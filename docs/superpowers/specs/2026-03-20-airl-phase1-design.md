@@ -12,7 +12,7 @@ Phase 1 implements a complete tree-walking interpreter for AIRL in Rust, coverin
 
 **Design principles:**
 - Zero external dependencies (std only)
-- Hand-written recursive descent parser (LL(1) grammar)
+- Hand-written recursive descent parser (LL(1) grammar) — the spec suggests nom/pest, but the grammar is trivially LL(1) and a hand-written parser gives us zero dependencies, better error messages, and full control. This is a deliberate departure.
 - Extensive testing at all levels
 
 ---
@@ -88,10 +88,46 @@ Two-layer design:
 ### AST
 
 ```rust
-enum TopLevel { Module, Defn, DefType, Task, UseDecl }
-enum Expr { Atom, List, If, Match, Let, Do, FnCall, Lambda, ... }
+enum TopLevel { Module(ModuleDef), Defn(FnDef), DefType(TypeDef), Task(TaskDef), UseDecl(UseDef) }
+
+enum Expr { Atom, List, If, Match, Let, Do, Try, FnCall, Lambda, ... }
+//                                            ^^^
+// `Try` handles the (try expr) operator from §9.1 for Result error propagation.
+// `Do` handles sequential (do ...) blocks from §7.2.
+// `Let` supports multi-binding syntax: (let (x : i32 42) (y : i32 1) body)
+// `Lambda` corresponds to the spec's (fn [params] body) anonymous function syntax.
+
 enum Type { Primitive, Tensor, Function, Named, TypeApp }
-struct Contract { requires, ensures, invariant, intent }
+
+struct ContractSet { requires, ensures, invariant, intent }
+// :intent is stored as Option<String> metadata — preserved for display/debugging
+// but not evaluated (per spec §4.1: "Metadata, not verified").
+
+struct ModuleDef {
+    name: Symbol,
+    version: Option<Version>,       // :version 0.1.0
+    requires: Vec<Symbol>,          // :requires [tensor contracts agent]
+    provides: Vec<Symbol>,          // :provides [public-fn-1 public-fn-2]
+    verify: VerifyLevel,            // :verify checked|proven|trusted — propagates to all fns
+    execute_on: Option<ExecTarget>, // :execute-on cpu|gpu|any (parsed, cpu-only in Phase 1)
+    body: Vec<TopLevel>,
+}
+
+struct FnDef {
+    // ... signature, contracts, body ...
+    execute_on: Option<ExecTarget>, // :execute-on (parsed, cpu-only in Phase 1)
+    priority: Option<Priority>,     // :priority low|normal|high|critical
+}
+
+struct UseDef {
+    module: Symbol,
+    kind: UseKind,
+}
+enum UseKind {
+    Symbols(Vec<Symbol>),           // (use tensor [matmul transpose])
+    Prefixed(Symbol),               // (use agent :as ag) → ag/send
+    All,                            // (use math :all)
+}
 ```
 
 Every node carries a `Span`. Ownership annotations (`own`, `&ref`, `&mut`, `copy`) are part of parameter representation.
@@ -165,7 +201,7 @@ Runtime assertions. On function call:
 3. Bind `result`, evaluate `:ensures`. Same violation reporting.
 4. `:invariant` checked at loop/recursion boundaries.
 
-Quantifiers (`forall`, `exists`) evaluated by iteration over collections.
+Quantifiers (`forall`, `exists`) evaluated by iteration over the relevant collection. `forall` short-circuits on first failure, `exists` on first success. For large collections, a configurable iteration cap (default 10,000) prevents runaway evaluation — exceeding the cap is a runtime warning, not a silent pass.
 
 ### Verification Level: `proven` (Stub Prover)
 
@@ -216,7 +252,30 @@ enum Value {
 
 ### TensorValue
 
-Flat `Vec<f32/f64/etc.>` with shape metadata. CPU-only for Phase 1.
+```rust
+struct TensorValue {
+    dtype: PrimTy,
+    shape: Vec<usize>,
+    data: TensorData,
+}
+
+enum TensorData {
+    F16(Vec<u16>),      // stored as raw bits, converted on access
+    F32(Vec<f32>),
+    F64(Vec<f64>),
+    BF16(Vec<u16>),     // stored as raw bits, converted on access
+    I8(Vec<i8>),
+    I16(Vec<i16>),
+    I32(Vec<i32>),
+    I64(Vec<i64>),
+    U8(Vec<u8>),
+    U16(Vec<u16>),
+    U32(Vec<u32>),
+    U64(Vec<u64>),
+}
+```
+
+CPU-only for Phase 1. `f16`/`bf16` are stored as raw `u16` bits and converted to `f32` for computation.
 
 ### Environment
 
@@ -275,7 +334,34 @@ Manages agent lifecycle: identity, registry of known agents, pending tasks, inte
 
 ### Task Lifecycle
 
-Sender serializes `(task ...)` as AIRL text → transport → receiver parses, typechecks, validates `:requires`, executes body, validates `:ensures` → sends `(TaskResult ...)` back → sender validates against `:expected-output` (rigor depends on trust level).
+Full lifecycle handling for all task attributes from spec §5.3:
+
+```
+Sender                                    Receiver
+  │                                          │
+  ├── serialize (task ...) as AIRL text ────►│
+  │                                          ├── parse & typecheck
+  │                                          ├── validate :input types
+  │                                          ├── check :constraints
+  │                                          │     max-memory: tracked via allocator stats
+  │                                          │     max-tokens: N/A in Phase 1 (no LLM calls)
+  │                                          │     no-network: enforced by transport config
+  │                                          ├── start :deadline timer (spawn thread)
+  │                                          ├── execute task body
+  │                                          ├── validate :ensures on result
+  │                                          ├── if success: evaluate :on-success expr
+  │                                          │   if failure: evaluate :on-failure expr
+  │                                          │   if timeout: evaluate :on-timeout expr
+  │◄── (TaskResult ...) ────────────────────┤
+  ├── validate result against
+  │   :expected-output contracts
+  │   (trust-level determines rigor)
+  ▼                                          ▼
+```
+
+**Deadline enforcement:** A background thread monitors elapsed time. If the deadline expires before the body completes, execution is cancelled and `:on-timeout` is invoked.
+
+**Failure handling:** The `:on-failure` expression is evaluated when the body returns an `Err` or a contract violation occurs. The `retry` builtin re-dispatches the task with configurable max retries and backoff strategy. The `escalate` builtin sends a structured error to a specified agent.
 
 ### Trust Verification
 
@@ -286,10 +372,13 @@ Sender serializes `(task ...)` as AIRL text → transport → receiver parses, t
 ### Agent Operations (Builtins)
 
 - `send` — dispatch task over transport
-- `await` — block with timeout for result
+- `await` — block with timeout for result, invoke `:on-result` or `:on-timeout`
 - `spawn-agent` — launch child process, connect via stdio
-- `parallel` — fan-out, collect, merge
-- `broadcast` — send to all matching capability filter
+- `parallel` — fan-out multiple tasks, collect results, apply `:merge` function
+- `broadcast` — send to all agents matching a capability filter, merge with `:first-valid` or custom strategy
+- `any-agent` — capability-based routing: resolve to a single agent matching required capabilities, with optional `:prefer` strategy (`:lowest-latency`, `:round-robin`)
+- `retry` — re-dispatch a failed task with configurable max retries and backoff (`:exponential`, `:linear`, `:constant`)
+- `escalate` — send structured failure notification to a specified agent with `:reason` and `:partial-results`
 
 ---
 
