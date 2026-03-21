@@ -1,0 +1,1 @@
+Call fibonacci with argument -1 (negative input)

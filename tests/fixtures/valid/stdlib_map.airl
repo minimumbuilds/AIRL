@@ -1,0 +1,68 @@
+;; EXPECT: ()
+;; Test map-new and map-size
+(let (m : _ (map-new))
+  (print "empty size:" (map-size m)))
+
+;; Test map-set and map-get
+(let (m : _ (map-set (map-set (map-new) "name" "AIRL") "version" 1))
+  (do
+    (print "get name:" (map-get m "name"))
+    (print "get version:" (map-get m "version"))
+    (print "get missing:" (map-get m "missing"))
+    (print "size:" (map-size m))))
+
+;; Test map-from
+(let (m : _ (map-from ["a" 1 "b" 2 "c" 3]))
+  (do
+    (print "from get a:" (map-get m "a"))
+    (print "from size:" (map-size m))))
+
+;; Test map-has and map-remove
+(let (m : _ (map-from ["x" 10 "y" 20]))
+  (do
+    (print "has x:" (map-has m "x"))
+    (print "has z:" (map-has m "z"))
+    (let (m2 : _ (map-remove m "x"))
+      (print "after remove has x:" (map-has m2 "x")))))
+
+;; Test map-keys and map-values
+(let (m : _ (map-from ["b" 2 "a" 1 "c" 3]))
+  (do
+    (print "keys:" (map-keys m))
+    (print "values:" (map-values m))))
+
+;; Test map-get-or
+(let (m : _ (map-from ["a" 1]))
+  (do
+    (print "get-or found:" (map-get-or m "a" 0))
+    (print "get-or default:" (map-get-or m "z" 99))))
+
+;; Test AIRL helpers
+;; map-entries
+(let (m : _ (map-from ["x" 10 "y" 20]))
+  (print "entries:" (map-entries m)))
+
+;; map-from-entries
+(let (m : _ (map-from-entries [["a" 1] ["b" 2]]))
+  (print "from-entries:" (map-get m "a") (map-get m "b")))
+
+;; map-merge
+(let (m1 : _ (map-from ["a" 1 "b" 2]))
+  (let (m2 : _ (map-from ["b" 99 "c" 3]))
+    (let (merged : _ (map-merge m1 m2))
+      (print "merge a:" (map-get merged "a") "b:" (map-get merged "b") "c:" (map-get merged "c")))))
+
+;; map-map-values
+(let (m : _ (map-from ["a" 1 "b" 2 "c" 3]))
+  (let (doubled : _ (map-map-values (fn [v] (* v 2)) m))
+    (print "map-values a:" (map-get doubled "a") "b:" (map-get doubled "b"))))
+
+;; map-filter
+(let (m : _ (map-from ["a" 1 "b" 20 "c" 3 "d" 40]))
+  (let (big : _ (map-filter (fn [k v] (> v 10)) m))
+    (print "filter size:" (map-size big))))
+
+;; map-update
+(let (m : _ (map-from ["count" 5]))
+  (let (updated : _ (map-update m "count" (fn [v] (+ v 1))))
+    (print "update count:" (map-get updated "count"))))

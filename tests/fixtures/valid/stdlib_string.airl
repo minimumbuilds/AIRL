@@ -1,0 +1,49 @@
+;; EXPECT: ()
+;; Test char-at
+(print "char-at 0:" (char-at "hello" 0))
+(print "char-at 4:" (char-at "hello" 4))
+
+;; Test substring
+(print "substring:" (substring "hello world" 0 5))
+(print "substring mid:" (substring "hello world" 6 11))
+
+;; Test split/join
+(print "split:" (split "a,b,c" ","))
+(print "join:" (join ["a" "b" "c"] "-"))
+
+;; Test contains
+(print "contains yes:" (contains "hello world" "world"))
+(print "contains no:" (contains "hello world" "xyz"))
+
+;; Test starts-with/ends-with
+(print "starts-with:" (starts-with "hello" "hel"))
+(print "ends-with:" (ends-with "hello" "llo"))
+
+;; Test trim
+(print "trim:" (trim "  hello  "))
+
+;; Test to-upper/to-lower
+(print "to-upper:" (to-upper "hello"))
+(print "to-lower:" (to-lower "HELLO"))
+
+;; Test replace
+(print "replace:" (replace "hello world" "world" "AIRL"))
+
+;; Test index-of
+(print "index-of found:" (index-of "hello world" "world"))
+(print "index-of not found:" (index-of "hello" "xyz"))
+
+;; Test chars
+(print "chars:" (chars "abc"))
+
+;; Test AIRL helpers
+(print "words:" (words "  hello   world  "))
+(print "unwords:" (unwords ["hello" "world"]))
+(print "lines:" (lines "line1\nline2\nline3"))
+(print "repeat-str:" (repeat-str "ab" 3))
+(print "reverse-str:" (reverse-str "hello"))
+(print "is-empty-str yes:" (is-empty-str ""))
+(print "is-empty-str no:" (is-empty-str "hi"))
+(print "count-occurrences:" (count-occurrences "abcabcabc" "abc"))
+(print "pad-left:" (pad-left "42" 5 "0"))
+(print "pad-right:" (pad-right "hi" 5 "."))

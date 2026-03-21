@@ -1,0 +1,1 @@
+Call word-frequency with a single repeated word "yes yes yes"

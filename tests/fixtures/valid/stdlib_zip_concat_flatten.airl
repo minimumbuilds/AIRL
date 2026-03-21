@@ -1,0 +1,16 @@
+;; EXPECT: ()
+;; Test zip
+(let (pairs : List (zip [1 2 3] [4 5 6]))
+  (print "zip:" pairs))
+
+;; Test concat
+(let (joined : List (concat [1 2] [3 4 5]))
+  (print "concat:" joined))
+
+;; Test flatten
+(let (flat : List (flatten [[1 2] [3 4] [5]]))
+  (print "flatten:" flat))
+
+;; Test zip unequal lengths
+(let (pairs : List (zip [1 2 3] [4 5]))
+  (print "zip unequal:" pairs))

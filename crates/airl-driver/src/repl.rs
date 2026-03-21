@@ -1,7 +1,7 @@
 use std::io::{self, Write, BufRead};
 use airl_runtime::eval::Interpreter;
 use airl_runtime::value::Value;
-use airl_types::checker::TypeChecker;
+use crate::pipeline::eval_prelude;
 
 fn print_env(interp: &Interpreter) {
     let bindings = interp.env.iter_bindings();
@@ -37,7 +37,7 @@ fn print_env(interp: &Interpreter) {
             if let Value::Function(f) = &slot.value {
                 let params: Vec<&str> = f.def.params.iter().map(|p| p.name.as_str()).collect();
                 let param_str = format!("({})", params.join(", "));
-                let ret = f.def.return_type.to_airl();
+                let ret = format!("{:?}", f.def.return_type.kind);
                 println!("  {} : {} -> {}", name, param_str, ret);
             }
         }
@@ -48,9 +48,9 @@ pub fn run_repl() {
     let stdin = io::stdin();
     let mut input = String::new();
     let mut interp = Interpreter::new();
-    let mut type_checker = TypeChecker::new();
+    eval_prelude(&mut interp);
 
-    println!("AIRL v0.1.0 — Type :help for commands, :quit to exit");
+    println!("AIRL v0.1.0 — Type :quit to exit");
 
     loop {
         let prompt = if input.is_empty() { "airl> " } else { "...   " };
@@ -70,26 +70,6 @@ pub fn run_repl() {
             print_env(&interp);
             continue;
         }
-        if trimmed == ":help" || trimmed == ":h" {
-            print_help();
-            continue;
-        }
-        if let Some(expr_str) = trimmed.strip_prefix(":type ") {
-            type_expr(expr_str, &mut type_checker);
-            continue;
-        }
-        if trimmed == ":type" {
-            eprintln!("Usage: :type <expression>");
-            continue;
-        }
-        if let Some(path) = trimmed.strip_prefix(":load ") {
-            load_file(path.trim(), &mut interp);
-            continue;
-        }
-        if trimmed == ":load" {
-            eprintln!("Usage: :load <file.airl>");
-            continue;
-        }
 
         input.push_str(&line);
         if !parens_balanced(&input) {
@@ -101,63 +81,6 @@ pub fn run_repl() {
             Err(e) => eprintln!("error: {}", e),
         }
         input.clear();
-    }
-}
-
-fn print_help() {
-    println!("AIRL REPL Commands:");
-    println!("  :help, :h       Show this help message");
-    println!("  :quit, :q       Exit the REPL");
-    println!("  :env            Show all user bindings and functions");
-    println!("  :type <expr>    Show the type of an expression without evaluating");
-    println!("  :load <file>    Load and evaluate an AIRL source file");
-    println!();
-    println!("Enter any AIRL expression to evaluate it.");
-}
-
-fn type_expr(expr_str: &str, tc: &mut TypeChecker) {
-    let mut lexer = airl_syntax::Lexer::new(expr_str);
-    let tokens = match lexer.lex_all() {
-        Ok(t) => t,
-        Err(d) => { eprintln!("error: {}", d.message); return; }
-    };
-    let sexprs = match airl_syntax::parse_sexpr_all(&tokens) {
-        Ok(s) => s,
-        Err(d) => { eprintln!("error: {}", d.message); return; }
-    };
-    if sexprs.is_empty() {
-        eprintln!("error: no expression");
-        return;
-    }
-    let mut diags = airl_syntax::Diagnostics::new();
-    let expr = match airl_syntax::parser::parse_expr(&sexprs[0], &mut diags) {
-        Ok(e) => e,
-        Err(d) => { eprintln!("error: {}", d.message); return; }
-    };
-    match tc.check_expr(&expr) {
-        Ok(ty) => println!("{}", ty),
-        Err(()) => {
-            let diags = tc.drain_diagnostics();
-            for d in diags.iter() {
-                eprintln!("{}: {}", if d.severity == airl_syntax::diagnostic::Severity::Error { "error" } else { "warning" }, d.message);
-            }
-        }
-    }
-}
-
-fn load_file(path: &str, interp: &mut Interpreter) {
-    let source = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => { eprintln!("error: cannot read {}: {}", path, e); return; }
-    };
-    match eval_repl_input(&source, interp) {
-        Ok(val) => {
-            if val != Value::Unit {
-                println!("{}", val);
-            }
-            println!("Loaded {}", path);
-        }
-        Err(e) => eprintln!("error: {}", e),
     }
 }
 

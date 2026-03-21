@@ -46,107 +46,300 @@ airl-driver ← airl-solver (Z3)
 - **The `orchestrator.airl` fixture** requires the built binary (uses `spawn-agent`) — it's in `tests/fixtures/agent/`, NOT `tests/fixtures/valid/`, so the fixture runner doesn't try to run it.
 - **Builtin dispatch pattern:** Builtins that need `&mut self` (spawn-agent, send, tensor JIT) are handled directly in the `FnCall` arm of `eval.rs` BEFORE the generic builtin registry dispatch. The `Option::take()` trick is used for tensor_jit to work around the borrow checker.
 
+## Standard Library
+
+**Location:** `stdlib/` directory (embedded in binary via `include_str!`, auto-loaded before user code)
+
+The stdlib is 4 modules (46 functions total) — mostly pure AIRL, with Rust builtins for list destructuring and string character access.
+
+### Primitive Builtins (Rust)
+
+**List builtins** (4) in `crates/airl-runtime/src/builtins.rs`:
+- `head` — first element of list (errors on empty)
+- `tail` — all but first element (errors on empty)
+- `empty?` — is list empty? → Bool
+- `cons` — prepend element to front of list → List
+
+**String builtins** (13) in `crates/airl-runtime/src/builtins.rs`:
+- `char-at`, `substring`, `chars` — character access (Unicode-safe)
+- `split`, `join` — split/join strings
+- `contains`, `starts-with`, `ends-with`, `index-of` — search
+- `trim`, `to-upper`, `to-lower`, `replace` — transformation
+
+**Map builtins** (10) in `crates/airl-runtime/src/builtins.rs`:
+- `map-new`, `map-from` — creation
+- `map-get`, `map-get-or`, `map-has`, `map-size` — reading
+- `map-set`, `map-remove` — mutation (returns new map)
+- `map-keys`, `map-values` — enumeration
+
+### Stdlib Modules (Pure AIRL)
+
+**Collections** (`stdlib/prelude.airl`) — 15 functions:
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `map` | `(map f xs)` | Apply f to each element |
+| `filter` | `(filter pred xs)` | Keep elements where pred is true |
+| `fold` | `(fold f init xs)` | Left fold with accumulator |
+| `reverse` | `(reverse xs)` | Reverse a list |
+| `concat` | `(concat xs ys)` | Concatenate two lists |
+| `zip` | `(zip xs ys)` | Pair elements from two lists |
+| `flatten` | `(flatten xss)` | Flatten list of lists |
+| `range` | `(range start end)` | Generate integers [start, end) |
+| `take` | `(take n xs)` | First n elements |
+| `drop` | `(drop n xs)` | Skip first n elements |
+| `any` | `(any pred xs)` | Any element satisfies pred? |
+| `all` | `(all pred xs)` | All elements satisfy pred? |
+| `find` | `(find pred xs)` | First element satisfying pred, or nil |
+| `sort` | `(sort cmp xs)` | Merge sort with comparison fn |
+| `merge` | `(merge cmp xs ys)` | Merge two sorted lists |
+
+**Math** (`stdlib/math.airl`) — 13 functions:
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `abs` | `(abs x)` | Absolute value |
+| `min` | `(min a b)` | Minimum of two values |
+| `max` | `(max a b)` | Maximum of two values |
+| `clamp` | `(clamp x lo hi)` | Clamp value to range [lo, hi] |
+| `sign` | `(sign x)` | Returns -1, 0, or 1 |
+| `even?` | `(even? x)` | Is integer even? |
+| `odd?` | `(odd? x)` | Is integer odd? |
+| `pow` | `(pow base exp)` | Integer exponentiation |
+| `gcd` | `(gcd a b)` | Greatest common divisor |
+| `lcm` | `(lcm a b)` | Least common multiple |
+| `sum-list` | `(sum-list xs)` | Sum all elements |
+| `product-list` | `(product-list xs)` | Multiply all elements |
+
+**Result Combinators** (`stdlib/result.airl`) — 8 functions:
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `is-ok?` | `(is-ok? r)` | Check if Result is Ok |
+| `is-err?` | `(is-err? r)` | Check if Result is Err |
+| `unwrap-or` | `(unwrap-or r default)` | Extract Ok or return default |
+| `map-ok` | `(map-ok f r)` | Apply f to Ok value |
+| `map-err` | `(map-err f r)` | Apply f to Err value |
+| `and-then` | `(and-then f r)` | Chain Result-returning function |
+| `or-else` | `(or-else f r)` | Recover from Err |
+| `ok-or` | `(ok-or val err)` | Wrap non-nil in Ok, nil becomes Err |
+
+**String** (`stdlib/string.airl`) — 10 AIRL functions + 13 Rust builtins:
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `words` | `(words s)` | Split by whitespace |
+| `unwords` | `(unwords ws)` | Join with spaces |
+| `lines` | `(lines s)` | Split by newlines |
+| `unlines` | `(unlines ls)` | Join with newlines |
+| `repeat-str` | `(repeat-str s n)` | Repeat string n times |
+| `pad-left` | `(pad-left s w ch)` | Pad to width on left |
+| `pad-right` | `(pad-right s w ch)` | Pad to width on right |
+| `is-empty-str` | `(is-empty-str s)` | Is string empty? |
+| `reverse-str` | `(reverse-str s)` | Reverse a string |
+| `count-occurrences` | `(count-occurrences s sub)` | Count substring occurrences |
+
+See `stdlib/string.md` for full documentation including the 13 Rust builtins.
+
+**Map** (`stdlib/map.airl`) — 8 AIRL functions + 10 Rust builtins:
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `map-entries` | `(map-entries m)` | All entries as `[[k v] ...]` pairs |
+| `map-from-entries` | `(map-from-entries pairs)` | Create from `[[k v] ...]` pairs |
+| `map-merge` | `(map-merge m1 m2)` | Merge maps (m2 wins on conflict) |
+| `map-map-values` | `(map-map-values f m)` | Apply f to every value |
+| `map-filter` | `(map-filter pred m)` | Keep entries where pred(k,v) is true |
+| `map-update` | `(map-update m key f)` | Apply f to value at key |
+| `map-update-or` | `(map-update-or m key default f)` | Update with default for missing keys |
+| `map-count` | `(map-count pred m)` | Count matching entries |
+
+See `stdlib/map.md` for full documentation including the 10 Rust builtins.
+
+### Prelude Loading
+
+- Embedded via `include_str!()` in `crates/airl-driver/src/pipeline.rs`
+- `eval_prelude()` parses and evaluates all five modules in order: collections → math → result → string → map
+- Called in both `run_source_with_mode()` and REPL startup
+- **Load order matters:** math depends on collections (`fold`), string depends on collections (`filter`, `reverse`)
+- **Recursion depth limit:** 50,000 (in `Interpreter.recursion_depth`) to prevent stack overflow on large lists
+- **Known issue:** Type checker warns "undefined symbol" for stdlib functions because they are loaded at runtime, not registered in the type checker. Cosmetic only — functions work correctly.
+
 ---
 
 ## Remaining Tasks
 
 ### Tier 1 — High Priority
 
-#### 1. ~~Async Agent Builtins: `await`, `parallel`~~ ✅ DONE
+#### 1. Async Agent Builtins: `await`, `parallel`
 
-**Implemented:** `send-async`, `await`, and `parallel` builtins.
+**Status:** `await` and `parallel` are registered as builtin names in `crates/airl-agent/src/builtins.rs` but have zero implementation. Currently calling them produces `UndefinedSymbol` at runtime.
 
-- `send-async` — Same args as `send` but returns immediately with a task ID string. Writes the task frame synchronously, then spawns a background thread to read the response via `mpsc::channel`.
-- `await` — Takes a task ID and optional timeout in milliseconds. Blocks on the channel receiver. `(await task-id)` or `(await task-id 5000)`.
-- `parallel` — Takes a list of task ID strings (from prior `send-async` calls), awaits all, returns a list of results. Optional timeout as second arg.
-- Agent reader/writer changed to `Arc<Mutex<>>` for thread-safe sharing.
-- `pending_results: HashMap<String, mpsc::Receiver<Result<Value, String>>>` added to Interpreter.
-- Test fixture: `tests/fixtures/agent/async_orchestrator.airl`.
+**What to build:**
 
----
+`await` — Takes a task ID (from a future async `send`) and a timeout duration. Blocks until the result arrives or timeout expires. For Phase 1, `send` is already synchronous, so `await` only makes sense if `send` gets an async mode. **Recommended approach:** Add `send-async` that returns a task ID immediately (spawns a background thread for the send), then `await` blocks on a channel receiver with timeout.
 
-#### 2. ~~Z3 Quantifier Support (`forall`/`exists`)~~ ✅ DONE
+**Files to modify:**
+- `crates/airl-runtime/src/eval.rs` — Add `builtin_await`, `builtin_send_async` methods on Interpreter. Add a `pending_results: HashMap<String, mpsc::Receiver<Value>>` field.
+- `crates/airl-agent/src/builtins.rs` — Remove from stub list once implemented.
 
-**Implemented:** Full quantifier support across 4 crates:
-- **AST:** `ExprKind::Forall` and `ExprKind::Exists` variants with `Param`, optional `where` guard, and body expression.
-- **Parser:** `(forall [i : Type] (where guard) body)` and `(exists [i : Type] (where guard) body)` syntax. Where clause is optional.
-- **Z3 Translator:** Translates to `z3::ast::forall_const` / `z3::ast::exists_const`. Where clause becomes implication (forall) or conjunction (exists). Temporarily binds quantified variable in translator maps.
-- **Runtime:** Iterates integers 0..10,000. `forall` short-circuits on first false, `exists` on first true. Where clause filters domain.
-- **Type Checker:** Returns `Bool` type for quantifier expressions.
-- Test fixtures: `tests/fixtures/valid/forall_expr.airl`, `tests/fixtures/valid/exists_expr.airl`, `tests/fixtures/valid/forall_contract.airl`.
+`parallel` — Takes a list of task expressions, dispatches them concurrently (one thread per task), collects results, applies a merge function. **Recommended approach:** `(parallel [(send w1 "fn" args...) (send w2 "fn" args...)] :merge (fn [results] ...))`. Spawn a thread per task, each does a synchronous send, collect via channels, apply merge.
+
+**Files to modify:**
+- `crates/airl-runtime/src/eval.rs` — Add `builtin_parallel`. Needs `std::thread::spawn` + channels.
+
+**Estimated effort:** 300-500 lines total.
 
 ---
 
-#### 3. ~~Invariant Checking~~ ✅ DONE
+#### 2. Z3 Quantifier Support (`forall`/`exists`)
 
-**Implemented:** `:invariant` clauses are now evaluated in `call_fn` after body evaluation and before `:ensures` checking (both JIT and interpreter paths). Uses `ContractKind::Invariant` for violation errors. Test fixtures: `tests/fixtures/valid/invariant.airl`, `tests/fixtures/contract_errors/invariant_violation.airl`.
+**Status:** The language spec (§4.4) defines quantified contracts but they are not parseable or translatable to Z3.
+
+**What to build:**
+
+Step 1 — Parse `forall`/`exists` in contracts. Currently the parser treats them as regular function calls. Add `ExprKind::Forall` and `ExprKind::Exists` to the AST (`crates/airl-syntax/src/ast.rs`), and recognize them in the form parser (`crates/airl-syntax/src/parser.rs`).
+
+Syntax from spec:
+```clojure
+(forall [i : Nat]
+  (where (< i (length result)))
+  (>= (at result i) 0))
+```
+
+Step 2 — Translate to Z3. The `z3` crate supports quantifiers via `z3::ast::forall_const` and `z3::ast::exists_const`. Add handlers in `crates/airl-solver/src/translate.rs`.
+
+Step 3 — Runtime evaluation. In `checked` mode, quantifiers over collections need to be evaluated by iterating. Add evaluation logic in `crates/airl-runtime/src/eval.rs` — `forall` iterates and short-circuits on first false, `exists` short-circuits on first true. Cap iteration at 10,000 elements.
+
+**Files to modify:**
+- `crates/airl-syntax/src/ast.rs` — Add `Forall`/`Exists` to `ExprKind`
+- `crates/airl-syntax/src/parser.rs` — Recognize `forall`/`exists` forms
+- `crates/airl-solver/src/translate.rs` — Translate to Z3 quantifiers
+- `crates/airl-runtime/src/eval.rs` — Runtime evaluation via iteration
+- `crates/airl-contracts/src/checked.rs` — May need updates for quantifier evaluation
+
+**Estimated effort:** 300-400 lines total.
+
+---
+
+#### 3. Invariant Checking
+
+**Status:** `:invariant` is parsed and stored on `FnDef` but never evaluated at runtime. The `invariants` field exists in the AST but `call_fn` in `eval.rs` ignores it.
+
+**What to build:** In `eval.rs`'s `call_fn`, after evaluating the body (and before `:ensures`), check invariant clauses. For loops/recursive calls, invariants should be checked at each iteration entry — but since AIRL doesn't have explicit loops (recursion only), check invariants on each recursive re-entry.
+
+**Simpler approach for Phase 1:** Check invariants once after body evaluation, same timing as ensures. This is less powerful than continuous verification but catches the common case.
+
+**Files to modify:**
+- `crates/airl-runtime/src/eval.rs` — In `call_fn`, add invariant checking block between body evaluation and ensures checking.
+
+**Estimated effort:** 30-50 lines.
 
 ---
 
 ### Tier 2 — Important for Completeness
 
-#### 4. ~~Z3 Float Arithmetic Support~~ ✅ DONE
+#### 4. Z3 Float Arithmetic Support
 
-**Implemented:** Z3 Real arithmetic for `f16`, `f32`, `f64`, `bf16` types.
-- **Translator:** `VarSort::Real`, `declare_real`, `get_real_var`, `translate_real` (handles `+`, `-`, `*`, `/` on Reals). Float literals converted to Z3 rationals via scaled integers.
-- **Comparisons:** `translate_cmp_eq`/`translate_cmp_ord` try Int first, fall back to Real — no type inference needed.
-- **Prover:** Declares Real variables for float params/result. Counterexample extraction for Real variables.
-- **Quantifiers:** `VarSort::Real` arm added to `translate_quantifier`.
-- Test fixture: `tests/fixtures/valid/float_contract.airl`.
+**Status:** The Z3 translator (`crates/airl-solver/src/translate.rs`) only handles integer types. Any function with `f32`/`f64` params returns `VerifyResult::Unknown("unsupported parameter types")`.
 
----
+**What to build:** Add `z3::ast::Float` (or `z3::ast::Real`) support to the translator. Z3 has a real arithmetic theory (`QF_LRA`) that handles `+`, `-`, `*`, `/`, comparisons on reals. Map `f32`/`f64` to Z3 Reals (not IEEE floats — Z3's float theory is slow and incomplete). This is an approximation but covers most contract patterns.
 
-#### 5. ~~Better Error Messages with Source Context~~ ✅ DONE
+**Files to modify:**
+- `crates/airl-solver/src/translate.rs` — Add `translate_real`, `declare_real`, `VarSort::Real`. Update comparison operators to handle real operands.
+- `crates/airl-solver/src/prover.rs` — Update `sort_from_type_name` to map f32/f64 to Real.
 
-**Implemented:**
-- **`Expr::to_airl()`** in `ast.rs` — converts any `Expr` AST node back to readable AIRL S-expression syntax. Handles all `ExprKind` variants, `AstType`, and `Pattern`.
-- **Contract violation messages** now show `(> x 0)` instead of `FnCall(Expr { kind: SymbolRef(">="), ...})`. All 5 sites in `eval.rs` updated.
-- **Z3 disproven warnings** now show `(>= result lo)` instead of debug output. All 3 sites in `prover.rs` updated.
-- **`ContractViolation::Display`** improved: shows `"Requires contract violated in \`fn\`: (clause) evaluated to false"` with optional bindings.
-- **Bindings captured**: `capture_bindings()` populates the `bindings` field with actual parameter values (filtering out builtins/functions).
-- **Runtime errors with source context**: `main.rs` now calls `format_diagnostic_with_source` for `ContractViolation` and `UseAfterMove`, showing the source line and caret.
+**Estimated effort:** 150-200 lines.
 
 ---
 
-#### 6. ~~REPL Enhancements~~ ✅ DONE
+#### 5. Better Error Messages with Source Context
 
-**Implemented:**
-- `:help` / `:h` — Lists all commands with descriptions.
-- `:load <file>` — Reads and evaluates a file in the REPL session using `eval_repl_input`.
-- `:type <expr>` — Shows the type of an expression without evaluating, using a persistent `TypeChecker`.
-- `drain_diagnostics(&mut self)` added to `TypeChecker` for non-consuming diagnostic access.
-- `Display` impls added for `Ty` and `PrimTy` for readable type output.
-- `:env` now shows readable types (e.g., `i32` instead of `Named("i32")`).
+**Status:** Error messages show the error type and span (line:col) but not the source code context. The infrastructure exists (`format_diagnostic_with_source` in `pipeline.rs` and `Diagnostic` with notes in `diagnostic.rs`) but is underused.
+
+**What to build:**
+- Contract violations should show the contract clause source text and the values that violated it.
+- Use-after-move errors should show both the move site and the use site.
+- Type errors should show the expected vs actual type with source context.
+
+**Key improvement:** The `ContractViolation` struct's `clause_source` field currently contains `format!("{:?}", expr.kind)` (Rust debug output). Replace with a pretty-printed AIRL S-expression of the clause.
+
+**Files to modify:**
+- `crates/airl-runtime/src/eval.rs` — Improve `clause_source` formatting in contract violation construction.
+- `crates/airl-driver/src/pipeline.rs` — Use `format_diagnostic_with_source` for all error types, not just syntax errors.
+- `crates/airl-syntax/src/diagnostic.rs` — Add helper methods for building rich diagnostics.
+
+**Estimated effort:** 150-250 lines.
 
 ---
 
-#### 7. ~~Agent Builtins: `broadcast`, `retry`, `escalate`, `any-agent`~~ ✅ DONE
+#### 6. REPL Enhancements
 
-**Implemented:**
-- **`broadcast`** — `(broadcast [agent1 agent2 ...] "fn" args...)`. Sends the same task to all agents concurrently via threads, returns the first successful result.
-- **`retry`** — `(retry target "fn" args... :max N)`. Wraps a synchronous `send` in retry logic with exponential backoff (100ms, 200ms, 400ms...). Default 3 retries.
-- **`escalate`** — `(escalate target :reason "msg" :data value)`. Sends a structured escalation to an agent via `__escalate__` function. Falls back to returning an `(Escalation ...)` variant if the agent doesn't handle it.
-- **`any-agent`** — `(any-agent)`. Returns the name of the first spawned agent. Simple Phase 1 implementation without capability filtering.
+**Status:** REPL has `:quit`, `:env`, and expression evaluation. Missing `:type`, `:load`, `:help`.
+
+**What to build:**
+- `:help` — Print available commands. Trivial (10 lines).
+- `:load <file>` — Read and evaluate a file in the REPL session. Use `std::fs::read_to_string` + existing `eval_repl_input`.
+- `:type <expr>` — Show the type of an expression without evaluating. Requires running the `TypeChecker` on the expression. **Challenge:** TypeChecker's `into_diagnostics()` is consuming — need to add `drain_diagnostics(&mut self)` to `crates/airl-types/src/checker.rs` for REPL persistence.
+
+**Files to modify:**
+- `crates/airl-driver/src/repl.rs` — Add command handlers.
+- `crates/airl-types/src/checker.rs` — Add `drain_diagnostics` for REPL type checking.
+
+**Estimated effort:** 100-200 lines.
+
+---
+
+#### 7. Agent Builtins: `broadcast`, `retry`, `escalate`, `any-agent`
+
+**Status:** Registered as names in `crates/airl-agent/src/builtins.rs`, zero implementation.
+
+**What to build:**
+
+- `broadcast` — `(broadcast [agent1 agent2 agent3] "fn" args... :merge :first-valid)`. Send the same task to multiple agents, return first successful result. Implement as parallel sends (threads) with first-result channel.
+
+- `retry` — `(retry :max 3 :backoff :exponential (send target "fn" args...))`. Wrap a send in retry logic. Implement as a loop with sleep between retries.
+
+- `escalate` — `(escalate target :reason :timeout :partial-results data)`. Send a structured error notification to a specified agent. Implement as a special task message type.
+
+- `any-agent` — `(any-agent :with [:compute-gpu])`. Look up agents by capability in the registry. Requires the `AgentRegistry` from `airl-agent` to be accessible from the interpreter. Currently the interpreter has a simple `Vec<LiveAgent>` — would need to track capabilities per agent.
+
+**Files to modify:**
+- `crates/airl-runtime/src/eval.rs` — Add builtin methods.
+- `crates/airl-agent/src/builtins.rs` — Remove from stub list.
+
+**Estimated effort:** 400-600 lines total.
 
 ---
 
 ### Tier 3 — Nice to Have
 
-#### 8. ~~Static Linearity Analysis~~ ✅ DONE
+#### 8. Static Linearity Analysis
 
-**Implemented:** Control-flow-sensitive AST walk tracking ownership through branches.
-- **`check_fn(def)`** — Registers function param ownerships, introduces params, walks body.
-- **`check_expr(expr)`** — Recursively walks all `ExprKind` variants. For `FnCall`, looks up callee's parameter ownership annotations via `fn_ownerships` registry and calls `track_move`/`track_borrow` on symbol arguments.
-- **Branch divergence:** `If` and `Match` use `snapshot()`/`restore()` to check each branch independently, then `merge_branch_states()` verifies all branches agree on ownership state.
-- **Pattern bindings:** `introduce_pattern()` handles nested pattern binding introduction in match arms.
-- **Pipeline integration:** Linearity analysis runs after type checking in both `run_source_with_mode` and `check_source`. Errors shown as warnings in Run mode, errors in Check mode.
-- Detects: use-after-move, move-while-borrowed, branch ownership divergence.
+**Status:** The `LinearityChecker` in `crates/airl-types/src/linearity.rs` tracks ownership state at the API level but is not wired into the AST walk. Runtime enforcement (in `eval.rs`) catches use-after-move for explicit `Ownership::Own` params, but doesn't detect branch divergence or scope issues.
+
+**What to build:** A control-flow-sensitive pass that walks function bodies and tracks ownership state through branches. For `if`/`match`, both arms must leave bindings in compatible states. This is essentially a simplified version of Rust's borrow checker.
+
+**Files to modify:**
+- `crates/airl-types/src/linearity.rs` — Add `check_fn_body(&mut self, body: &Expr)` that walks the AST.
+- `crates/airl-types/src/checker.rs` — Call linearity check after type checking.
+- `crates/airl-driver/src/pipeline.rs` — Report linearity errors.
+
+**Estimated effort:** 500-800 lines. This is the hardest remaining task.
 
 ---
 
-#### 9. ~~Nested Pattern Matching~~ ✅ ALREADY WORKING
+#### 9. Nested Pattern Matching
 
-**Status:** Nested patterns already work. Both the parser (`parse_pattern` recursively calls itself on sub-items) and the runtime (`try_match` recursively matches sub-patterns) support arbitrary nesting. Patterns like `(Ok (Ok v))`, `(Some (Err e))`, and `(Pair a b)` all work correctly. The original task description was outdated. Added test fixture: `tests/fixtures/valid/nested_match.airl`.
+**Status:** Pattern matching works for top-level variants (`(Ok v)`, `(Err e)`) but not nested patterns (`(Ok (Pair a b))`).
+
+**What to build:** Extend `try_match` in `crates/airl-runtime/src/pattern.rs` to recursively destructure nested patterns. Also extend the parser to recognize nested pattern syntax.
+
+**Files to modify:**
+- `crates/airl-runtime/src/pattern.rs` — Recursive matching.
+- `crates/airl-syntax/src/parser.rs` — Parse nested patterns in match arms.
+
+**Estimated effort:** 100-200 lines.
 
 ---
 
@@ -170,14 +363,14 @@ airl-driver ← airl-solver (Z3)
 
 ---
 
-## Known Issues — All Resolved
+## Known Issues
 
-1. ~~**`cargo build` warning:**~~ ✅ Moved `Config` import to `#[cfg(test)]` block.
+1. **`cargo build` warning:** `unused import: Config` in `crates/airl-solver/src/translate.rs:3`. The `Config` import is only used in tests via `super::*`. Fix: move to `#[cfg(test)]` block or gate with `#[cfg(test)]`.
 
-2. ~~**Type checker warnings are noisy:**~~ ✅ Registered all builtins (tensor, agent, utility, collection) in `TypeChecker::register_builtins()` using `TypeVar` for polymorphic builtins. FnCall handler now treats `TypeVar` callees as wildcard-typed.
+2. **Type checker warnings are noisy:** The type checker warns about `spawn-agent`, `send`, and other builtins it doesn't know about. These are harmless but clutter output. Fix: register builtin types in the type checker environment.
 
-3. ~~**Z3 "disproven" warnings for valid contracts:**~~ ✅ Suppressed disproven warnings when the contract references `result` and `result` is not constrained in `:requires` (since the prover doesn't encode function bodies).
+3. **Z3 "disproven" warnings for valid contracts:** Contracts like `(= result (+ a b))` are "disproven" by Z3 because `result` is a free variable — the prover doesn't encode the function body. This is correct behavior but confusing. Consider suppressing disproven warnings for contracts that only reference `result` without body constraints, or adding a note explaining why.
 
-4. ~~**JIT float handling:**~~ ✅ Added safety documentation to `RawValue` explaining the bitcast invariant. Added tests for cross-type confusion and special float values (NaN, infinity, negative zero).
+4. **JIT float handling:** The scalar JIT uses I64 as the uniform ABI type and bitcasts for floats. This works but means float-returning functions store results as I64 bit patterns. The marshaling in `eval.rs` (`raw_to_value`) handles this correctly, but it's fragile.
 
-5. ~~**`spawn-agent` sleep:**~~ ✅ Replaced 100ms sleep with a proper handshake protocol. Agent sends a `"ready"` frame on stdout after initialization. Spawner blocks on `read_frame` until ready signal arrives.
+5. **`spawn-agent` sleep:** `builtin_spawn_agent` sleeps 100ms to let the child process start. This is a race condition — a slow system might need more time. A proper solution would be a handshake protocol (agent sends a "ready" message after loading).

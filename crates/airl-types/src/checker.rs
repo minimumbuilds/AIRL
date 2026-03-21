@@ -64,48 +64,23 @@ impl TypeChecker {
                 ret: Box::new(Ty::Prim(PrimTy::Bool)),
             },
         );
-        self.env.bind("xor".to_string(), Ty::Func {
-            params: vec![Ty::Prim(PrimTy::Bool), Ty::Prim(PrimTy::Bool)],
-            ret: Box::new(Ty::Prim(PrimTy::Bool)),
-        });
-        // Also register = and != (runtime uses these, not ==)
-        for op in &["=", "!="] {
-            self.env.bind(
-                op.to_string(),
-                Ty::Func {
-                    params: vec![Ty::Prim(PrimTy::I64), Ty::Prim(PrimTy::I64)],
-                    ret: Box::new(Ty::Prim(PrimTy::Bool)),
-                },
-            );
-        }
 
-        // Utility builtins
-        self.env.bind("print".to_string(), Ty::TypeVar("any".into()));
-        self.env.bind("type-of".to_string(), Ty::TypeVar("any".into()));
-        self.env.bind("valid".to_string(), Ty::TypeVar("any".into()));
-        self.env.bind("shape".to_string(), Ty::TypeVar("any".into()));
-
-        // Collection builtins
-        self.env.bind("length".to_string(), Ty::TypeVar("any".into()));
-        self.env.bind("at".to_string(), Ty::TypeVar("any".into()));
-        self.env.bind("append".to_string(), Ty::TypeVar("any".into()));
-
-        // Tensor builtins
-        for op in &[
+        // Collection builtins — registered as TypeVar for polymorphic dispatch
+        for name in &[
+            "length", "at", "append", "head", "tail", "empty?", "cons",
+            "print", "type-of", "shape", "valid",
             "tensor.zeros", "tensor.ones", "tensor.rand", "tensor.identity",
             "tensor.add", "tensor.mul", "tensor.matmul", "tensor.reshape",
             "tensor.transpose", "tensor.softmax", "tensor.sum", "tensor.max",
             "tensor.slice",
+            "spawn-agent", "send",
+            "char-at", "substring", "split", "join", "contains",
+            "starts-with", "ends-with", "trim", "to-upper", "to-lower",
+            "replace", "index-of", "chars",
+            "map-new", "map-from", "map-get", "map-get-or", "map-set",
+            "map-has", "map-remove", "map-keys", "map-values", "map-size",
         ] {
-            self.env.bind(op.to_string(), Ty::TypeVar("tensor_op".into()));
-        }
-
-        // Agent builtins
-        for op in &[
-            "spawn-agent", "send", "send-async", "await", "parallel",
-            "broadcast", "retry", "escalate", "any-agent",
-        ] {
-            self.env.bind(op.to_string(), Ty::TypeVar("agent_op".into()));
+            self.env.bind(name.to_string(), Ty::TypeVar("builtin".to_string()));
         }
     }
 
@@ -322,11 +297,11 @@ impl TypeChecker {
                         Ok(*ret)
                     }
                     Ty::TypeVar(_) => {
-                        // Polymorphic builtin — check args but return type is unknown
+                        // Polymorphic builtin — check args but return wildcard type
                         for arg in args {
                             let _ = self.check_expr(arg);
                         }
-                        Ok(Ty::TypeVar("result".into()))
+                        Ok(Ty::TypeVar("_".to_string()))
                     }
                     _ => {
                         self.diags.add(Diagnostic::error(
@@ -484,7 +459,6 @@ impl TypeChecker {
             }
 
             ast::ExprKind::Forall(_, _, _) | ast::ExprKind::Exists(_, _, _) => {
-                // Quantifiers are boolean expressions used in contracts
                 Ok(Ty::Prim(PrimTy::Bool))
             }
         }
@@ -706,11 +680,6 @@ impl TypeChecker {
 
     pub fn into_diagnostics(self) -> Diagnostics {
         self.diags
-    }
-
-    /// Drain diagnostics without consuming the checker (for REPL use).
-    pub fn drain_diagnostics(&mut self) -> Diagnostics {
-        std::mem::replace(&mut self.diags, Diagnostics::new())
     }
 
     pub fn has_errors(&self) -> bool {

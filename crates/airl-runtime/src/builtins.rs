@@ -21,6 +21,8 @@ impl Builtins {
         b.register_tensor();
         b.register_collections();
         b.register_utility();
+        b.register_string();
+        b.register_map();
         b
     }
 
@@ -90,6 +92,28 @@ impl Builtins {
         self.register("length", builtin_length);
         self.register("at", builtin_at);
         self.register("append", builtin_append);
+        self.register("head", builtin_head);
+        self.register("tail", builtin_tail);
+        self.register("empty?", builtin_empty);
+        self.register("cons", builtin_cons);
+    }
+
+    // ── String ──────────────────────────────────────────
+
+    fn register_string(&mut self) {
+        self.register("char-at", builtin_char_at);
+        self.register("substring", builtin_substring);
+        self.register("split", builtin_split);
+        self.register("join", builtin_join);
+        self.register("contains", builtin_contains);
+        self.register("starts-with", builtin_starts_with);
+        self.register("ends-with", builtin_ends_with);
+        self.register("trim", builtin_trim);
+        self.register("to-upper", builtin_to_upper);
+        self.register("to-lower", builtin_to_lower);
+        self.register("replace", builtin_replace);
+        self.register("index-of", builtin_index_of);
+        self.register("chars", builtin_chars);
     }
 
     // ── Utility ─────────────────────────────────────────
@@ -99,6 +123,21 @@ impl Builtins {
         self.register("type-of", builtin_type_of);
         self.register("shape", builtin_shape);
         self.register("valid", builtin_valid);
+    }
+
+    // ── Map ─────────────────────────────────────────────
+
+    fn register_map(&mut self) {
+        self.register("map-new", builtin_map_new);
+        self.register("map-from", builtin_map_from);
+        self.register("map-get", builtin_map_get);
+        self.register("map-get-or", builtin_map_get_or);
+        self.register("map-set", builtin_map_set);
+        self.register("map-has", builtin_map_has);
+        self.register("map-remove", builtin_map_remove);
+        self.register("map-keys", builtin_map_keys);
+        self.register("map-values", builtin_map_values);
+        self.register("map-size", builtin_map_size);
     }
 }
 
@@ -491,6 +530,66 @@ fn builtin_append(args: &[Value]) -> Result<Value, RuntimeError> {
     }
 }
 
+fn builtin_head(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("head", args, 1)?;
+    match &args[0] {
+        Value::List(items) => {
+            if items.is_empty() {
+                Err(RuntimeError::TypeError("head: empty list".into()))
+            } else {
+                Ok(items[0].clone())
+            }
+        }
+        _ => Err(RuntimeError::TypeError(format!(
+            "`head` expects a List, got {}",
+            type_name(&args[0])
+        ))),
+    }
+}
+
+fn builtin_tail(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("tail", args, 1)?;
+    match &args[0] {
+        Value::List(items) => {
+            if items.is_empty() {
+                Err(RuntimeError::TypeError("tail: empty list".into()))
+            } else {
+                Ok(Value::List(items[1..].to_vec()))
+            }
+        }
+        _ => Err(RuntimeError::TypeError(format!(
+            "`tail` expects a List, got {}",
+            type_name(&args[0])
+        ))),
+    }
+}
+
+fn builtin_empty(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("empty?", args, 1)?;
+    match &args[0] {
+        Value::List(items) => Ok(Value::Bool(items.is_empty())),
+        _ => Err(RuntimeError::TypeError(format!(
+            "`empty?` expects a List, got {}",
+            type_name(&args[0])
+        ))),
+    }
+}
+
+fn builtin_cons(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("cons", args, 2)?;
+    match &args[1] {
+        Value::List(items) => {
+            let mut new_items = vec![args[0].clone()];
+            new_items.extend(items.iter().cloned());
+            Ok(Value::List(new_items))
+        }
+        _ => Err(RuntimeError::TypeError(format!(
+            "`cons` expects a List as second argument, got {}",
+            type_name(&args[1])
+        ))),
+    }
+}
+
 // ── Utility implementations ─────────────────────────────
 
 fn builtin_print(args: &[Value]) -> Result<Value, RuntimeError> {
@@ -528,6 +627,354 @@ fn builtin_valid(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Bool(true))
 }
 
+// ── String implementations ──────────────────────────────
+
+fn builtin_char_at(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("char-at", args, 2)?;
+    match (&args[0], &args[1]) {
+        (Value::Str(s), Value::Int(idx)) => {
+            let i = *idx as usize;
+            match s.chars().nth(i) {
+                Some(c) => Ok(Value::Str(c.to_string())),
+                None => Err(RuntimeError::Custom(format!(
+                    "`char-at` index {} out of bounds for string of length {}",
+                    idx,
+                    s.chars().count()
+                ))),
+            }
+        }
+        _ => Err(RuntimeError::TypeError(
+            "`char-at` expects (Str, Int)".into(),
+        )),
+    }
+}
+
+fn builtin_substring(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("substring", args, 3)?;
+    match (&args[0], &args[1], &args[2]) {
+        (Value::Str(s), Value::Int(start), Value::Int(end)) => {
+            let start = *start as usize;
+            let end = *end as usize;
+            if end < start {
+                return Err(RuntimeError::Custom(format!(
+                    "`substring` end ({}) < start ({})",
+                    end, start
+                )));
+            }
+            let result: String = s.chars().skip(start).take(end - start).collect();
+            Ok(Value::Str(result))
+        }
+        _ => Err(RuntimeError::TypeError(
+            "`substring` expects (Str, Int, Int)".into(),
+        )),
+    }
+}
+
+fn builtin_split(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("split", args, 2)?;
+    match (&args[0], &args[1]) {
+        (Value::Str(s), Value::Str(delim)) => {
+            let parts: Vec<Value> = s
+                .split(delim.as_str())
+                .map(|p| Value::Str(p.to_string()))
+                .collect();
+            Ok(Value::List(parts))
+        }
+        _ => Err(RuntimeError::TypeError(
+            "`split` expects (Str, Str)".into(),
+        )),
+    }
+}
+
+fn builtin_join(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("join", args, 2)?;
+    match (&args[0], &args[1]) {
+        (Value::List(items), Value::Str(sep)) => {
+            let mut parts = Vec::new();
+            for item in items {
+                match item {
+                    Value::Str(s) => parts.push(s.clone()),
+                    other => parts.push(format!("{}", other)),
+                }
+            }
+            Ok(Value::Str(parts.join(sep.as_str())))
+        }
+        _ => Err(RuntimeError::TypeError(
+            "`join` expects (List, Str)".into(),
+        )),
+    }
+}
+
+fn builtin_contains(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("contains", args, 2)?;
+    match (&args[0], &args[1]) {
+        (Value::Str(s), Value::Str(sub)) => Ok(Value::Bool(s.contains(sub.as_str()))),
+        _ => Err(RuntimeError::TypeError(
+            "`contains` expects (Str, Str)".into(),
+        )),
+    }
+}
+
+fn builtin_starts_with(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("starts-with", args, 2)?;
+    match (&args[0], &args[1]) {
+        (Value::Str(s), Value::Str(prefix)) => {
+            Ok(Value::Bool(s.starts_with(prefix.as_str())))
+        }
+        _ => Err(RuntimeError::TypeError(
+            "`starts-with` expects (Str, Str)".into(),
+        )),
+    }
+}
+
+fn builtin_ends_with(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("ends-with", args, 2)?;
+    match (&args[0], &args[1]) {
+        (Value::Str(s), Value::Str(suffix)) => {
+            Ok(Value::Bool(s.ends_with(suffix.as_str())))
+        }
+        _ => Err(RuntimeError::TypeError(
+            "`ends-with` expects (Str, Str)".into(),
+        )),
+    }
+}
+
+fn builtin_trim(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("trim", args, 1)?;
+    match &args[0] {
+        Value::Str(s) => Ok(Value::Str(s.trim().to_string())),
+        _ => Err(RuntimeError::TypeError(
+            "`trim` expects a Str argument".into(),
+        )),
+    }
+}
+
+fn builtin_to_upper(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("to-upper", args, 1)?;
+    match &args[0] {
+        Value::Str(s) => Ok(Value::Str(s.to_uppercase())),
+        _ => Err(RuntimeError::TypeError(
+            "`to-upper` expects a Str argument".into(),
+        )),
+    }
+}
+
+fn builtin_to_lower(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("to-lower", args, 1)?;
+    match &args[0] {
+        Value::Str(s) => Ok(Value::Str(s.to_lowercase())),
+        _ => Err(RuntimeError::TypeError(
+            "`to-lower` expects a Str argument".into(),
+        )),
+    }
+}
+
+fn builtin_replace(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("replace", args, 3)?;
+    match (&args[0], &args[1], &args[2]) {
+        (Value::Str(s), Value::Str(old), Value::Str(new)) => {
+            Ok(Value::Str(s.replace(old.as_str(), new.as_str())))
+        }
+        _ => Err(RuntimeError::TypeError(
+            "`replace` expects (Str, Str, Str)".into(),
+        )),
+    }
+}
+
+fn builtin_index_of(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("index-of", args, 2)?;
+    match (&args[0], &args[1]) {
+        (Value::Str(s), Value::Str(sub)) => {
+            // Find the byte offset, then convert to char index
+            match s.find(sub.as_str()) {
+                Some(byte_offset) => {
+                    let char_index = s[..byte_offset].chars().count() as i64;
+                    Ok(Value::Int(char_index))
+                }
+                None => Ok(Value::Int(-1)),
+            }
+        }
+        _ => Err(RuntimeError::TypeError(
+            "`index-of` expects (Str, Str)".into(),
+        )),
+    }
+}
+
+fn builtin_chars(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("chars", args, 1)?;
+    match &args[0] {
+        Value::Str(s) => {
+            let char_list: Vec<Value> = s
+                .chars()
+                .map(|c| Value::Str(c.to_string()))
+                .collect();
+            Ok(Value::List(char_list))
+        }
+        _ => Err(RuntimeError::TypeError(
+            "`chars` expects a Str argument".into(),
+        )),
+    }
+}
+
+// ── Map implementations ─────────────────────────────────
+
+fn builtin_map_new(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("map-new", args, 0)?;
+    Ok(Value::Map(std::collections::HashMap::new()))
+}
+
+fn builtin_map_from(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("map-from", args, 1)?;
+    let items = match &args[0] {
+        Value::List(items) => items,
+        _ => return Err(RuntimeError::TypeError(
+            "`map-from` expects a List argument".into(),
+        )),
+    };
+    if items.len() % 2 != 0 {
+        return Err(RuntimeError::TypeError(
+            "`map-from` expects an even-length list of [key value ...] pairs".into(),
+        ));
+    }
+    let mut m = std::collections::HashMap::new();
+    for chunk in items.chunks(2) {
+        let key = match &chunk[0] {
+            Value::Str(s) => s.clone(),
+            _ => return Err(RuntimeError::TypeError(
+                "`map-from`: keys must be strings".into(),
+            )),
+        };
+        m.insert(key, chunk[1].clone());
+    }
+    Ok(Value::Map(m))
+}
+
+fn builtin_map_get(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("map-get", args, 2)?;
+    let m = match &args[0] {
+        Value::Map(m) => m,
+        _ => return Err(RuntimeError::TypeError(
+            "`map-get`: first argument must be a Map".into(),
+        )),
+    };
+    let key = match &args[1] {
+        Value::Str(s) => s,
+        _ => return Err(RuntimeError::TypeError(
+            "`map-get`: key must be a String".into(),
+        )),
+    };
+    Ok(m.get(key.as_str()).cloned().unwrap_or(Value::Nil))
+}
+
+fn builtin_map_get_or(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("map-get-or", args, 3)?;
+    let m = match &args[0] {
+        Value::Map(m) => m,
+        _ => return Err(RuntimeError::TypeError(
+            "`map-get-or`: first argument must be a Map".into(),
+        )),
+    };
+    let key = match &args[1] {
+        Value::Str(s) => s,
+        _ => return Err(RuntimeError::TypeError(
+            "`map-get-or`: key must be a String".into(),
+        )),
+    };
+    Ok(m.get(key.as_str()).cloned().unwrap_or_else(|| args[2].clone()))
+}
+
+fn builtin_map_set(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("map-set", args, 3)?;
+    let m = match &args[0] {
+        Value::Map(m) => m,
+        _ => return Err(RuntimeError::TypeError(
+            "`map-set`: first argument must be a Map".into(),
+        )),
+    };
+    let key = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`map-set`: key must be a String".into(),
+        )),
+    };
+    let mut new_map = m.clone();
+    new_map.insert(key, args[2].clone());
+    Ok(Value::Map(new_map))
+}
+
+fn builtin_map_has(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("map-has", args, 2)?;
+    let m = match &args[0] {
+        Value::Map(m) => m,
+        _ => return Err(RuntimeError::TypeError(
+            "`map-has`: first argument must be a Map".into(),
+        )),
+    };
+    let key = match &args[1] {
+        Value::Str(s) => s,
+        _ => return Err(RuntimeError::TypeError(
+            "`map-has`: key must be a String".into(),
+        )),
+    };
+    Ok(Value::Bool(m.contains_key(key.as_str())))
+}
+
+fn builtin_map_remove(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("map-remove", args, 2)?;
+    let m = match &args[0] {
+        Value::Map(m) => m,
+        _ => return Err(RuntimeError::TypeError(
+            "`map-remove`: first argument must be a Map".into(),
+        )),
+    };
+    let key = match &args[1] {
+        Value::Str(s) => s,
+        _ => return Err(RuntimeError::TypeError(
+            "`map-remove`: key must be a String".into(),
+        )),
+    };
+    let mut new_map = m.clone();
+    new_map.remove(key.as_str());
+    Ok(Value::Map(new_map))
+}
+
+fn builtin_map_keys(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("map-keys", args, 1)?;
+    let m = match &args[0] {
+        Value::Map(m) => m,
+        _ => return Err(RuntimeError::TypeError(
+            "`map-keys`: argument must be a Map".into(),
+        )),
+    };
+    let mut keys: Vec<String> = m.keys().cloned().collect();
+    keys.sort();
+    Ok(Value::List(keys.into_iter().map(Value::Str).collect()))
+}
+
+fn builtin_map_values(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("map-values", args, 1)?;
+    let m = match &args[0] {
+        Value::Map(m) => m,
+        _ => return Err(RuntimeError::TypeError(
+            "`map-values`: argument must be a Map".into(),
+        )),
+    };
+    let mut keys: Vec<&String> = m.keys().collect();
+    keys.sort();
+    Ok(Value::List(keys.into_iter().map(|k| m[k].clone()).collect()))
+}
+
+fn builtin_map_size(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("map-size", args, 1)?;
+    let m = match &args[0] {
+        Value::Map(m) => m,
+        _ => return Err(RuntimeError::TypeError(
+            "`map-size`: argument must be a Map".into(),
+        )),
+    };
+    Ok(Value::Int(m.len() as i64))
+}
+
 // ── Helper ──────────────────────────────────────────────
 
 fn type_name(val: &Value) -> &'static str {
@@ -544,6 +991,7 @@ fn type_name(val: &Value) -> &'static str {
         Value::Tuple(_) => "Tuple",
         Value::Variant(_, _) => "Variant",
         Value::Struct(_) => "Struct",
+        Value::Map(_) => "Map",
         Value::Function(_) => "Function",
         Value::Lambda(_) => "Lambda",
         Value::BuiltinFn(_) => "BuiltinFn",
@@ -805,6 +1253,139 @@ mod tests {
         let b = builtins();
         assert!(b.has("+"));
         assert!(b.has("tensor.matmul"));
+        assert!(b.has("char-at"));
         assert!(!b.has("nonexistent"));
+    }
+
+    // ── String ─────────────────────────────────────────
+
+    #[test]
+    fn char_at() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "char-at", &[Value::Str("hello".into()), Value::Int(0)]).unwrap(),
+            Value::Str("h".into())
+        );
+        assert_eq!(
+            call(&b, "char-at", &[Value::Str("hello".into()), Value::Int(4)]).unwrap(),
+            Value::Str("o".into())
+        );
+    }
+
+    #[test]
+    fn char_at_out_of_bounds() {
+        let b = builtins();
+        let r = call(&b, "char-at", &[Value::Str("hi".into()), Value::Int(5)]);
+        assert!(matches!(r, Err(RuntimeError::Custom(_))));
+    }
+
+    #[test]
+    fn substring_basic() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "substring", &[Value::Str("hello world".into()), Value::Int(0), Value::Int(5)]).unwrap(),
+            Value::Str("hello".into())
+        );
+    }
+
+    #[test]
+    fn split_and_join() {
+        let b = builtins();
+        let split_result = call(&b, "split", &[Value::Str("a,b,c".into()), Value::Str(",".into())]).unwrap();
+        assert_eq!(
+            split_result,
+            Value::List(vec![Value::Str("a".into()), Value::Str("b".into()), Value::Str("c".into())])
+        );
+        let join_result = call(&b, "join", &[split_result, Value::Str("-".into())]).unwrap();
+        assert_eq!(join_result, Value::Str("a-b-c".into()));
+    }
+
+    #[test]
+    fn contains_str() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "contains", &[Value::Str("hello world".into()), Value::Str("world".into())]).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            call(&b, "contains", &[Value::Str("hello".into()), Value::Str("xyz".into())]).unwrap(),
+            Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn starts_ends_with() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "starts-with", &[Value::Str("hello".into()), Value::Str("hel".into())]).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            call(&b, "ends-with", &[Value::Str("hello".into()), Value::Str("llo".into())]).unwrap(),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn trim_str() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "trim", &[Value::Str("  hello  ".into())]).unwrap(),
+            Value::Str("hello".into())
+        );
+    }
+
+    #[test]
+    fn to_upper_lower() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "to-upper", &[Value::Str("hello".into())]).unwrap(),
+            Value::Str("HELLO".into())
+        );
+        assert_eq!(
+            call(&b, "to-lower", &[Value::Str("HELLO".into())]).unwrap(),
+            Value::Str("hello".into())
+        );
+    }
+
+    #[test]
+    fn replace_str() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "replace", &[Value::Str("hello world".into()), Value::Str("world".into()), Value::Str("AIRL".into())]).unwrap(),
+            Value::Str("hello AIRL".into())
+        );
+    }
+
+    #[test]
+    fn index_of_str() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "index-of", &[Value::Str("hello world".into()), Value::Str("world".into())]).unwrap(),
+            Value::Int(6)
+        );
+        assert_eq!(
+            call(&b, "index-of", &[Value::Str("hello".into()), Value::Str("xyz".into())]).unwrap(),
+            Value::Int(-1)
+        );
+    }
+
+    #[test]
+    fn chars_str() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "chars", &[Value::Str("abc".into())]).unwrap(),
+            Value::List(vec![Value::Str("a".into()), Value::Str("b".into()), Value::Str("c".into())])
+        );
+    }
+
+    #[test]
+    fn chars_unicode() {
+        let b = builtins();
+        let result = call(&b, "chars", &[Value::Str("hi".into())]).unwrap();
+        // Unicode: each emoji is one char
+        if let Value::List(items) = &result {
+            assert_eq!(items.len(), 2);
+        }
     }
 }

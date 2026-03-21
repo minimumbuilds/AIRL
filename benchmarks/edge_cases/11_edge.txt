@@ -1,0 +1,1 @@
+Call remove-duplicates with a list where all elements are the same [7, 7, 7, 7]

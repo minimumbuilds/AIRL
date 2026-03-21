@@ -1,0 +1,79 @@
+;; ── AIRL Standard Library: Result Combinators ──────────────────
+
+;; ── is-ok? : check if Result is Ok ──
+(defn is-ok?
+  :sig [(r : _) -> bool]
+  :intent "Check if a Result is an Ok variant"
+  :requires [(valid r)]
+  :ensures [(valid result)]
+  :body (match r
+          (Ok _) true
+          (Err _) false))
+
+;; ── is-err? : check if Result is Err ──
+(defn is-err?
+  :sig [(r : _) -> bool]
+  :intent "Check if a Result is an Err variant"
+  :requires [(valid r)]
+  :ensures [(valid result)]
+  :body (match r
+          (Ok _) false
+          (Err _) true))
+
+;; ── unwrap-or : extract Ok value or return default ──
+(defn unwrap-or
+  :sig [(r : _) (default : _) -> _]
+  :intent "Extract Ok value, or return default if Err"
+  :requires [(valid r)]
+  :ensures [(valid result)]
+  :body (match r
+          (Ok v) v
+          (Err _) default))
+
+;; ── map-ok : apply function to Ok value ──
+(defn map-ok
+  :sig [(f : fn) (r : _) -> _]
+  :intent "Apply f to the Ok value, leave Err unchanged"
+  :requires [(valid f)]
+  :ensures [(valid result)]
+  :body (match r
+          (Ok v) (Ok (f v))
+          (Err e) (Err e)))
+
+;; ── map-err : apply function to Err value ──
+(defn map-err
+  :sig [(f : fn) (r : _) -> _]
+  :intent "Apply f to the Err value, leave Ok unchanged"
+  :requires [(valid f)]
+  :ensures [(valid result)]
+  :body (match r
+          (Ok v) (Ok v)
+          (Err e) (Err (f e))))
+
+;; ── and-then : chain Result-returning functions ──
+(defn and-then
+  :sig [(f : fn) (r : _) -> _]
+  :intent "If Ok, apply f (which returns a Result). If Err, propagate."
+  :requires [(valid f)]
+  :ensures [(valid result)]
+  :body (match r
+          (Ok v) (f v)
+          (Err e) (Err e)))
+
+;; ── or-else : recover from Err ──
+(defn or-else
+  :sig [(f : fn) (r : _) -> _]
+  :intent "If Err, apply f to try recovery. If Ok, return as-is."
+  :requires [(valid f)]
+  :ensures [(valid result)]
+  :body (match r
+          (Ok v) (Ok v)
+          (Err e) (f e)))
+
+;; ── ok-or : convert value to Ok, or Err if nil ──
+(defn ok-or
+  :sig [(val : _) (err : _) -> _]
+  :intent "Wrap non-nil value in Ok, or return Err if nil"
+  :requires [(valid err)]
+  :ensures [(valid result)]
+  :body (if (= val nil) (Err err) (Ok val)))

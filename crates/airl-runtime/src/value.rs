@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use airl_syntax::ast::{FnDef, Param, Expr};
@@ -33,6 +33,7 @@ pub enum Value {
     Tuple(Vec<Value>),
     Variant(String, Box<Value>),
     Struct(BTreeMap<String, Value>),
+    Map(HashMap<String, Value>),
     Function(FnValue),
     Lambda(LambdaValue),
     BuiltinFn(String),
@@ -85,6 +86,16 @@ impl fmt::Display for Value {
                 }
                 write!(f, "}}")
             }
+            Value::Map(m) => {
+                let mut keys: Vec<&String> = m.keys().collect();
+                keys.sort();
+                write!(f, "{{")?;
+                for (i, k) in keys.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}: {}", k, m[*k])?;
+                }
+                write!(f, "}}")
+            }
             Value::Function(fv) => write!(f, "<fn {}>", fv.name),
             Value::Lambda(_) => write!(f, "<lambda>"),
             Value::BuiltinFn(name) => write!(f, "<builtin {}>", name),
@@ -106,6 +117,12 @@ impl PartialEq for Value {
             (Value::Tuple(a), Value::Tuple(b)) => a == b,
             (Value::Variant(na, va), Value::Variant(nb, vb)) => na == nb && va == vb,
             (Value::Struct(a), Value::Struct(b)) => a == b,
+            (Value::Map(a), Value::Map(b)) => {
+                if a.len() != b.len() {
+                    return false;
+                }
+                a.iter().all(|(k, v)| b.get(k).map_or(false, |bv| v == bv))
+            }
             (Value::BuiltinFn(a), Value::BuiltinFn(b)) => a == b,
             (Value::Tensor(a), Value::Tensor(b)) => {
                 a.dtype == b.dtype && a.shape == b.shape && a.data == b.data
@@ -271,6 +288,30 @@ mod tests {
         let a = Value::Function(FnValue { name: "f".into(), def: def.clone() });
         let b = Value::Function(FnValue { name: "f".into(), def });
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn map_display_and_eq() {
+        let mut m1 = HashMap::new();
+        m1.insert("b".into(), Value::Int(2));
+        m1.insert("a".into(), Value::Int(1));
+        let v1 = Value::Map(m1);
+        // Display should sort keys
+        assert_eq!(format!("{}", v1), "{a: 1, b: 2}");
+
+        let mut m2 = HashMap::new();
+        m2.insert("a".into(), Value::Int(1));
+        m2.insert("b".into(), Value::Int(2));
+        let v2 = Value::Map(m2);
+        assert_eq!(v1, v2);
+
+        let mut m3 = HashMap::new();
+        m3.insert("a".into(), Value::Int(1));
+        let v3 = Value::Map(m3);
+        assert_ne!(v1, v3);
+
+        let empty = Value::Map(HashMap::new());
+        assert_eq!(format!("{}", empty), "{}");
     }
 
     #[test]

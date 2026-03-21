@@ -1,0 +1,29 @@
+;; EXPECT: ()
+;; Test is-ok? / is-err?
+(print "is-ok? Ok:" (is-ok? (Ok 42)))
+(print "is-ok? Err:" (is-ok? (Err "fail")))
+(print "is-err? Err:" (is-err? (Err "fail")))
+
+;; Test unwrap-or
+(print "unwrap-or Ok:" (unwrap-or (Ok 42) 0))
+(print "unwrap-or Err:" (unwrap-or (Err "fail") 0))
+
+;; Test map-ok
+(print "map-ok Ok:" (map-ok (fn [x] (* x 2)) (Ok 21)))
+(print "map-ok Err:" (map-ok (fn [x] (* x 2)) (Err "fail")))
+
+;; Test map-err
+(print "map-err Err:" (map-err (fn [e] (+ e "!")) (Err "oops")))
+(print "map-err Ok:" (map-err (fn [e] (+ e "!")) (Ok 42)))
+
+;; Test and-then
+(print "and-then Ok:" (and-then (fn [x] (if (> x 0) (Ok (* x 2)) (Err "negative"))) (Ok 5)))
+(print "and-then Err:" (and-then (fn [x] (Ok (* x 2))) (Err "already failed")))
+
+;; Test or-else
+(print "or-else Err:" (or-else (fn [e] (Ok 0)) (Err "failed")))
+(print "or-else Ok:" (or-else (fn [e] (Ok 0)) (Ok 42)))
+
+;; Test ok-or
+(print "ok-or value:" (ok-or 42 "was nil"))
+(print "ok-or nil:" (ok-or nil "was nil"))

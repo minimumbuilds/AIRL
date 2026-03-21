@@ -1,0 +1,36 @@
+;; EXPECT: ()
+;; Test abs
+(print "abs -5:" (abs -5))
+(print "abs 3:" (abs 3))
+(print "abs 0:" (abs 0))
+
+;; Test min/max
+(print "min 3 7:" (min 3 7))
+(print "max 3 7:" (max 3 7))
+
+;; Test clamp
+(print "clamp 5 1 10:" (clamp 5 1 10))
+(print "clamp -3 0 10:" (clamp -3 0 10))
+(print "clamp 15 0 10:" (clamp 15 0 10))
+
+;; Test sign
+(print "sign -42:" (sign -42))
+(print "sign 0:" (sign 0))
+(print "sign 7:" (sign 7))
+
+;; Test even?/odd?
+(print "even? 4:" (even? 4))
+(print "even? 3:" (even? 3))
+(print "odd? 5:" (odd? 5))
+
+;; Test pow
+(print "pow 2 10:" (pow 2 10))
+(print "pow 3 0:" (pow 3 0))
+
+;; Test gcd/lcm
+(print "gcd 12 8:" (gcd 12 8))
+(print "lcm 4 6:" (lcm 4 6))
+
+;; Test sum-list/product-list
+(print "sum-list:" (sum-list [1 2 3 4 5]))
+(print "product-list:" (product-list [1 2 3 4 5]))

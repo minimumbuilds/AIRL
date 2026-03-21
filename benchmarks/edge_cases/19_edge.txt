@@ -1,0 +1,1 @@
+Call flatten with all empty inner lists [[], [], []]

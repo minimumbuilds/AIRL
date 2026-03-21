@@ -1,0 +1,16 @@
+;; EXPECT: ()
+;; Test sort ascending
+(let (sorted : List (sort (fn [a b] (< a b)) [5 3 1 4 2]))
+  (print "sort asc:" sorted))
+
+;; Test sort descending
+(let (sorted : List (sort (fn [a b] (> a b)) [5 3 1 4 2]))
+  (print "sort desc:" sorted))
+
+;; Test sort empty
+(let (sorted : List (sort (fn [a b] (< a b)) []))
+  (print "sort empty:" sorted))
+
+;; Test sort single
+(let (sorted : List (sort (fn [a b] (< a b)) [42]))
+  (print "sort single:" sorted))

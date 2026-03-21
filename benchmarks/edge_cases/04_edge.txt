@@ -1,0 +1,1 @@
+Call validate-age with argument -5 (negative age)

@@ -1,0 +1,16 @@
+;; EXPECT: ()
+;; Test any
+(let (has-even : bool (any (fn [x] (= (% x 2) 0)) [1 3 4 5]))
+  (print "any even:" has-even))
+
+;; Test all
+(let (all-pos : bool (all (fn [x] (> x 0)) [1 2 3 4]))
+  (print "all positive:" all-pos))
+
+;; Test find
+(let (found : i64 (find (fn [x] (> x 3)) [1 2 3 4 5]))
+  (print "find >3:" found))
+
+;; Test find nil
+(let (not-found : _ (find (fn [x] (> x 100)) [1 2 3]))
+  (print "find >100:" not-found))

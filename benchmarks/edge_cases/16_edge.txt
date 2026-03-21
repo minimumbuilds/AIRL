@@ -1,0 +1,1 @@
+Call safe-sqrt with argument -4 (negative input)

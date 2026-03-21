@@ -1,0 +1,1 @@
+Call running-sum with a single-element list [42]
