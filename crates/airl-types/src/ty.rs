@@ -83,6 +83,64 @@ pub struct TyField {
     pub ty: Ty,
 }
 
+impl std::fmt::Display for Ty {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Ty::Prim(p) => write!(f, "{}", p),
+            Ty::Tensor { elem, shape } => {
+                let dims: Vec<String> = shape.iter().map(|d| format!("{:?}", d)).collect();
+                write!(f, "tensor[{} {}]", elem, dims.join(" "))
+            }
+            Ty::Func { params, ret } => {
+                let ps: Vec<String> = params.iter().map(|p| format!("{}", p)).collect();
+                write!(f, "({} -> {})", ps.join(" "), ret)
+            }
+            Ty::Named { name, args } => {
+                if args.is_empty() {
+                    write!(f, "{}", name)
+                } else {
+                    let as_: Vec<String> = args.iter().map(|a| match a {
+                        TyArg::Type(t) => format!("{}", t),
+                        TyArg::Nat(d) => format!("{:?}", d),
+                    }).collect();
+                    write!(f, "{}[{}]", name, as_.join(", "))
+                }
+            }
+            Ty::Sum(variants) => {
+                let vs: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
+                write!(f, "({})", vs.join(" | "))
+            }
+            Ty::Product(fields) => {
+                let fs: Vec<String> = fields.iter()
+                    .map(|fld| format!("{}: {}", fld.name, fld.ty))
+                    .collect();
+                write!(f, "{{{}}}", fs.join(", "))
+            }
+            Ty::TypeVar(s) => write!(f, "{}", s),
+            Ty::Nat(d) => write!(f, "{:?}", d),
+            Ty::Unit => write!(f, "()"),
+            Ty::Never => write!(f, "!"),
+        }
+    }
+}
+
+impl std::fmt::Display for PrimTy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            PrimTy::Bool => "bool",
+            PrimTy::I8 => "i8", PrimTy::I16 => "i16",
+            PrimTy::I32 => "i32", PrimTy::I64 => "i64",
+            PrimTy::U8 => "u8", PrimTy::U16 => "u16",
+            PrimTy::U32 => "u32", PrimTy::U64 => "u64",
+            PrimTy::F16 => "f16", PrimTy::F32 => "f32", PrimTy::F64 => "f64",
+            PrimTy::BF16 => "bf16",
+            PrimTy::Nat => "Nat",
+            PrimTy::Str => "String",
+        };
+        write!(f, "{}", name)
+    }
+}
+
 /// Whether a type supports Copy semantics.
 pub fn is_copy(ty: &Ty) -> bool {
     match ty {

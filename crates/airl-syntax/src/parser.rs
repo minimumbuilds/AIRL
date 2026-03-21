@@ -48,6 +48,8 @@ pub fn parse_expr(sexpr: &SExpr, diags: &mut Diagnostics) -> Result<Expr, Diagno
                     "match" => parse_match_expr(&items[1..], span, diags),
                     "fn" => parse_lambda_expr(&items[1..], span, diags),
                     "try" => parse_try_expr(&items[1..], span, diags),
+                    "forall" => parse_quantifier_expr(&items[1..], span, true, diags),
+                    "exists" => parse_quantifier_expr(&items[1..], span, false, diags),
                     s if is_capitalized(s) => {
                         // VariantCtor
                         let name = s.to_string();
@@ -253,6 +255,84 @@ fn parse_try_expr(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Resul
         kind: ExprKind::Try(Box::new(inner)),
         span,
     })
+}
+
+/// Parse a quantifier expression: (forall [i : Type] (where guard)? body)
+///                                 (exists [i : Type] (where guard)? body)
+fn parse_quantifier_expr(
+    items: &[SExpr],
+    span: Span,
+    is_forall: bool,
+    diags: &mut Diagnostics,
+) -> Result<Expr, Diagnostic> {
+    let name = if is_forall { "forall" } else { "exists" };
+    if items.len() < 2 {
+        return Err(Diagnostic::error(
+            &format!("{} requires a parameter list and body", name), span,
+        ));
+    }
+
+    // Parse parameter from bracket list [name : Type]
+    let param = match &items[0] {
+        SExpr::BracketList(param_items, pspan) => {
+            if param_items.len() < 3 {
+                return Err(Diagnostic::error(
+                    &format!("{} parameter requires [name : Type]", name), *pspan,
+                ));
+            }
+            let pname = expect_symbol(&param_items[0])?;
+            if param_items[1].as_symbol() != Some(":") {
+                return Err(Diagnostic::error("expected ':' in parameter", *pspan));
+            }
+            let ty_name = expect_symbol(&param_items[2])?;
+            Param {
+                ownership: Ownership::Default,
+                name: pname,
+                ty: AstType { kind: AstTypeKind::Named(ty_name), span: *pspan },
+                default: None,
+                span: *pspan,
+            }
+        }
+        _ => return Err(Diagnostic::error(
+            &format!("{} requires [name : Type] parameter list", name), span,
+        )),
+    };
+
+    // Check for optional (where guard) clause
+    let (where_clause, body_idx) = if items.len() >= 3 {
+        // Check if items[1] is (where ...)
+        if let SExpr::List(inner, _) = &items[1] {
+            if !inner.is_empty() && inner[0].as_symbol() == Some("where") {
+                if inner.len() != 2 {
+                    return Err(Diagnostic::error("where clause requires exactly one expression", span));
+                }
+                let guard = parse_expr(&inner[1], diags)?;
+                (Some(Box::new(guard)), 2)
+            } else {
+                (None, 1)
+            }
+        } else {
+            (None, 1)
+        }
+    } else {
+        (None, 1)
+    };
+
+    if body_idx >= items.len() {
+        return Err(Diagnostic::error(
+            &format!("{} requires a body expression", name), span,
+        ));
+    }
+
+    let body = parse_expr(&items[body_idx], diags)?;
+
+    let kind = if is_forall {
+        ExprKind::Forall(Box::new(param), where_clause, Box::new(body))
+    } else {
+        ExprKind::Exists(Box::new(param), where_clause, Box::new(body))
+    };
+
+    Ok(Expr { kind, span })
 }
 
 // ── Pattern parsing ────────────────────────────────────

@@ -1,4 +1,4 @@
-;; ERROR: ContractViolation
+;; ERROR: contract violated
 (defn safe-div
   :sig [(a : i32) (b : i32) -> i32]
   :intent "divide safely"

@@ -1,0 +1,6 @@
+;; EXPECT: 42
+;; Test nested pattern matching: (Ok (Ok v))
+(match (Ok (Ok 42))
+  (Ok (Ok v)) v
+  (Ok (Err e)) 0
+  (Err e) -1)

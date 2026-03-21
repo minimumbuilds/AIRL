@@ -1,0 +1,9 @@
+;; EXPECT: 7
+;; Test that Z3 can verify quantified contracts
+(defn add
+  :sig [(a : i32) (b : i32) -> i32]
+  :intent "add two numbers"
+  :requires [(valid a) (valid b)]
+  :ensures [(= result (+ a b))]
+  :body (+ a b))
+(add 3 4)

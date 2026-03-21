@@ -1,0 +1,6 @@
+;; EXPECT: true
+;; Test forall as a standalone expression
+;; All integers 0..9999 satisfy: i >= 0
+(forall [i : Nat]
+  (where (< i 10))
+  (>= i 0))

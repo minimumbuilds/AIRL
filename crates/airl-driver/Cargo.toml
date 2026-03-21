@@ -19,3 +19,7 @@ airl-contracts = { path = "../airl-contracts" }
 airl-runtime = { path = "../airl-runtime" }
 airl-agent = { path = "../airl-agent" }
 airl-solver = { path = "../airl-solver" }
+
+[features]
+mlir = ["airl-runtime/mlir"]
+cuda = ["airl-runtime/cuda"]

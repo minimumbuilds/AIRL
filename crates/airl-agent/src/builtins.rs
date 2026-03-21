@@ -1,11 +1,12 @@
-//! Agent builtins — stub registrations for Phase 1.
+//! Agent builtins — all implemented in `airl-runtime/src/eval.rs`.
 //!
-//! These will be wired into the interpreter when the full pipeline is ready.
-//! For now, we define the names and signatures that the agent system will provide.
+//! These names are registered with the interpreter and dispatched
+//! via the `&mut self` builtin pattern in the `FnCall` arm of `eval()`.
 
 /// Names of agent builtins that will be registered with the interpreter.
 pub const AGENT_BUILTINS: &[&str] = &[
     "send",
+    "send-async",
     "await",
     "spawn-agent",
     "parallel",
@@ -44,6 +45,6 @@ mod tests {
 
     #[test]
     fn builtin_count() {
-        assert_eq!(AGENT_BUILTINS.len(), 8);
+        assert_eq!(AGENT_BUILTINS.len(), 9);
     }
 }

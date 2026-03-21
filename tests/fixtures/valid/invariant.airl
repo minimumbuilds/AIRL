@@ -1,0 +1,9 @@
+;; EXPECT: 10
+(defn clamp-positive
+  :sig [(x : i64) -> i64]
+  :intent "Return x if positive, else 0"
+  :requires [(valid x)]
+  :ensures [(>= result 0)]
+  :invariant [(>= result 0)]
+  :body (if (< x 0) 0 x))
+(clamp-positive 10)

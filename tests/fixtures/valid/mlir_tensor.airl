@@ -1,0 +1,5 @@
+;; EXPECT: 18.0
+;; MLIR tensor compilation test fixture.
+;; When built with --features mlir, tensor.add executes via the MLIR pipeline.
+;; Without the feature, it falls through to Cranelift JIT or interpreted builtins.
+(tensor.sum (tensor.add (tensor.ones [3 3]) (tensor.ones [3 3])))

@@ -1,0 +1,12 @@
+[package]
+name = "airl-mlir"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+melior = "0.19"
+cudarc = { version = "0.19", optional = true, default-features = false, features = ["driver", "nvrtc", "fallback-dynamic-loading", "cuda-12080"] }
+
+[features]
+default = []
+cuda = ["cudarc"]

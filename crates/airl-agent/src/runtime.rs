@@ -145,6 +145,11 @@ pub fn run_agent_loop(module_path: &str, endpoint: &Endpoint) -> Result<(), Agen
             let stdout = std::io::stdout();
             let mut reader = std::io::BufReader::new(stdin.lock());
             let mut writer = std::io::BufWriter::new(stdout.lock());
+
+            // Send ready handshake so spawner knows we're initialized
+            crate::transport::write_frame(&mut writer, "ready")
+                .map_err(|e| AgentError::Protocol(format!("cannot send ready: {}", e)))?;
+
             handle_stdio_connection(&mut reader, &mut writer, &mut interp);
             Ok(())
         }

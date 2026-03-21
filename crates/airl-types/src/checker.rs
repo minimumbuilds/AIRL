@@ -64,6 +64,49 @@ impl TypeChecker {
                 ret: Box::new(Ty::Prim(PrimTy::Bool)),
             },
         );
+        self.env.bind("xor".to_string(), Ty::Func {
+            params: vec![Ty::Prim(PrimTy::Bool), Ty::Prim(PrimTy::Bool)],
+            ret: Box::new(Ty::Prim(PrimTy::Bool)),
+        });
+        // Also register = and != (runtime uses these, not ==)
+        for op in &["=", "!="] {
+            self.env.bind(
+                op.to_string(),
+                Ty::Func {
+                    params: vec![Ty::Prim(PrimTy::I64), Ty::Prim(PrimTy::I64)],
+                    ret: Box::new(Ty::Prim(PrimTy::Bool)),
+                },
+            );
+        }
+
+        // Utility builtins
+        self.env.bind("print".to_string(), Ty::TypeVar("any".into()));
+        self.env.bind("type-of".to_string(), Ty::TypeVar("any".into()));
+        self.env.bind("valid".to_string(), Ty::TypeVar("any".into()));
+        self.env.bind("shape".to_string(), Ty::TypeVar("any".into()));
+
+        // Collection builtins
+        self.env.bind("length".to_string(), Ty::TypeVar("any".into()));
+        self.env.bind("at".to_string(), Ty::TypeVar("any".into()));
+        self.env.bind("append".to_string(), Ty::TypeVar("any".into()));
+
+        // Tensor builtins
+        for op in &[
+            "tensor.zeros", "tensor.ones", "tensor.rand", "tensor.identity",
+            "tensor.add", "tensor.mul", "tensor.matmul", "tensor.reshape",
+            "tensor.transpose", "tensor.softmax", "tensor.sum", "tensor.max",
+            "tensor.slice",
+        ] {
+            self.env.bind(op.to_string(), Ty::TypeVar("tensor_op".into()));
+        }
+
+        // Agent builtins
+        for op in &[
+            "spawn-agent", "send", "send-async", "await", "parallel",
+            "broadcast", "retry", "escalate", "any-agent",
+        ] {
+            self.env.bind(op.to_string(), Ty::TypeVar("agent_op".into()));
+        }
     }
 
     // ── Type resolution ──────────────────────────────────
@@ -278,6 +321,13 @@ impl TypeChecker {
                         }
                         Ok(*ret)
                     }
+                    Ty::TypeVar(_) => {
+                        // Polymorphic builtin — check args but return type is unknown
+                        for arg in args {
+                            let _ = self.check_expr(arg);
+                        }
+                        Ok(Ty::TypeVar("result".into()))
+                    }
                     _ => {
                         self.diags.add(Diagnostic::error(
                             format!("expected function type, got {:?}", callee_ty),
@@ -431,6 +481,11 @@ impl TypeChecker {
                     }
                 }
                 Ok(first_ty)
+            }
+
+            ast::ExprKind::Forall(_, _, _) | ast::ExprKind::Exists(_, _, _) => {
+                // Quantifiers are boolean expressions used in contracts
+                Ok(Ty::Prim(PrimTy::Bool))
             }
         }
     }
@@ -651,6 +706,11 @@ impl TypeChecker {
 
     pub fn into_diagnostics(self) -> Diagnostics {
         self.diags
+    }
+
+    /// Drain diagnostics without consuming the checker (for REPL use).
+    pub fn drain_diagnostics(&mut self) -> Diagnostics {
+        std::mem::replace(&mut self.diags, Diagnostics::new())
     }
 
     pub fn has_errors(&self) -> bool {
