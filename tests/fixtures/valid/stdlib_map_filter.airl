@@ -1,0 +1,12 @@
+;; EXPECT: ()
+;; Test map
+(let (doubled : List (map (fn [x] (* x 2)) [1 2 3 4 5]))
+  (print "map doubled:" doubled))
+
+;; Test filter
+(let (evens : List (filter (fn [x] (= (% x 2) 0)) [1 2 3 4 5 6]))
+  (print "filter evens:" evens))
+
+;; Test map with empty list
+(let (result : List (map (fn [x] (+ x 10)) []))
+  (print "map empty:" result))

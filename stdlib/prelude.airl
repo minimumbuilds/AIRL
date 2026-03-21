@@ -1,0 +1,162 @@
+;; ── AIRL Standard Library: Collections ──────────────────
+
+;; ── map : apply f to each element ──
+(defn map
+  :sig [(f : fn) (xs : List) -> List]
+  :intent "Apply function to each element of a list"
+  :requires [(valid f)]
+  :ensures [(= (length result) (length xs))]
+  :body (if (empty? xs)
+          []
+          (cons (f (head xs)) (map f (tail xs)))))
+
+;; ── filter : keep elements matching predicate ──
+(defn filter
+  :sig [(pred : fn) (xs : List) -> List]
+  :intent "Keep elements where predicate returns true"
+  :requires [(valid pred)]
+  :ensures [(<= (length result) (length xs))]
+  :body (if (empty? xs)
+          []
+          (if (pred (head xs))
+            (cons (head xs) (filter pred (tail xs)))
+            (filter pred (tail xs)))))
+
+;; ── fold : left fold with accumulator ──
+(defn fold
+  :sig [(f : fn) (init : _) (xs : List) -> _]
+  :intent "Reduce a list to a single value using accumulator"
+  :requires [(valid f)]
+  :ensures [(valid result)]
+  :body (if (empty? xs)
+          init
+          (fold f (f init (head xs)) (tail xs))))
+
+;; ── reverse : reverse a list ──
+(defn reverse
+  :sig [(xs : List) -> List]
+  :intent "Reverse a list"
+  :requires [(valid xs)]
+  :ensures [(= (length result) (length xs))]
+  :body (fold (fn [acc x] (cons x acc)) [] xs))
+
+;; ── concat : concatenate two lists ──
+(defn concat
+  :sig [(xs : List) (ys : List) -> List]
+  :intent "Concatenate two lists"
+  :requires [(valid xs)]
+  :ensures [(= (length result) (+ (length xs) (length ys)))]
+  :body (if (empty? xs)
+          ys
+          (cons (head xs) (concat (tail xs) ys))))
+
+;; ── zip : pair elements from two lists ──
+(defn zip
+  :sig [(xs : List) (ys : List) -> List]
+  :intent "Pair corresponding elements from two lists"
+  :requires [(valid xs)]
+  :ensures [(valid result)]
+  :body (if (or (empty? xs) (empty? ys))
+          []
+          (cons [(head xs) (head ys)] (zip (tail xs) (tail ys)))))
+
+;; ── flatten : flatten list of lists ──
+(defn flatten
+  :sig [(xss : List) -> List]
+  :intent "Flatten a list of lists into a single list"
+  :requires [(valid xss)]
+  :ensures [(valid result)]
+  :body (fold (fn [acc xs] (concat acc xs)) [] xss))
+
+;; ── range : generate integers [start, end) ──
+(defn range
+  :sig [(start : i64) (end : i64) -> List]
+  :intent "Generate a list of integers from start to end (exclusive)"
+  :requires [(<= start end)]
+  :ensures [(= (length result) (- end start))]
+  :body (if (= start end)
+          []
+          (cons start (range (+ start 1) end))))
+
+;; ── take : first n elements ──
+(defn take
+  :sig [(n : i64) (xs : List) -> List]
+  :intent "Take the first n elements of a list"
+  :requires [(>= n 0)]
+  :ensures [(<= (length result) n)]
+  :body (if (or (= n 0) (empty? xs))
+          []
+          (cons (head xs) (take (- n 1) (tail xs)))))
+
+;; ── drop : skip first n elements ──
+(defn drop
+  :sig [(n : i64) (xs : List) -> List]
+  :intent "Drop the first n elements of a list"
+  :requires [(>= n 0)]
+  :ensures [(valid result)]
+  :body (if (or (= n 0) (empty? xs))
+          xs
+          (drop (- n 1) (tail xs))))
+
+;; ── any : does any element satisfy predicate ──
+(defn any
+  :sig [(pred : fn) (xs : List) -> bool]
+  :intent "Check if any element satisfies the predicate"
+  :requires [(valid pred)]
+  :ensures [(valid result)]
+  :body (if (empty? xs)
+          false
+          (if (pred (head xs))
+            true
+            (any pred (tail xs)))))
+
+;; ── all : do all elements satisfy predicate ──
+(defn all
+  :sig [(pred : fn) (xs : List) -> bool]
+  :intent "Check if all elements satisfy the predicate"
+  :requires [(valid pred)]
+  :ensures [(valid result)]
+  :body (if (empty? xs)
+          true
+          (if (pred (head xs))
+            (all pred (tail xs))
+            false)))
+
+;; ── find : first element satisfying predicate ──
+(defn find
+  :sig [(pred : fn) (xs : List) -> _]
+  :intent "Find first element satisfying predicate, or nil"
+  :requires [(valid pred)]
+  :ensures [(valid result)]
+  :body (if (empty? xs)
+          nil
+          (if (pred (head xs))
+            (head xs)
+            (find pred (tail xs)))))
+
+;; ── merge : merge two sorted lists ──
+(defn merge
+  :sig [(cmp : fn) (xs : List) (ys : List) -> List]
+  :intent "Merge two sorted lists using comparison function"
+  :requires [(valid cmp)]
+  :ensures [(= (length result) (+ (length xs) (length ys)))]
+  :body (if (empty? xs)
+          ys
+          (if (empty? ys)
+            xs
+            (if (cmp (head xs) (head ys))
+              (cons (head xs) (merge cmp (tail xs) ys))
+              (cons (head ys) (merge cmp xs (tail ys)))))))
+
+;; ── sort : merge sort with comparison function ──
+(defn sort
+  :sig [(cmp : fn) (xs : List) -> List]
+  :intent "Sort a list using merge sort with comparison function"
+  :requires [(valid cmp)]
+  :ensures [(= (length result) (length xs))]
+  :body (if (<= (length xs) 1)
+          xs
+          (let (mid : i64 (/ (length xs) 2))
+            (let (left : List (take mid xs))
+              (let (right : List (drop mid xs))
+                (merge cmp (sort cmp left) (sort cmp right)))))))

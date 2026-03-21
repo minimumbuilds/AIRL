@@ -5,15 +5,13 @@ use crate::builtins::Builtins;
 use crate::pattern::try_match;
 use airl_syntax::ast::*;
 
-use std::collections::HashMap;
 use std::io::{BufReader, BufWriter};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, mpsc};
 
 struct LiveAgent {
     name: String,
-    writer: Arc<Mutex<BufWriter<std::process::ChildStdin>>>,
-    reader: Arc<Mutex<BufReader<std::process::ChildStdout>>>,
+    writer: BufWriter<std::process::ChildStdin>,
+    reader: BufReader<std::process::ChildStdout>,
     child: Child,
 }
 
@@ -22,15 +20,10 @@ pub struct Interpreter {
     builtins: Builtins,
     pub jit: Option<airl_codegen::JitCache>,
     pub tensor_jit: Option<airl_codegen::TensorJit>,
-    #[cfg(feature = "mlir")]
-    pub mlir_jit: Option<airl_mlir::MlirTensorJit>,
     agents: Vec<LiveAgent>,
-    pending_results: HashMap<String, mpsc::Receiver<Result<Value, String>>>,
     next_agent_id: u32,
     next_send_id: u32,
-    /// Current execution target override from `:execute-on` annotation.
-    /// `None` means auto-detect (try GPU → MLIR CPU → Cranelift → interpreted).
-    exec_target: Option<ExecTarget>,
+    recursion_depth: usize,
 }
 
 impl Interpreter {
@@ -40,13 +33,10 @@ impl Interpreter {
             builtins: Builtins::new(),
             jit: airl_codegen::JitCache::new().ok(),
             tensor_jit: airl_codegen::TensorJit::new().ok(),
-            #[cfg(feature = "mlir")]
-            mlir_jit: airl_mlir::MlirTensorJit::new().ok(),
             agents: Vec::new(),
-            pending_results: HashMap::new(),
             next_agent_id: 0,
             next_send_id: 0,
-            exec_target: None,
+            recursion_depth: 0,
         };
         // Register all builtin names in the environment so symbol lookups resolve them
         interp.register_builtin_symbols();
@@ -62,10 +52,14 @@ impl Interpreter {
             "tensor.add", "tensor.mul", "tensor.matmul", "tensor.reshape",
             "tensor.transpose", "tensor.softmax", "tensor.sum", "tensor.max",
             "tensor.slice",
-            "length", "at", "append",
+            "length", "at", "append", "head", "tail", "empty?", "cons",
             "print", "type-of", "shape", "valid",
-            "spawn-agent", "send", "send-async", "await", "parallel",
-            "broadcast", "retry", "escalate", "any-agent",
+            "spawn-agent", "send",
+            "char-at", "substring", "split", "join", "contains",
+            "starts-with", "ends-with", "trim", "to-upper", "to-lower",
+            "replace", "index-of", "chars",
+            "map-new", "map-from", "map-get", "map-get-or", "map-set",
+            "map-has", "map-remove", "map-keys", "map-values", "map-size",
         ];
         for name in &names {
             self.env.bind(name.to_string(), Value::BuiltinFn(name.to_string()));
@@ -230,106 +224,11 @@ impl Interpreter {
                             }
                             return result;
                         }
-                        "send-async" => {
-                            let result = self.builtin_send_async(&arg_vals);
-                            for (bname, is_mutable) in &borrow_ledger {
-                                if *is_mutable { self.env.release_mutable_borrow(bname); }
-                                else { self.env.release_immutable_borrow(bname); }
-                            }
-                            return result;
-                        }
-                        "await" => {
-                            let result = self.builtin_await(&arg_vals);
-                            for (bname, is_mutable) in &borrow_ledger {
-                                if *is_mutable { self.env.release_mutable_borrow(bname); }
-                                else { self.env.release_immutable_borrow(bname); }
-                            }
-                            return result;
-                        }
-                        "parallel" => {
-                            let result = self.builtin_parallel(&arg_vals);
-                            for (bname, is_mutable) in &borrow_ledger {
-                                if *is_mutable { self.env.release_mutable_borrow(bname); }
-                                else { self.env.release_immutable_borrow(bname); }
-                            }
-                            return result;
-                        }
-                        "broadcast" => {
-                            let result = self.builtin_broadcast(&arg_vals);
-                            for (bname, is_mutable) in &borrow_ledger {
-                                if *is_mutable { self.env.release_mutable_borrow(bname); }
-                                else { self.env.release_immutable_borrow(bname); }
-                            }
-                            return result;
-                        }
-                        "retry" => {
-                            let result = self.builtin_retry(&arg_vals);
-                            for (bname, is_mutable) in &borrow_ledger {
-                                if *is_mutable { self.env.release_mutable_borrow(bname); }
-                                else { self.env.release_immutable_borrow(bname); }
-                            }
-                            return result;
-                        }
-                        "escalate" => {
-                            let result = self.builtin_escalate(&arg_vals);
-                            for (bname, is_mutable) in &borrow_ledger {
-                                if *is_mutable { self.env.release_mutable_borrow(bname); }
-                                else { self.env.release_immutable_borrow(bname); }
-                            }
-                            return result;
-                        }
-                        "any-agent" => {
-                            let result = self.builtin_any_agent(&arg_vals);
-                            for (bname, is_mutable) in &borrow_ledger {
-                                if *is_mutable { self.env.release_mutable_borrow(bname); }
-                                else { self.env.release_immutable_borrow(bname); }
-                            }
-                            return result;
-                        }
                         _ => {}
                     }
                 }
 
-                // Try MLIR JIT first (if available), then Cranelift, then interpreted.
-                // Respects :execute-on — skip MLIR/GPU path if target is Cpu.
-                #[cfg(feature = "mlir")]
-                if !matches!(self.exec_target, Some(ExecTarget::Cpu)) {
-                if let Value::BuiltinFn(ref name) = callee_val {
-                    if matches!(name.as_str(), "tensor.add" | "tensor.mul" | "tensor.matmul" | "tensor.softmax" | "tensor.transpose") {
-                        if let Some(mut mjit) = self.mlir_jit.take() {
-                            let result = try_mlir_tensor_jit(&mut mjit, name, &arg_vals);
-                            self.mlir_jit = Some(mjit);
-                            match result {
-                                Ok(Some(val)) => {
-                                    for (bname, is_mutable) in &borrow_ledger {
-                                        if *is_mutable {
-                                            self.env.release_mutable_borrow(bname);
-                                        } else {
-                                            self.env.release_immutable_borrow(bname);
-                                        }
-                                    }
-                                    return Ok(val);
-                                }
-                                Err(e) => {
-                                    for (bname, is_mutable) in &borrow_ledger {
-                                        if *is_mutable {
-                                            self.env.release_mutable_borrow(bname);
-                                        } else {
-                                            self.env.release_immutable_borrow(bname);
-                                        }
-                                    }
-                                    return Err(e);
-                                }
-                                Ok(None) => {} // fall through to Cranelift JIT
-                            }
-                        }
-                    }
-                }
-                } // end exec_target != Cpu guard
-
-                // Try Cranelift tensor JIT for supported ops before regular dispatch.
-                // Skip if :execute-on gpu (force GPU-only path).
-                if !matches!(self.exec_target, Some(ExecTarget::Gpu)) {
+                // Try tensor JIT for supported ops before regular dispatch
                 if let Value::BuiltinFn(ref name) = callee_val {
                     if matches!(name.as_str(), "tensor.add" | "tensor.mul" | "tensor.matmul") {
                         if let Some(mut tjit) = self.tensor_jit.take() {
@@ -362,7 +261,6 @@ impl Interpreter {
                         }
                     }
                 }
-                } // end exec_target != Gpu guard
 
                 let result = match callee_val {
                     Value::BuiltinFn(ref name) => {
@@ -441,17 +339,13 @@ impl Interpreter {
     }
 
     fn call_fn(&mut self, fn_val: &FnValue, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        // Set :execute-on target for the duration of this call, restore on exit
-        let prev_target = self.exec_target.clone();
-        if let Some(ref target) = fn_val.def.execute_on {
-            self.exec_target = Some(target.clone());
+        if self.recursion_depth >= 50_000 {
+            return Err(RuntimeError::TypeError(
+                "maximum recursion depth (50000) exceeded".into(),
+            ));
         }
-        let result = self.call_fn_inner(fn_val, args);
-        self.exec_target = prev_target;
-        result
-    }
+        self.recursion_depth += 1;
 
-    fn call_fn_inner(&mut self, fn_val: &FnValue, args: Vec<Value>) -> Result<Value, RuntimeError> {
         let def = &fn_val.def;
 
         // 1. Push Function frame
@@ -467,13 +361,14 @@ impl Interpreter {
         for contract in &def.requires {
             let contract_result = self.eval(contract)?;
             if contract_result != Value::Bool(true) {
+                self.recursion_depth -= 1;
                 self.env.pop_frame();
                 return Err(RuntimeError::ContractViolation(
                     airl_contracts::violation::ContractViolation {
                         function: fn_val.name.clone(),
                         contract_kind: airl_contracts::violation::ContractKind::Requires,
-                        clause_source: contract.to_airl(),
-                        bindings: self.capture_bindings(),
+                        clause_source: format!("{:?}", contract.kind),
+                        bindings: vec![],
                         evaluated: format!("{}", contract_result),
                         span: contract.span,
                     },
@@ -491,40 +386,26 @@ impl Interpreter {
                 match jit.try_call(def, &raw_args) {
                     Ok(Some(raw_result)) => {
                         let result_val = raw_to_value(raw_result, &def.return_type);
-                        // Check :invariant and :ensures contracts
+                        // Check :ensures contracts
                         self.env.bind("result".to_string(), result_val.clone());
-                        for contract in &def.invariants {
-                            let contract_result = self.eval(contract)?;
-                            if contract_result != Value::Bool(true) {
-                                self.env.pop_frame();
-                                return Err(RuntimeError::ContractViolation(
-                                    airl_contracts::violation::ContractViolation {
-                                        function: fn_val.name.clone(),
-                                        contract_kind: airl_contracts::violation::ContractKind::Invariant,
-                                        clause_source: contract.to_airl(),
-                                        bindings: self.capture_bindings(),
-                                        evaluated: format!("{}", contract_result),
-                                        span: contract.span,
-                                    },
-                                ));
-                            }
-                        }
                         for contract in &def.ensures {
                             let contract_result = self.eval(contract)?;
                             if contract_result != Value::Bool(true) {
+                                self.recursion_depth -= 1;
                                 self.env.pop_frame();
                                 return Err(RuntimeError::ContractViolation(
                                     airl_contracts::violation::ContractViolation {
                                         function: fn_val.name.clone(),
                                         contract_kind: airl_contracts::violation::ContractKind::Ensures,
-                                        clause_source: contract.to_airl(),
-                                        bindings: self.capture_bindings(),
+                                        clause_source: format!("{:?}", contract.kind),
+                                        bindings: vec![],
                                         evaluated: format!("{}", contract_result),
                                         span: contract.span,
                                     },
                                 ));
                             }
                         }
+                        self.recursion_depth -= 1;
                         self.env.pop_frame();
                         return Ok(result_val);
                     }
@@ -541,38 +422,21 @@ impl Interpreter {
 
         match result {
             Ok(result_val) => {
-                // 5. Bind `result` for :invariant and :ensures checking
+                // 5. Bind `result` for :ensures checking
                 self.env.bind("result".to_string(), result_val.clone());
 
-                // 6. Check :invariant contracts
-                for contract in &def.invariants {
-                    let contract_result = self.eval(contract)?;
-                    if contract_result != Value::Bool(true) {
-                        self.env.pop_frame();
-                        return Err(RuntimeError::ContractViolation(
-                            airl_contracts::violation::ContractViolation {
-                                function: fn_val.name.clone(),
-                                contract_kind: airl_contracts::violation::ContractKind::Invariant,
-                                clause_source: contract.to_airl(),
-                                bindings: self.capture_bindings(),
-                                evaluated: format!("{}", contract_result),
-                                span: contract.span,
-                            },
-                        ));
-                    }
-                }
-
-                // 7. Check :ensures contracts
+                // 6. Check :ensures contracts
                 for contract in &def.ensures {
                     let contract_result = self.eval(contract)?;
                     if contract_result != Value::Bool(true) {
+                        self.recursion_depth -= 1;
                         self.env.pop_frame();
                         return Err(RuntimeError::ContractViolation(
                             airl_contracts::violation::ContractViolation {
                                 function: fn_val.name.clone(),
                                 contract_kind: airl_contracts::violation::ContractKind::Ensures,
-                                clause_source: contract.to_airl(),
-                                bindings: self.capture_bindings(),
+                                clause_source: format!("{:?}", contract.kind),
+                                bindings: vec![],
                                 evaluated: format!("{}", contract_result),
                                 span: contract.span,
                             },
@@ -581,12 +445,14 @@ impl Interpreter {
                 }
 
                 // 7. Pop frame
+                self.recursion_depth -= 1;
                 self.env.pop_frame();
 
                 // 8. Return result
                 Ok(result_val)
             }
             Err(e) => {
+                self.recursion_depth -= 1;
                 self.env.pop_frame();
                 Err(e)
             }
@@ -612,10 +478,6 @@ impl Interpreter {
         result
     }
 
-    /// Evaluate a quantifier (forall/exists) by iterating over a domain.
-    /// For forall: returns true if body is true for all values where guard holds.
-    /// For exists: returns true if body is true for at least one value where guard holds.
-    /// Domain is determined by the where clause; defaults to 0..1000 for integers.
     fn eval_quantifier(
         &mut self,
         var_name: &str,
@@ -623,14 +485,12 @@ impl Interpreter {
         body: &Expr,
         is_forall: bool,
     ) -> Result<Value, RuntimeError> {
-        // Determine iteration domain. For now: integers 0..10000
         const MAX_ITERATIONS: i64 = 10_000;
 
         for i in 0..MAX_ITERATIONS {
             self.env.push_frame(FrameKind::Let);
             self.env.bind(var_name.to_string(), Value::Int(i));
 
-            // Check where clause — skip this value if guard is false
             let in_domain = if let Some(guard) = where_clause {
                 let guard_val = self.eval(guard)?;
                 is_truthy(&guard_val)
@@ -644,36 +504,21 @@ impl Interpreter {
                 self.env.pop_frame();
 
                 if is_forall && !holds {
-                    return Ok(Value::Bool(false)); // forall: short-circuit on first false
+                    return Ok(Value::Bool(false));
                 }
                 if !is_forall && holds {
-                    return Ok(Value::Bool(true)); // exists: short-circuit on first true
+                    return Ok(Value::Bool(true));
                 }
             } else {
                 self.env.pop_frame();
             }
         }
 
-        // Exhausted domain
         if is_forall {
-            Ok(Value::Bool(true))  // all checked values passed
+            Ok(Value::Bool(true))
         } else {
-            Ok(Value::Bool(false)) // no value satisfied the predicate
+            Ok(Value::Bool(false))
         }
-    }
-
-    /// Capture current parameter bindings for contract violation messages.
-    /// Only includes user-defined variables, not builtins.
-    fn capture_bindings(&self) -> Vec<(String, String)> {
-        self.env.iter_bindings().iter()
-            .filter(|(name, slot)| {
-                !slot.moved
-                && *name != "result"
-                && !matches!(slot.value, Value::BuiltinFn(_))
-                && !matches!(slot.value, Value::Function(_))
-            })
-            .map(|(name, slot)| (name.to_string(), format!("{}", slot.value)))
-            .collect()
     }
 
     fn capture_env(&self) -> Vec<(String, Value)> {
@@ -727,29 +572,15 @@ impl Interpreter {
         let name = format!("agent-{}", self.next_agent_id);
         self.next_agent_id += 1;
 
-        let reader = Arc::new(Mutex::new(BufReader::new(stdout)));
-        let writer = Arc::new(Mutex::new(BufWriter::new(stdin)));
-
-        // Wait for agent ready handshake (with 10s timeout)
-        {
-            let mut r = reader.lock()
-                .map_err(|_| RuntimeError::Custom("agent reader lock poisoned".into()))?;
-            // Use a thread to implement timeout on the blocking read
-            let ready_msg = crate::agent_client::read_frame(&mut *r)
-                .map_err(|e| RuntimeError::Custom(format!("agent failed to start: {}", e)))?;
-            if ready_msg != "ready" {
-                return Err(RuntimeError::Custom(format!(
-                    "agent sent unexpected handshake: {}", ready_msg
-                )));
-            }
-        }
-
         self.agents.push(LiveAgent {
             name: name.clone(),
-            writer,
-            reader,
+            writer: BufWriter::new(stdin),
+            reader: BufReader::new(stdout),
             child,
         });
+
+        // Give agent a moment to load
+        std::thread::sleep(std::time::Duration::from_millis(100));
 
         Ok(Value::Str(name))
     }
@@ -807,363 +638,13 @@ impl Interpreter {
         let agent = self.agents.iter_mut().find(|a| a.name == name)
             .ok_or_else(|| RuntimeError::Custom(format!("unknown agent: {}", name)))?;
 
-        let mut writer = agent.writer.lock()
-            .map_err(|_| RuntimeError::Custom("agent writer lock poisoned".into()))?;
-        let mut reader = agent.reader.lock()
-            .map_err(|_| RuntimeError::Custom("agent reader lock poisoned".into()))?;
-
-        crate::agent_client::write_frame(&mut *writer, task_msg)
+        crate::agent_client::write_frame(&mut agent.writer, task_msg)
             .map_err(|e| RuntimeError::Custom(format!("send to {} failed: {}", name, e)))?;
-        let response = crate::agent_client::read_frame(&mut *reader)
+        let response = crate::agent_client::read_frame(&mut agent.reader)
             .map_err(|e| RuntimeError::Custom(format!("recv from {} failed: {}", name, e)))?;
 
         crate::agent_client::parse_result_message(&response)
             .map_err(|e| RuntimeError::Custom(e))
-    }
-
-    /// send-async: dispatch a task to an agent without waiting for the result.
-    /// Returns a task ID string that can be passed to `await`.
-    fn builtin_send_async(&mut self, args: &[Value]) -> Result<Value, RuntimeError> {
-        if args.len() < 2 {
-            return Err(RuntimeError::TypeError(
-                "send-async requires at least 2 args: target, function, [args...]".into(),
-            ));
-        }
-
-        let target = match &args[0] {
-            Value::Str(s) => s.clone(),
-            _ => return Err(RuntimeError::TypeError("send-async target must be a string".into())),
-        };
-        let fn_name = match &args[1] {
-            Value::Str(s) => s.clone(),
-            _ => return Err(RuntimeError::TypeError("send-async function name must be a string".into())),
-        };
-        let fn_args = &args[2..];
-
-        let task_id = format!("send-{}", self.next_send_id);
-        self.next_send_id += 1;
-        let task_msg = crate::agent_client::format_task(&task_id, &fn_name, fn_args);
-
-        // Find the agent and get Arc handles to its reader/writer
-        let agent = self.agents.iter().find(|a| a.name == target)
-            .ok_or_else(|| RuntimeError::Custom(format!("unknown agent: {}", target)))?;
-        let writer_arc = Arc::clone(&agent.writer);
-        let reader_arc = Arc::clone(&agent.reader);
-        let agent_name = agent.name.clone();
-
-        // Write the task frame (synchronous — fast, just writes to pipe buffer)
-        {
-            let mut writer = writer_arc.lock()
-                .map_err(|_| RuntimeError::Custom("agent writer lock poisoned".into()))?;
-            crate::agent_client::write_frame(&mut *writer, &task_msg)
-                .map_err(|e| RuntimeError::Custom(format!("send-async to {} failed: {}", agent_name, e)))?;
-        }
-
-        // Spawn background thread to read the response
-        let (tx, rx) = mpsc::channel();
-        let _tid = task_id.clone();
-        std::thread::spawn(move || {
-            let result = (|| {
-                let mut reader = reader_arc.lock()
-                    .map_err(|_| "agent reader lock poisoned".to_string())?;
-                let response = crate::agent_client::read_frame(&mut *reader)
-                    .map_err(|e| format!("recv from {} failed: {}", agent_name, e))?;
-                crate::agent_client::parse_result_message(&response)
-            })();
-            let _ = tx.send(result);
-        });
-
-        self.pending_results.insert(task_id.clone(), rx);
-        Ok(Value::Str(task_id))
-    }
-
-    /// await: block until an async task completes, with optional timeout in milliseconds.
-    /// Usage: (await task-id) or (await task-id 5000)
-    fn builtin_await(&mut self, args: &[Value]) -> Result<Value, RuntimeError> {
-        let task_id = match args.first() {
-            Some(Value::Str(s)) => s.clone(),
-            _ => return Err(RuntimeError::TypeError("await requires a task ID string".into())),
-        };
-
-        let rx = self.pending_results.remove(&task_id)
-            .ok_or_else(|| RuntimeError::Custom(format!("unknown task ID: {}", task_id)))?;
-
-        // Optional timeout in milliseconds (second argument)
-        let result = match args.get(1) {
-            Some(Value::Int(ms)) => {
-                let timeout = std::time::Duration::from_millis(*ms as u64);
-                rx.recv_timeout(timeout)
-                    .map_err(|e| RuntimeError::Custom(format!("await {} timed out: {}", task_id, e)))?
-            }
-            _ => {
-                // No timeout — block indefinitely
-                rx.recv()
-                    .map_err(|e| RuntimeError::Custom(format!("await {} failed: {}", task_id, e)))?
-            }
-        };
-
-        result.map_err(|e| RuntimeError::Custom(e))
-    }
-
-    /// parallel: dispatch multiple send-async calls concurrently and collect results.
-    /// Usage: (parallel [task-id-1 task-id-2 ...])
-    /// Returns a list of results in the same order as the task IDs.
-    fn builtin_parallel(&mut self, args: &[Value]) -> Result<Value, RuntimeError> {
-        // Accept a list of task IDs
-        let task_ids = match args.first() {
-            Some(Value::List(ids)) => {
-                let mut result = Vec::new();
-                for id in ids {
-                    match id {
-                        Value::Str(s) => result.push(s.clone()),
-                        _ => return Err(RuntimeError::TypeError(
-                            "parallel requires a list of task ID strings".into()
-                        )),
-                    }
-                }
-                result
-            }
-            _ => return Err(RuntimeError::TypeError(
-                "parallel requires a list of task IDs".into()
-            )),
-        };
-
-        // Optional timeout in milliseconds (second argument)
-        let timeout = match args.get(1) {
-            Some(Value::Int(ms)) => Some(std::time::Duration::from_millis(*ms as u64)),
-            _ => None,
-        };
-
-        // Collect all results
-        let mut results = Vec::new();
-        for task_id in &task_ids {
-            let rx = self.pending_results.remove(task_id)
-                .ok_or_else(|| RuntimeError::Custom(format!("unknown task ID: {}", task_id)))?;
-
-            let result = match timeout {
-                Some(t) => rx.recv_timeout(t)
-                    .map_err(|e| RuntimeError::Custom(
-                        format!("parallel: task {} timed out: {}", task_id, e)
-                    ))?,
-                None => rx.recv()
-                    .map_err(|e| RuntimeError::Custom(
-                        format!("parallel: task {} failed: {}", task_id, e)
-                    ))?,
-            };
-
-            results.push(result.map_err(|e| RuntimeError::Custom(e))?);
-        }
-
-        Ok(Value::List(results))
-    }
-
-    /// broadcast: send the same task to multiple agents concurrently.
-    /// Usage: (broadcast [agent1 agent2 ...] "fn" args...)
-    /// Sends to all agents in parallel and returns the first successful result.
-    fn builtin_broadcast(&mut self, args: &[Value]) -> Result<Value, RuntimeError> {
-        if args.len() < 2 {
-            return Err(RuntimeError::TypeError(
-                "broadcast requires at least 2 args: [agents], function, [args...]".into(),
-            ));
-        }
-
-        let targets = match &args[0] {
-            Value::List(ids) => {
-                let mut result = Vec::new();
-                for id in ids {
-                    match id {
-                        Value::Str(s) => result.push(s.clone()),
-                        _ => return Err(RuntimeError::TypeError(
-                            "broadcast requires a list of agent name strings".into(),
-                        )),
-                    }
-                }
-                result
-            }
-            _ => return Err(RuntimeError::TypeError(
-                "broadcast first arg must be a list of agent names".into(),
-            )),
-        };
-
-        let fn_name = match &args[1] {
-            Value::Str(s) => s.clone(),
-            _ => return Err(RuntimeError::TypeError("broadcast function name must be a string".into())),
-        };
-        let fn_args = &args[2..];
-
-        if targets.is_empty() {
-            return Err(RuntimeError::Custom("broadcast: no agents specified".into()));
-        }
-
-        // Send the same task to all agents asynchronously
-        let mut task_ids = Vec::new();
-        for target in &targets {
-            let task_id = format!("send-{}", self.next_send_id);
-            self.next_send_id += 1;
-            let task_msg = crate::agent_client::format_task(&task_id, &fn_name, fn_args);
-
-            let agent = self.agents.iter().find(|a| a.name == *target)
-                .ok_or_else(|| RuntimeError::Custom(format!("unknown agent: {}", target)))?;
-            let writer_arc = Arc::clone(&agent.writer);
-            let reader_arc = Arc::clone(&agent.reader);
-            let agent_name = agent.name.clone();
-
-            {
-                let mut writer = writer_arc.lock()
-                    .map_err(|_| RuntimeError::Custom("agent writer lock poisoned".into()))?;
-                crate::agent_client::write_frame(&mut *writer, &task_msg)
-                    .map_err(|e| RuntimeError::Custom(format!("broadcast to {} failed: {}", agent_name, e)))?;
-            }
-
-            let (tx, rx) = mpsc::channel();
-            std::thread::spawn(move || {
-                let result = (|| {
-                    let mut reader = reader_arc.lock()
-                        .map_err(|_| "agent reader lock poisoned".to_string())?;
-                    let response = crate::agent_client::read_frame(&mut *reader)
-                        .map_err(|e| format!("recv from {} failed: {}", agent_name, e))?;
-                    crate::agent_client::parse_result_message(&response)
-                })();
-                let _ = tx.send(result);
-            });
-
-            task_ids.push((task_id, rx));
-        }
-
-        // Return first successful result
-        let mut last_err = String::from("all agents failed");
-        for (task_id, rx) in task_ids {
-            match rx.recv() {
-                Ok(Ok(val)) => return Ok(val),
-                Ok(Err(e)) => { last_err = format!("task {}: {}", task_id, e); }
-                Err(e) => { last_err = format!("task {}: channel error: {}", task_id, e); }
-            }
-        }
-        Err(RuntimeError::Custom(format!("broadcast: {}", last_err)))
-    }
-
-    /// retry: wrap a synchronous send in retry logic with backoff.
-    /// Usage: (retry target "fn" args... :max N)
-    /// Optional :max N (default 3). Uses exponential backoff (100ms, 200ms, 400ms...).
-    fn builtin_retry(&mut self, args: &[Value]) -> Result<Value, RuntimeError> {
-        if args.len() < 2 {
-            return Err(RuntimeError::TypeError(
-                "retry requires at least 2 args: target, function, [args...] [:max N]".into(),
-            ));
-        }
-
-        // Parse args, looking for optional :max keyword
-        let mut max_retries: u32 = 3;
-        let mut send_args = Vec::new();
-
-        let mut i = 0;
-        while i < args.len() {
-            if let Value::Str(s) = &args[i] {
-                if s == ":max" {
-                    if let Some(Value::Int(n)) = args.get(i + 1) {
-                        max_retries = *n as u32;
-                        i += 2;
-                        continue;
-                    }
-                }
-            }
-            send_args.push(args[i].clone());
-            i += 1;
-        }
-
-        let mut last_err = String::new();
-        for attempt in 0..=max_retries {
-            match self.builtin_send(&send_args) {
-                Ok(val) => return Ok(val),
-                Err(e) => {
-                    last_err = format!("{}", e);
-                    if attempt < max_retries {
-                        let backoff = 100 * (1u64 << attempt);
-                        std::thread::sleep(std::time::Duration::from_millis(backoff));
-                    }
-                }
-            }
-        }
-
-        Err(RuntimeError::Custom(format!(
-            "retry: all {} attempts failed, last error: {}", max_retries + 1, last_err
-        )))
-    }
-
-    /// escalate: send a structured error notification to an agent.
-    /// Usage: (escalate target :reason "msg" :data value)
-    /// Sends a special escalation message and returns the agent's response.
-    fn builtin_escalate(&mut self, args: &[Value]) -> Result<Value, RuntimeError> {
-        if args.is_empty() {
-            return Err(RuntimeError::TypeError(
-                "escalate requires at least a target agent".into(),
-            ));
-        }
-
-        let target = match &args[0] {
-            Value::Str(s) => s.clone(),
-            _ => return Err(RuntimeError::TypeError("escalate target must be a string".into())),
-        };
-
-        // Parse keyword arguments
-        let mut reason = String::from("unknown");
-        let mut data = Value::Nil;
-
-        let mut i = 1;
-        while i < args.len() {
-            if let Value::Str(s) = &args[i] {
-                match s.as_str() {
-                    ":reason" => {
-                        if let Some(Value::Str(r)) = args.get(i + 1) {
-                            reason = r.clone();
-                            i += 2;
-                            continue;
-                        }
-                    }
-                    ":data" => {
-                        if let Some(d) = args.get(i + 1) {
-                            data = d.clone();
-                            i += 2;
-                            continue;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            i += 1;
-        }
-
-        // Format as a special escalation task
-        let task_id = format!("send-{}", self.next_send_id);
-        self.next_send_id += 1;
-
-        // Send as a regular task with function name "__escalate__" and structured args
-        let escalation_args = [
-            Value::Str(reason.clone()),
-            data,
-        ];
-        let task_msg = crate::agent_client::format_task(&task_id, "__escalate__", &escalation_args);
-
-        // Try to send; if the agent doesn't handle __escalate__, return the escalation as a value
-        match self.send_to_agent(&target, &task_msg) {
-            Ok(val) => Ok(val),
-            Err(_) => {
-                // Agent doesn't handle escalation — return structured value
-                Ok(Value::Variant(
-                    "Escalation".into(),
-                    Box::new(Value::Str(format!("to={} reason={}", target, reason))),
-                ))
-            }
-        }
-    }
-
-    /// any-agent: return the name of the first available spawned agent.
-    /// Usage: (any-agent) — returns agent name string, or error if none spawned.
-    fn builtin_any_agent(&self, _args: &[Value]) -> Result<Value, RuntimeError> {
-        if self.agents.is_empty() {
-            return Err(RuntimeError::Custom("any-agent: no agents spawned".into()));
-        }
-        Ok(Value::Str(self.agents[0].name.clone()))
     }
 
     pub fn eval_top_level(&mut self, top: &TopLevel) -> Result<Value, RuntimeError> {
@@ -1269,89 +750,6 @@ fn try_tensor_jit(
                 .map_err(|e| RuntimeError::Custom(e))?;
             Ok(Some(Value::Tensor(Box::new(crate::tensor::TensorValue {
                 dtype: a.dtype, shape: vec![m, n], data: out,
-            }))))
-        }
-        _ => Ok(None),
-    }
-}
-
-#[cfg(feature = "mlir")]
-fn try_mlir_tensor_jit(
-    mjit: &mut airl_mlir::MlirTensorJit,
-    op: &str,
-    args: &[Value],
-) -> Result<Option<Value>, RuntimeError> {
-    match op {
-        "tensor.add" | "tensor.mul" => {
-            if args.len() != 2 { return Ok(None); }
-            let (a, b) = match (&args[0], &args[1]) {
-                (Value::Tensor(a), Value::Tensor(b)) => (a.as_ref(), b.as_ref()),
-                _ => return Ok(None),
-            };
-            if a.shape != b.shape {
-                return Err(RuntimeError::ShapeMismatch {
-                    expected: a.shape.clone(), got: b.shape.clone(),
-                });
-            }
-            let mut out = vec![0.0f64; a.data.len()];
-            let r = if op == "tensor.add" {
-                mjit.add(&a.data, &b.data, &mut out)
-            } else {
-                mjit.mul(&a.data, &b.data, &mut out)
-            };
-            r.map_err(|e| RuntimeError::Custom(e))?;
-            Ok(Some(Value::Tensor(Box::new(crate::tensor::TensorValue {
-                dtype: a.dtype, shape: a.shape.clone(), data: out,
-            }))))
-        }
-        "tensor.matmul" => {
-            if args.len() != 2 { return Ok(None); }
-            let (a, b) = match (&args[0], &args[1]) {
-                (Value::Tensor(a), Value::Tensor(b)) => (a.as_ref(), b.as_ref()),
-                _ => return Ok(None),
-            };
-            if a.shape.len() != 2 || b.shape.len() != 2 { return Ok(None); }
-            let (m, k1) = (a.shape[0], a.shape[1]);
-            let (k2, n) = (b.shape[0], b.shape[1]);
-            if k1 != k2 {
-                return Err(RuntimeError::ShapeMismatch {
-                    expected: vec![m, k1], got: vec![k2, n],
-                });
-            }
-            let mut out = vec![0.0f64; m * n];
-            mjit.matmul(&a.data, &b.data, &mut out, m, k1, n)
-                .map_err(|e| RuntimeError::Custom(e))?;
-            Ok(Some(Value::Tensor(Box::new(crate::tensor::TensorValue {
-                dtype: a.dtype, shape: vec![m, n], data: out,
-            }))))
-        }
-        "tensor.softmax" => {
-            if args.len() != 1 { return Ok(None); }
-            let t = match &args[0] {
-                Value::Tensor(t) => t.as_ref(),
-                _ => return Ok(None),
-            };
-            // Flatten to 1-D for softmax over all elements (matches interpreted builtin)
-            let mut out = vec![0.0f64; t.data.len()];
-            mjit.softmax(&t.data, &mut out)
-                .map_err(|e| RuntimeError::Custom(e))?;
-            Ok(Some(Value::Tensor(Box::new(crate::tensor::TensorValue {
-                dtype: t.dtype, shape: t.shape.clone(), data: out,
-            }))))
-        }
-        "tensor.transpose" => {
-            if args.len() != 1 { return Ok(None); }
-            let t = match &args[0] {
-                Value::Tensor(t) => t.as_ref(),
-                _ => return Ok(None),
-            };
-            if t.shape.len() != 2 { return Ok(None); }
-            let (rows, cols) = (t.shape[0], t.shape[1]);
-            let mut out = vec![0.0f64; rows * cols];
-            mjit.transpose(&t.data, &mut out, rows, cols)
-                .map_err(|e| RuntimeError::Custom(e))?;
-            Ok(Some(Value::Tensor(Box::new(crate::tensor::TensorValue {
-                dtype: t.dtype, shape: vec![cols, rows], data: out,
             }))))
         }
         _ => Ok(None),

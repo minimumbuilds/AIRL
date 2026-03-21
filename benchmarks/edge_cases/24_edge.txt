@@ -1,0 +1,1 @@
+Call merge-sorted with two empty lists [] and []

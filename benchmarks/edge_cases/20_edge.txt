@@ -1,0 +1,1 @@
+Call group-by-parity with all even numbers [2, 4, 6]

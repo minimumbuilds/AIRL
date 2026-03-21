@@ -5,11 +5,45 @@ use airl_runtime::value::Value;
 use airl_runtime::error::RuntimeError;
 use airl_types::checker::TypeChecker;
 
+const COLLECTIONS_SOURCE: &str = include_str!("../../../stdlib/prelude.airl");
+const MATH_SOURCE: &str = include_str!("../../../stdlib/math.airl");
+const RESULT_SOURCE: &str = include_str!("../../../stdlib/result.airl");
+const STRING_SOURCE: &str = include_str!("../../../stdlib/string.airl");
+const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineMode {
     Check,  // type errors block execution
     Run,    // type errors warn to stderr, execution proceeds
     Repl,   // type errors warn to stderr, execution proceeds
+}
+
+/// Load a single stdlib source into the interpreter.
+/// Panics on parse/eval errors since stdlib is trusted code.
+fn eval_stdlib_source(interp: &mut Interpreter, source: &str, name: &str) {
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.lex_all().unwrap_or_else(|e| panic!("{} lexing failed: {}", name, e.message));
+    let sexprs = parse_sexpr_all(&tokens).unwrap_or_else(|e| panic!("{} s-expr parsing failed: {}", name, e.message));
+    let mut diags = Diagnostics::new();
+
+    for sexpr in &sexprs {
+        match parser::parse_top_level(sexpr, &mut diags) {
+            Ok(top) => {
+                interp.eval_top_level(&top).unwrap_or_else(|e| panic!("{} eval failed: {}", name, e));
+            }
+            Err(d) => panic!("{} parse error: {}", name, d.message),
+        }
+    }
+}
+
+/// Load the standard library into an interpreter.
+/// Order matters: collections first (provides fold), then math, then result.
+pub fn eval_prelude(interp: &mut Interpreter) {
+    eval_stdlib_source(interp, COLLECTIONS_SOURCE, "stdlib/collections");
+    eval_stdlib_source(interp, MATH_SOURCE, "stdlib/math");
+    eval_stdlib_source(interp, RESULT_SOURCE, "stdlib/result");
+    eval_stdlib_source(interp, STRING_SOURCE, "stdlib/string");
+    eval_stdlib_source(interp, MAP_SOURCE, "stdlib/map");
 }
 
 pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, PipelineError> {
@@ -55,25 +89,6 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
         }
     }
 
-    // Linearity analysis
-    {
-        let mut lin_checker = airl_types::linearity::LinearityChecker::new();
-        for top in &tops {
-            if let airl_syntax::ast::TopLevel::Defn(f) = top {
-                lin_checker.check_fn(f);
-            }
-        }
-        if lin_checker.has_errors() {
-            let lin_diags = lin_checker.drain_diagnostics();
-            for d in lin_diags.errors() {
-                match mode {
-                    PipelineMode::Check => eprintln!("error: linearity: {}", d.message),
-                    _ => eprintln!("warning: linearity: {}", d.message),
-                }
-            }
-        }
-    }
-
     // Z3 contract verification
     let z3_prover = airl_solver::prover::Z3Prover::new();
     for top in &tops {
@@ -87,21 +102,11 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
                         }
                     }
                     airl_solver::VerifyResult::Disproven { counterexample } => {
-                        // Check if the clause references `result` — if so, the
-                        // "disproven" is expected because Z3 doesn't encode the
-                        // function body, so `result` is a free variable.
-                        let mentions_result = clause.contains("result");
-                        let result_constrained = f.requires.iter()
-                            .any(|r| r.to_airl().contains("result"));
-                        if mentions_result && !result_constrained {
-                            // Suppress — expected behavior, not a real error
-                        } else {
-                            let msg = format!("contract disproven in `{}`: {} (counterexample: {:?})",
-                                f.name, clause, counterexample);
-                            match mode {
-                                PipelineMode::Check => eprintln!("error: {}", msg),
-                                _ => eprintln!("warning: {}", msg),
-                            }
+                        let msg = format!("contract disproven in `{}`: {} (counterexample: {:?})",
+                            f.name, clause, counterexample);
+                        match mode {
+                            PipelineMode::Check => eprintln!("error: {}", msg),
+                            _ => eprintln!("warning: {}", msg),
                         }
                     }
                     airl_solver::VerifyResult::Unknown(_) | airl_solver::VerifyResult::TranslationError(_) => {
@@ -114,6 +119,7 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
 
     // Evaluate
     let mut interp = Interpreter::new();
+    eval_prelude(&mut interp);
     let mut result = Value::Unit;
     for top in &tops {
         result = interp.eval_top_level(top).map_err(PipelineError::Runtime)?;
@@ -157,22 +163,6 @@ pub fn check_source(source: &str) -> Result<(), PipelineError> {
         return Err(PipelineError::TypeCheck(checker.into_diagnostics()));
     }
 
-    // Linearity analysis
-    {
-        let mut lin_checker = airl_types::linearity::LinearityChecker::new();
-        for top in &tops {
-            if let airl_syntax::ast::TopLevel::Defn(f) = top {
-                lin_checker.check_fn(f);
-            }
-        }
-        if lin_checker.has_errors() {
-            let lin_diags = lin_checker.drain_diagnostics();
-            for d in lin_diags.errors() {
-                eprintln!("error: linearity: {}", d.message);
-            }
-        }
-    }
-
     // Z3 contract verification
     let z3_prover = airl_solver::prover::Z3Prover::new();
     for top in &tops {
@@ -184,13 +174,8 @@ pub fn check_source(source: &str) -> Result<(), PipelineError> {
                         eprintln!("note: `{}` contract proven: {}", f.name, clause);
                     }
                     airl_solver::VerifyResult::Disproven { counterexample } => {
-                        let mentions_result = clause.contains("result");
-                        let result_constrained = f.requires.iter()
-                            .any(|r| r.to_airl().contains("result"));
-                        if !mentions_result || result_constrained {
-                            eprintln!("error: contract disproven in `{}`: {} (counterexample: {:?})",
-                                f.name, clause, counterexample);
-                        }
+                        eprintln!("error: contract disproven in `{}`: {} (counterexample: {:?})",
+                            f.name, clause, counterexample);
                     }
                     airl_solver::VerifyResult::Unknown(_) | airl_solver::VerifyResult::TranslationError(_) => {
                         // Silent — fall back to runtime checking

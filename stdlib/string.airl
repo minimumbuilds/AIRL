@@ -1,0 +1,87 @@
+;; ── AIRL Standard Library: String ──────────────────
+
+;; ── words : split string by spaces ──
+(defn words
+  :sig [(s : String) -> List]
+  :intent "Split a string into words by whitespace"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (filter (fn [w] (not (= w ""))) (split (trim s) " ")))
+
+;; ── unwords : join strings with spaces ──
+(defn unwords
+  :sig [(ws : List) -> String]
+  :intent "Join a list of strings with spaces"
+  :requires [(valid ws)]
+  :ensures [(valid result)]
+  :body (join ws " "))
+
+;; ── lines : split string by newlines ──
+(defn lines
+  :sig [(s : String) -> List]
+  :intent "Split a string into lines"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (split s "\n"))
+
+;; ── unlines : join strings with newlines ──
+(defn unlines
+  :sig [(ls : List) -> String]
+  :intent "Join a list of strings with newlines"
+  :requires [(valid ls)]
+  :ensures [(valid result)]
+  :body (join ls "\n"))
+
+;; ── repeat-str : repeat a string n times ──
+(defn repeat-str
+  :sig [(s : String) (n : i64) -> String]
+  :intent "Repeat a string n times"
+  :requires [(>= n 0)]
+  :ensures [(valid result)]
+  :body (if (= n 0)
+          ""
+          (+ s (repeat-str s (- n 1)))))
+
+;; ── pad-left : pad string to width on left ──
+(defn pad-left
+  :sig [(s : String) (width : i64) (ch : String) -> String]
+  :intent "Pad string to width by prepending ch characters"
+  :requires [(>= width 0)]
+  :ensures [(valid result)]
+  :body (if (>= (length s) width)
+          s
+          (pad-left (+ ch s) width ch)))
+
+;; ── pad-right : pad string to width on right ──
+(defn pad-right
+  :sig [(s : String) (width : i64) (ch : String) -> String]
+  :intent "Pad string to width by appending ch characters"
+  :requires [(>= width 0)]
+  :ensures [(valid result)]
+  :body (if (>= (length s) width)
+          s
+          (pad-right (+ s ch) width ch)))
+
+;; ── is-empty-str : check if string is empty ──
+(defn is-empty-str
+  :sig [(s : String) -> bool]
+  :intent "Check if a string is empty"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (= (length s) 0))
+
+;; ── reverse-str : reverse a string ──
+(defn reverse-str
+  :sig [(s : String) -> String]
+  :intent "Reverse a string"
+  :requires [(valid s)]
+  :ensures [(= (length result) (length s))]
+  :body (join (reverse (chars s)) ""))
+
+;; ── count-occurrences : count occurrences of substring ──
+(defn count-occurrences
+  :sig [(s : String) (sub : String) -> i64]
+  :intent "Count non-overlapping occurrences of sub in s"
+  :requires [(valid s) (not (= sub ""))]
+  :ensures [(>= result 0)]
+  :body (- (length (split s sub)) 1))

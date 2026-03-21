@@ -1,0 +1,70 @@
+;; ── AIRL Standard Library: Map ──────────────────
+
+;; ── map-entries : get list of [key value] pairs ──
+(defn map-entries
+  :sig [(m : _) -> List]
+  :intent "Get all entries as a list of [key value] pairs"
+  :requires [(valid m)]
+  :ensures [(= (length result) (map-size m))]
+  :body (let (ks : List (map-keys m))
+          (map (fn [k] [k (map-get m k)]) ks)))
+
+;; ── map-from-entries : create map from list of [key value] pairs ──
+(defn map-from-entries
+  :sig [(entries : List) -> _]
+  :intent "Create a map from a list of [key value] pairs"
+  :requires [(valid entries)]
+  :ensures [(= (map-size result) (length entries))]
+  :body (fold (fn [acc pair] (map-set acc (head pair) (at pair 1))) (map-new) entries))
+
+;; ── map-merge : merge two maps (second wins on conflict) ──
+(defn map-merge
+  :sig [(m1 : _) (m2 : _) -> _]
+  :intent "Merge two maps, m2 values overwrite m1 on key conflict"
+  :requires [(valid m1)]
+  :ensures [(valid result)]
+  :body (fold (fn [acc pair] (map-set acc (head pair) (at pair 1))) m1 (map-entries m2)))
+
+;; ── map-map-values : apply function to all values ──
+;; NOTE: parameter named `transform` to avoid collision with fold's `f` parameter
+(defn map-map-values
+  :sig [(transform : fn) (m : _) -> _]
+  :intent "Apply transform to every value in the map, keeping keys"
+  :requires [(valid transform)]
+  :ensures [(= (map-size result) (map-size m))]
+  :body (fold (fn [acc pair] (map-set acc (head pair) (transform (at pair 1)))) (map-new) (map-entries m)))
+
+;; ── map-filter : keep entries where predicate is true ──
+;; NOTE: parameter named `pred-fn` to avoid collision with fold's `f` parameter
+(defn map-filter
+  :sig [(pred-fn : fn) (m : _) -> _]
+  :intent "Keep entries where pred-fn(key, value) returns true"
+  :requires [(valid pred-fn)]
+  :ensures [(<= (map-size result) (map-size m))]
+  :body (fold (fn [acc pair] (if (pred-fn (head pair) (at pair 1)) (map-set acc (head pair) (at pair 1)) acc)) (map-new) (map-entries m)))
+
+;; ── map-update : update a single key with a function ──
+(defn map-update
+  :sig [(m : _) (key : String) (updater : fn) -> _]
+  :intent "Apply updater to the value at key, or do nothing if key absent"
+  :requires [(valid updater)]
+  :ensures [(valid result)]
+  :body (if (map-has m key)
+          (map-set m key (updater (map-get m key)))
+          m))
+
+;; ── map-update-or : update a key with a function, using default if absent ──
+(defn map-update-or
+  :sig [(m : _) (key : String) (default : _) (updater : fn) -> _]
+  :intent "Apply updater to value at key, or set to (updater default) if absent"
+  :requires [(valid updater)]
+  :ensures [(map-has result key)]
+  :body (map-set m key (updater (map-get-or m key default))))
+
+;; ── map-count : count entries matching predicate ──
+(defn map-count
+  :sig [(pred-fn : fn) (m : _) -> i64]
+  :intent "Count entries where pred-fn(key, value) returns true"
+  :requires [(valid pred-fn)]
+  :ensures [(>= result 0)]
+  :body (fold (fn [acc pair] (if (pred-fn (head pair) (at pair 1)) (+ acc 1) acc)) 0 (map-entries m)))

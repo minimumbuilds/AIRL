@@ -1,0 +1,20 @@
+;; EXPECT: ()
+;; Test range
+(let (r : List (range 1 6))
+  (print "range 1..6:" r))
+
+;; Test range empty
+(let (r : List (range 5 5))
+  (print "range empty:" r))
+
+;; Test take
+(let (t : List (take 3 [1 2 3 4 5]))
+  (print "take 3:" t))
+
+;; Test drop
+(let (d : List (drop 2 [1 2 3 4 5]))
+  (print "drop 2:" d))
+
+;; Test take 0
+(let (t : List (take 0 [1 2 3]))
+  (print "take 0:" t))

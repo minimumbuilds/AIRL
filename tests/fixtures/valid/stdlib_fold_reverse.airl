@@ -1,0 +1,12 @@
+;; EXPECT: ()
+;; Test fold - sum
+(let (total : i64 (fold (fn [acc x] (+ acc x)) 0 [1 2 3 4 5]))
+  (print "fold sum:" total))
+
+;; Test reverse
+(let (rev : List (reverse [1 2 3 4 5]))
+  (print "reverse:" rev))
+
+;; Test reverse empty
+(let (rev : List (reverse []))
+  (print "reverse empty:" rev))

@@ -1,0 +1,1 @@
+Call zip-lists with one empty list [] and one non-empty list [1, 2, 3]

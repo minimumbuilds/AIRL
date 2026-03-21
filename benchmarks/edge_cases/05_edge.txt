@@ -1,0 +1,1 @@
+Call tokenize with an empty string ""

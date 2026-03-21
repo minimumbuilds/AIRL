@@ -1,6 +1,6 @@
 # AIRL — AI Intermediate Representation Language
 
-**A programming language designed by AI, for AI -- purpose-built for multi-agent systems. Not humans...**
+**A programming language designed for AI systems, not humans.**
 
 AIRL is a typed, contract-verified programming language for inter-agent communication. AI systems generate AIRL programs, transmit them as messages, execute them with formal guarantees, and verify results against machine-checkable contracts. The syntax is the serialization format. The message is the program.
 
@@ -38,6 +38,7 @@ Every existing programming language optimizes for human readability. AIRL optimi
 - Algebraic data types (sum types, product types)
 - Pattern matching with exhaustiveness checking
 - First-class functions and closures
+- **Standard library** — 15 pure AIRL collection functions (map, filter, fold, sort, etc.) auto-loaded as a prelude
 
 ### Compilation
 - **Tree-walking interpreter** for all AIRL programs
@@ -305,4 +306,4 @@ The complete language specification is in [`AIRL-Language-Specification-v0.1.0.m
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+MIT
