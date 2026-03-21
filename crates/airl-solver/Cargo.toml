@@ -1,0 +1,8 @@
+[package]
+name = "airl-solver"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+airl-syntax = { path = "../airl-syntax" }
+z3 = { version = "0.12", features = ["static-link-z3"] }
