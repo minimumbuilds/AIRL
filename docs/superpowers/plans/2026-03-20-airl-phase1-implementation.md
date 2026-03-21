@@ -98,7 +98,11 @@ airl/
 │   │   │   ├── safe_divide.airl
 │   │   │   ├── matrix_multiply.airl
 │   │   │   ├── modules.airl
-│   │   │   └── tensor_ops.airl
+│   │   │   ├── tensor_ops.airl
+│   │   │   ├── quantifier_contracts.airl
+│   │   │   ├── try_propagation.airl
+│   │   │   ├── higher_order.airl
+│   │   │   └── module_imports.airl
 │   │   ├── type_errors/
 │   │   │   ├── dim_mismatch.airl
 │   │   │   ├── wrong_arg_type.airl
@@ -112,7 +116,10 @@ airl/
 │   │   │   └── move_while_borrowed.airl
 │   │   └── agent/
 │   │       ├── task_roundtrip.airl
-│   │       └── capability_routing.airl
+│   │       ├── capability_routing.airl
+│   │       ├── parallel_fanout.airl
+│   │       ├── broadcast.airl
+│   │       └── await_timeout.airl
 │   └── e2e/
 │       └── fixture_runner.rs           # test harness for .airl fixtures
 └── docs/
@@ -766,7 +773,7 @@ impl<'src> Lexer<'src> {
             }
             b'0'..=b'9' => self.lex_number()?,
             b'-' if self.peek_at(1).map_or(false, |c| c.is_ascii_digit()) => self.lex_number()?,
-            _ if is_symbol_start(ch) => self.lex_symbol_or_keyword(),
+            _ if is_symbol_start(ch) => self.lex_symbol(),
             _ => {
                 return Err(Diagnostic::error(
                     format!("unexpected character: '{}'", ch as char),
@@ -910,10 +917,9 @@ impl<'src> Lexer<'src> {
 
         let text = std::str::from_utf8(&self.source[start..self.pos]).unwrap();
         if is_float {
-            // Strip suffix for parsing
-            let parse_text = text.trim_end_matches(|c: char| c == 'f' || c.is_ascii_digit() && text.contains('f'));
-            let parse_text = if parse_text.ends_with('f') || text.contains("f32") || text.contains("f64") {
-                text.split('f').next().unwrap()
+            // Strip optional float suffix (e.g., "3.14f32" → "3.14")
+            let parse_text = if let Some(idx) = text.find('f') {
+                &text[..idx]
             } else {
                 text
             };
@@ -943,7 +949,7 @@ impl<'src> Lexer<'src> {
         }
     }
 
-    fn lex_symbol_or_keyword(&mut self) -> TokenKind {
+    fn lex_symbol(&mut self) -> TokenKind {
         let start = self.pos;
         while self.pos < self.source.len() && is_symbol_char(self.source[self.pos]) {
             // Allow : inside symbols for agent:name syntax, but only if followed by a symbol char
@@ -970,16 +976,7 @@ impl<'src> Lexer<'src> {
         loop {
             // Skip whitespace
             while self.pos < self.source.len() && self.source[self.pos].is_ascii_whitespace() {
-                if self.source[self.pos] == b'\n' {
-                    self.line += 1;
-                    self.col = 0;
-                }
-                self.advance_no_col_track();
-                if self.source.get(self.pos.wrapping_sub(1)) == Some(&b'\n') {
-                    // col already reset
-                } else {
-                    // col was advanced in advance_no_col_track
-                }
+                self.advance();
             }
 
             if self.pos >= self.source.len() {
@@ -1032,13 +1029,6 @@ impl<'src> Lexer<'src> {
 
     fn advance(&mut self) {
         if self.pos < self.source.len() {
-            self.pos += 1;
-            self.col += 1;
-        }
-    }
-
-    fn advance_no_col_track(&mut self) {
-        if self.pos < self.source.len() {
             if self.source[self.pos] == b'\n' {
                 self.line += 1;
                 self.col = 0;
@@ -1068,7 +1058,7 @@ fn is_symbol_char(ch: u8) -> bool {
 }
 ```
 
-Note: the lexer whitespace handling has redundancy in `advance` vs `advance_no_col_track`. The implementer should simplify to a single `advance` that tracks newlines. The above code is a starting structure — expect to refine during implementation.
+Note: The lexer uses a single `advance()` method that handles newline tracking. Block comments also call `advance()` which correctly tracks line/col through multi-line comments.
 
 - [ ] **Step 4: Run tests**
 
@@ -2457,61 +2447,211 @@ git commit -m "feat(types): add DimExpr unification for dependent types"
 
 ---
 
-## Task 11: Type Checker (`airl-types`)
+## Task 11a: Type Checker — Type Resolution and Expression Checking (`airl-types`)
 
 **Files:**
 - Create: `crates/airl-types/src/checker.rs`
 - Test: inline `#[cfg(test)]`
 
-- [ ] **Step 1: Write failing tests for type checking**
+This is the first half of the type checker: resolving AST types to internal Ty, and checking basic expressions (literals, let, if, do).
 
-Key scenarios to test:
-- Arithmetic on matching types (i32 + i32 → i32) ✓
-- Arithmetic on mismatched types (i32 + f32 → error) ✓
-- Function call with correct/incorrect argument types ✓
-- Tensor dimension unification (matrix multiply) ✓
-- Let binding type annotation matches value ✓
-- Match exhaustiveness (covered in Task 12) ✓
+- [ ] **Step 1: Write failing tests for type resolution and basic expression checking**
 
-- [ ] **Step 2: Implement TypeChecker**
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check_expr_type(input: &str) -> Result<Ty, String> {
+        // Helper: parse input as an expression, type-check it, return type
+        ...
+    }
+
+    #[test]
+    fn resolve_primitive_types() {
+        let mut checker = TypeChecker::new();
+        let ty = checker.resolve_type_name("i32").unwrap();
+        assert_eq!(ty, Ty::Prim(PrimTy::I32));
+    }
+
+    #[test]
+    fn resolve_tensor_type() {
+        let mut checker = TypeChecker::new();
+        // tensor[f32 64 64] → Tensor { elem: Prim(F32), shape: [Lit(64), Lit(64)] }
+        ...
+    }
+
+    #[test]
+    fn check_int_literal() {
+        assert_eq!(check_expr_type("42"), Ok(Ty::Prim(PrimTy::I64)));
+    }
+
+    #[test]
+    fn check_string_literal() {
+        assert_eq!(check_expr_type(r#""hello""#), Ok(Ty::Prim(PrimTy::Str)));
+    }
+
+    #[test]
+    fn check_arithmetic_same_type() {
+        // (+ 1 2) → i64
+        assert_eq!(check_expr_type("(+ 1 2)"), Ok(Ty::Prim(PrimTy::I64)));
+    }
+
+    #[test]
+    fn check_arithmetic_type_mismatch() {
+        // Can't add int and string
+        assert!(check_expr_type(r#"(+ 1 "hello")"#).is_err());
+    }
+
+    #[test]
+    fn check_let_binding_type() {
+        // (let (x : i32 42) x) → i32
+        assert_eq!(check_expr_type("(let (x : i32 42) x)"), Ok(Ty::Prim(PrimTy::I32)));
+    }
+
+    #[test]
+    fn check_if_branches_same_type() {
+        assert_eq!(check_expr_type("(if true 1 2)"), Ok(Ty::Prim(PrimTy::I64)));
+    }
+
+    #[test]
+    fn check_if_branches_different_type() {
+        assert!(check_expr_type(r#"(if true 1 "hello")"#).is_err());
+    }
+}
+```
+
+- [ ] **Step 2: Implement TypeChecker struct, resolve_type, and check_expr for basic forms**
 
 ```rust
 use airl_syntax::{ast, Span, Diagnostic, Diagnostics};
 use crate::ty::*;
 use crate::env::TypeEnv;
-use crate::unify::{DimSubst, unify_dim};
+use crate::unify::DimSubst;
 
 pub struct TypeChecker {
-    env: TypeEnv,
-    dim_subst: DimSubst,
+    pub env: TypeEnv,
+    pub dim_subst: DimSubst,
     diags: Diagnostics,
 }
 
 impl TypeChecker {
-    pub fn new() -> Self { ... }
+    pub fn new() -> Self {
+        Self {
+            env: TypeEnv::new(),
+            dim_subst: DimSubst::new(),
+            diags: Diagnostics::new(),
+        }
+    }
 
-    /// Type-check a top-level form. Returns the type of the form.
-    pub fn check_top_level(&mut self, top: &ast::TopLevel) -> Result<(), ()> { ... }
+    /// Resolve an AST type name to an internal Ty.
+    pub fn resolve_type_name(&self, name: &str) -> Result<Ty, ()> {
+        if let Some(prim) = PrimTy::from_name(name) {
+            return Ok(Ty::Prim(prim));
+        }
+        match name {
+            "Unit" => Ok(Ty::Unit),
+            "Never" => Ok(Ty::Never),
+            _ => {
+                if let Some(reg) = self.env.lookup_type(name) {
+                    Ok(reg.ty.clone())
+                } else {
+                    Err(())
+                }
+            }
+        }
+    }
 
-    /// Check a function definition. Registers it in the env.
-    pub fn check_fn(&mut self, f: &ast::FnDef) -> Result<Ty, ()> { ... }
+    /// Resolve a full AST type node to internal Ty.
+    pub fn resolve_type(&mut self, ast_ty: &ast::AstType) -> Result<Ty, ()> {
+        match &ast_ty.kind {
+            ast::AstTypeKind::Named(name) => self.resolve_type_name(name),
+            ast::AstTypeKind::App(name, args) => {
+                if name == "tensor" {
+                    // tensor[ElemType Dim1 Dim2 ...]
+                    let elem = self.resolve_type(&args[0])?;
+                    let shape = args[1..].iter().map(|a| self.resolve_dim(a)).collect::<Result<_, _>>()?;
+                    Ok(Ty::Tensor { elem: Box::new(elem), shape })
+                } else {
+                    // Named type application: Result[i32, DivError]
+                    let resolved_args = args.iter().map(|a| {
+                        self.resolve_type(a).map(TyArg::Type)
+                    }).collect::<Result<_, _>>()?;
+                    Ok(Ty::Named { name: name.clone(), args: resolved_args })
+                }
+            }
+            ast::AstTypeKind::Func(params, ret) => {
+                let param_tys = params.iter().map(|p| self.resolve_type(p)).collect::<Result<_, _>>()?;
+                let ret_ty = self.resolve_type(ret)?;
+                Ok(Ty::Func { params: param_tys, ret: Box::new(ret_ty) })
+            }
+            ast::AstTypeKind::Nat(nat) => Ok(Ty::Nat(self.ast_nat_to_dim(nat))),
+        }
+    }
 
     /// Check an expression and return its type.
-    pub fn check_expr(&mut self, expr: &ast::Expr) -> Result<Ty, ()> { ... }
+    pub fn check_expr(&mut self, expr: &ast::Expr) -> Result<Ty, ()> {
+        match &expr.kind {
+            ast::ExprKind::IntLit(_) => Ok(Ty::Prim(PrimTy::I64)),
+            ast::ExprKind::FloatLit(_) => Ok(Ty::Prim(PrimTy::F64)),
+            ast::ExprKind::BoolLit(_) => Ok(Ty::Prim(PrimTy::Bool)),
+            ast::ExprKind::StrLit(_) => Ok(Ty::Prim(PrimTy::Str)),
+            ast::ExprKind::NilLit => Ok(Ty::Unit),
+            ast::ExprKind::SymbolRef(name) => {
+                self.env.lookup(name).cloned().ok_or_else(|| {
+                    self.diags.add(Diagnostic::error(
+                        format!("undefined symbol: `{}`", name), expr.span));
+                })
+            }
+            ast::ExprKind::If(cond, then, else_) => {
+                let cond_ty = self.check_expr(cond)?;
+                if cond_ty != Ty::Prim(PrimTy::Bool) {
+                    self.diags.add(Diagnostic::error("if condition must be bool", cond.span));
+                    return Err(());
+                }
+                let then_ty = self.check_expr(then)?;
+                let else_ty = self.check_expr(else_)?;
+                if then_ty != else_ty {
+                    self.diags.add(Diagnostic::error(
+                        format!("if branches have different types: {:?} vs {:?}", then_ty, else_ty),
+                        expr.span));
+                    return Err(());
+                }
+                Ok(then_ty)
+            }
+            ast::ExprKind::Let(bindings, body) => {
+                self.env.push_scope();
+                for b in bindings {
+                    let declared = self.resolve_type(&b.ty)?;
+                    let actual = self.check_expr(&b.value)?;
+                    // TODO: check declared == actual
+                    self.env.bind(b.name.clone(), declared);
+                }
+                let body_ty = self.check_expr(body)?;
+                self.env.pop_scope();
+                Ok(body_ty)
+            }
+            ast::ExprKind::Do(exprs) => {
+                let mut ty = Ty::Unit;
+                for e in exprs { ty = self.check_expr(e)?; }
+                Ok(ty)
+            }
+            // FnCall, Match, Lambda, Try handled in Task 11b
+            _ => {
+                self.diags.add(Diagnostic::error(
+                    format!("type checking not yet implemented for {:?}", expr.kind), expr.span));
+                Err(())
+            }
+        }
+    }
 
-    /// Resolve an AST type to an internal Ty.
-    pub fn resolve_type(&mut self, ast_ty: &ast::AstType) -> Result<Ty, ()> { ... }
+    fn resolve_dim(&mut self, ast_ty: &ast::AstType) -> Result<DimExpr, ()> { ... }
+    fn ast_nat_to_dim(&self, nat: &ast::NatExpr) -> DimExpr { ... }
 
     pub fn into_diagnostics(self) -> Diagnostics { self.diags }
     pub fn has_errors(&self) -> bool { self.diags.has_errors() }
 }
 ```
-
-Implementation walks the AST:
-- `check_fn`: resolve param types, bind params in new scope, check body, verify return type matches
-- `check_expr`: dispatch on ExprKind — IntLit→Prim(I64), FnCall→look up callee type, verify arg types, return ret type, etc.
-- `resolve_type`: Named("i32")→Prim(I32), App("tensor", [f32, 64, 64])→Tensor{...}, etc.
-- Tensor operations: when checking matmul, unify the shared K dimension via `unify_dim`
 
 - [ ] **Step 3: Run tests**
 
@@ -2522,7 +2662,154 @@ Expected: pass
 
 ```bash
 git add crates/airl-types/src/checker.rs
-git commit -m "feat(types): add type checker with dependent dimension unification"
+git commit -m "feat(types): add type checker — type resolution and basic expression checking"
+```
+
+---
+
+## Task 11b: Type Checker — Function Calls, Match, and Dimension Unification (`airl-types`)
+
+**Files:**
+- Modify: `crates/airl-types/src/checker.rs`
+- Test: inline `#[cfg(test)]`
+
+This extends the type checker with function call checking (including tensor dim unification), match, lambda, and try.
+
+- [ ] **Step 1: Write failing tests**
+
+```rust
+#[test]
+fn check_fn_call_correct_types() {
+    // Define a function (a : i32) (b : i32) -> i32, call with two ints
+    ...
+}
+
+#[test]
+fn check_fn_call_wrong_arg_type() {
+    // Call an i32 function with a string → error
+    ...
+}
+
+#[test]
+fn check_tensor_dim_unification() {
+    // matrix-multiply: tensor[f32 M K] * tensor[f32 K N] → tensor[f32 M N]
+    // Calling with tensor[f32 3 4] and tensor[f32 4 5] → K unifies to 4
+    ...
+}
+
+#[test]
+fn check_tensor_dim_mismatch() {
+    // tensor[f32 3 4] * tensor[f32 5 6] → K mismatch (4 vs 5) → error
+    ...
+}
+
+#[test]
+fn check_match_type() {
+    // match returns the common type of all arms
+    ...
+}
+
+#[test]
+fn check_lambda_type() {
+    // (fn [x] (+ x 1)) → (-> [i64] i64)
+    ...
+}
+
+#[test]
+fn check_try_unwraps_result() {
+    // (try (Ok 42)) inside a function returning Result → type is i32
+    ...
+}
+```
+
+- [ ] **Step 2: Extend check_expr with FnCall, Match, Lambda, Try**
+
+```rust
+// Add to check_expr match arms:
+
+ast::ExprKind::FnCall(callee, args) => {
+    let callee_ty = self.check_expr(callee)?;
+    match callee_ty {
+        Ty::Func { params, ret } => {
+            if args.len() != params.len() {
+                self.diags.add(Diagnostic::error(...));
+                return Err(());
+            }
+            for (arg, param_ty) in args.iter().zip(params.iter()) {
+                let arg_ty = self.check_expr(arg)?;
+                self.check_assignable(&arg_ty, param_ty, arg.span)?;
+            }
+            Ok(*ret)
+        }
+        _ => { /* check builtins, report error */ }
+    }
+}
+
+ast::ExprKind::Match(scrutinee, arms) => {
+    let scrut_ty = self.check_expr(scrutinee)?;
+    let mut result_ty = None;
+    for arm in arms {
+        self.env.push_scope();
+        self.check_pattern(&arm.pattern, &scrut_ty)?;
+        let arm_ty = self.check_expr(&arm.body)?;
+        self.env.pop_scope();
+        if let Some(ref prev) = result_ty {
+            if arm_ty != *prev {
+                self.diags.add(Diagnostic::error("match arms have different types", arm.span));
+                return Err(());
+            }
+        } else {
+            result_ty = Some(arm_ty);
+        }
+    }
+    result_ty.ok_or(())
+}
+```
+
+Also add `check_top_level` and `check_fn` methods:
+
+```rust
+pub fn check_top_level(&mut self, top: &ast::TopLevel) -> Result<(), ()> {
+    match top {
+        ast::TopLevel::Defn(f) => { self.check_fn(f)?; Ok(()) }
+        ast::TopLevel::DefType(td) => { self.register_type_def(td)?; Ok(()) }
+        ast::TopLevel::Module(m) => {
+            for item in &m.body { self.check_top_level(item)?; }
+            Ok(())
+        }
+        _ => Ok(())
+    }
+}
+
+pub fn check_fn(&mut self, f: &ast::FnDef) -> Result<Ty, ()> {
+    self.env.push_scope();
+    let mut param_tys = Vec::new();
+    for p in &f.params {
+        let ty = self.resolve_type(&p.ty)?;
+        self.env.bind(p.name.clone(), ty.clone());
+        param_tys.push(ty);
+    }
+    let declared_ret = self.resolve_type(&f.return_type)?;
+    let body_ty = self.check_expr(&f.body)?;
+    // check body_ty is assignable to declared_ret
+    self.check_assignable(&body_ty, &declared_ret, f.body.span)?;
+    self.env.pop_scope();
+    let fn_ty = Ty::Func { params: param_tys, ret: Box::new(declared_ret) };
+    self.env.bind(f.name.clone(), fn_ty.clone());
+    Ok(fn_ty)
+}
+```
+
+- [ ] **Step 3: Run tests**
+
+Run: `cargo test -p airl-types`
+Expected: pass
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add crates/airl-types/src/checker.rs
+git commit -m "feat(types): add function call checking, match, and tensor dim unification"
 ```
 
 ---
@@ -2580,19 +2867,93 @@ git commit -m "feat(types): add match exhaustiveness checker"
 ```rust
 #[cfg(test)]
 mod tests {
-    // Test: use after move
-    // Test: double mutable borrow
-    // Test: mutable borrow while immutable borrow exists
-    // Test: move while borrowed
-    // Test: explicit copy is allowed
-    // Test: branches must agree on ownership state
-    // Test: valid borrow/move sequences
+    use super::*;
+
+    fn check_linearity(input: &str) -> Result<(), Vec<String>> {
+        // Parse, type-check, then linearity-check the input
+        ...
+    }
+
+    #[test]
+    fn valid_owned_use() {
+        // Using an owned value once is fine
+        assert!(check_linearity("(let (x : i32 42) x)").is_ok());
+    }
+
+    #[test]
+    fn use_after_move() {
+        // Passing x to consume (own), then using x again → error
+        let result = check_linearity(r#"
+            (let (x : i32 42)
+              (do (consume x) x))
+        "#);
+        assert!(result.is_err());
+        assert!(result.unwrap_err()[0].contains("moved"));
+    }
+
+    #[test]
+    fn double_mut_borrow() {
+        let result = check_linearity(r#"
+            (let (x : i32 42)
+              (do (mutate &mut x) (mutate &mut x)))
+        "#);
+        // Two sequential &mut borrows are fine (first ends before second)
+        // But simultaneous would fail — tested via nested calls
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn mut_borrow_while_ref_exists() {
+        let result = check_linearity(r#"
+            (let (x : i32 42)
+              (use-both (&ref x) (&mut x)))
+        "#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn move_while_borrowed() {
+        let result = check_linearity(r#"
+            (let (x : i32 42)
+              (let (r : &i32 (&ref x))
+                (consume x)))
+        "#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn explicit_copy_allowed() {
+        assert!(check_linearity(r#"
+            (let (x : i32 42)
+              (do (consume (copy x)) x))
+        "#).is_ok());
+    }
+
+    #[test]
+    fn branches_must_agree() {
+        // If one branch moves x and other doesn't → error
+        let result = check_linearity(r#"
+            (let (x : i32 42)
+              (do
+                (if true (consume x) nil)
+                x))
+        "#);
+        assert!(result.is_err());
+    }
 }
 ```
 
 - [ ] **Step 2: Implement LinearityChecker**
 
 ```rust
+use airl_syntax::{ast, Span, Diagnostic, Diagnostics};
+use crate::ty::{Ty, is_copy};
+use crate::env::TypeEnv;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorrowKind { Immutable, Mutable }
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum OwnershipState {
     Owned,
@@ -2601,14 +2962,115 @@ pub enum OwnershipState {
     Dropped,
 }
 
-pub struct LinearityChecker { ... }
+pub struct LinearityChecker {
+    /// Maps binding names to their ownership state
+    states: Vec<HashMap<String, OwnershipState>>, // scoped stack
+    diags: Diagnostics,
+}
 
 impl LinearityChecker {
-    pub fn check_fn(&mut self, f: &ast::FnDef, env: &TypeEnv) -> Result<(), ()> { ... }
-    pub fn check_expr(&mut self, expr: &ast::Expr) -> Result<(), ()> { ... }
-    fn track_move(&mut self, name: &str, span: Span) -> Result<(), ()> { ... }
-    fn track_borrow(&mut self, name: &str, kind: BorrowKind, span: Span) -> Result<(), ()> { ... }
-    fn track_copy(&mut self, name: &str, ty: &Ty, span: Span) -> Result<(), ()> { ... }
+    pub fn new() -> Self {
+        Self { states: vec![HashMap::new()], diags: Diagnostics::new() }
+    }
+
+    pub fn introduce(&mut self, name: String) {
+        if let Some(scope) = self.states.last_mut() {
+            scope.insert(name, OwnershipState::Owned);
+        }
+    }
+
+    pub fn track_move(&mut self, name: &str, span: Span) -> Result<(), ()> {
+        let state = self.lookup_state(name);
+        match state {
+            Some(OwnershipState::Owned) => {
+                self.set_state(name, OwnershipState::Moved { moved_at: span });
+                Ok(())
+            }
+            Some(OwnershipState::Moved { moved_at }) => {
+                self.diags.add(
+                    Diagnostic::error(format!("use of moved value `{}`", name), span)
+                        .with_note(moved_at, "value moved here".into())
+                );
+                Err(())
+            }
+            Some(OwnershipState::Borrowed { .. }) => {
+                self.diags.add(Diagnostic::error(
+                    format!("cannot move `{}` while borrowed", name), span));
+                Err(())
+            }
+            _ => {
+                self.diags.add(Diagnostic::error(
+                    format!("use of undefined value `{}`", name), span));
+                Err(())
+            }
+        }
+    }
+
+    pub fn track_borrow(&mut self, name: &str, kind: BorrowKind, span: Span) -> Result<(), ()> {
+        let state = self.lookup_state(name);
+        match (state, kind) {
+            (Some(OwnershipState::Owned), BorrowKind::Immutable) => {
+                self.set_state(name, OwnershipState::Borrowed { kind, count: 1 });
+                Ok(())
+            }
+            (Some(OwnershipState::Borrowed { kind: BorrowKind::Immutable, count }), BorrowKind::Immutable) => {
+                self.set_state(name, OwnershipState::Borrowed { kind: BorrowKind::Immutable, count: count + 1 });
+                Ok(())
+            }
+            (Some(OwnershipState::Owned), BorrowKind::Mutable) => {
+                self.set_state(name, OwnershipState::Borrowed { kind, count: 1 });
+                Ok(())
+            }
+            (Some(OwnershipState::Borrowed { .. }), BorrowKind::Mutable) => {
+                self.diags.add(Diagnostic::error(
+                    format!("cannot mutably borrow `{}` — already borrowed", name), span));
+                Err(())
+            }
+            (Some(OwnershipState::Moved { moved_at }), _) => {
+                self.diags.add(
+                    Diagnostic::error(format!("use of moved value `{}`", name), span)
+                        .with_note(moved_at, "value moved here".into()));
+                Err(())
+            }
+            _ => Err(())
+        }
+    }
+
+    pub fn track_copy(&mut self, name: &str, ty: &Ty, span: Span) -> Result<(), ()> {
+        if !is_copy(ty) {
+            self.diags.add(Diagnostic::error(
+                format!("type {:?} does not implement Copy", ty), span));
+            return Err(());
+        }
+        // Copy doesn't change ownership state
+        Ok(())
+    }
+
+    fn lookup_state(&self, name: &str) -> Option<OwnershipState> {
+        for scope in self.states.iter().rev() {
+            if let Some(s) = scope.get(name) { return Some(s.clone()); }
+        }
+        None
+    }
+
+    fn set_state(&mut self, name: &str, state: OwnershipState) {
+        for scope in self.states.iter_mut().rev() {
+            if scope.contains_key(name) {
+                scope.insert(name.to_string(), state);
+                return;
+            }
+        }
+    }
+
+    pub fn push_scope(&mut self) { self.states.push(HashMap::new()); }
+    pub fn pop_scope(&mut self) { if self.states.len() > 1 { self.states.pop(); } }
+
+    /// Snapshot current state for branch checking
+    pub fn snapshot(&self) -> Vec<HashMap<String, OwnershipState>> { self.states.clone() }
+    pub fn restore(&mut self, snap: Vec<HashMap<String, OwnershipState>>) { self.states = snap; }
+
+    pub fn into_diagnostics(self) -> Diagnostics { self.diags }
+    pub fn has_errors(&self) -> bool { self.diags.has_errors() }
 }
 ```
 
@@ -2938,9 +3400,13 @@ pub enum TensorData {
 impl TensorValue {
     pub fn zeros(dtype: PrimTy, shape: Vec<usize>) -> Self { ... }
     pub fn ones(dtype: PrimTy, shape: Vec<usize>) -> Self { ... }
+    pub fn rand(dtype: PrimTy, shape: Vec<usize>) -> Self { ... }
+    pub fn alloc(dtype: PrimTy, shape: Vec<usize>) -> Self { ... }  // uninitialized
     pub fn identity(dtype: PrimTy, n: usize) -> Self { ... }
     pub fn add(&self, other: &TensorValue) -> Result<TensorValue, RuntimeError> { ... }
+    pub fn mul(&self, other: &TensorValue) -> Result<TensorValue, RuntimeError> { ... }  // element-wise
     pub fn matmul(&self, other: &TensorValue) -> Result<TensorValue, RuntimeError> { ... }
+    pub fn contract(&self, other: &TensorValue, over: usize) -> Result<TensorValue, RuntimeError> { ... }
     pub fn reshape(&self, new_shape: Vec<usize>) -> Result<TensorValue, RuntimeError> { ... }
     pub fn transpose(&self, perm: &[usize]) -> Result<TensorValue, RuntimeError> { ... }
     pub fn softmax(&self, dim: i64) -> Result<TensorValue, RuntimeError> { ... }
@@ -3591,8 +4057,14 @@ pub fn run_repl() {
 fn parens_balanced(input: &str) -> bool {
     let mut depth = 0i32;
     let mut in_string = false;
+    let mut escape = false;
     for ch in input.chars() {
-        if in_string { if ch == '"' { in_string = false; } continue; }
+        if in_string {
+            if escape { escape = false; continue; }
+            if ch == '\\' { escape = true; continue; }
+            if ch == '"' { in_string = false; }
+            continue;
+        }
         match ch {
             '"' => in_string = true,
             '(' | '[' => depth += 1,
@@ -3617,6 +4089,8 @@ fn unbalanced_open() { assert!(!parens_balanced("(+ 1")); }
 fn balanced_nested() { assert!(parens_balanced("(+ (* 2 3) 4)")); }
 #[test]
 fn string_parens_ignored() { assert!(parens_balanced(r#"(print "(hello")"#)); }
+#[test]
+fn escaped_quote_in_string() { assert!(parens_balanced(r#"(print "escaped\"paren(")"#)); }
 ```
 
 - [ ] **Step 3: Run tests, commit**
@@ -3692,6 +4166,10 @@ git commit -m "feat(driver): add Rust-style error formatting"
 - Create: `tests/fixtures/valid/matrix_multiply.airl`
 - Create: `tests/fixtures/valid/modules.airl`
 - Create: `tests/fixtures/valid/tensor_ops.airl`
+- Create: `tests/fixtures/valid/quantifier_contracts.airl`
+- Create: `tests/fixtures/valid/try_propagation.airl`
+- Create: `tests/fixtures/valid/higher_order.airl`
+- Create: `tests/fixtures/valid/module_imports.airl`
 
 - [ ] **Step 1: Write all valid fixtures from spec examples**
 
@@ -3852,6 +4330,9 @@ git commit -m "test: add end-to-end fixture test runner"
 **Files:**
 - Create: `tests/fixtures/agent/task_roundtrip.airl`
 - Create: `tests/fixtures/agent/capability_routing.airl`
+- Create: `tests/fixtures/agent/parallel_fanout.airl`
+- Create: `tests/fixtures/agent/broadcast.airl`
+- Create: `tests/fixtures/agent/await_timeout.airl`
 - Create: `tests/e2e/agent_tests.rs`
 
 - [ ] **Step 1: Write multi-agent test**
