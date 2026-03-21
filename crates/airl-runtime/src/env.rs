@@ -1,7 +1,7 @@
 use crate::value::Value;
 use crate::error::RuntimeError;
 use airl_syntax::Span;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The kind of scope frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +18,8 @@ pub struct Slot {
     pub value: Value,
     pub moved: bool,
     pub moved_at: Option<Span>,
+    pub immutable_borrows: u32,
+    pub mutable_borrow: bool,
 }
 
 /// A single scope frame with its bindings.
@@ -67,6 +69,8 @@ impl Env {
             value,
             moved: false,
             moved_at: None,
+            immutable_borrows: 0,
+            mutable_borrow: false,
         });
     }
 
@@ -87,16 +91,108 @@ impl Env {
         Err(RuntimeError::UndefinedSymbol(name.to_string()))
     }
 
-    /// Mark a binding as moved.
+    /// Mark a binding as moved. Errors if the binding is currently borrowed.
     pub fn mark_moved(&mut self, name: &str, span: Span) -> Result<(), RuntimeError> {
         for frame in self.frames.iter_mut().rev() {
             if let Some(slot) = frame.bindings.get_mut(name) {
+                if slot.immutable_borrows > 0 || slot.mutable_borrow {
+                    return Err(RuntimeError::Custom(format!(
+                        "cannot move `{}` — borrowed", name
+                    )));
+                }
                 slot.moved = true;
                 slot.moved_at = Some(span);
                 return Ok(());
             }
         }
         Err(RuntimeError::UndefinedSymbol(name.to_string()))
+    }
+
+    /// Increment immutable borrow count. Errors if mutably borrowed or moved.
+    pub fn borrow_immutable(&mut self, name: &str) -> Result<(), RuntimeError> {
+        for frame in self.frames.iter_mut().rev() {
+            if let Some(slot) = frame.bindings.get_mut(name) {
+                if slot.moved {
+                    return Err(RuntimeError::UseAfterMove {
+                        name: name.to_string(),
+                        span: slot.moved_at.unwrap_or_else(Span::dummy),
+                    });
+                }
+                if slot.mutable_borrow {
+                    return Err(RuntimeError::Custom(format!(
+                        "cannot immutably borrow `{}` — already mutably borrowed", name
+                    )));
+                }
+                slot.immutable_borrows += 1;
+                return Ok(());
+            }
+        }
+        Err(RuntimeError::UndefinedSymbol(name.to_string()))
+    }
+
+    /// Set mutable borrow. Errors if any borrows exist or moved.
+    pub fn borrow_mutable(&mut self, name: &str) -> Result<(), RuntimeError> {
+        for frame in self.frames.iter_mut().rev() {
+            if let Some(slot) = frame.bindings.get_mut(name) {
+                if slot.moved {
+                    return Err(RuntimeError::UseAfterMove {
+                        name: name.to_string(),
+                        span: slot.moved_at.unwrap_or_else(Span::dummy),
+                    });
+                }
+                if slot.immutable_borrows > 0 {
+                    return Err(RuntimeError::Custom(format!(
+                        "cannot mutably borrow `{}` — already immutably borrowed", name
+                    )));
+                }
+                if slot.mutable_borrow {
+                    return Err(RuntimeError::Custom(format!(
+                        "cannot mutably borrow `{}` — already mutably borrowed", name
+                    )));
+                }
+                slot.mutable_borrow = true;
+                return Ok(());
+            }
+        }
+        Err(RuntimeError::UndefinedSymbol(name.to_string()))
+    }
+
+    /// Release an immutable borrow (decrement count).
+    pub fn release_immutable_borrow(&mut self, name: &str) {
+        for frame in self.frames.iter_mut().rev() {
+            if let Some(slot) = frame.bindings.get_mut(name) {
+                if slot.immutable_borrows > 0 {
+                    slot.immutable_borrows -= 1;
+                }
+                return;
+            }
+        }
+    }
+
+    /// Release a mutable borrow (clear flag).
+    pub fn release_mutable_borrow(&mut self, name: &str) {
+        for frame in self.frames.iter_mut().rev() {
+            if let Some(slot) = frame.bindings.get_mut(name) {
+                slot.mutable_borrow = false;
+                return;
+            }
+        }
+    }
+
+    /// Iterate all bindings across all frames (innermost first).
+    /// Returns (name, &Slot) pairs. Later bindings shadow earlier ones.
+    pub fn iter_bindings(&self) -> Vec<(&str, &Slot)> {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for frame in self.frames.iter().rev() {
+            for (name, slot) in &frame.bindings {
+                if seen.insert(name.as_str()) {
+                    result.push((name.as_str(), slot));
+                }
+            }
+        }
+        result.sort_by_key(|(name, _)| *name);
+        result
     }
 
     /// Get a mutable reference to a binding's value.
@@ -245,5 +341,73 @@ mod tests {
         env.pop_frame(); // pop Match
         assert!(env.get("d").is_err());
         assert_eq!(*env.get("c").unwrap(), Value::Int(3));
+    }
+
+    #[test]
+    fn borrow_immutable_succeeds() {
+        let mut env = Env::new();
+        env.bind("x".into(), Value::Int(42));
+        env.borrow_immutable("x").unwrap();
+        assert_eq!(*env.get("x").unwrap(), Value::Int(42));
+    }
+
+    #[test]
+    fn borrow_mutable_blocks_immutable() {
+        let mut env = Env::new();
+        env.bind("x".into(), Value::Int(1));
+        env.borrow_mutable("x").unwrap();
+        assert!(env.borrow_immutable("x").is_err());
+    }
+
+    #[test]
+    fn immutable_borrow_blocks_mutable() {
+        let mut env = Env::new();
+        env.bind("x".into(), Value::Int(1));
+        env.borrow_immutable("x").unwrap();
+        assert!(env.borrow_mutable("x").is_err());
+    }
+
+    #[test]
+    fn multiple_immutable_borrows_ok() {
+        let mut env = Env::new();
+        env.bind("x".into(), Value::Int(1));
+        env.borrow_immutable("x").unwrap();
+        env.borrow_immutable("x").unwrap();
+    }
+
+    #[test]
+    fn release_borrow_allows_mutable() {
+        let mut env = Env::new();
+        env.bind("x".into(), Value::Int(1));
+        env.borrow_immutable("x").unwrap();
+        env.release_immutable_borrow("x");
+        env.borrow_mutable("x").unwrap();
+    }
+
+    #[test]
+    fn borrow_moved_value_fails() {
+        let mut env = Env::new();
+        env.bind("x".into(), Value::Int(1));
+        env.mark_moved("x", Span::dummy()).unwrap();
+        assert!(env.borrow_immutable("x").is_err());
+    }
+
+    #[test]
+    fn mark_moved_while_borrowed_fails() {
+        let mut env = Env::new();
+        env.bind("x".into(), Value::Int(1));
+        env.borrow_immutable("x").unwrap();
+        let err = env.mark_moved("x", Span::dummy()).unwrap_err();
+        assert!(matches!(err, RuntimeError::Custom(ref s) if s.contains("borrowed")));
+    }
+
+    #[test]
+    fn iter_bindings_returns_all() {
+        let mut env = Env::new();
+        env.bind("a".into(), Value::Int(1));
+        env.bind("b".into(), Value::Int(2));
+        let bindings = env.iter_bindings();
+        let names: Vec<&str> = bindings.iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, vec!["a", "b"]);
     }
 }
