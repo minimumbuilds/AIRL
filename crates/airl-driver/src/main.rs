@@ -1,9 +1,5 @@
-mod pipeline;
-mod repl;
-mod fmt;
-
-use pipeline::{run_file, check_file, format_diagnostic_with_source, PipelineError};
-use fmt::format_source;
+use airl_driver::pipeline::{run_file, check_file, format_diagnostic_with_source, PipelineError};
+use airl_driver::fmt::format_source;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -54,7 +50,7 @@ fn cmd_check(args: &[String]) {
 }
 
 fn cmd_repl() {
-    repl::run_repl();
+    airl_driver::repl::run_repl();
 }
 
 fn cmd_agent(args: &[String]) {

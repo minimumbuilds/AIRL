@@ -4,6 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "airl_driver"
+path = "src/lib.rs"
+
+[[bin]]
+name = "airl-driver"
+path = "src/main.rs"
+
 [dependencies]
 airl-syntax = { path = "../airl-syntax" }
 airl-types = { path = "../airl-types" }
