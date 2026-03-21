@@ -582,9 +582,168 @@ For agent communication, message payloads are serialized when crossing agent bou
 
 ---
 
-## 9. Error Handling
+## 9. Standard Library
 
-### 9.1 Result Types
+AIRL includes a standard library of pure AIRL functions, auto-loaded as a prelude before user code. No imports are needed — all stdlib functions are available in every program.
+
+The stdlib is organized into 5 modules, loaded in dependency order: Collections → Math → Result → String → Map.
+
+### 9.1 Primitive Builtins
+
+The stdlib relies on a small set of Rust builtins for list destructuring, string character access, and map operations:
+
+**List primitives:**
+```clojure
+(head [1 2 3])        ;; → 1 (first element, errors on empty)
+(tail [1 2 3])        ;; → [2 3] (all but first, errors on empty)
+(empty? [])           ;; → true
+(cons 0 [1 2 3])      ;; → [0 1 2 3] (prepend)
+```
+
+**String primitives:**
+```clojure
+(char-at "hello" 0)       ;; → "h" (Unicode-safe)
+(substring "hello" 0 3)   ;; → "hel"
+(chars "abc")             ;; → ["a" "b" "c"]
+(split "a,b,c" ",")       ;; → ["a" "b" "c"]
+(join ["a" "b"] "-")      ;; → "a-b"
+(contains "hello" "ell")  ;; → true
+(starts-with "hello" "hel") ;; → true
+(ends-with "hello" "llo")   ;; → true
+(index-of "hello" "ll")     ;; → 2 (char index, or -1)
+(trim "  hi  ")            ;; → "hi"
+(to-upper "hello")         ;; → "HELLO"
+(to-lower "HELLO")         ;; → "hello"
+(replace "hello" "l" "r")  ;; → "herro"
+```
+
+**Map primitives:**
+```clojure
+(map-new)                          ;; → {} (empty map)
+(map-from ["a" 1 "b" 2])          ;; → {a: 1, b: 2}
+(map-get m "key")                  ;; → value or nil
+(map-get-or m "key" default)       ;; → value or default
+(map-set m "key" value)            ;; → new map with key set
+(map-has m "key")                  ;; → bool
+(map-remove m "key")               ;; → new map without key
+(map-keys m)                       ;; → sorted list of keys
+(map-values m)                     ;; → values in key-sorted order
+(map-size m)                       ;; → number of entries
+```
+
+### 9.2 Collections Module
+
+Source: `stdlib/prelude.airl` — 15 functions for list processing.
+
+```clojure
+;; Core
+(map (fn [x] (* x 2)) [1 2 3])         ;; → [2 4 6]
+(filter (fn [x] (> x 2)) [1 2 3 4])    ;; → [3 4]
+(fold (fn [acc x] (+ acc x)) 0 [1 2 3]) ;; → 6
+
+;; Structural
+(reverse [1 2 3])                ;; → [3 2 1]
+(concat [1 2] [3 4])            ;; → [1 2 3 4]
+(zip [1 2] [3 4])               ;; → [[1 3] [2 4]]
+(flatten [[1 2] [3] [4 5]])     ;; → [1 2 3 4 5]
+
+;; Slicing
+(range 1 5)                      ;; → [1 2 3 4]
+(take 2 [1 2 3 4])              ;; → [1 2]
+(drop 2 [1 2 3 4])              ;; → [3 4]
+
+;; Searching
+(any (fn [x] (> x 3)) [1 2 4])  ;; → true
+(all (fn [x] (> x 0)) [1 2 3])  ;; → true
+(find (fn [x] (> x 3)) [1 2 4]) ;; → 4 (or nil)
+
+;; Sorting (merge sort)
+(sort (fn [a b] (< a b)) [3 1 2])  ;; → [1 2 3]
+(merge (fn [a b] (< a b)) [1 3] [2 4]) ;; → [1 2 3 4]
+```
+
+### 9.3 Math Module
+
+Source: `stdlib/math.airl` — 13 integer math functions.
+
+```clojure
+(abs -5)             ;; → 5
+(min 3 7)            ;; → 3
+(max 3 7)            ;; → 7
+(clamp 15 0 10)      ;; → 10
+(sign -3)            ;; → -1
+(even? 4)            ;; → true
+(odd? 3)             ;; → true
+(pow 2 10)           ;; → 1024
+(gcd 12 8)           ;; → 4
+(lcm 4 6)            ;; → 12
+(sum-list [1 2 3])   ;; → 6
+(product-list [1 2 3]) ;; → 6
+```
+
+### 9.4 Result Combinators Module
+
+Source: `stdlib/result.airl` — 8 functions for working with `Result` values.
+
+```clojure
+(is-ok? (Ok 42))                ;; → true
+(is-err? (Err "fail"))          ;; → true
+(unwrap-or (Err "fail") 0)      ;; → 0
+(map-ok (fn [x] (* x 2)) (Ok 21))  ;; → (Ok 42)
+(map-err (fn [e] (+ e "!")) (Err "oops")) ;; → (Err "oops!")
+(and-then (fn [x] (Ok (* x 2))) (Ok 5))   ;; → (Ok 10)
+(or-else (fn [e] (Ok 0)) (Err "fail"))    ;; → (Ok 0)
+(ok-or 42 "was nil")            ;; → (Ok 42)
+(ok-or nil "was nil")           ;; → (Err "was nil")
+```
+
+### 9.5 String Module
+
+Source: `stdlib/string.airl` — 10 higher-level string functions (built on string builtins).
+
+```clojure
+(words "hello  world")     ;; → ["hello" "world"]
+(unwords ["hello" "world"]) ;; → "hello world"
+(lines "a\nb\nc")          ;; → ["a" "b" "c"]
+(unlines ["a" "b"])        ;; → "a\nb"
+(repeat-str "ab" 3)        ;; → "ababab"
+(pad-left "42" 5 "0")      ;; → "00042"
+(pad-right "hi" 5 ".")     ;; → "hi..."
+(is-empty-str "")           ;; → true
+(reverse-str "hello")       ;; → "olleh"
+(count-occurrences "abcabc" "abc") ;; → 2
+```
+
+### 9.6 Map Module
+
+Source: `stdlib/map.airl` — 8 higher-level map functions (built on map builtins).
+
+Maps use string keys and arbitrary values. All mutation operations return new maps.
+
+```clojure
+(map-entries m)              ;; → [["k1" v1] ["k2" v2] ...]
+(map-from-entries [["a" 1] ["b" 2]]) ;; → {a: 1, b: 2}
+(map-merge m1 m2)            ;; → merged map (m2 wins on conflict)
+(map-map-values (fn [v] (* v 2)) m)  ;; → map with all values doubled
+(map-filter (fn [k v] (> v 10)) m)   ;; → filtered map
+(map-update m "key" (fn [v] (+ v 1))) ;; → map with key updated
+(map-update-or m "key" 0 (fn [v] (+ v 1))) ;; → update with default
+(map-count (fn [k v] (> v 0)) m)     ;; → count of matching entries
+```
+
+### 9.7 Implementation Notes
+
+- The stdlib is embedded in the binary via `include_str!()` and parsed/evaluated before user code.
+- All collection functions are recursive. A recursion depth limit of 50,000 prevents stack overflow on large lists.
+- Map keys are always strings. Maps are backed by `HashMap<String, Value>` for O(1) operations.
+- All character indexing in string builtins is Unicode-safe (char-based, not byte-based).
+- See `stdlib/*.md` for detailed documentation per module.
+
+---
+
+## 10. Error Handling
+
+### 10.1 Result Types
 
 AIRL uses Result types for expected errors and contract violations for bugs. There are no exceptions.
 
@@ -606,7 +765,7 @@ AIRL uses Result types for expected errors and contract violations for bugs. The
       (Ok (transform validated))))
 ```
 
-### 9.2 Contract Violations
+### 10.2 Contract Violations
 
 When a contract violation occurs at runtime (in `:verify checked` mode), the system produces a structured error:
 
@@ -622,9 +781,9 @@ When a contract violation occurs at runtime (in `:verify checked` mode), the sys
 
 ---
 
-## 10. Implementation Roadmap
+## 11. Implementation Roadmap
 
-### 10.1 Phase 1: Interpreter (Rust)
+### 11.1 Phase 1: Interpreter (Rust)
 
 Build a tree-walking interpreter in Rust that validates the language design:
 
@@ -637,7 +796,7 @@ Build a tree-walking interpreter in Rust that validates the language design:
 
 **Target:** Wire into an existing multi-agent system (e.g., Claude + Qwen3 via LiteLLM) as the inter-agent message format. Validate that agents can generate, parse, and execute AIRL task expressions.
 
-### 10.2 Phase 2: MLIR Compilation
+### 11.2 Phase 2: MLIR Compilation
 
 Add a compilation path for performance-critical operations:
 
@@ -647,7 +806,7 @@ Add a compilation path for performance-critical operations:
 - GPU kernel compilation targeting CUDA and ROCm
 - Z3 SMT solver integration for `:verify proven` mode
 
-### 10.3 Phase 3: Self-Hosting
+### 11.3 Phase 3: Self-Hosting
 
 Write the AIRL compiler in AIRL itself:
 
@@ -655,7 +814,7 @@ Write the AIRL compiler in AIRL itself:
 - Self-compiling compiler: AIRL compiler compiles itself
 - At this point, an AI system can modify and improve the language toolchain
 
-### 10.4 First Compiler: Rust
+### 11.4 First Compiler: Rust
 
 The Phase 1 implementation language is Rust, chosen for the following reasons:
 
