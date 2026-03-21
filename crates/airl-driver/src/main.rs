@@ -1,4 +1,4 @@
-use airl_driver::pipeline::{run_file, check_file, format_diagnostic_with_source, PipelineError};
+use airl_driver::pipeline::{run_file, check_file, format_diagnostic_with_source, PipelineError, PipelineMode};
 use airl_driver::fmt::format_source;
 
 fn main() {
@@ -91,6 +91,12 @@ fn print_pipeline_error(err: &PipelineError, path: &str) {
             eprint!("{}", format_diagnostic_with_source(diag, &source, path));
         }
         PipelineError::Parse(diags) => {
+            let source = std::fs::read_to_string(path).unwrap_or_default();
+            for diag in diags.errors() {
+                eprint!("{}", format_diagnostic_with_source(diag, &source, path));
+            }
+        }
+        PipelineError::TypeCheck(diags) => {
             let source = std::fs::read_to_string(path).unwrap_or_default();
             for diag in diags.errors() {
                 eprint!("{}", format_diagnostic_with_source(diag, &source, path));

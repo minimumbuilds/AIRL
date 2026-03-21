@@ -3,36 +3,69 @@ use airl_syntax::parser;
 use airl_runtime::eval::Interpreter;
 use airl_runtime::value::Value;
 use airl_runtime::error::RuntimeError;
+use airl_types::checker::TypeChecker;
 
-pub fn run_source(source: &str) -> Result<Value, PipelineError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipelineMode {
+    Check,  // type errors block execution
+    Run,    // type errors warn to stderr, execution proceeds
+    Repl,   // type errors warn to stderr, execution proceeds
+}
+
+pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, PipelineError> {
+    // Lex
     let mut lexer = Lexer::new(source);
     let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
     let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
     let mut diags = Diagnostics::new();
-    let mut interp = Interpreter::new();
-    let mut result = Value::Unit;
 
+    // Parse all top-level forms
+    let mut tops = Vec::new();
     for sexpr in &sexprs {
         match parser::parse_top_level(sexpr, &mut diags) {
-            Ok(top) => {
-                if diags.has_errors() {
-                    return Err(PipelineError::Parse(diags));
-                }
-                result = interp.eval_top_level(&top).map_err(PipelineError::Runtime)?;
-            }
+            Ok(top) => tops.push(top),
             Err(d) => {
-                // Try as bare expression
                 let mut diags2 = Diagnostics::new();
                 match parser::parse_expr(sexpr, &mut diags2) {
-                    Ok(expr) => {
-                        result = interp.eval(&expr).map_err(PipelineError::Runtime)?;
-                    }
+                    Ok(expr) => tops.push(airl_syntax::ast::TopLevel::Expr(expr)),
                     Err(_) => return Err(PipelineError::Syntax(d)),
                 }
             }
         }
     }
+    if diags.has_errors() {
+        return Err(PipelineError::Parse(diags));
+    }
+
+    // Type check
+    let mut checker = TypeChecker::new();
+    for top in &tops {
+        let _ = checker.check_top_level(top);
+    }
+    if checker.has_errors() {
+        let type_diags = checker.into_diagnostics();
+        match mode {
+            PipelineMode::Check => return Err(PipelineError::TypeCheck(type_diags)),
+            PipelineMode::Run | PipelineMode::Repl => {
+                // Print as warnings to stderr, don't block
+                for d in type_diags.errors() {
+                    eprintln!("warning: {}", d.message);
+                }
+            }
+        }
+    }
+
+    // Evaluate
+    let mut interp = Interpreter::new();
+    let mut result = Value::Unit;
+    for top in &tops {
+        result = interp.eval_top_level(top).map_err(PipelineError::Runtime)?;
+    }
     Ok(result)
+}
+
+pub fn run_source(source: &str) -> Result<Value, PipelineError> {
+    run_source_with_mode(source, PipelineMode::Run)
 }
 
 pub fn run_file(path: &str) -> Result<Value, PipelineError> {
@@ -46,11 +79,25 @@ pub fn check_source(source: &str) -> Result<(), PipelineError> {
     let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
     let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
     let mut diags = Diagnostics::new();
+
+    let mut tops = Vec::new();
     for sexpr in &sexprs {
-        let _ = parser::parse_top_level(sexpr, &mut diags);
+        match parser::parse_top_level(sexpr, &mut diags) {
+            Ok(top) => tops.push(top),
+            Err(_) => {}
+        }
     }
     if diags.has_errors() {
-        Err(PipelineError::Parse(diags))
+        return Err(PipelineError::Parse(diags));
+    }
+
+    // Type check (strict mode)
+    let mut checker = TypeChecker::new();
+    for top in &tops {
+        let _ = checker.check_top_level(top);
+    }
+    if checker.has_errors() {
+        Err(PipelineError::TypeCheck(checker.into_diagnostics()))
     } else {
         Ok(())
     }
@@ -67,6 +114,7 @@ pub enum PipelineError {
     Io(String),
     Syntax(Diagnostic),
     Parse(Diagnostics),
+    TypeCheck(Diagnostics),
     Runtime(RuntimeError),
 }
 
@@ -78,6 +126,12 @@ impl std::fmt::Display for PipelineError {
             PipelineError::Parse(ds) => {
                 for d in ds.errors() {
                     writeln!(f, "Parse error: {}", d.message)?;
+                }
+                Ok(())
+            }
+            PipelineError::TypeCheck(ds) => {
+                for d in ds.errors() {
+                    writeln!(f, "Type error: {}", d.message)?;
                 }
                 Ok(())
             }
@@ -192,5 +246,12 @@ mod tests {
     fn pipeline_error_display() {
         let err = PipelineError::Io("file not found".to_string());
         assert_eq!(format!("{}", err), "IO error: file not found");
+    }
+
+    #[test]
+    fn check_source_with_type_checker() {
+        // Valid source should pass check
+        let result = check_source("(+ 1 2)");
+        assert!(result.is_ok());
     }
 }
