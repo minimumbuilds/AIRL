@@ -1,0 +1,3 @@
+;; ERROR: type
+;; If branches return different types
+(if false 42 (+ "hello" 1))

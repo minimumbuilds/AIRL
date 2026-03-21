@@ -1,0 +1,9 @@
+;; ERROR: type
+;; This should fail type checking: passing string where i32 expected
+(defn double
+  :sig [(x : i32) -> i32]
+  :intent "double x"
+  :requires [(valid x)]
+  :ensures [(valid result)]
+  :body (* x 2))
+(double "hello")

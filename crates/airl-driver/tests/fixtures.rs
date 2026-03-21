@@ -184,3 +184,40 @@ fn linearity_error_fixtures_all_fail() {
     }
     eprintln!("  {} linearity_error fixtures passed", count);
 }
+
+#[test]
+fn check_type_error_fixtures() {
+    let dir = fixtures_root().join("type_errors");
+    let files = collect_airl_files(&dir);
+    if files.is_empty() { return; }
+
+    let mut failures = Vec::new();
+
+    for file in &files {
+        let source = fs::read_to_string(file).unwrap();
+        let expected_error = extract_error(&source);
+
+        if expected_error.is_some() {
+            // Use check_source (which runs type checker in strict mode)
+            let check_failed = airl_driver::pipeline::check_source(&source).is_err();
+            let run_failed = run_fixture(&source).is_err();
+
+            if !check_failed && !run_failed {
+                failures.push(format!(
+                    "{}: should fail (check or run) but both check and run passed",
+                    file.display()
+                ));
+            }
+        }
+    }
+
+    if !failures.is_empty() {
+        panic!(
+            "\n{} check_type_error fixture(s) failed:\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        );
+    }
+
+    eprintln!("  {} check_type_error fixtures verified", files.len());
+}
