@@ -9,6 +9,7 @@ pub struct Interpreter {
     pub env: Env,
     builtins: Builtins,
     pub jit: Option<airl_codegen::JitCache>,
+    pub tensor_jit: Option<airl_codegen::TensorJit>,
 }
 
 impl Interpreter {
@@ -17,6 +18,7 @@ impl Interpreter {
             env: Env::new(),
             builtins: Builtins::new(),
             jit: airl_codegen::JitCache::new().ok(),
+            tensor_jit: airl_codegen::TensorJit::new().ok(),
         };
         // Register all builtin names in the environment so symbol lookups resolve them
         interp.register_builtin_symbols();
@@ -171,6 +173,40 @@ impl Interpreter {
                 }
 
                 // Call the function
+                // Try tensor JIT for supported ops before regular dispatch
+                if let Value::BuiltinFn(ref name) = callee_val {
+                    if matches!(name.as_str(), "tensor.add" | "tensor.mul" | "tensor.matmul") {
+                        if let Some(mut tjit) = self.tensor_jit.take() {
+                            let result = try_tensor_jit(&mut tjit, name, &arg_vals);
+                            self.tensor_jit = Some(tjit);
+                            match result {
+                                Ok(Some(val)) => {
+                                    // Release borrows before returning
+                                    for (bname, is_mutable) in &borrow_ledger {
+                                        if *is_mutable {
+                                            self.env.release_mutable_borrow(bname);
+                                        } else {
+                                            self.env.release_immutable_borrow(bname);
+                                        }
+                                    }
+                                    return Ok(val);
+                                }
+                                Err(e) => {
+                                    for (bname, is_mutable) in &borrow_ledger {
+                                        if *is_mutable {
+                                            self.env.release_mutable_borrow(bname);
+                                        } else {
+                                            self.env.release_immutable_borrow(bname);
+                                        }
+                                    }
+                                    return Err(e);
+                                }
+                                Ok(None) => {} // fall through to interpreted builtin
+                            }
+                        }
+                    }
+                }
+
                 let result = match callee_val {
                     Value::BuiltinFn(ref name) => {
                         let f = self.builtins.get(name).ok_or_else(|| {
@@ -444,6 +480,59 @@ fn raw_to_value(raw: airl_codegen::RawValue, ty: &airl_syntax::ast::AstType) -> 
             _ => Value::Int(raw.to_i64()),
         },
         _ => Value::Int(raw.to_i64()),
+    }
+}
+
+fn try_tensor_jit(
+    tjit: &mut airl_codegen::TensorJit,
+    op: &str,
+    args: &[Value],
+) -> Result<Option<Value>, RuntimeError> {
+    match op {
+        "tensor.add" | "tensor.mul" => {
+            if args.len() != 2 { return Ok(None); }
+            let (a, b) = match (&args[0], &args[1]) {
+                (Value::Tensor(a), Value::Tensor(b)) => (a.as_ref(), b.as_ref()),
+                _ => return Ok(None),
+            };
+            if a.shape != b.shape {
+                return Err(RuntimeError::ShapeMismatch {
+                    expected: a.shape.clone(), got: b.shape.clone(),
+                });
+            }
+            let mut out = vec![0.0f64; a.data.len()];
+            let r = if op == "tensor.add" {
+                tjit.add(&a.data, &b.data, &mut out)
+            } else {
+                tjit.mul(&a.data, &b.data, &mut out)
+            };
+            r.map_err(|e| RuntimeError::Custom(e))?;
+            Ok(Some(Value::Tensor(Box::new(crate::tensor::TensorValue {
+                dtype: a.dtype, shape: a.shape.clone(), data: out,
+            }))))
+        }
+        "tensor.matmul" => {
+            if args.len() != 2 { return Ok(None); }
+            let (a, b) = match (&args[0], &args[1]) {
+                (Value::Tensor(a), Value::Tensor(b)) => (a.as_ref(), b.as_ref()),
+                _ => return Ok(None),
+            };
+            if a.shape.len() != 2 || b.shape.len() != 2 { return Ok(None); }
+            let (m, k1) = (a.shape[0], a.shape[1]);
+            let (k2, n) = (b.shape[0], b.shape[1]);
+            if k1 != k2 {
+                return Err(RuntimeError::ShapeMismatch {
+                    expected: vec![m, k1], got: vec![k2, n],
+                });
+            }
+            let mut out = vec![0.0f64; m * n];
+            tjit.matmul(&a.data, &b.data, &mut out, m, k1, n)
+                .map_err(|e| RuntimeError::Custom(e))?;
+            Ok(Some(Value::Tensor(Box::new(crate::tensor::TensorValue {
+                dtype: a.dtype, shape: vec![m, n], data: out,
+            }))))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -761,5 +850,39 @@ mod tests {
             (greet "world")
         "#;
         assert_eq!(eval_str(input), Value::Str("world".into()));
+    }
+
+    #[test]
+    fn tensor_jit_add_transparent() {
+        let input = r#"
+            (let (a : tensor (tensor.ones [4]))
+              (let (b : tensor (tensor.ones [4]))
+                (tensor.add a b)))
+        "#;
+        let result = eval_str(input);
+        if let Value::Tensor(t) = result {
+            assert_eq!(t.data, vec![2.0, 2.0, 2.0, 2.0]);
+        } else {
+            panic!("expected Tensor");
+        }
+    }
+
+    #[test]
+    fn tensor_jit_matmul_transparent() {
+        let input = r#"
+            (let (a : tensor (tensor.identity 3))
+              (let (b : tensor (tensor.identity 3))
+                (tensor.matmul a b)))
+        "#;
+        let result = eval_str(input);
+        if let Value::Tensor(t) = result {
+            assert_eq!(t.shape, vec![3, 3]);
+            assert_eq!(t.data[0], 1.0); // diagonal
+            assert_eq!(t.data[4], 1.0);
+            assert_eq!(t.data[8], 1.0);
+            assert_eq!(t.data[1], 0.0); // off-diagonal
+        } else {
+            panic!("expected Tensor");
+        }
     }
 }
