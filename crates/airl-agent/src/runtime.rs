@@ -1,11 +1,15 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
 
 use crate::identity::{AgentId, Endpoint};
+use crate::protocol::{parse_task, serialize_result, ResultMessage};
 use crate::registry::AgentRegistry;
 use crate::task::TaskStatus;
-use crate::transport::TransportError;
+use crate::tcp_transport::TcpTransport;
+use crate::transport::{Transport, TransportError};
+use airl_runtime::eval::Interpreter;
+use airl_runtime::value::Value;
 
 /// Errors from the agent runtime.
 #[derive(Debug)]
@@ -105,6 +109,101 @@ pub fn parse_endpoint(s: &str) -> Result<Endpoint, String> {
     }
 }
 
+/// Load an AIRL module file and start listening for tasks.
+pub fn run_agent_loop(module_path: &str, endpoint: &Endpoint) -> Result<(), AgentError> {
+    // 1. Load module
+    let source = std::fs::read_to_string(module_path)
+        .map_err(|e| AgentError::Protocol(format!("cannot read {}: {}", module_path, e)))?;
+
+    let mut interp = Interpreter::new();
+    load_module(&source, &mut interp)?;
+
+    eprintln!("Agent loaded: {}", module_path);
+
+    // 2. Bind listener
+    match endpoint {
+        Endpoint::Tcp(addr) => {
+            let listener = TcpListener::bind(addr)
+                .map_err(|e| AgentError::Protocol(format!("cannot bind {}: {}", addr, e)))?;
+            eprintln!("Listening on tcp:{}", addr);
+
+            // 3. Accept loop
+            loop {
+                let (stream, peer) = listener.accept()
+                    .map_err(|e| AgentError::Protocol(format!("accept error: {}", e)))?;
+                eprintln!("Connection from {}", peer);
+
+                let mut transport = TcpTransport::from_stream(stream);
+                handle_connection(&mut transport, &mut interp);
+                eprintln!("Connection closed from {}", peer);
+            }
+        }
+        _ => Err(AgentError::Protocol("only TCP listeners supported in Phase 1".into())),
+    }
+}
+
+/// Parse AIRL source, evaluate top-level forms to register functions.
+pub fn load_module(source: &str, interp: &mut Interpreter) -> Result<(), AgentError> {
+    let mut lexer = airl_syntax::Lexer::new(source);
+    let tokens = lexer.lex_all()
+        .map_err(|d| AgentError::Protocol(format!("parse error: {}", d.message)))?;
+    let sexprs = airl_syntax::parse_sexpr_all(&tokens)
+        .map_err(|d| AgentError::Protocol(format!("parse error: {}", d.message)))?;
+    let mut diags = airl_syntax::Diagnostics::new();
+
+    for sexpr in &sexprs {
+        match airl_syntax::parser::parse_top_level(sexpr, &mut diags) {
+            Ok(top) => {
+                interp.eval_top_level(&top)
+                    .map_err(|e| AgentError::Protocol(format!("module error: {}", e)))?;
+            }
+            Err(_) => {} // skip unparseable forms
+        }
+    }
+    Ok(())
+}
+
+/// Read-eval-respond loop on a single connection.
+pub fn handle_connection(transport: &mut dyn Transport, interp: &mut Interpreter) {
+    loop {
+        let frame = match transport.recv_message() {
+            Ok(f) => f,
+            Err(_) => break, // disconnected or error -> close connection
+        };
+
+        let result_msg = match parse_task(&frame) {
+            Ok(task) => {
+                eprintln!("Task {}: calling {}({:?})", task.id, task.call, task.args);
+                match interp.call_by_name(&task.call, task.args) {
+                    Ok(value) => ResultMessage {
+                        id: task.id,
+                        success: true,
+                        payload: Some(value),
+                        error: None,
+                    },
+                    Err(e) => ResultMessage {
+                        id: task.id,
+                        success: false,
+                        payload: None,
+                        error: Some(format!("{}", e)),
+                    },
+                }
+            }
+            Err(e) => ResultMessage {
+                id: "unknown".into(),
+                success: false,
+                payload: None,
+                error: Some(format!("protocol error: {}", e)),
+            },
+        };
+
+        let response = serialize_result(&result_msg);
+        if transport.send_message(&response).is_err() {
+            break;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +283,73 @@ mod tests {
     #[test]
     fn parse_invalid_endpoint() {
         assert!(parse_endpoint("garbage").is_err());
+    }
+
+    #[test]
+    fn agent_loop_integration() {
+        use crate::protocol::parse_result;
+        use std::thread;
+        use std::time::Duration;
+
+        // Write a temp module file
+        let dir = std::env::temp_dir().join("airl-test-agent");
+        std::fs::create_dir_all(&dir).ok();
+        let module_path = dir.join("worker.airl");
+        std::fs::write(&module_path, r#"
+            (defn add
+              :sig [(a : i32) (b : i32) -> i32]
+              :intent "add"
+              :requires [(valid a) (valid b)]
+              :ensures [(= result (+ a b))]
+              :body (+ a b))
+        "#).unwrap();
+
+        // Find a free port
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let module_path_str = module_path.to_str().unwrap().to_string();
+        let endpoint = Endpoint::Tcp(addr);
+
+        // Start agent in background thread
+        let _handle = thread::spawn(move || {
+            let _ = run_agent_loop(&module_path_str, &endpoint);
+        });
+
+        // Give agent time to bind
+        thread::sleep(Duration::from_millis(200));
+
+        // Connect as client
+        let mut client = TcpTransport::connect(addr).unwrap();
+        let task_str = r#"(task "t-1" :from "test" :call "add" :args [3 4])"#;
+        client.send_message(task_str).unwrap();
+        let response = client.recv_message().unwrap();
+        client.close().ok();
+
+        // Parse response
+        let result = parse_result(&response).unwrap();
+        assert!(result.success);
+        assert_eq!(result.payload, Some(Value::Int(7)));
+
+        // Cleanup
+        std::fs::remove_file(&module_path).ok();
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    #[test]
+    fn load_module_registers_functions() {
+        let source = r#"
+            (defn double
+              :sig [(x : i32) -> i32]
+              :intent "double"
+              :requires [(valid x)]
+              :ensures [(valid result)]
+              :body (* x 2))
+        "#;
+        let mut interp = Interpreter::new();
+        load_module(source, &mut interp).unwrap();
+        let result = interp.call_by_name("double", vec![Value::Int(21)]).unwrap();
+        assert_eq!(result, Value::Int(42));
     }
 }
