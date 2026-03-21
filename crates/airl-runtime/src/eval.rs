@@ -5,11 +5,24 @@ use crate::builtins::Builtins;
 use crate::pattern::try_match;
 use airl_syntax::ast::*;
 
+use std::io::{BufReader, BufWriter};
+use std::process::{Child, Command, Stdio};
+
+struct LiveAgent {
+    name: String,
+    writer: BufWriter<std::process::ChildStdin>,
+    reader: BufReader<std::process::ChildStdout>,
+    child: Child,
+}
+
 pub struct Interpreter {
     pub env: Env,
     builtins: Builtins,
     pub jit: Option<airl_codegen::JitCache>,
     pub tensor_jit: Option<airl_codegen::TensorJit>,
+    agents: Vec<LiveAgent>,
+    next_agent_id: u32,
+    next_send_id: u32,
 }
 
 impl Interpreter {
@@ -19,6 +32,9 @@ impl Interpreter {
             builtins: Builtins::new(),
             jit: airl_codegen::JitCache::new().ok(),
             tensor_jit: airl_codegen::TensorJit::new().ok(),
+            agents: Vec::new(),
+            next_agent_id: 0,
+            next_send_id: 0,
         };
         // Register all builtin names in the environment so symbol lookups resolve them
         interp.register_builtin_symbols();
@@ -36,6 +52,7 @@ impl Interpreter {
             "tensor.slice",
             "length", "at", "append",
             "print", "type-of", "shape", "valid",
+            "spawn-agent", "send",
         ];
         for name in &names {
             self.env.bind(name.to_string(), Value::BuiltinFn(name.to_string()));
@@ -173,6 +190,29 @@ impl Interpreter {
                 }
 
                 // Call the function
+                // Handle spawn-agent and send builtins (need &mut self)
+                if let Value::BuiltinFn(ref name) = callee_val {
+                    match name.as_str() {
+                        "spawn-agent" => {
+                            let result = self.builtin_spawn_agent(&arg_vals);
+                            for (bname, is_mutable) in &borrow_ledger {
+                                if *is_mutable { self.env.release_mutable_borrow(bname); }
+                                else { self.env.release_immutable_borrow(bname); }
+                            }
+                            return result;
+                        }
+                        "send" => {
+                            let result = self.builtin_send(&arg_vals);
+                            for (bname, is_mutable) in &borrow_ledger {
+                                if *is_mutable { self.env.release_mutable_borrow(bname); }
+                                else { self.env.release_immutable_borrow(bname); }
+                            }
+                            return result;
+                        }
+                        _ => {}
+                    }
+                }
+
                 // Try tensor JIT for supported ops before regular dispatch
                 if let Value::BuiltinFn(ref name) = callee_val {
                     if matches!(name.as_str(), "tensor.add" | "tensor.mul" | "tensor.matmul") {
@@ -436,6 +476,106 @@ impl Interpreter {
         self.call_fn(&fn_val, args)
     }
 
+    fn builtin_spawn_agent(&mut self, args: &[Value]) -> Result<Value, RuntimeError> {
+        let module_path = match args.first() {
+            Some(Value::Str(s)) => s.clone(),
+            _ => return Err(RuntimeError::TypeError("spawn-agent requires a string path".into())),
+        };
+
+        let exe = std::env::current_exe()
+            .map_err(|e| RuntimeError::Custom(format!("cannot find airl binary: {}", e)))?;
+
+        let mut child = Command::new(&exe)
+            .args(["agent", &module_path, "--listen", "stdio"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|e| RuntimeError::Custom(format!("cannot spawn agent: {}", e)))?;
+
+        let stdin = child.stdin.take()
+            .ok_or_else(|| RuntimeError::Custom("cannot get child stdin".into()))?;
+        let stdout = child.stdout.take()
+            .ok_or_else(|| RuntimeError::Custom("cannot get child stdout".into()))?;
+
+        let name = format!("agent-{}", self.next_agent_id);
+        self.next_agent_id += 1;
+
+        self.agents.push(LiveAgent {
+            name: name.clone(),
+            writer: BufWriter::new(stdin),
+            reader: BufReader::new(stdout),
+            child,
+        });
+
+        // Give agent a moment to load
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        Ok(Value::Str(name))
+    }
+
+    fn builtin_send(&mut self, args: &[Value]) -> Result<Value, RuntimeError> {
+        if args.len() < 2 {
+            return Err(RuntimeError::TypeError(
+                "send requires at least 2 args: target, function, [args...]".into(),
+            ));
+        }
+
+        let target = match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => return Err(RuntimeError::TypeError("send target must be a string".into())),
+        };
+        let fn_name = match &args[1] {
+            Value::Str(s) => s.clone(),
+            _ => return Err(RuntimeError::TypeError("send function name must be a string".into())),
+        };
+        let fn_args = &args[2..];
+
+        let task_id = format!("send-{}", self.next_send_id);
+        self.next_send_id += 1;
+        let task_msg = crate::agent_client::format_task(&task_id, &fn_name, fn_args);
+
+        if target.starts_with("tcp:") || target.starts_with("unix:") {
+            self.send_to_endpoint(&target, &task_msg)
+        } else {
+            self.send_to_agent(&target, &task_msg)
+        }
+    }
+
+    fn send_to_endpoint(&mut self, endpoint: &str, task_msg: &str) -> Result<Value, RuntimeError> {
+        use std::net::TcpStream;
+
+        if let Some(addr_str) = endpoint.strip_prefix("tcp:") {
+            let addr: std::net::SocketAddr = addr_str.parse()
+                .map_err(|e| RuntimeError::Custom(format!("invalid address: {}", e)))?;
+            let mut stream = TcpStream::connect(addr)
+                .map_err(|e| RuntimeError::Custom(format!("cannot connect: {}", e)))?;
+
+            crate::agent_client::write_frame(&mut stream, task_msg)
+                .map_err(|e| RuntimeError::Custom(format!("send failed: {}", e)))?;
+            let response = crate::agent_client::read_frame(&mut stream)
+                .map_err(|e| RuntimeError::Custom(format!("recv failed: {}", e)))?;
+
+            crate::agent_client::parse_result_message(&response)
+                .map_err(|e| RuntimeError::Custom(e))
+        } else {
+            Err(RuntimeError::Custom(format!("unsupported endpoint: {}", endpoint)))
+        }
+    }
+
+    fn send_to_agent(&mut self, name: &str, task_msg: &str) -> Result<Value, RuntimeError> {
+        let agent = self.agents.iter_mut().find(|a| a.name == name)
+            .ok_or_else(|| RuntimeError::Custom(format!("unknown agent: {}", name)))?;
+
+        crate::agent_client::write_frame(&mut agent.writer, task_msg)
+            .map_err(|e| RuntimeError::Custom(format!("send to {} failed: {}", name, e)))?;
+        let response = crate::agent_client::read_frame(&mut agent.reader)
+            .map_err(|e| RuntimeError::Custom(format!("recv from {} failed: {}", name, e)))?;
+
+        crate::agent_client::parse_result_message(&response)
+            .map_err(|e| RuntimeError::Custom(e))
+    }
+
     pub fn eval_top_level(&mut self, top: &TopLevel) -> Result<Value, RuntimeError> {
         match top {
             TopLevel::Defn(f) => {
@@ -456,6 +596,15 @@ impl Interpreter {
             }
             TopLevel::UseDecl(_) => Ok(Value::Unit),
             TopLevel::Task(_) => Ok(Value::Unit),
+        }
+    }
+}
+
+impl Drop for Interpreter {
+    fn drop(&mut self) {
+        for agent in &mut self.agents {
+            let _ = agent.child.kill();
+            let _ = agent.child.wait();
         }
     }
 }
@@ -884,5 +1033,37 @@ mod tests {
         } else {
             panic!("expected Tensor");
         }
+    }
+
+    #[test]
+    fn send_to_tcp_agent() {
+        use std::net::TcpListener;
+        use std::thread;
+
+        // Start a mini agent on TCP in a background thread
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let handle = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(&stream);
+            let mut writer = std::io::BufWriter::new(&stream);
+
+            let _frame = crate::agent_client::read_frame(&mut reader).unwrap();
+            // Parse task, respond with result
+            let response = format!(r#"(result "t" :status :complete :payload 42)"#);
+            crate::agent_client::write_frame(&mut writer, &response).unwrap();
+        });
+
+        let mut interp = Interpreter::new();
+        let result = interp.builtin_send(&[
+            Value::Str(format!("tcp:{}", addr)),
+            Value::Str("add".into()),
+            Value::Int(3),
+            Value::Int(4),
+        ]).unwrap();
+
+        assert_eq!(result, Value::Int(42));
+        handle.join().unwrap();
     }
 }
