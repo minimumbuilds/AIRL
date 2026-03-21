@@ -1,0 +1,12 @@
+[package]
+name = "airl-driver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+airl-syntax = { path = "../airl-syntax" }
+airl-types = { path = "../airl-types" }
+airl-contracts = { path = "../airl-contracts" }
+airl-runtime = { path = "../airl-runtime" }
+airl-agent = { path = "../airl-agent" }

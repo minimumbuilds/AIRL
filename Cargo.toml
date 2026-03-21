@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/airl-syntax",
+    "crates/airl-types",
+    "crates/airl-contracts",
+    "crates/airl-runtime",
+    "crates/airl-agent",
+    "crates/airl-driver",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"

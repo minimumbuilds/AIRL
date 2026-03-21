@@ -1,0 +1,8 @@
+[package]
+name = "airl-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+airl-syntax = { path = "../airl-syntax" }

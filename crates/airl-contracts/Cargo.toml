@@ -1,0 +1,9 @@
+[package]
+name = "airl-contracts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+airl-syntax = { path = "../airl-syntax" }
+airl-types = { path = "../airl-types" }
