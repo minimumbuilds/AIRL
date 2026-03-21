@@ -1,0 +1,37 @@
+;; verified_arithmetic.airl — Formally verified functions via Z3
+;;
+;; Demonstrates:
+;;   - Contracts that Z3 can prove correct at compile time
+;;   - The difference between runtime-checked and formally proven contracts
+;;   - Use `cargo run -- check` to see "contract proven" messages from Z3
+;;
+;; Run with:  cargo run -- run examples/03-verified-arithmetic/verified_arithmetic.airl
+;; Check with: cargo run -- check examples/03-verified-arithmetic/verified_arithmetic.airl
+
+;; Z3 can prove this: result always equals a + b
+(defn add
+  :sig [(a : i32) (b : i32) -> i32]
+  :intent "Add two integers"
+  :requires [(valid a) (valid b)]
+  :ensures [(= result (+ a b))]
+  :body (+ a b))
+
+;; Z3 can prove: doubling is the same as adding a number to itself
+(defn double
+  :sig [(x : i32) -> i32]
+  :intent "Double a value"
+  :requires [(valid x)]
+  :ensures [(= result (+ x x))]
+  :body (* x 2))
+
+;; Z3 can prove: absolute value is always non-negative
+(defn abs
+  :sig [(x : i32) -> i32]
+  :intent "Absolute value"
+  :requires [(valid x)]
+  :ensures [(>= result 0)]
+  :body (if (< x 0) (* x -1) x))
+
+(print "add 3 4 =" (add 3 4))
+(print "double 21 =" (double 21))
+(print "abs -17 =" (abs -17))

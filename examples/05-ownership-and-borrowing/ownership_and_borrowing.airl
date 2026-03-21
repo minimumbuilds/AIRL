@@ -1,0 +1,32 @@
+;; ownership_and_borrowing.airl — Ownership and borrowing
+;;
+;; Demonstrates:
+;;   - (own x : T)  — takes ownership, moves the value
+;;   - (ref x : T)  — immutable borrow, caller retains ownership
+;;   - Safe patterns for working with owned values
+;;
+;; Run with: cargo run -- run examples/05-ownership-and-borrowing/ownership_and_borrowing.airl
+
+;; This function takes ownership: the caller's binding is moved
+(defn consume
+  :sig [(own val : i64) -> i64]
+  :intent "Take ownership of a value and return it doubled"
+  :requires [(valid val)]
+  :ensures [(valid result)]
+  :body (* val 2))
+
+;; This function borrows immutably: the caller keeps the value
+(defn inspect
+  :sig [(ref val : i64) -> i64]
+  :intent "Read a value without taking ownership"
+  :requires [(valid val)]
+  :ensures [(valid result)]
+  :body val)
+
+;; Safe usage: inspect (borrow) then consume (move)
+(let (x : i64 21)
+  (do
+    (print "Inspecting x (borrow):" (inspect x))
+    (print "x is still usable after borrow")
+    (print "Consuming x (move):" (consume x))
+    (print "Done — x has been consumed")))

@@ -1,0 +1,19 @@
+;; hello_world.airl — Your first AIRL program
+;;
+;; Run with: cargo run -- run examples/hello_world.airl
+
+;; A simple greeting — just call the print builtin
+(print "Hello, World!")
+
+;; Define a greeting function with a contract
+(defn greet
+  :sig [(name : String) -> String]
+  :intent "create a personalized greeting"
+  :ensures [(valid result)]
+  :body (do
+    (print "Greetings from AIRL,")
+    (print name)
+    name))
+
+;; Call it
+(greet "fellow AI")
