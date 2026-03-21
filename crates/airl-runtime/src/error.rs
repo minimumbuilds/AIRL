@@ -14,6 +14,7 @@ pub enum RuntimeError {
     NotCallable(String),
     TryOnNonResult(String),
     Custom(String),
+    NonExhaustiveMatch { value: String },
 }
 
 impl fmt::Display for RuntimeError {
@@ -41,6 +42,9 @@ impl fmt::Display for RuntimeError {
                 write!(f, "TryOnNonResult: {}", desc)
             }
             RuntimeError::Custom(msg) => write!(f, "{}", msg),
+            RuntimeError::NonExhaustiveMatch { value } => {
+                write!(f, "NonExhaustiveMatch: no arm matched value: {}", value)
+            }
         }
     }
 }
@@ -115,6 +119,14 @@ mod tests {
     fn custom_display() {
         let e = RuntimeError::Custom("something went wrong".into());
         assert!(format!("{}", e).contains("something went wrong"));
+    }
+
+    #[test]
+    fn non_exhaustive_match_display() {
+        let e = RuntimeError::NonExhaustiveMatch { value: "(Ok 42)".into() };
+        let s = format!("{}", e);
+        assert!(s.contains("NonExhaustiveMatch"));
+        assert!(s.contains("(Ok 42)"));
     }
 
     #[test]

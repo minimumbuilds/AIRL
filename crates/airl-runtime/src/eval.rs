@@ -93,10 +93,9 @@ impl Interpreter {
                         return result;
                     }
                 }
-                Err(RuntimeError::Custom(format!(
-                    "no match arm matched value: {}",
-                    val
-                )))
+                Err(RuntimeError::NonExhaustiveMatch {
+                    value: format!("{}", val),
+                })
             }
 
             ExprKind::Lambda(params, body) => {
