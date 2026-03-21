@@ -5,6 +5,7 @@ pub mod env;
 pub mod pattern;
 pub mod builtins;
 pub mod eval;
+pub mod agent_client;
 
 // Convenience re-exports
 pub use error::RuntimeError;
