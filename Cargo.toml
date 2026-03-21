@@ -6,6 +6,7 @@ members = [
     "crates/airl-contracts",
     "crates/airl-runtime",
     "crates/airl-agent",
+    "crates/airl-codegen",
     "crates/airl-driver",
 ]
 
