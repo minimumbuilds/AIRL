@@ -1,0 +1,5 @@
+;; Spawns a worker agent and sends it a task
+;; Run manually: cargo run -- run tests/fixtures/valid/orchestrator.airl
+;; SKIP: requires built binary for spawn-agent (not runnable in fixture runner)
+(let (w : String (spawn-agent "tests/fixtures/agent/worker_module.airl"))
+  (send w "add" 10 20))
