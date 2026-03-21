@@ -97,14 +97,16 @@ impl AgentRuntime {
 
 /// Parse an endpoint string like "tcp:127.0.0.1:9001" or "unix:/tmp/airl.sock".
 pub fn parse_endpoint(s: &str) -> Result<Endpoint, String> {
-    if let Some(addr_str) = s.strip_prefix("tcp:") {
+    if s == "stdio" {
+        Ok(Endpoint::Stdio)
+    } else if let Some(addr_str) = s.strip_prefix("tcp:") {
         let addr: SocketAddr = addr_str.parse()
             .map_err(|e| format!("invalid TCP address '{}': {}", addr_str, e))?;
         Ok(Endpoint::Tcp(addr))
     } else if let Some(path_str) = s.strip_prefix("unix:") {
         Ok(Endpoint::Unix(PathBuf::from(path_str)))
     } else {
-        Err(format!("unknown endpoint format: '{}' (expected tcp:HOST:PORT or unix:/path)", s))
+        Err(format!("unknown endpoint format: '{}' (expected tcp:HOST:PORT, unix:/path, or stdio)", s))
     }
 }
 
@@ -137,7 +139,16 @@ pub fn run_agent_loop(module_path: &str, endpoint: &Endpoint) -> Result<(), Agen
                 eprintln!("Connection closed from {}", peer);
             }
         }
-        _ => Err(AgentError::Protocol("only TCP listeners supported in Phase 1".into())),
+        Endpoint::Stdio => {
+            eprintln!("Agent listening on stdio");
+            let stdin = std::io::stdin();
+            let stdout = std::io::stdout();
+            let mut reader = std::io::BufReader::new(stdin.lock());
+            let mut writer = std::io::BufWriter::new(stdout.lock());
+            handle_stdio_connection(&mut reader, &mut writer, &mut interp);
+            Ok(())
+        }
+        _ => Err(AgentError::Protocol("unsupported endpoint type".into())),
     }
 }
 
@@ -198,6 +209,53 @@ pub fn handle_connection(transport: &mut dyn Transport, interp: &mut Interpreter
 
         let response = serialize_result(&result_msg);
         if transport.send_message(&response).is_err() {
+            break;
+        }
+    }
+}
+
+/// Read-eval-respond loop on stdio (for child-process agents).
+fn handle_stdio_connection(
+    reader: &mut dyn std::io::Read,
+    writer: &mut dyn std::io::Write,
+    interp: &mut Interpreter,
+) {
+    use crate::transport::{read_frame, write_frame};
+
+    loop {
+        let frame = match read_frame(reader) {
+            Ok(f) => f,
+            Err(_) => break,
+        };
+
+        let result_msg = match parse_task(&frame) {
+            Ok(task) => {
+                eprintln!("Task {}: calling {}({:?})", task.id, task.call, task.args);
+                match interp.call_by_name(&task.call, task.args) {
+                    Ok(value) => ResultMessage {
+                        id: task.id,
+                        success: true,
+                        payload: Some(value),
+                        error: None,
+                    },
+                    Err(e) => ResultMessage {
+                        id: task.id,
+                        success: false,
+                        payload: None,
+                        error: Some(format!("{}", e)),
+                    },
+                }
+            }
+            Err(e) => ResultMessage {
+                id: "unknown".into(),
+                success: false,
+                payload: None,
+                error: Some(format!("protocol error: {}", e)),
+            },
+        };
+
+        let response = serialize_result(&result_msg);
+        if write_frame(writer, &response).is_err() {
             break;
         }
     }
@@ -278,6 +336,12 @@ mod tests {
     fn parse_unix_endpoint() {
         let ep = parse_endpoint("unix:/tmp/airl.sock").unwrap();
         assert!(matches!(ep, Endpoint::Unix(ref p) if p.to_str().unwrap() == "/tmp/airl.sock"));
+    }
+
+    #[test]
+    fn parse_stdio_endpoint() {
+        let ep = parse_endpoint("stdio").unwrap();
+        assert!(matches!(ep, Endpoint::Stdio));
     }
 
     #[test]
