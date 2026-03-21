@@ -129,7 +129,7 @@ impl LinearityChecker {
     }
 
     /// Track a copy of the named binding. Only succeeds if the type is Copy.
-    pub fn track_copy(&mut self, name: &str, ty: &Ty, span: Span) -> Result<(), ()> {
+    pub fn track_copy(&mut self, _name: &str, ty: &Ty, span: Span) -> Result<(), ()> {
         if !is_copy(ty) {
             self.diags.add(Diagnostic::error(
                 format!("type {:?} does not implement Copy", ty),

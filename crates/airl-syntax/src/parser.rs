@@ -658,7 +658,7 @@ fn parse_type_params(items: &[SExpr], diags: &mut Diagnostics) -> Result<Vec<Typ
 }
 
 fn parse_type_def_body(sexpr: &SExpr, diags: &mut Diagnostics) -> Result<TypeDefBody, Diagnostic> {
-    let span = sexpr.span();
+    let _span = sexpr.span();
     match sexpr {
         SExpr::List(items, _) if !items.is_empty() => {
             if let Some(head) = items[0].as_symbol() {

@@ -162,7 +162,7 @@ impl Interpreter {
                 Ok(Value::Variant(name.clone(), Box::new(inner)))
             }
 
-            ExprKind::StructLit(name, fields) => {
+            ExprKind::StructLit(_name, fields) => {
                 let mut map = std::collections::BTreeMap::new();
                 for (field_name, field_expr) in fields {
                     map.insert(field_name.clone(), self.eval(field_expr)?);

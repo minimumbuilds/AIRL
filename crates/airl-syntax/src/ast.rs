@@ -1,5 +1,4 @@
 use crate::span::Span;
-use std::collections::BTreeMap;
 
 pub type Symbol = String;
 

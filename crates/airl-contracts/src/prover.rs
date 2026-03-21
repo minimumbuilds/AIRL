@@ -8,6 +8,7 @@ pub enum ProofResult {
 }
 
 pub struct StubProver {
+    #[allow(dead_code)]
     assumptions: Vec<Expr>,
 }
 

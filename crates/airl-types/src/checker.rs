@@ -399,7 +399,7 @@ impl TypeChecker {
                 }
             }
 
-            ast::ExprKind::StructLit(name, fields) => {
+            ast::ExprKind::StructLit(_name, fields) => {
                 let mut field_tys = Vec::new();
                 for (fname, fexpr) in fields {
                     let ty = self.check_expr(fexpr)?;
@@ -450,7 +450,7 @@ impl TypeChecker {
                 // for now — just accept them.
                 Ok(())
             }
-            ast::PatternKind::Variant(name, sub_pats) => {
+            ast::PatternKind::Variant(_name, sub_pats) => {
                 // For variant patterns, bind sub-patterns.
                 // In a full checker we'd look up the variant fields,
                 // but for now we bind each sub-pattern to the scrutinee type.

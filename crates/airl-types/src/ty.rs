@@ -1,5 +1,3 @@
-use airl_syntax::Span;
-
 pub type Symbol = String;
 
 #[derive(Debug, Clone, PartialEq)]

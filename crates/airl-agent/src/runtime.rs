@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use crate::identity::AgentId;
 use crate::registry::AgentRegistry;
-use crate::task::{TaskResult, TaskStatus};
-use crate::transport::{Transport, TransportError};
+use crate::task::TaskStatus;
+use crate::transport::TransportError;
 
 /// Errors from the agent runtime.
 #[derive(Debug)]

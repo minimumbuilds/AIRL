@@ -1,4 +1,4 @@
-use crate::ty::{Ty, Symbol, TyVariant, TyField};
+use crate::ty::{Ty, Symbol};
 use std::collections::HashMap;
 
 /// A registered type definition.
