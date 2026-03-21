@@ -7,3 +7,4 @@ pub mod stdio_transport;
 pub mod task;
 pub mod runtime;
 pub mod builtins;
+pub mod protocol;
