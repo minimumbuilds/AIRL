@@ -55,6 +55,34 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
         }
     }
 
+    // Z3 contract verification
+    let z3_prover = airl_solver::prover::Z3Prover::new();
+    for top in &tops {
+        if let airl_syntax::ast::TopLevel::Defn(f) = top {
+            let verification = z3_prover.verify_function(f);
+            for (clause, result) in &verification.ensures_results {
+                match result {
+                    airl_solver::VerifyResult::Proven => {
+                        if mode == PipelineMode::Check {
+                            eprintln!("note: `{}` contract proven: {}", f.name, clause);
+                        }
+                    }
+                    airl_solver::VerifyResult::Disproven { counterexample } => {
+                        let msg = format!("contract disproven in `{}`: {} (counterexample: {:?})",
+                            f.name, clause, counterexample);
+                        match mode {
+                            PipelineMode::Check => eprintln!("error: {}", msg),
+                            _ => eprintln!("warning: {}", msg),
+                        }
+                    }
+                    airl_solver::VerifyResult::Unknown(_) | airl_solver::VerifyResult::TranslationError(_) => {
+                        // Silent — fall back to runtime checking
+                    }
+                }
+            }
+        }
+    }
+
     // Evaluate
     let mut interp = Interpreter::new();
     let mut result = Value::Unit;
@@ -97,10 +125,32 @@ pub fn check_source(source: &str) -> Result<(), PipelineError> {
         let _ = checker.check_top_level(top);
     }
     if checker.has_errors() {
-        Err(PipelineError::TypeCheck(checker.into_diagnostics()))
-    } else {
-        Ok(())
+        return Err(PipelineError::TypeCheck(checker.into_diagnostics()));
     }
+
+    // Z3 contract verification
+    let z3_prover = airl_solver::prover::Z3Prover::new();
+    for top in &tops {
+        if let airl_syntax::ast::TopLevel::Defn(f) = top {
+            let verification = z3_prover.verify_function(f);
+            for (clause, result) in &verification.ensures_results {
+                match result {
+                    airl_solver::VerifyResult::Proven => {
+                        eprintln!("note: `{}` contract proven: {}", f.name, clause);
+                    }
+                    airl_solver::VerifyResult::Disproven { counterexample } => {
+                        eprintln!("error: contract disproven in `{}`: {} (counterexample: {:?})",
+                            f.name, clause, counterexample);
+                    }
+                    airl_solver::VerifyResult::Unknown(_) | airl_solver::VerifyResult::TranslationError(_) => {
+                        // Silent — fall back to runtime checking
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub fn check_file(path: &str) -> Result<(), PipelineError> {
