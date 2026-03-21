@@ -4,3 +4,4 @@ pub mod lexer;
 pub mod sexpr;
 pub mod ast;
 pub mod diagnostic;
+pub mod parser;
