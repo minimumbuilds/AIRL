@@ -77,7 +77,7 @@ loop {
     accept connection → transport
     loop {
         frame = transport.recv_message()
-        if disconnected: break inner loop
+        if Err(Io(UnexpectedEof)) or Err(Disconnected): break inner loop
 
         sexpr = parse(frame)
         task_id, fn_name, args = extract_task_fields(sexpr)
@@ -101,7 +101,7 @@ When a task arrives with `:call "add" :args [3 4]`:
 
 1. Look up `"add"` in the interpreter's environment → must be `Value::Function(FnValue)`
 2. Parse each arg from the S-expression into a `Value` (integer literals → `Value::Int`, strings → `Value::Str`, etc.)
-3. Call `interpreter.call_fn(&fn_val, arg_values)` — this checks `:requires`, executes the body, checks `:ensures`
+3. Call the function via a new public method `interpreter.call_by_name(name, args)` — this looks up the function, checks `:requires`, executes the body, checks `:ensures`. Note: `call_fn` is currently private; we add `call_by_name` as the public entry point rather than exposing `call_fn` directly.
 4. On `Ok(value)` → serialize as success result
 5. On `Err(RuntimeError)` → serialize as error result
 
@@ -137,12 +137,16 @@ CLI arguments are parsed as AIRL literals:
 
 ## 4. Endpoint Parsing
 
-Shared utility for both `--listen` and positional endpoint arg:
+Shared utility for both `--listen` and positional endpoint arg. Reuses the existing `Endpoint` type from `airl_agent::identity`:
 
 ```
 tcp:127.0.0.1:9001  → Endpoint::Tcp(SocketAddr)
 unix:/tmp/airl.sock → Endpoint::Unix(PathBuf)
 ```
+
+Add a `parse_endpoint(s: &str) -> Result<Endpoint, String>` function to `airl-agent`.
+
+**CLI argument parsing for `cmd_agent`:** Since the project uses raw `std::env::args` (no clap), find `--listen` in the args slice, take the next arg as the endpoint string. First positional arg (before `--listen`) is the module file path.
 
 ---
 
@@ -155,11 +159,13 @@ To send results back over the wire, we need `Value → S-expression string`:
 - `Value::Bool(true)` → `"true"`
 - `Value::Str("hello")` → `"\"hello\""`
 - `Value::Nil` → `"nil"`
-- `Value::Unit` → `"nil"`
+- `Value::Unit` → `"()"` (current Display impl; receiver treats as nil)
 - `Value::Variant("Ok", box Int(42))` → `"(Ok 42)"`
 - `Value::List([1, 2, 3])` → `"[1 2 3]"`
 
-This is just the `Display` impl for `Value` — which already exists. We can use `format!("{}", value)` directly in the result message.
+This uses the `Display` impl for `Value` — which already exists. We use `format!("{}", value)` for the result payload.
+
+**Supported types over the wire:** Int, UInt, Float, Bool, Str, Nil, Unit, Variant, List. Unsupported types (Struct, Tensor, Function, Lambda, BuiltinFn) will serialize via their Display impl but may not round-trip through the parser. For Phase 1 this is acceptable — the demo only uses primitive types. A future iteration should add proper S-expression serialization for all Value types.
 
 For deserializing args from the task message, parse each element of the `:args` bracket list as a `Value` using the existing SExpr → literal mapping.
 
