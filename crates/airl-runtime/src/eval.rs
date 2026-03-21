@@ -111,10 +111,65 @@ impl Interpreter {
             ExprKind::FnCall(callee, args) => {
                 let callee_val = self.eval(callee)?;
                 let mut arg_vals = Vec::with_capacity(args.len());
-                for arg in args {
-                    arg_vals.push(self.eval(arg)?);
+
+                // Get parameter ownership from callee if it's a known function
+                let param_ownerships = match &callee_val {
+                    Value::Function(f) => f.def.params.iter().map(|p| p.ownership).collect::<Vec<_>>(),
+                    _ => vec![Ownership::Default; args.len()],
+                };
+
+                // Track borrows for this call so we can release them after
+                let mut borrow_ledger: Vec<(String, bool)> = Vec::new(); // (name, is_mutable)
+
+                for (i, arg) in args.iter().enumerate() {
+                    let val = self.eval(arg)?;
+                    arg_vals.push(val);
+
+                    let ownership = param_ownerships.get(i).copied().unwrap_or(Ownership::Default);
+
+                    // Only track ownership for symbol references (not literals/expressions)
+                    if let ExprKind::SymbolRef(ref name) = arg.kind {
+                        // Skip builtins
+                        if let Ok(v) = self.env.get(name) {
+                            if matches!(v, Value::BuiltinFn(_)) { continue; }
+                        }
+
+                        match ownership {
+                            Ownership::Own => {
+                                // Explicit own: mark source as moved
+                                self.env.mark_moved(name, arg.span)?;
+                            }
+                            Ownership::Ref => {
+                                self.env.borrow_immutable(name)?;
+                                borrow_ledger.push((name.clone(), false));
+                            }
+                            Ownership::Mut => {
+                                self.env.borrow_mutable(name)?;
+                                borrow_ledger.push((name.clone(), true));
+                            }
+                            Ownership::Copy => {
+                                // Verify type supports Copy (primitives except String)
+                                if let Ok(v) = self.env.get(name) {
+                                    let is_copy = matches!(v,
+                                        Value::Int(_) | Value::UInt(_) | Value::Float(_) |
+                                        Value::Bool(_) | Value::Unit | Value::Nil
+                                    );
+                                    if !is_copy {
+                                        return Err(RuntimeError::Custom(format!(
+                                            "cannot copy `{}` — type does not implement Copy", name
+                                        )));
+                                    }
+                                }
+                            }
+                            Ownership::Default => {
+                                // Default: clone without move (no tracking)
+                            }
+                        }
+                    }
                 }
-                match callee_val {
+
+                // Call the function
+                let result = match callee_val {
                     Value::BuiltinFn(ref name) => {
                         let f = self.builtins.get(name).ok_or_else(|| {
                             RuntimeError::UndefinedSymbol(name.clone())
@@ -130,7 +185,18 @@ impl Interpreter {
                         self.call_lambda(&lam, arg_vals)
                     }
                     other => Err(RuntimeError::NotCallable(format!("{}", other))),
+                };
+
+                // Release borrows taken for this call
+                for (name, is_mutable) in &borrow_ledger {
+                    if *is_mutable {
+                        self.env.release_mutable_borrow(name);
+                    } else {
+                        self.env.release_immutable_borrow(name);
+                    }
                 }
+
+                result
             }
 
             ExprKind::Try(inner) => {
@@ -504,5 +570,37 @@ mod tests {
             eval_str("(let (x : i32 (+ 1 2)) (* x x))"),
             Value::Int(9)
         );
+    }
+
+    #[test]
+    fn eval_use_after_move_errors() {
+        let input = r#"
+            (defn consume
+              :sig [(own x : i32) -> i32]
+              :intent "consume x"
+              :requires [(valid x)]
+              :ensures [(valid result)]
+              :body x)
+            (let (v : i32 42)
+              (do (consume v) v))
+        "#;
+        let mut lexer = airl_syntax::Lexer::new(input);
+        let tokens = lexer.lex_all().unwrap();
+        let sexprs = airl_syntax::parse_sexpr_all(&tokens).unwrap();
+        let mut diags = airl_syntax::Diagnostics::new();
+        let mut interp = Interpreter::new();
+        let mut result: Result<Value, RuntimeError> = Ok(Value::Unit);
+        for sexpr in &sexprs {
+            match airl_syntax::parser::parse_top_level(sexpr, &mut diags) {
+                Ok(top) => result = interp.eval_top_level(&top),
+                Err(_) => {
+                    let expr = airl_syntax::parser::parse_expr(sexpr, &mut diags).unwrap();
+                    result = interp.eval(&expr);
+                }
+            }
+        }
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("UseAfterMove") || err.contains("moved"));
     }
 }
