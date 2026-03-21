@@ -1,5 +1,6 @@
 use airl_syntax::{Span, Diagnostic, Diagnostics};
-use crate::ty::{Ty, is_copy};
+use airl_syntax::ast::*;
+use crate::ty::{Ty, is_copy, PrimTy};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +21,8 @@ pub enum OwnershipState {
 pub struct LinearityChecker {
     /// Maps binding names to their ownership state (scoped stack).
     states: Vec<HashMap<String, OwnershipState>>,
+    /// Registry of known function parameter ownerships for call-site analysis.
+    fn_ownerships: HashMap<String, Vec<Ownership>>,
     diags: Diagnostics,
 }
 
@@ -27,6 +30,7 @@ impl LinearityChecker {
     pub fn new() -> Self {
         Self {
             states: vec![HashMap::new()],
+            fn_ownerships: HashMap::new(),
             diags: Diagnostics::new(),
         }
     }
@@ -139,6 +143,249 @@ impl LinearityChecker {
         }
         // Copy doesn't change ownership state — the original remains Owned.
         Ok(())
+    }
+
+    // ── Static analysis: AST walking ─────────────────────
+
+    /// Register a function's parameter ownership annotations.
+    pub fn register_fn(&mut self, def: &FnDef) {
+        let ownerships: Vec<Ownership> = def.params.iter()
+            .map(|p| p.ownership)
+            .collect();
+        self.fn_ownerships.insert(def.name.clone(), ownerships);
+    }
+
+    /// Check a function definition for linearity violations.
+    /// Introduces parameters, walks the body, and checks for issues.
+    pub fn check_fn(&mut self, def: &FnDef) {
+        // Register this function for call-site analysis
+        self.register_fn(def);
+
+        self.push_scope();
+
+        // Introduce parameters based on their ownership annotation
+        for param in &def.params {
+            self.introduce(param.name.clone());
+        }
+
+        // Walk the body
+        self.check_expr(&def.body);
+
+        self.pop_scope();
+    }
+
+    /// Recursively walk an expression, tracking ownership state.
+    fn check_expr(&mut self, expr: &Expr) {
+        match &expr.kind {
+            // Atoms — no ownership effects
+            ExprKind::IntLit(_) | ExprKind::FloatLit(_) | ExprKind::StrLit(_)
+            | ExprKind::BoolLit(_) | ExprKind::NilLit | ExprKind::KeywordLit(_) => {}
+
+            ExprKind::SymbolRef(_) => {
+                // Reading a symbol is not a move by itself;
+                // moves/borrows happen at call sites
+            }
+
+            ExprKind::FnCall(callee, args) => {
+                // Get parameter ownership annotations if callee is a known function
+                let param_ownerships = self.extract_callee_ownerships(callee, args.len());
+
+                for (i, arg) in args.iter().enumerate() {
+                    let ownership = param_ownerships.get(i).copied()
+                        .unwrap_or(Ownership::Default);
+                    self.check_arg(arg, ownership);
+                }
+
+                // Also check the callee itself (in case it's a complex expression)
+                self.check_expr(callee);
+            }
+
+            ExprKind::Let(bindings, body) => {
+                self.push_scope();
+                for binding in bindings {
+                    self.check_expr(&binding.value);
+                    self.introduce(binding.name.clone());
+                }
+                self.check_expr(body);
+                self.pop_scope();
+            }
+
+            ExprKind::Do(exprs) => {
+                for e in exprs {
+                    self.check_expr(e);
+                }
+            }
+
+            ExprKind::If(cond, then_branch, else_branch) => {
+                self.check_expr(cond);
+
+                let snap = self.snapshot();
+
+                // Check then branch
+                self.check_expr(then_branch);
+                let then_states = self.snapshot();
+
+                // Restore and check else branch
+                self.restore(snap.clone());
+                self.check_expr(else_branch);
+                let else_states = self.snapshot();
+
+                // Merge: check that branches agree on ownership state
+                self.merge_branch_states(&then_states, &else_states, expr.span);
+            }
+
+            ExprKind::Match(scrutinee, arms) => {
+                self.check_expr(scrutinee);
+
+                if arms.is_empty() {
+                    return;
+                }
+
+                let snap = self.snapshot();
+                let mut arm_states = Vec::new();
+
+                for arm in arms {
+                    self.restore(snap.clone());
+
+                    // Pattern introduces bindings
+                    self.push_scope();
+                    self.introduce_pattern(&arm.pattern);
+                    self.check_expr(&arm.body);
+                    self.pop_scope();
+
+                    arm_states.push(self.snapshot());
+                }
+
+                // Merge all arm states pairwise against the first
+                if arm_states.len() > 1 {
+                    for i in 1..arm_states.len() {
+                        self.merge_branch_states(&arm_states[0], &arm_states[i], expr.span);
+                    }
+                }
+
+                // Restore to first arm's state (representative post-match state)
+                self.restore(arm_states.into_iter().next().unwrap_or(snap));
+            }
+
+            ExprKind::Lambda(_params, body) => {
+                // Lambda captures current env but its body is checked independently
+                self.push_scope();
+                self.check_expr(body);
+                self.pop_scope();
+            }
+
+            ExprKind::Try(inner) => {
+                self.check_expr(inner);
+            }
+
+            ExprKind::VariantCtor(_, args) => {
+                for a in args {
+                    self.check_expr(a);
+                }
+            }
+
+            ExprKind::StructLit(_, fields) => {
+                for (_, val) in fields {
+                    self.check_expr(val);
+                }
+            }
+
+            ExprKind::ListLit(items) => {
+                for item in items {
+                    self.check_expr(item);
+                }
+            }
+
+            ExprKind::Forall(_, where_c, body) | ExprKind::Exists(_, where_c, body) => {
+                if let Some(guard) = where_c {
+                    self.check_expr(guard);
+                }
+                self.check_expr(body);
+            }
+        }
+    }
+
+    /// Check an argument expression based on the parameter's ownership annotation.
+    fn check_arg(&mut self, arg: &Expr, ownership: Ownership) {
+        match (&arg.kind, ownership) {
+            (ExprKind::SymbolRef(name), Ownership::Own) => {
+                let _ = self.track_move(name, arg.span);
+            }
+            (ExprKind::SymbolRef(name), Ownership::Ref) => {
+                let _ = self.track_borrow(name, BorrowKind::Immutable, arg.span);
+            }
+            (ExprKind::SymbolRef(name), Ownership::Mut) => {
+                let _ = self.track_borrow(name, BorrowKind::Mutable, arg.span);
+            }
+            (ExprKind::SymbolRef(name), Ownership::Copy) => {
+                // For static analysis, treat Copy as non-consuming
+                let _ = self.track_copy(name, &Ty::Prim(PrimTy::I64), arg.span);
+            }
+            _ => {
+                // Default ownership or complex expression — recurse
+                self.check_expr(arg);
+            }
+        }
+    }
+
+    /// Extract parameter ownership annotations from a callee expression.
+    /// Returns ownership list if callee is a known function with registered annotations.
+    fn extract_callee_ownerships(&self, callee: &Expr, _arg_count: usize) -> Vec<Ownership> {
+        if let ExprKind::SymbolRef(name) = &callee.kind {
+            if let Some(ownerships) = self.fn_ownerships.get(name) {
+                return ownerships.clone();
+            }
+        }
+        vec![]
+    }
+
+    /// Introduce bindings from a pattern into the current scope.
+    fn introduce_pattern(&mut self, pattern: &Pattern) {
+        match &pattern.kind {
+            PatternKind::Binding(name) => {
+                self.introduce(name.clone());
+            }
+            PatternKind::Variant(_, sub_pats) => {
+                for p in sub_pats {
+                    self.introduce_pattern(p);
+                }
+            }
+            PatternKind::Wildcard | PatternKind::Literal(_) => {}
+        }
+    }
+
+    /// Check that two branch states agree on ownership of all bindings.
+    /// If a binding is Moved in one branch but Owned in another, emit an error.
+    fn merge_branch_states(
+        &mut self,
+        state_a: &[HashMap<String, OwnershipState>],
+        state_b: &[HashMap<String, OwnershipState>],
+        span: Span,
+    ) {
+        // Compare each scope level
+        let len = state_a.len().min(state_b.len());
+        for i in 0..len {
+            for (name, state_in_a) in &state_a[i] {
+                if let Some(state_in_b) = state_b[i].get(name) {
+                    let a_moved = matches!(state_in_a, OwnershipState::Moved { .. });
+                    let b_moved = matches!(state_in_b, OwnershipState::Moved { .. });
+                    if a_moved != b_moved {
+                        self.diags.add(Diagnostic::error(
+                            format!(
+                                "branches disagree on ownership of `{}`: moved in one branch but not the other",
+                                name
+                            ),
+                            span,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Drain diagnostics without consuming the checker.
+    pub fn drain_diagnostics(&mut self) -> Diagnostics {
+        std::mem::replace(&mut self.diags, Diagnostics::new())
     }
 
     /// Release a borrow on the named binding (decrement count or return to Owned).

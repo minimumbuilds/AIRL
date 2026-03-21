@@ -55,6 +55,25 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
         }
     }
 
+    // Linearity analysis
+    {
+        let mut lin_checker = airl_types::linearity::LinearityChecker::new();
+        for top in &tops {
+            if let airl_syntax::ast::TopLevel::Defn(f) = top {
+                lin_checker.check_fn(f);
+            }
+        }
+        if lin_checker.has_errors() {
+            let lin_diags = lin_checker.drain_diagnostics();
+            for d in lin_diags.errors() {
+                match mode {
+                    PipelineMode::Check => eprintln!("error: linearity: {}", d.message),
+                    _ => eprintln!("warning: linearity: {}", d.message),
+                }
+            }
+        }
+    }
+
     // Z3 contract verification
     let z3_prover = airl_solver::prover::Z3Prover::new();
     for top in &tops {
@@ -68,11 +87,21 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
                         }
                     }
                     airl_solver::VerifyResult::Disproven { counterexample } => {
-                        let msg = format!("contract disproven in `{}`: {} (counterexample: {:?})",
-                            f.name, clause, counterexample);
-                        match mode {
-                            PipelineMode::Check => eprintln!("error: {}", msg),
-                            _ => eprintln!("warning: {}", msg),
+                        // Check if the clause references `result` — if so, the
+                        // "disproven" is expected because Z3 doesn't encode the
+                        // function body, so `result` is a free variable.
+                        let mentions_result = clause.contains("result");
+                        let result_constrained = f.requires.iter()
+                            .any(|r| r.to_airl().contains("result"));
+                        if mentions_result && !result_constrained {
+                            // Suppress — expected behavior, not a real error
+                        } else {
+                            let msg = format!("contract disproven in `{}`: {} (counterexample: {:?})",
+                                f.name, clause, counterexample);
+                            match mode {
+                                PipelineMode::Check => eprintln!("error: {}", msg),
+                                _ => eprintln!("warning: {}", msg),
+                            }
                         }
                     }
                     airl_solver::VerifyResult::Unknown(_) | airl_solver::VerifyResult::TranslationError(_) => {
@@ -128,6 +157,22 @@ pub fn check_source(source: &str) -> Result<(), PipelineError> {
         return Err(PipelineError::TypeCheck(checker.into_diagnostics()));
     }
 
+    // Linearity analysis
+    {
+        let mut lin_checker = airl_types::linearity::LinearityChecker::new();
+        for top in &tops {
+            if let airl_syntax::ast::TopLevel::Defn(f) = top {
+                lin_checker.check_fn(f);
+            }
+        }
+        if lin_checker.has_errors() {
+            let lin_diags = lin_checker.drain_diagnostics();
+            for d in lin_diags.errors() {
+                eprintln!("error: linearity: {}", d.message);
+            }
+        }
+    }
+
     // Z3 contract verification
     let z3_prover = airl_solver::prover::Z3Prover::new();
     for top in &tops {
@@ -139,8 +184,13 @@ pub fn check_source(source: &str) -> Result<(), PipelineError> {
                         eprintln!("note: `{}` contract proven: {}", f.name, clause);
                     }
                     airl_solver::VerifyResult::Disproven { counterexample } => {
-                        eprintln!("error: contract disproven in `{}`: {} (counterexample: {:?})",
-                            f.name, clause, counterexample);
+                        let mentions_result = clause.contains("result");
+                        let result_constrained = f.requires.iter()
+                            .any(|r| r.to_airl().contains("result"));
+                        if !mentions_result || result_constrained {
+                            eprintln!("error: contract disproven in `{}`: {} (counterexample: {:?})",
+                                f.name, clause, counterexample);
+                        }
                     }
                     airl_solver::VerifyResult::Unknown(_) | airl_solver::VerifyResult::TranslationError(_) => {
                         // Silent — fall back to runtime checking

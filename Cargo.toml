@@ -8,6 +8,7 @@ members = [
     "crates/airl-agent",
     "crates/airl-codegen",
     "crates/airl-solver",
+    "crates/airl-mlir",
     "crates/airl-driver",
 ]
 

@@ -221,6 +221,26 @@ fn print_pipeline_error(err: &PipelineError, path: &str) {
                 eprint!("{}", format_diagnostic_with_source(diag, &source, path));
             }
         }
+        PipelineError::Runtime(ref runtime_err) => {
+            // For contract violations, show source context
+            if let airl_runtime::error::RuntimeError::ContractViolation(ref cv) = runtime_err {
+                let source = std::fs::read_to_string(path).unwrap_or_default();
+                let diag = airl_syntax::diagnostic::Diagnostic::error(
+                    format!("{}", cv),
+                    cv.span,
+                );
+                eprint!("{}", format_diagnostic_with_source(&diag, &source, path));
+            } else if let airl_runtime::error::RuntimeError::UseAfterMove { ref name, span } = runtime_err {
+                let source = std::fs::read_to_string(path).unwrap_or_default();
+                let diag = airl_syntax::diagnostic::Diagnostic::error(
+                    format!("use of moved value `{}`", name),
+                    *span,
+                );
+                eprint!("{}", format_diagnostic_with_source(&diag, &source, path));
+            } else {
+                eprintln!("Runtime error: {}", runtime_err);
+            }
+        }
         _ => eprintln!("{}", err),
     }
 }

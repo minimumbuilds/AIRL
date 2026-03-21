@@ -19,15 +19,20 @@ pub struct ContractViolation {
 
 impl std::fmt::Display for ContractViolation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "ContractViolation in `{}`: {:?} clause `{}` failed\n  bindings: {:?}\n  evaluated: {}",
-            self.function,
-            self.contract_kind,
-            self.clause_source,
-            self.bindings,
-            self.evaluated
-        )
+        let kind = match self.contract_kind {
+            ContractKind::Requires => "Requires",
+            ContractKind::Ensures => "Ensures",
+            ContractKind::Invariant => "Invariant",
+        };
+        write!(f, "{} contract violated in `{}`: {} evaluated to {}",
+            kind, self.function, self.clause_source, self.evaluated)?;
+        if !self.bindings.is_empty() {
+            write!(f, "\n  with")?;
+            for (name, val) in &self.bindings {
+                write!(f, " {} = {},", name, val)?;
+            }
+        }
+        Ok(())
     }
 }
 

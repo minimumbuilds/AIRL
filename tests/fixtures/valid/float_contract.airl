@@ -1,0 +1,9 @@
+;; EXPECT: 7.0
+;; Test float function with contract
+(defn scale
+  :sig [(x : f64) (factor : f64) -> f64]
+  :intent "Scale x by factor"
+  :requires [(valid x) (valid factor)]
+  :ensures [(valid result)]
+  :body (* x factor))
+(scale 3.5 2.0)

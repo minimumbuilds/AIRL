@@ -1,0 +1,12 @@
+;; EXPECT: 18.0
+;; Test :execute-on gpu annotation.
+;; When built with --features cuda, tensor.add executes on GPU.
+;; Without CUDA, falls through to MLIR CPU or Cranelift.
+(defn gpu-add
+  :sig [(a : tensor) (b : tensor) -> tensor]
+  :requires [true]
+  :ensures [true]
+  :execute-on gpu
+  :body (tensor.add a b))
+
+(tensor.sum (gpu-add (tensor.ones [3 3]) (tensor.ones [3 3])))

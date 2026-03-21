@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use z3::ast::{self, Ast};
-use z3::{Config, Context};
+use z3::Context;
 use airl_syntax::ast::{Expr, ExprKind};
 
 /// Error during AIRL → Z3 translation.
@@ -26,6 +26,7 @@ impl std::fmt::Display for TranslateError {
 pub enum VarSort {
     Int,
     Bool,
+    Real,
 }
 
 /// Translates AIRL expressions to Z3 AST nodes.
@@ -33,6 +34,7 @@ pub struct Translator<'ctx> {
     ctx: &'ctx Context,
     int_vars: HashMap<String, ast::Int<'ctx>>,
     bool_vars: HashMap<String, ast::Bool<'ctx>>,
+    real_vars: HashMap<String, ast::Real<'ctx>>,
 }
 
 impl<'ctx> Translator<'ctx> {
@@ -41,6 +43,7 @@ impl<'ctx> Translator<'ctx> {
             ctx,
             int_vars: HashMap::new(),
             bool_vars: HashMap::new(),
+            real_vars: HashMap::new(),
         }
     }
 
@@ -56,13 +59,24 @@ impl<'ctx> Translator<'ctx> {
         self.bool_vars.insert(name.to_string(), var);
     }
 
+    /// Declare a real variable (for f32/f64 parameters).
+    pub fn declare_real(&mut self, name: &str) {
+        let var = ast::Real::new_const(self.ctx, name);
+        self.real_vars.insert(name.to_string(), var);
+    }
+
     /// Get a reference to an integer variable (for counterexample extraction).
     pub fn get_int_var(&self, name: &str) -> Option<&ast::Int<'ctx>> {
         self.int_vars.get(name)
     }
 
+    /// Get a reference to a real variable (for counterexample extraction).
+    pub fn get_real_var(&self, name: &str) -> Option<&ast::Real<'ctx>> {
+        self.real_vars.get(name)
+    }
+
     /// Translate an AIRL expression to a Z3 Bool (for contracts).
-    pub fn translate_bool(&self, expr: &Expr) -> Result<ast::Bool<'ctx>, TranslateError> {
+    pub fn translate_bool(&mut self, expr: &Expr) -> Result<ast::Bool<'ctx>, TranslateError> {
         match &expr.kind {
             ExprKind::BoolLit(v) => Ok(ast::Bool::from_bool(self.ctx, *v)),
 
@@ -78,36 +92,13 @@ impl<'ctx> Translator<'ctx> {
                 if let ExprKind::SymbolRef(op) = &callee.kind {
                     match op.as_str() {
                         // Comparison operators → Bool result
-                        "=" => {
-                            let lhs = self.translate_int(&args[0])?;
-                            let rhs = self.translate_int(&args[1])?;
-                            Ok(lhs._eq(&rhs))
-                        }
-                        "!=" => {
-                            let lhs = self.translate_int(&args[0])?;
-                            let rhs = self.translate_int(&args[1])?;
-                            Ok(lhs._eq(&rhs).not())
-                        }
-                        "<" => {
-                            let lhs = self.translate_int(&args[0])?;
-                            let rhs = self.translate_int(&args[1])?;
-                            Ok(lhs.lt(&rhs))
-                        }
-                        ">" => {
-                            let lhs = self.translate_int(&args[0])?;
-                            let rhs = self.translate_int(&args[1])?;
-                            Ok(lhs.gt(&rhs))
-                        }
-                        "<=" => {
-                            let lhs = self.translate_int(&args[0])?;
-                            let rhs = self.translate_int(&args[1])?;
-                            Ok(lhs.le(&rhs))
-                        }
-                        ">=" => {
-                            let lhs = self.translate_int(&args[0])?;
-                            let rhs = self.translate_int(&args[1])?;
-                            Ok(lhs.ge(&rhs))
-                        }
+                        // Try Int first; if that fails, try Real
+                        "=" => self.translate_cmp_eq(&args[0], &args[1], false),
+                        "!=" => self.translate_cmp_eq(&args[0], &args[1], true),
+                        "<" => self.translate_cmp_ord(&args[0], &args[1], "lt"),
+                        ">" => self.translate_cmp_ord(&args[0], &args[1], "gt"),
+                        "<=" => self.translate_cmp_ord(&args[0], &args[1], "le"),
+                        ">=" => self.translate_cmp_ord(&args[0], &args[1], "ge"),
                         // Boolean operators
                         "and" => {
                             let lhs = self.translate_bool(&args[0])?;
@@ -136,6 +127,14 @@ impl<'ctx> Translator<'ctx> {
                 }
             }
 
+            ExprKind::Forall(param, where_clause, body) => {
+                self.translate_quantifier(param, where_clause.as_deref(), body, true)
+            }
+
+            ExprKind::Exists(param, where_clause, body) => {
+                self.translate_quantifier(param, where_clause.as_deref(), body, false)
+            }
+
             _ => Err(TranslateError::UnsupportedExpression(
                 format!("{:?}", expr.kind)
             )),
@@ -143,7 +142,7 @@ impl<'ctx> Translator<'ctx> {
     }
 
     /// Translate an AIRL expression to a Z3 Int.
-    pub fn translate_int(&self, expr: &Expr) -> Result<ast::Int<'ctx>, TranslateError> {
+    pub fn translate_int(&mut self, expr: &Expr) -> Result<ast::Int<'ctx>, TranslateError> {
         match &expr.kind {
             ExprKind::IntLit(v) => Ok(ast::Int::from_i64(self.ctx, *v)),
 
@@ -208,11 +207,258 @@ impl<'ctx> Translator<'ctx> {
         }
     }
 
+    /// Translate an AIRL expression to a Z3 Real (for float arithmetic).
+    pub fn translate_real(&mut self, expr: &Expr) -> Result<ast::Real<'ctx>, TranslateError> {
+        match &expr.kind {
+            ExprKind::FloatLit(v) => {
+                // Approximate: convert f64 to rational num/den via scaled integer
+                // For exact representation, we scale by 1_000_000 and use from_real
+                let scaled = (*v * 1_000_000.0).round() as i32;
+                Ok(ast::Real::from_real(self.ctx, scaled, 1_000_000))
+            }
+
+            ExprKind::IntLit(v) => {
+                // Allow int literals in real context
+                Ok(ast::Real::from_real(self.ctx, *v as i32, 1))
+            }
+
+            ExprKind::SymbolRef(name) => {
+                if let Some(var) = self.real_vars.get(name) {
+                    Ok(var.clone())
+                } else {
+                    Err(TranslateError::UndefinedVariable(name.clone()))
+                }
+            }
+
+            ExprKind::FnCall(callee, args) => {
+                if let ExprKind::SymbolRef(op) = &callee.kind {
+                    match op.as_str() {
+                        "+" => {
+                            let operands: Result<Vec<_>, _> = args.iter()
+                                .map(|a| self.translate_real(a))
+                                .collect();
+                            let operands = operands?;
+                            let refs: Vec<&ast::Real> = operands.iter().collect();
+                            Ok(ast::Real::add(self.ctx, &refs))
+                        }
+                        "-" => {
+                            if args.len() == 2 {
+                                let lhs = self.translate_real(&args[0])?;
+                                let rhs = self.translate_real(&args[1])?;
+                                Ok(ast::Real::sub(self.ctx, &[&lhs, &rhs]))
+                            } else {
+                                Err(TranslateError::UnsupportedExpression("unary minus".into()))
+                            }
+                        }
+                        "*" => {
+                            let operands: Result<Vec<_>, _> = args.iter()
+                                .map(|a| self.translate_real(a))
+                                .collect();
+                            let operands = operands?;
+                            let refs: Vec<&ast::Real> = operands.iter().collect();
+                            Ok(ast::Real::mul(self.ctx, &refs))
+                        }
+                        "/" => {
+                            let lhs = self.translate_real(&args[0])?;
+                            let rhs = self.translate_real(&args[1])?;
+                            Ok(lhs.div(&rhs))
+                        }
+                        _ => Err(TranslateError::UnsupportedExpression(
+                            format!("real context: {}", op)
+                        )),
+                    }
+                } else {
+                    Err(TranslateError::UnsupportedExpression("non-symbol callee".into()))
+                }
+            }
+
+            _ => Err(TranslateError::UnsupportedExpression(
+                format!("real context: {:?}", expr.kind)
+            )),
+        }
+    }
+
+    /// Translate an equality/inequality comparison, trying Int then Real.
+    fn translate_cmp_eq(
+        &mut self,
+        lhs: &Expr,
+        rhs: &Expr,
+        negate: bool,
+    ) -> Result<ast::Bool<'ctx>, TranslateError> {
+        // Try Int first
+        if let (Ok(l), Ok(r)) = (self.translate_int(lhs), self.translate_int(rhs)) {
+            let eq = l._eq(&r);
+            return Ok(if negate { eq.not() } else { eq });
+        }
+        // Try Real
+        if let (Ok(l), Ok(r)) = (self.translate_real(lhs), self.translate_real(rhs)) {
+            let eq = l._eq(&r);
+            return Ok(if negate { eq.not() } else { eq });
+        }
+        Err(TranslateError::UnsupportedExpression("cannot translate comparison operands".into()))
+    }
+
+    /// Translate an ordering comparison (lt/le/gt/ge), trying Int then Real.
+    fn translate_cmp_ord(
+        &mut self,
+        lhs: &Expr,
+        rhs: &Expr,
+        op: &str,
+    ) -> Result<ast::Bool<'ctx>, TranslateError> {
+        // Try Int first
+        if let (Ok(l), Ok(r)) = (self.translate_int(lhs), self.translate_int(rhs)) {
+            return Ok(match op {
+                "lt" => l.lt(&r),
+                "le" => l.le(&r),
+                "gt" => l.gt(&r),
+                "ge" => l.ge(&r),
+                _ => unreachable!(),
+            });
+        }
+        // Try Real
+        if let (Ok(l), Ok(r)) = (self.translate_real(lhs), self.translate_real(rhs)) {
+            return Ok(match op {
+                "lt" => l.lt(&r),
+                "le" => l.le(&r),
+                "gt" => l.gt(&r),
+                "ge" => l.ge(&r),
+                _ => unreachable!(),
+            });
+        }
+        Err(TranslateError::UnsupportedExpression(
+            format!("cannot translate {} operands", op)
+        ))
+    }
+
+    /// Translate a quantified expression (forall/exists) to Z3.
+    /// Creates a fresh Z3 constant for the bound variable, temporarily adds it to
+    /// the variable maps, builds the body formula, then removes it.
+    fn translate_quantifier(
+        &mut self,
+        param: &airl_syntax::ast::Param,
+        where_clause: Option<&Expr>,
+        body: &Expr,
+        is_forall: bool,
+    ) -> Result<ast::Bool<'ctx>, TranslateError> {
+        let var_name = &param.name;
+        let type_name = match &param.ty.kind {
+            airl_syntax::ast::AstTypeKind::Named(n) => n.as_str(),
+            _ => return Err(TranslateError::UnsupportedType(format!("{:?}", param.ty))),
+        };
+
+        let sort = Self::sort_from_type_name(type_name)
+            .ok_or_else(|| TranslateError::UnsupportedType(type_name.to_string()))?;
+
+        // Create fresh Z3 constant for the bound variable
+        match sort {
+            VarSort::Int => {
+                let bound_var = ast::Int::new_const(self.ctx, var_name.as_str());
+                // Save and replace any existing variable
+                let prev = self.int_vars.insert(var_name.clone(), bound_var.clone());
+
+                // Build body formula
+                let body_bool = self.translate_bool(body)?;
+
+                // If there's a where clause, build (where => body) for forall,
+                // or (where && body) for exists
+                let formula = if let Some(guard) = where_clause {
+                    let guard_bool = self.translate_bool(guard)?;
+                    if is_forall {
+                        // forall x. (guard(x) => body(x))
+                        guard_bool.implies(&body_bool)
+                    } else {
+                        // exists x. (guard(x) && body(x))
+                        ast::Bool::and(self.ctx, &[&guard_bool, &body_bool])
+                    }
+                } else {
+                    body_bool
+                };
+
+                // Build quantified formula
+                let result = if is_forall {
+                    ast::forall_const(self.ctx, &[&bound_var], &[], &formula)
+                } else {
+                    ast::exists_const(self.ctx, &[&bound_var], &[], &formula)
+                };
+
+                // Restore previous variable binding
+                if let Some(prev_var) = prev {
+                    self.int_vars.insert(var_name.clone(), prev_var);
+                } else {
+                    self.int_vars.remove(var_name);
+                }
+
+                Ok(result)
+            }
+            VarSort::Bool => {
+                let bound_var = ast::Bool::new_const(self.ctx, var_name.as_str());
+                let prev = self.bool_vars.insert(var_name.clone(), bound_var.clone());
+
+                let body_bool = self.translate_bool(body)?;
+                let formula = if let Some(guard) = where_clause {
+                    let guard_bool = self.translate_bool(guard)?;
+                    if is_forall {
+                        guard_bool.implies(&body_bool)
+                    } else {
+                        ast::Bool::and(self.ctx, &[&guard_bool, &body_bool])
+                    }
+                } else {
+                    body_bool
+                };
+
+                let result = if is_forall {
+                    ast::forall_const(self.ctx, &[&bound_var], &[], &formula)
+                } else {
+                    ast::exists_const(self.ctx, &[&bound_var], &[], &formula)
+                };
+
+                if let Some(prev_var) = prev {
+                    self.bool_vars.insert(var_name.clone(), prev_var);
+                } else {
+                    self.bool_vars.remove(var_name);
+                }
+
+                Ok(result)
+            }
+            VarSort::Real => {
+                let bound_var = ast::Real::new_const(self.ctx, var_name.as_str());
+                let prev = self.real_vars.insert(var_name.clone(), bound_var.clone());
+
+                let body_bool = self.translate_bool(body)?;
+                let formula = if let Some(guard) = where_clause {
+                    let guard_bool = self.translate_bool(guard)?;
+                    if is_forall {
+                        guard_bool.implies(&body_bool)
+                    } else {
+                        ast::Bool::and(self.ctx, &[&guard_bool, &body_bool])
+                    }
+                } else {
+                    body_bool
+                };
+
+                let result = if is_forall {
+                    ast::forall_const(self.ctx, &[&bound_var], &[], &formula)
+                } else {
+                    ast::exists_const(self.ctx, &[&bound_var], &[], &formula)
+                };
+
+                if let Some(prev_var) = prev {
+                    self.real_vars.insert(var_name.clone(), prev_var);
+                } else {
+                    self.real_vars.remove(var_name);
+                }
+
+                Ok(result)
+            }
+        }
+    }
+
     /// Determine variable sort from an AIRL type name.
     pub fn sort_from_type_name(name: &str) -> Option<VarSort> {
         match name {
             "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "Nat" => Some(VarSort::Int),
             "bool" => Some(VarSort::Bool),
+            "f16" | "f32" | "f64" | "bf16" => Some(VarSort::Real),
             _ => None,
         }
     }
@@ -221,6 +467,7 @@ impl<'ctx> Translator<'ctx> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use z3::Config;
 
     fn make_ctx() -> Context {
         let cfg = Config::new();
@@ -230,7 +477,7 @@ mod tests {
     #[test]
     fn translate_int_literal() {
         let ctx = make_ctx();
-        let t = Translator::new(&ctx);
+        let mut t = Translator::new(&ctx);
         let expr = Expr { kind: ExprKind::IntLit(42), span: airl_syntax::Span::dummy() };
         assert!(t.translate_int(&expr).is_ok());
     }
@@ -238,7 +485,7 @@ mod tests {
     #[test]
     fn translate_bool_literal() {
         let ctx = make_ctx();
-        let t = Translator::new(&ctx);
+        let mut t = Translator::new(&ctx);
         let expr = Expr { kind: ExprKind::BoolLit(true), span: airl_syntax::Span::dummy() };
         assert!(t.translate_bool(&expr).is_ok());
     }
@@ -255,7 +502,7 @@ mod tests {
     #[test]
     fn translate_undefined_variable() {
         let ctx = make_ctx();
-        let t = Translator::new(&ctx);
+        let mut t = Translator::new(&ctx);
         let expr = Expr { kind: ExprKind::SymbolRef("y".into()), span: airl_syntax::Span::dummy() };
         assert!(t.translate_int(&expr).is_err());
     }
@@ -302,7 +549,7 @@ mod tests {
     #[test]
     fn translate_unsupported_string() {
         let ctx = make_ctx();
-        let t = Translator::new(&ctx);
+        let mut t = Translator::new(&ctx);
         let expr = Expr { kind: ExprKind::StrLit("hello".into()), span: airl_syntax::Span::dummy() };
         assert!(t.translate_int(&expr).is_err());
     }
@@ -311,6 +558,8 @@ mod tests {
     fn sort_from_type() {
         assert!(matches!(Translator::sort_from_type_name("i32"), Some(VarSort::Int)));
         assert!(matches!(Translator::sort_from_type_name("bool"), Some(VarSort::Bool)));
+        assert!(matches!(Translator::sort_from_type_name("f32"), Some(VarSort::Real)));
+        assert!(matches!(Translator::sort_from_type_name("f64"), Some(VarSort::Real)));
         assert!(Translator::sort_from_type_name("String").is_none());
     }
 }

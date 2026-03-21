@@ -1,0 +1,5 @@
+;; EXPECT: true
+;; Test exists: there exists a number that equals 5
+(exists [i : Nat]
+  (where (< i 10))
+  (= i 5))

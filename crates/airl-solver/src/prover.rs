@@ -24,6 +24,7 @@ impl Z3Prover {
                 match Translator::sort_from_type_name(type_name) {
                     Some(VarSort::Int) => translator.declare_int(&param.name),
                     Some(VarSort::Bool) => translator.declare_bool(&param.name),
+                    Some(VarSort::Real) => translator.declare_real(&param.name),
                     None => { can_translate = false; break; }
                 }
             } else {
@@ -38,6 +39,7 @@ impl Z3Prover {
                 match Translator::sort_from_type_name(type_name) {
                     Some(VarSort::Int) => translator.declare_int("result"),
                     Some(VarSort::Bool) => translator.declare_bool("result"),
+                    Some(VarSort::Real) => translator.declare_real("result"),
                     None => can_translate = false,
                 }
             } else {
@@ -49,7 +51,7 @@ impl Z3Prover {
             return FunctionVerification {
                 function_name: def.name.clone(),
                 ensures_results: def.ensures.iter().map(|e| {
-                    (format!("{:?}", e.kind), VerifyResult::Unknown("unsupported parameter types".into()))
+                    (e.to_airl(), VerifyResult::Unknown("unsupported parameter types".into()))
                 }).collect(),
             };
         }
@@ -63,7 +65,7 @@ impl Z3Prover {
                     return FunctionVerification {
                         function_name: def.name.clone(),
                         ensures_results: def.ensures.iter().map(|e| {
-                            (format!("{:?}", e.kind), VerifyResult::Unknown("cannot translate requires".into()))
+                            (e.to_airl(), VerifyResult::Unknown("cannot translate requires".into()))
                         }).collect(),
                     };
                 }
@@ -73,7 +75,7 @@ impl Z3Prover {
         // Prove each :ensures clause
         let mut ensures_results = Vec::new();
         for ensures_expr in &def.ensures {
-            let clause_source = format!("{:?}", ensures_expr.kind);
+            let clause_source = ensures_expr.to_airl();
 
             let result = match translator.translate_bool(ensures_expr) {
                 Ok(z3_bool) => {
@@ -89,12 +91,22 @@ impl Z3Prover {
                             if let Some(model) = solver.get_model() {
                                 for param in &def.params {
                                     if let AstTypeKind::Named(type_name) = &param.ty.kind {
-                                        if let Some(VarSort::Int) = Translator::sort_from_type_name(type_name) {
-                                            if let Some(var) = translator.get_int_var(&param.name) {
-                                                if let Some(val) = model.eval(var, true) {
-                                                    counterexample.push((param.name.clone(), val.to_string()));
+                                        match Translator::sort_from_type_name(type_name) {
+                                            Some(VarSort::Int) => {
+                                                if let Some(var) = translator.get_int_var(&param.name) {
+                                                    if let Some(val) = model.eval(var, true) {
+                                                        counterexample.push((param.name.clone(), val.to_string()));
+                                                    }
                                                 }
                                             }
+                                            Some(VarSort::Real) => {
+                                                if let Some(var) = translator.get_real_var(&param.name) {
+                                                    if let Some(val) = model.eval(var, true) {
+                                                        counterexample.push((param.name.clone(), val.to_string()));
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
                                         }
                                     }
                                 }
