@@ -1,0 +1,38 @@
+;; higher_order_functions.airl — Lambdas and functional programming
+;;
+;; Demonstrates:
+;;   - Lambda expressions: (fn [x] body)
+;;   - Passing functions as arguments
+;;   - Building abstractions with higher-order functions
+;;   - Let-binding lambdas for local reuse
+;;
+;; Run with: cargo run -- run examples/07-higher-order-functions/higher_order_functions.airl
+
+;; apply-twice: takes a function and a value, applies the function twice
+(defn apply-twice
+  :sig [(f : fn) (x : i64) -> i64]
+  :intent "Apply function f to x twice: f(f(x))"
+  :requires [(valid f) (valid x)]
+  :ensures [(valid result)]
+  :body (f (f x)))
+
+;; Use with lambdas
+(print "Increment twice: 10 + 1 + 1 =" (apply-twice (fn [x] (+ x 1)) 10))
+(print "Double twice: 3 * 2 * 2 =" (apply-twice (fn [x] (* x 2)) 3))
+
+;; Compose two functions into one
+(defn compose
+  :sig [(f : fn) (g : fn) (x : i64) -> i64]
+  :intent "Compute f(g(x))"
+  :requires [(valid f) (valid g) (valid x)]
+  :ensures [(valid result)]
+  :body (f (g x)))
+
+;; add-1 then double: (5 + 1) * 2 = 12
+(print "Compose (double . add1) 5 =" (compose (fn [x] (* x 2)) (fn [x] (+ x 1)) 5))
+
+;; Let-bind a lambda for reuse
+(let (square : fn (fn [x] (* x x)))
+  (do
+    (print "square 7 =" (square 7))
+    (print "square applied twice to 2 =" (apply-twice square 2))))

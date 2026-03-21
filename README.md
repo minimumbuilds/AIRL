@@ -73,26 +73,40 @@ cargo build
 
 Requirements: Rust 1.85+, CMake, C++ compiler, Python 3 (for Z3 compilation on first build).
 
+### Hello World
+
+```clojure
+;; examples/01-hello-world/hello_world.airl
+
+(print "Hello, World!")
+
+(defn greet
+  :sig [(name : String) -> String]
+  :intent "create a personalized greeting"
+  :ensures [(valid result)]
+  :body (do
+    (print "Greetings from AIRL,")
+    (print name)
+    name))
+
+(greet "fellow AI")
+```
+
+```bash
+cargo run -- run examples/01-hello-world/hello_world.airl
+# Hello, World!
+# Greetings from AIRL,
+# fellow AI
+```
+
 ### Run a Program
 
 ```bash
-# Simple arithmetic
-echo '(+ (* 6 7) 1)' > test.airl
-cargo run -- run test.airl
-# → 43
-
 # Function with contracts
-cat > math.airl << 'EOF'
-(defn factorial
-  :sig [(n : i64) -> i64]
-  :intent "Compute n factorial"
-  :requires [(>= n 0)]
-  :ensures [(> result 0)]
-  :body (if (= n 0) 1 (* n (factorial (- n 1)))))
-(factorial 5)
-EOF
-cargo run -- run math.airl
-# → 120
+cargo run -- run examples/02-functions-and-contracts/functions_and_contracts.airl
+
+# Formally verify contracts with Z3
+cargo run -- check examples/03-verified-arithmetic/verified_arithmetic.airl
 ```
 
 ### Type Check
@@ -146,6 +160,26 @@ cargo run -- call tcp:127.0.0.1:9001 multiply 6 7
 
 ```bash
 cargo run -- run orchestrator.airl
+```
+
+## Examples
+
+The `examples/` directory contains progressive examples showcasing AIRL's capabilities:
+
+| Example | Demonstrates |
+|---------|-------------|
+| `01-hello-world` | `print`, basic `defn`, `do` blocks |
+| `02-functions-and-contracts` | `:requires`/`:ensures`, function composition |
+| `03-verified-arithmetic` | Z3 formal proofs (`cargo run -- check`) |
+| `04-safe-error-handling` | `Result`/`Option` variants, `match` |
+| `05-ownership-and-borrowing` | `own`, `ref`, ownership transfer |
+| `06-tensor-operations` | Tensor builtins, JIT-accelerated matmul, softmax |
+| `07-higher-order-functions` | Lambdas, function arguments, composition |
+| `08-agent-orchestration` | `spawn-agent`, `send`, multi-agent IPC |
+
+Run any example:
+```bash
+cargo run -- run examples/01-hello-world/hello_world.airl
 ```
 
 ## Architecture

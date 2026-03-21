@@ -1,0 +1,28 @@
+;; worker.airl — Worker agent module for orchestration example
+;;
+;; This file defines functions that a remote agent can call.
+;; It is loaded by a spawned child process when the orchestrator
+;; calls (spawn-agent "examples/08-agent-orchestration/worker.airl").
+;;
+;; Each function has full contracts — the worker guarantees its outputs.
+
+(defn factorial
+  :sig [(n : i64) -> i64]
+  :intent "Compute n! recursively"
+  :requires [(>= n 0) (<= n 20)]
+  :ensures [(>= result 1)]
+  :body (if (<= n 1) 1 (* n (factorial (- n 1)))))
+
+(defn fibonacci
+  :sig [(n : i64) -> i64]
+  :intent "Compute the nth Fibonacci number"
+  :requires [(>= n 0) (<= n 30)]
+  :ensures [(>= result 0)]
+  :body (if (<= n 1) n (+ (fibonacci (- n 1)) (fibonacci (- n 2)))))
+
+(defn is-even
+  :sig [(n : i64) -> i64]
+  :intent "Return 1 if n is even, 0 if odd"
+  :requires [(valid n)]
+  :ensures [(>= result 0) (<= result 1)]
+  :body (if (= (% n 2) 0) 1 0))

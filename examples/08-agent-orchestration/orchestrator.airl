@@ -1,0 +1,28 @@
+;; orchestrator.airl — Multi-agent orchestration
+;;
+;; Demonstrates:
+;;   - Spawning a child agent process with (spawn-agent ...)
+;;   - Sending typed tasks with (send agent "function" args...)
+;;   - The agent receives the task, runs the contracted function,
+;;     and returns the result over a pipe
+;;
+;; IMPORTANT: This example requires the built AIRL binary.
+;; Build first: cargo build
+;; Run with:    cargo run -- run examples/08-agent-orchestration/orchestrator.airl
+
+;; Spawn the worker — returns an agent ID string
+(let (worker : String (spawn-agent "examples/08-agent-orchestration/worker.airl"))
+  (do
+    (print "Worker agent spawned")
+
+    ;; Delegate computation to the worker
+    (let (fact5 : i64 (send worker "factorial" 5))
+      (print "factorial(5) =" fact5))
+
+    (let (fib10 : i64 (send worker "fibonacci" 10))
+      (print "fibonacci(10) =" fib10))
+
+    (let (even-check : i64 (send worker "is-even" 42))
+      (print "is-even(42) =" even-check))
+
+    (print "All tasks completed")))

@@ -1,0 +1,31 @@
+;; functions_and_contracts.airl — Contracts as executable specifications
+;;
+;; Demonstrates:
+;;   - Function definition with :sig, :intent, :requires, :ensures
+;;   - Preconditions that guard against invalid input
+;;   - Postconditions that guarantee output properties
+;;   - Function composition with contracts at every layer
+;;
+;; Run with: cargo run -- run examples/02-functions-and-contracts/functions_and_contracts.airl
+
+;; A function that clamps a value to a range [lo, hi].
+;; The contract guarantees the result is always within bounds.
+(defn clamp
+  :sig [(val : i64) (lo : i64) (hi : i64) -> i64]
+  :intent "Restrict val to the range [lo, hi]"
+  :requires [(<= lo hi)]
+  :ensures [(>= result lo) (<= result hi)]
+  :body (if (< val lo) lo (if (> val hi) hi val)))
+
+;; Converts a raw score (any integer) to a percentage [0, 100]
+(defn to-percentage
+  :sig [(score : i64) (max-score : i64) -> i64]
+  :intent "Convert a raw score to a percentage, clamped to [0, 100]"
+  :requires [(> max-score 0)]
+  :ensures [(>= result 0) (<= result 100)]
+  :body (clamp (/ (* score 100) max-score) 0 100))
+
+;; Try it out
+(print "Score 37/50 as percentage:" (to-percentage 37 50))
+(print "Score 120/100 (over-achiever, clamped):" (to-percentage 120 100))
+(print "Negative score (clamped to 0):" (to-percentage -10 100))

@@ -1,0 +1,37 @@
+;; safe_error_handling.airl — Safe error handling with variants and match
+;;
+;; Demonstrates:
+;;   - Result types: (Ok value) and (Err reason)
+;;   - Pattern matching with (match ...)
+;;   - Building safe APIs that return errors instead of crashing
+;;
+;; Run with: cargo run -- run examples/04-safe-error-handling/safe_error_handling.airl
+
+;; Safe division returns a Result instead of crashing on zero
+(defn safe-divide
+  :sig [(a : i64) (b : i64) -> Result[i64, String]]
+  :intent "Divide a by b, returning Err on division by zero"
+  :requires [(valid a) (valid b)]
+  :ensures [(valid result)]
+  :body (if (= b 0)
+          (Err "division by zero")
+          (Ok (/ a b))))
+
+;; Use match to handle results
+(print "10 / 3 =")
+(match (safe-divide 10 3)
+  (Ok v) (print "  Ok:" v)
+  (Err e) (print "  Err:" e))
+
+(print "10 / 0 =")
+(match (safe-divide 10 0)
+  (Ok v) (print "  Ok:" v)
+  (Err e) (print "  Err:" e))
+
+;; Nested match: chain multiple safe operations
+(print "Chain: (100 / 5) / 2 =")
+(match (safe-divide 100 5)
+  (Ok first) (match (safe-divide first 2)
+    (Ok second) (print "  Ok:" second)
+    (Err e) (print "  Err:" e))
+  (Err e) (print "  Err:" e))
