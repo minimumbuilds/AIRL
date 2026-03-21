@@ -1,0 +1,9 @@
+;; EXPECT: 47
+;; Tests JIT compilation of pure arithmetic
+(defn compute
+  :sig [(x : i64) -> i64]
+  :intent "polynomial evaluation"
+  :requires [(valid x)]
+  :ensures [(valid result)]
+  :body (+ (+ (* x x) (* 3 x)) 7))
+(compute 5)

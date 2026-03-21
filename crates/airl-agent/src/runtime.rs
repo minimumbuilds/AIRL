@@ -9,7 +9,6 @@ use crate::task::TaskStatus;
 use crate::tcp_transport::TcpTransport;
 use crate::transport::{Transport, TransportError};
 use airl_runtime::eval::Interpreter;
-use airl_runtime::value::Value;
 
 /// Errors from the agent runtime.
 #[derive(Debug)]
@@ -208,6 +207,7 @@ pub fn handle_connection(transport: &mut dyn Transport, interp: &mut Interpreter
 mod tests {
     use super::*;
     use crate::identity::*;
+    use airl_runtime::value::Value;
 
     fn test_identity() -> AgentId {
         AgentId {
