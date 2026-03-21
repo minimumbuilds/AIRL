@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::path::PathBuf;
 
-use crate::identity::AgentId;
+use crate::identity::{AgentId, Endpoint};
 use crate::registry::AgentRegistry;
 use crate::task::TaskStatus;
 use crate::transport::TransportError;
@@ -90,6 +92,19 @@ impl AgentRuntime {
     }
 }
 
+/// Parse an endpoint string like "tcp:127.0.0.1:9001" or "unix:/tmp/airl.sock".
+pub fn parse_endpoint(s: &str) -> Result<Endpoint, String> {
+    if let Some(addr_str) = s.strip_prefix("tcp:") {
+        let addr: SocketAddr = addr_str.parse()
+            .map_err(|e| format!("invalid TCP address '{}': {}", addr_str, e))?;
+        Ok(Endpoint::Tcp(addr))
+    } else if let Some(path_str) = s.strip_prefix("unix:") {
+        Ok(Endpoint::Unix(PathBuf::from(path_str)))
+    } else {
+        Err(format!("unknown endpoint format: '{}' (expected tcp:HOST:PORT or unix:/path)", s))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,5 +167,22 @@ mod tests {
         };
         rt.registry.register(peer);
         assert!(rt.registry.lookup("gpu-worker").is_some());
+    }
+
+    #[test]
+    fn parse_tcp_endpoint() {
+        let ep = parse_endpoint("tcp:127.0.0.1:9001").unwrap();
+        assert!(matches!(ep, Endpoint::Tcp(addr) if addr.port() == 9001));
+    }
+
+    #[test]
+    fn parse_unix_endpoint() {
+        let ep = parse_endpoint("unix:/tmp/airl.sock").unwrap();
+        assert!(matches!(ep, Endpoint::Unix(ref p) if p.to_str().unwrap() == "/tmp/airl.sock"));
+    }
+
+    #[test]
+    fn parse_invalid_endpoint() {
+        assert!(parse_endpoint("garbage").is_err());
     }
 }
