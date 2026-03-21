@@ -341,6 +341,24 @@ impl Interpreter {
         Vec::new()
     }
 
+    /// Call a named function with the given arguments.
+    /// Used by the agent runtime to execute tasks.
+    pub fn call_by_name(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let fn_val = match self.env.get(name)? {
+            Value::Function(f) => f.clone(),
+            Value::BuiltinFn(ref bname) => {
+                let f = self.builtins.get(bname).ok_or_else(|| {
+                    RuntimeError::UndefinedSymbol(bname.to_string())
+                })?;
+                return f(&args);
+            }
+            other => return Err(RuntimeError::NotCallable(format!(
+                "`{}` is {}, not a function", name, other
+            ))),
+        };
+        self.call_fn(&fn_val, args)
+    }
+
     pub fn eval_top_level(&mut self, top: &TopLevel) -> Result<Value, RuntimeError> {
         match top {
             TopLevel::Defn(f) => {
@@ -570,6 +588,43 @@ mod tests {
             eval_str("(let (x : i32 (+ 1 2)) (* x x))"),
             Value::Int(9)
         );
+    }
+
+    #[test]
+    fn call_by_name_success() {
+        let mut interp = Interpreter::new();
+        let input = r#"
+            (defn double
+              :sig [(x : i32) -> i32]
+              :intent "double"
+              :requires [(valid x)]
+              :ensures [(valid result)]
+              :body (* x 2))
+        "#;
+        let mut lexer = airl_syntax::Lexer::new(input);
+        let tokens = lexer.lex_all().unwrap();
+        let sexprs = airl_syntax::parse_sexpr_all(&tokens).unwrap();
+        let mut diags = airl_syntax::Diagnostics::new();
+        for sexpr in &sexprs {
+            let top = airl_syntax::parser::parse_top_level(sexpr, &mut diags).unwrap();
+            interp.eval_top_level(&top).unwrap();
+        }
+        let result = interp.call_by_name("double", vec![Value::Int(21)]).unwrap();
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[test]
+    fn call_by_name_not_found() {
+        let mut interp = Interpreter::new();
+        let result = interp.call_by_name("nonexistent", vec![]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn call_by_name_builtin() {
+        let mut interp = Interpreter::new();
+        let result = interp.call_by_name("+", vec![Value::Int(3), Value::Int(4)]).unwrap();
+        assert_eq!(result, Value::Int(7));
     }
 
     #[test]
