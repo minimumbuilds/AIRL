@@ -16,16 +16,25 @@ Wire the existing static analysis passes (type checker, exhaustiveness checker) 
 
 ### Current State
 
-`pipeline.rs` goes directly from parsing to evaluation. The `TypeChecker` in `airl-types` is only used in unit tests.
+`pipeline.rs` goes directly from parsing to evaluation. The `TypeChecker` in `airl-types` is only used in unit tests. The existing `check_source` function only parses — it does not run the type checker despite the `check` name.
 
 ### Changes
 
-Add a `PipelineMode` enum:
+Add a `PipelineMode` enum and a `TypeCheck` variant to `PipelineError`:
 ```rust
 pub enum PipelineMode {
     Check,  // strict: type errors block, exit non-zero
     Run,    // warn: type errors printed to stderr, execution proceeds
     Repl,   // warn: type errors printed to stderr, execution proceeds
+}
+
+// Add to PipelineError:
+pub enum PipelineError {
+    Io(String),
+    Syntax(Diagnostic),
+    Parse(Diagnostics),
+    TypeCheck(Diagnostics),  // NEW: type-check errors
+    Runtime(RuntimeError),
 }
 ```
 
@@ -42,13 +51,24 @@ Behavior per mode:
 | `airl run` | Yes | Print warnings to stderr, proceed |
 | `airl repl` | Yes (per expr) | Print warnings, proceed |
 
+### TypeChecker API Usage
+
+The `TypeChecker` stores diagnostics internally and returns `Result<_, ()>`. To integrate:
+1. Create `TypeChecker`, call `check_top_level` for each parsed form
+2. After all forms are checked, call `checker.has_errors()` to test for failures
+3. Extract diagnostics via `checker.into_diagnostics()` (consuming) or iterate via the checker's error accessors
+4. In `Check` mode: if errors exist, return `PipelineError::TypeCheck(diags)`
+5. In `Run`/`Repl` mode: if errors exist, print them to stderr as warnings, then proceed to evaluation regardless
+
+**Note:** `check_source` must be substantially rewritten — it currently only parses. After this change it will run the full type-check pass.
+
 ### Persistent State
 
 In REPL mode, the `TypeChecker` persists alongside the `Interpreter` so that function/type definitions accumulate across expressions. Both are passed through `eval_repl_input`.
 
 ### Files Modified
 
-- `crates/airl-driver/src/pipeline.rs` — add `PipelineMode`, wire `TypeChecker` into `run_source`/`check_source`
+- `crates/airl-driver/src/pipeline.rs` — add `PipelineMode`, `PipelineError::TypeCheck`, rewrite `check_source`, wire `TypeChecker` into `run_source`
 - `crates/airl-driver/src/main.rs` — pass mode to pipeline functions
 - `crates/airl-driver/src/repl.rs` — persistent `TypeChecker`
 - `crates/airl-driver/src/lib.rs` — re-export new types if needed
@@ -59,18 +79,18 @@ In REPL mode, the `TypeChecker` persists alongside the `Interpreter` so that fun
 
 ### Current State
 
-The exhaustiveness checker is called by `TypeChecker::check_match_expr()` but since the type checker isn't wired in, it never runs. Additionally, `eval.rs` silently falls through if no match arm matches.
+The exhaustiveness checker is called by `TypeChecker::check_match_expr()` but since the type checker isn't wired in, it never runs. The evaluator already returns an error (`RuntimeError::Custom("no match arm matched value: ...")`) when no arm matches — this is functional but uses a generic error type.
 
 ### Changes
 
 1. **Static:** Wiring the type checker (section 1) automatically enables exhaustiveness checking during the type-check pass.
 
-2. **Runtime:** Add `RuntimeError::NonExhaustiveMatch` variant. When `eval` processes a match expression and no arm matches the scrutinee, return this error instead of falling through.
+2. **Runtime:** Replace the generic `Custom` error with a dedicated `RuntimeError::NonExhaustiveMatch { value: String }` variant for better error messages and programmatic matching. The existing runtime behavior (error on no match) is preserved — this is a refinement, not a new feature.
 
 ### Files Modified
 
 - `crates/airl-runtime/src/error.rs` — add `NonExhaustiveMatch` variant
-- `crates/airl-runtime/src/eval.rs` — return error when no match arm matches
+- `crates/airl-runtime/src/eval.rs` — replace `Custom("no match arm...")` with `NonExhaustiveMatch`
 
 ---
 
@@ -106,9 +126,9 @@ When calling a function, check each parameter's ownership annotation:
 | `Ownership::Copy` | Clone value out. Error if type is not Copy (tensors, functions, strings are not Copy). |
 | `Ownership::Default` | Treated as `Own`. |
 
-**Borrow release:** When a function call returns, release all borrows taken for that call (decrement immutable_borrows, clear mutable_borrow).
+**Borrow release:** Each function call maintains a per-call borrow ledger — a `Vec<(String, BorrowKind)>` tracking which slots were borrowed for that specific call. When the call returns, only the borrows in the ledger are released (decrement `immutable_borrows` by 1 per immutable borrow, clear `mutable_borrow` per mutable borrow). This correctly handles nested calls where the same slot is borrowed at multiple call levels.
 
-**`(copy x)` expression:** When the evaluator encounters a SymbolRef that represents a copy operation, clone without moving. This is handled in `FnCall` when the parameter has `Ownership::Copy`.
+**`(copy x)` in function parameters:** When a function parameter has `Ownership::Copy`, the evaluator clones the value without marking the source as moved. It checks that the value's type supports Copy (primitives except String are Copy; tensors, functions, strings are not). There is no separate `ExprKind::Copy` AST node — copy semantics are triggered by the parameter annotation in the callee's signature, not by an expression form in the caller.
 
 #### What This Catches
 
@@ -152,6 +172,7 @@ Walk the interpreter's `Env` frames. For each slot:
 - Skip `Value::BuiltinFn` entries
 - For `Value::Function(f)`, extract and format the signature from `f.def`
 - For other values, show `name = display_value`
+- For moved slots, append `[moved]` to indicate the binding has been consumed
 
 ### Files Modified
 
