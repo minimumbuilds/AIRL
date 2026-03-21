@@ -1,4 +1,4 @@
-use airl_driver::pipeline::{run_file, check_file, format_diagnostic_with_source, PipelineError, PipelineMode};
+use airl_driver::pipeline::{run_file, check_file, format_diagnostic_with_source, PipelineError};
 use airl_driver::fmt::format_source;
 
 fn main() {
