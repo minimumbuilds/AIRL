@@ -1,0 +1,22 @@
+;; Worker module for agent integration testing
+
+(defn add
+  :sig [(a : i32) (b : i32) -> i32]
+  :intent "Add two integers"
+  :requires [(valid a) (valid b)]
+  :ensures [(= result (+ a b))]
+  :body (+ a b))
+
+(defn multiply
+  :sig [(a : i32) (b : i32) -> i32]
+  :intent "Multiply two integers"
+  :requires [(valid a) (valid b)]
+  :ensures [(= result (* a b))]
+  :body (* a b))
+
+(defn greet
+  :sig [(name : String) -> String]
+  :intent "Greet by name"
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body name)
