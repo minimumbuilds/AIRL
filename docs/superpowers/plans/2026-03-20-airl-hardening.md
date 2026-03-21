@@ -287,8 +287,8 @@ fn mark_moved_while_borrowed_fails() {
     let mut env = Env::new();
     env.bind("x".into(), Value::Int(42));
     env.borrow_immutable("x").unwrap();
-    // Move should fail because borrows are active
-    // Update mark_moved to check borrows
+    let err = env.mark_moved("x", Span::dummy());
+    assert!(err.is_err(), "should not be able to move a borrowed value");
 }
 
 #[test]
@@ -375,42 +375,13 @@ fn eval_use_after_move_errors() {
 }
 ```
 
-- [ ] **Step 2: Implement linearity enforcement in call_fn**
+- [ ] **Step 2: Implement linearity enforcement in the FnCall arm of eval()**
 
-In `call_fn`, after evaluating arguments but before binding params, check ownership annotations and track moves/borrows. Add a borrow ledger for the call:
+In the `FnCall` arm of `eval()`, after evaluating the callee and args, check ownership annotations. **Only enforce moves on explicit `Ownership::Own`** — `Default` is treated as a read (clone without move). This avoids breaking existing tests where params don't specify ownership.
 
-```rust
-fn call_fn(&mut self, fn_val: &FnValue, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let def = &fn_val.def;
+For `Ownership::Ref` and `Ownership::Mut`, track borrows on the source binding and release them after the call returns.
 
-    // Track borrows for this call so we can release them after
-    let mut borrow_ledger: Vec<(String, BorrowKind)> = Vec::new();
-
-    // Enforce ownership on arguments before pushing frame
-    // We need the arg source names for tracking — extract from the call site
-    // For now, check ownership annotations on params
-    for (i, param) in def.params.iter().enumerate() {
-        match param.ownership {
-            Ownership::Own | Ownership::Default => {
-                // If the arg was a symbol ref, mark it as moved
-                // We can't easily get the source name here, so we'll
-                // handle this in eval() for FnCall by passing arg exprs
-            }
-            _ => {}
-        }
-    }
-
-    // Push Function frame and bind params
-    self.env.push_frame(FrameKind::Function);
-    for (i, param) in def.params.iter().enumerate() {
-        let val = args.get(i).cloned().unwrap_or(Value::Nil);
-        self.env.bind(param.name.clone(), val);
-    }
-    // ... rest unchanged
-}
-```
-
-**Better approach:** In the `FnCall` arm of `eval()`, before calling `call_fn`, check each argument. If the argument is a `SymbolRef` and the corresponding parameter has `Ownership::Own`, mark the source binding as moved:
+For `Ownership::Copy`, verify the value's type is Copy before cloning.
 
 ```rust
 ExprKind::FnCall(callee, args) => {
@@ -423,41 +394,96 @@ ExprKind::FnCall(callee, args) => {
         _ => vec![Ownership::Default; args.len()],
     };
 
+    // Track borrows for this call so we can release them after
+    let mut borrow_ledger: Vec<(String, bool)> = Vec::new(); // (name, is_mutable)
+
     for (i, arg) in args.iter().enumerate() {
         let val = self.eval(arg)?;
         arg_vals.push(val);
 
-        // Enforce ownership: if param is Own and arg is a symbol, mark moved
         let ownership = param_ownerships.get(i).copied().unwrap_or(Ownership::Default);
-        if matches!(ownership, Ownership::Own | Ownership::Default) {
-            if let ExprKind::SymbolRef(ref name) = arg.kind {
-                // Don't move builtins or functions
-                if let Ok(v) = self.env.get(name) {
-                    if !matches!(v, Value::BuiltinFn(_)) {
-                        let _ = self.env.mark_moved(name, arg.span);
+        if let ExprKind::SymbolRef(ref name) = arg.kind {
+            // Skip builtins — they're not movable
+            if let Ok(v) = self.env.get(name) {
+                if matches!(v, Value::BuiltinFn(_)) { continue; }
+            }
+
+            match ownership {
+                Ownership::Own => {
+                    // Explicit own: mark source as moved
+                    self.env.mark_moved(name, arg.span)?;
+                }
+                Ownership::Ref => {
+                    // Immutable borrow: track it
+                    self.env.borrow_immutable(name)?;
+                    borrow_ledger.push((name.clone(), false));
+                }
+                Ownership::Mut => {
+                    // Mutable borrow: track it
+                    self.env.borrow_mutable(name)?;
+                    borrow_ledger.push((name.clone(), true));
+                }
+                Ownership::Copy => {
+                    // Explicit copy: verify type is Copy (primitives except String)
+                    // For Phase 1, allow copy on Int/UInt/Float/Bool/Unit
+                    if let Ok(v) = self.env.get(name) {
+                        let is_copy = matches!(v,
+                            Value::Int(_) | Value::UInt(_) | Value::Float(_) |
+                            Value::Bool(_) | Value::Unit | Value::Nil
+                        );
+                        if !is_copy {
+                            return Err(RuntimeError::Custom(format!(
+                                "cannot copy `{}` — type does not implement Copy", name
+                            )));
+                        }
                     }
+                    // Clone without moving (already done by eval)
+                }
+                Ownership::Default => {
+                    // Default: clone without move (no tracking)
                 }
             }
         }
     }
 
-    match callee_val {
-        // ... existing match arms unchanged
+    // Call the function
+    let result = match callee_val {
+        Value::BuiltinFn(ref name) => {
+            let f = self.builtins.get(name).ok_or_else(|| {
+                RuntimeError::UndefinedSymbol(name.clone())
+            })?;
+            f(&arg_vals)
+        }
+        Value::Function(ref fn_val) => {
+            let fn_val = fn_val.clone();
+            self.call_fn(&fn_val, arg_vals)
+        }
+        Value::Lambda(ref lam) => {
+            let lam = lam.clone();
+            self.call_lambda(&lam, arg_vals)
+        }
+        other => Err(RuntimeError::NotCallable(format!("{}", other))),
+    };
+
+    // Release borrows taken for this call
+    for (name, is_mutable) in &borrow_ledger {
+        if *is_mutable {
+            self.env.release_mutable_borrow(name);
+        } else {
+            self.env.release_immutable_borrow(name);
+        }
     }
+
+    result
 }
 ```
+
+**Key: `Default` ownership does NOT move.** Only explicit `Ownership::Own` marks a binding as moved. This preserves backward compatibility with all existing tests.
 
 - [ ] **Step 3: Run tests**
 
 Run: `cargo test --workspace`
-Expected: all tests pass. The use_after_move test should now pass.
-
-**Note:** Some existing tests may break if they reuse variables that are now moved. If so, fix those tests by either:
-- Changing the param ownership to `&ref` in the test's defn
-- Adding `(copy x)` where needed
-- Or only enforcing moves for explicit `own` annotations (not `Default`)
-
-If `Default` ownership causing moves breaks too many tests, change the strategy: only enforce move semantics on explicit `Ownership::Own`, treat `Default` as a read (clone without move). This is pragmatic for Phase 1.
+Expected: all 347+ existing tests pass. The new `eval_use_after_move_errors` test passes because it uses explicit `(own x : i32)` in the defn.
 
 - [ ] **Step 4: Commit**
 
@@ -707,44 +733,11 @@ fn print_env(interp: &Interpreter) {
 
 Note: `AstTypeKind` doesn't implement Display — you may need to add a simple formatter or use Debug. For Phase 1, `{:?}` is acceptable.
 
-- [ ] **Step 2: Add type checking warnings to REPL**
+- [ ] **Step 2: Add type checking warnings to REPL (simplified)**
 
-Import the type checker and create a persistent instance:
-```rust
-use airl_types::checker::TypeChecker;
-```
+**Skip persistent REPL type checking for this hardening pass.** The TypeChecker's API uses `into_diagnostics()` which is consuming — integrating it into a persistent REPL session requires adding a `drain_diagnostics(&mut self)` method to `airl-types/src/checker.rs`. This is a cross-crate change that adds complexity. Instead, focus on `:env` (which is the user-facing improvement) and leave REPL type checking for a follow-up.
 
-In `run_repl()`, create alongside interpreter:
-```rust
-let mut checker = TypeChecker::new();
-```
-
-In `eval_repl_input`, add a `checker` parameter and run type checking before evaluation:
-```rust
-fn eval_repl_input(
-    input: &str,
-    interp: &mut Interpreter,
-    checker: &mut TypeChecker,
-) -> Result<Value, String> {
-    // ... parse as before ...
-
-    // Type check (warn only)
-    for top in &parsed_tops {
-        let _ = checker.check_top_level(top);
-    }
-    if checker.has_errors() {
-        // Print warnings but don't block
-        // Note: checker accumulates diagnostics — we need to drain them
-        // This is tricky with the current API. For now, just note
-        // that type checking happened and move on.
-    }
-
-    // Evaluate as before
-    // ...
-}
-```
-
-**Pragmatic note:** The TypeChecker's `into_diagnostics()` is consuming. For REPL mode where the checker persists, we need a non-consuming way to read and clear diagnostics. If `TypeChecker` doesn't support this, add a `drain_diagnostics(&mut self) -> Diagnostics` method to the checker. If modifying airl-types is too invasive, skip REPL type checking for now and just wire `:env`.
+The `airl run` and `airl check` commands get type checking via the pipeline (Task 4). The REPL gets `:env`.
 
 - [ ] **Step 3: Write test for :env**
 
@@ -752,9 +745,6 @@ fn eval_repl_input(
 #[test]
 fn eval_repl_then_env() {
     let mut interp = Interpreter::new();
-    eval_repl_input("(let (x : i32 42) x)", &mut interp).unwrap();
-    // x is in a let frame that was popped, so :env won't show it
-    // But a defn should persist:
     let input = r#"
         (defn greet
           :sig [(name : String) -> String]
@@ -791,7 +781,9 @@ git commit -m "feat(driver): implement :env command and REPL type checking"
 **Files:**
 - Create: `tests/fixtures/type_errors/type_mismatch_arg.airl`
 - Create: `tests/fixtures/type_errors/if_branch_mismatch.airl`
+- Create: `tests/fixtures/type_errors/non_exhaustive_match.airl`
 - Create: `tests/fixtures/linearity_errors/use_after_move_own.airl`
+- Create: `tests/fixtures/linearity_errors/move_while_borrowed.airl`
 - Modify: `crates/airl-driver/tests/fixtures.rs`
 
 - [ ] **Step 1: Create type error fixtures**
@@ -816,7 +808,16 @@ git commit -m "feat(driver): implement :env command and REPL type checking"
 (if true 42 "hello")
 ```
 
-- [ ] **Step 2: Create linearity error fixture**
+`tests/fixtures/type_errors/non_exhaustive_match.airl`:
+```clojure
+;; ERROR: exhaustive
+;; Match missing Err variant for Result type
+(deftype Result [T : Type, E : Type]
+  (| (Ok T) (Err E)))
+(match (Ok 42) (Ok v) v)
+```
+
+- [ ] **Step 2: Create linearity error fixtures**
 
 `tests/fixtures/linearity_errors/use_after_move_own.airl`:
 ```clojure
@@ -829,6 +830,25 @@ git commit -m "feat(driver): implement :env command and REPL type checking"
   :ensures [(valid result)]
   :body x)
 (let (v : i32 42) (do (consume v) v))
+```
+
+`tests/fixtures/linearity_errors/move_while_borrowed.airl`:
+```clojure
+;; ERROR: borrowed
+;; Cannot move a value that is borrowed
+(defn read-ref
+  :sig [(&ref x : i32) -> i32]
+  :intent "read"
+  :requires [(valid x)]
+  :ensures [(valid result)]
+  :body x)
+(defn consume
+  :sig [(own x : i32) -> i32]
+  :intent "consume"
+  :requires [(valid x)]
+  :ensures [(valid result)]
+  :body x)
+(let (v : i32 42) (do (read-ref v) (consume v)))
 ```
 
 - [ ] **Step 3: Add check_fixtures test**
