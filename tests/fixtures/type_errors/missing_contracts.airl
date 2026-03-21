@@ -1,0 +1,2 @@
+;; ERROR: must have :requires
+(defn bad :sig [(x : i32) -> i32] :body x)

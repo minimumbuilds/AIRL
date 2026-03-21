@@ -1,0 +1,8 @@
+;; ERROR: ContractViolation
+(defn positive
+  :sig [(x : i32) -> i32]
+  :intent "return positive"
+  :requires [(> x 0)]
+  :ensures [(valid result)]
+  :body x)
+(positive -5)

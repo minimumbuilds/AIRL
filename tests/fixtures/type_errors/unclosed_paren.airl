@@ -1,0 +1,2 @@
+;; ERROR: unclosed
+(+ 1 2

@@ -1,0 +1,8 @@
+;; ERROR: ContractViolation
+(defn safe-div
+  :sig [(a : i32) (b : i32) -> i32]
+  :intent "divide safely"
+  :requires [(!= b 0)]
+  :ensures [(valid result)]
+  :body (/ a b))
+(safe-div 10 0)

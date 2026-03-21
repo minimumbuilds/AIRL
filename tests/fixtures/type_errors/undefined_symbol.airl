@@ -1,0 +1,2 @@
+;; ERROR: UndefinedSymbol
+(undefined-fn 1 2)

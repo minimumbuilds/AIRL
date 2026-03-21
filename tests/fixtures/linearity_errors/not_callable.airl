@@ -1,0 +1,2 @@
+;; ERROR: NotCallable
+(let (x : i32 42) (x 1))
