@@ -1,0 +1,8 @@
+;; EXPECT: (Ok 3)
+(defn safe-divide
+  :sig [(a : i32) (b : i32) -> Result[i32, DivError]]
+  :intent "Divide a by b"
+  :requires [(valid a) (valid b)]
+  :ensures [(valid result)]
+  :body (if (= b 0) (Err :division-by-zero) (Ok (/ a b))))
+(safe-divide 9 3)

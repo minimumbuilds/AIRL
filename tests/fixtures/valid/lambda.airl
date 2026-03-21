@@ -1,0 +1,2 @@
+;; EXPECT: 6
+(let (f : fn (fn [x] (+ x 1))) (f 5))

@@ -1,0 +1,2 @@
+;; EXPECT: 42
+(match (Ok 42) (Ok v) v (Err e) 0)

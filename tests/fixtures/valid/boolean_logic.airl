@@ -1,0 +1,2 @@
+;; EXPECT: true
+(or (and true false) (not false))

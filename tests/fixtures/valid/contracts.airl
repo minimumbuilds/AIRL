@@ -1,0 +1,8 @@
+;; EXPECT: 6
+(defn add-one
+  :sig [(x : i32) -> i32]
+  :intent "add one"
+  :requires [(valid x)]
+  :ensures [(valid result)]
+  :body (+ x 1))
+(add-one 5)
