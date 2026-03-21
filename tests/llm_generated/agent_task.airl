@@ -1,0 +1,23 @@
+;; LLM-generated AIRL: orchestrate a computation across agents
+;; This is what an AI orchestrator would generate to dispatch work
+
+(defn compute-pipeline
+  :sig [(x : i64) -> i64]
+  :intent "Multi-step computation: square, add 10, double"
+  :requires [(>= x 0)]
+  :ensures [(>= result 0)]
+  :body
+    (let (squared : i64 (* x x))
+      (let (plus-ten : i64 (+ squared 10))
+        (* plus-ten 2))))
+
+;; An orchestrator would generate this task expression:
+;; (task "pipeline-001"
+;;   :from agent:orchestrator
+;;   :to agent:compute-worker
+;;   :call "compute-pipeline"
+;;   :args [7])
+;;
+;; Expected: 7^2 = 49, 49+10 = 59, 59*2 = 118
+
+(compute-pipeline 7)
