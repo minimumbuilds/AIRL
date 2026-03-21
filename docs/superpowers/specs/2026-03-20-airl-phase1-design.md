@@ -119,6 +119,24 @@ struct FnDef {
     priority: Option<Priority>,     // :priority low|normal|high|critical
 }
 
+struct TypeDef {
+    name: Symbol,
+    type_params: Vec<(Symbol, Ty)>,  // [T : Type, E : Type]
+    body: TypeDefBody,
+}
+enum TypeDefBody {
+    Sum(Vec<Variant>),               // (| (Ok T) (Err E))
+    Product(Vec<Field>),             // (& (id : String) (from : AgentId))
+    Alias(Ty),                       // type alias
+}
+
+enum ExecTarget {
+    Cpu,
+    Gpu,
+    Any,
+    Agent(Symbol),                   // agent:<name> per spec grammar
+}
+
 struct UseDef {
     module: Symbol,
     kind: UseKind,
