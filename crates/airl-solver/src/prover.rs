@@ -1,7 +1,6 @@
 use z3::{Config, Context, SatResult, Solver};
-use z3::ast::Ast;
 use airl_syntax::ast::{FnDef, AstTypeKind};
-use crate::translate::{Translator, TranslateError, VarSort};
+use crate::translate::{Translator, VarSort};
 use crate::{VerifyResult, FunctionVerification};
 
 pub struct Z3Prover;

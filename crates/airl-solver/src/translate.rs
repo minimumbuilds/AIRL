@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use z3::ast::{self, Ast};
-use z3::{Config, Context, SatResult, Solver};
-use airl_syntax::ast::{Expr, ExprKind, FnDef, AstTypeKind};
+use z3::{Config, Context};
+use airl_syntax::ast::{Expr, ExprKind};
 
 /// Error during AIRL → Z3 translation.
 #[derive(Debug, Clone)]
