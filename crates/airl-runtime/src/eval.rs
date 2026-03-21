@@ -8,6 +8,7 @@ use airl_syntax::ast::*;
 pub struct Interpreter {
     pub env: Env,
     builtins: Builtins,
+    pub jit: Option<airl_codegen::JitCache>,
 }
 
 impl Interpreter {
@@ -15,6 +16,7 @@ impl Interpreter {
         let mut interp = Interpreter {
             env: Env::new(),
             builtins: Builtins::new(),
+            jit: airl_codegen::JitCache::new().ok(),
         };
         // Register all builtin names in the environment so symbol lookups resolve them
         interp.register_builtin_symbols();
@@ -275,7 +277,46 @@ impl Interpreter {
             }
         }
 
-        // 4. Eval body
+        // 4. Try JIT path
+        if let Some(ref mut jit) = self.jit {
+            let raw_args: Result<Vec<_>, _> = args.iter().map(|val| {
+                value_to_raw(val)
+            }).collect();
+
+            if let Ok(raw_args) = raw_args {
+                match jit.try_call(def, &raw_args) {
+                    Ok(Some(raw_result)) => {
+                        let result_val = raw_to_value(raw_result, &def.return_type);
+                        // Check :ensures contracts
+                        self.env.bind("result".to_string(), result_val.clone());
+                        for contract in &def.ensures {
+                            let contract_result = self.eval(contract)?;
+                            if contract_result != Value::Bool(true) {
+                                self.env.pop_frame();
+                                return Err(RuntimeError::ContractViolation(
+                                    airl_contracts::violation::ContractViolation {
+                                        function: fn_val.name.clone(),
+                                        contract_kind: airl_contracts::violation::ContractKind::Ensures,
+                                        clause_source: format!("{:?}", contract.kind),
+                                        bindings: vec![],
+                                        evaluated: format!("{}", contract_result),
+                                        span: contract.span,
+                                    },
+                                ));
+                            }
+                        }
+                        self.env.pop_frame();
+                        return Ok(result_val);
+                    }
+                    Ok(None) => {} // not compilable, fall through to interpreter
+                    Err(_e) => {
+                        // JIT error, fall through to interpreter silently
+                    }
+                }
+            }
+        }
+
+        // 5. Eval body (interpreted path)
         let result = self.eval(&def.body);
 
         match result {
@@ -380,6 +421,29 @@ impl Interpreter {
             TopLevel::UseDecl(_) => Ok(Value::Unit),
             TopLevel::Task(_) => Ok(Value::Unit),
         }
+    }
+}
+
+fn value_to_raw(val: &Value) -> Result<airl_codegen::RawValue, ()> {
+    match val {
+        Value::Int(v) => Ok(airl_codegen::RawValue::from_i64(*v)),
+        Value::Float(v) => Ok(airl_codegen::RawValue::from_f64(*v)),
+        Value::Bool(v) => Ok(airl_codegen::RawValue::from_bool(*v)),
+        _ => Err(()),
+    }
+}
+
+fn raw_to_value(raw: airl_codegen::RawValue, ty: &airl_syntax::ast::AstType) -> Value {
+    match &ty.kind {
+        airl_syntax::ast::AstTypeKind::Named(name) => match name.as_str() {
+            "i32" => Value::Int(raw.to_i32() as i64),
+            "i64" => Value::Int(raw.to_i64()),
+            "f32" => Value::Float(raw.to_f32() as f64),
+            "f64" => Value::Float(raw.to_f64()),
+            "bool" => Value::Bool(raw.to_bool()),
+            _ => Value::Int(raw.to_i64()),
+        },
+        _ => Value::Int(raw.to_i64()),
     }
 }
 
@@ -657,5 +721,45 @@ mod tests {
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
         assert!(err.contains("UseAfterMove") || err.contains("moved"));
+    }
+
+    #[test]
+    fn jit_transparent_same_result() {
+        let input = r#"
+            (defn add-nums
+              :sig [(a : i64) (b : i64) -> i64]
+              :intent "add" :requires [(valid a) (valid b)]
+              :ensures [(valid result)]
+              :body (+ a b))
+            (add-nums 100 200)
+        "#;
+        assert_eq!(eval_str(input), Value::Int(300));
+    }
+
+    #[test]
+    fn jit_with_if_expression() {
+        let input = r#"
+            (defn abs-val
+              :sig [(x : i64) -> i64]
+              :intent "absolute value" :requires [(valid x)]
+              :ensures [(valid result)]
+              :body (if (< x 0) (- 0 x) x))
+            (abs-val -42)
+        "#;
+        assert_eq!(eval_str(input), Value::Int(42));
+    }
+
+    #[test]
+    fn non_jit_function_still_works() {
+        // String params -> not JIT eligible, falls back to interpreter
+        let input = r#"
+            (defn greet
+              :sig [(name : String) -> String]
+              :intent "greet" :requires [(valid name)]
+              :ensures [(valid result)]
+              :body name)
+            (greet "world")
+        "#;
+        assert_eq!(eval_str(input), Value::Str("world".into()));
     }
 }

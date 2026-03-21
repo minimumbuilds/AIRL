@@ -48,6 +48,7 @@ dependencies = [
 name = "airl-runtime"
 version = "0.1.0"
 dependencies = [
+ "airl-codegen",
  "airl-contracts",
  "airl-syntax",
  "airl-types",

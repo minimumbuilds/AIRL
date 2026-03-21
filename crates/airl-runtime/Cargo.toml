@@ -8,3 +8,4 @@ license.workspace = true
 airl-syntax = { path = "../airl-syntax" }
 airl-types = { path = "../airl-types" }
 airl-contracts = { path = "../airl-contracts" }
+airl-codegen = { path = "../airl-codegen" }
