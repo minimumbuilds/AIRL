@@ -2,6 +2,47 @@ use std::io::{self, Write, BufRead};
 use airl_runtime::eval::Interpreter;
 use airl_runtime::value::Value;
 
+fn print_env(interp: &Interpreter) {
+    let bindings = interp.env.iter_bindings();
+
+    let values: Vec<(&str, &airl_runtime::env::Slot)> = bindings
+        .into_iter()
+        .filter(|(_, slot)| !matches!(slot.value, Value::BuiltinFn(_)))
+        .collect();
+
+    if values.is_empty() {
+        println!("(no user bindings)");
+        return;
+    }
+
+    let (functions, others): (Vec<_>, Vec<_>) = values
+        .into_iter()
+        .partition(|(_, slot)| matches!(slot.value, Value::Function(_)));
+
+    if !others.is_empty() {
+        println!("── Bindings ──");
+        for (name, slot) in &others {
+            if slot.moved {
+                println!("  {} = {} [moved]", name, slot.value);
+            } else {
+                println!("  {} = {}", name, slot.value);
+            }
+        }
+    }
+
+    if !functions.is_empty() {
+        println!("── Functions ──");
+        for (name, slot) in &functions {
+            if let Value::Function(f) = &slot.value {
+                let params: Vec<&str> = f.def.params.iter().map(|p| p.name.as_str()).collect();
+                let param_str = format!("({})", params.join(", "));
+                let ret = format!("{:?}", f.def.return_type.kind);
+                println!("  {} : {} -> {}", name, param_str, ret);
+            }
+        }
+    }
+}
+
 pub fn run_repl() {
     let stdin = io::stdin();
     let mut input = String::new();
@@ -24,7 +65,7 @@ pub fn run_repl() {
             break;
         }
         if trimmed == ":env" {
-            println!("(environment dump not yet implemented)");
+            print_env(&interp);
             continue;
         }
 
@@ -150,5 +191,24 @@ mod tests {
         let mut interp = Interpreter::new();
         let result = eval_repl_input("(+ 10 20)", &mut interp).unwrap();
         assert_eq!(format!("{}", result), "30");
+    }
+
+    #[test]
+    fn eval_repl_then_env() {
+        let mut interp = Interpreter::new();
+        let input = r#"
+            (defn greet
+              :sig [(name : String) -> String]
+              :intent "greet"
+              :requires [(valid name)]
+              :ensures [(valid result)]
+              :body name)
+        "#;
+        eval_repl_input(input, &mut interp).unwrap();
+        let bindings = interp.env.iter_bindings();
+        let has_greet = bindings.iter().any(|(name, slot)| {
+            *name == "greet" && matches!(slot.value, Value::Function(_))
+        });
+        assert!(has_greet);
     }
 }
