@@ -23,6 +23,7 @@ impl Builtins {
         b.register_utility();
         b.register_string();
         b.register_map();
+        b.register_file_io();
         b
     }
 
@@ -138,6 +139,14 @@ impl Builtins {
         self.register("map-keys", builtin_map_keys);
         self.register("map-values", builtin_map_values);
         self.register("map-size", builtin_map_size);
+    }
+
+    // ── File I/O ────────────────────────────────────────
+
+    fn register_file_io(&mut self) {
+        self.register("read-file", builtin_read_file);
+        self.register("write-file", builtin_write_file);
+        self.register("file-exists?", builtin_file_exists);
     }
 }
 
@@ -998,6 +1007,71 @@ fn type_name(val: &Value) -> &'static str {
     }
 }
 
+// ── File I/O implementations ────────────────────────────
+
+/// Validate that a path is relative and doesn't escape the working directory.
+fn validate_sandboxed_path(name: &str, path: &str) -> Result<std::path::PathBuf, RuntimeError> {
+    if path.starts_with('/') {
+        return Err(RuntimeError::Custom(format!(
+            "{}: path must be relative, got absolute path '{}'", name, path
+        )));
+    }
+    if path.contains("..") {
+        return Err(RuntimeError::Custom(format!(
+            "{}: path cannot contain '..': '{}'", name, path
+        )));
+    }
+    Ok(std::path::PathBuf::from(path))
+}
+
+fn builtin_read_file(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("read-file", args, 1)?;
+    let path = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("read-file: argument must be a string".into())),
+    };
+    let validated = validate_sandboxed_path("read-file", &path)?;
+    match std::fs::read_to_string(&validated) {
+        Ok(content) => Ok(Value::Str(content)),
+        Err(e) => Err(RuntimeError::Custom(format!("read-file: {}: {}", path, e))),
+    }
+}
+
+fn builtin_write_file(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("write-file", args, 2)?;
+    let path = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("write-file: first argument must be a string path".into())),
+    };
+    let content = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("write-file: second argument must be a string".into())),
+    };
+    let validated = validate_sandboxed_path("write-file", &path)?;
+    // Create parent directories if needed
+    if let Some(parent) = validated.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                RuntimeError::Custom(format!("write-file: cannot create directory: {}", e))
+            })?;
+        }
+    }
+    match std::fs::write(&validated, content) {
+        Ok(()) => Ok(Value::Bool(true)),
+        Err(e) => Err(RuntimeError::Custom(format!("write-file: {}: {}", path, e))),
+    }
+}
+
+fn builtin_file_exists(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("file-exists?", args, 1)?;
+    let path = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("file-exists?: argument must be a string".into())),
+    };
+    let validated = validate_sandboxed_path("file-exists?", &path)?;
+    Ok(Value::Bool(validated.exists()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1387,5 +1461,82 @@ mod tests {
         if let Value::List(items) = &result {
             assert_eq!(items.len(), 2);
         }
+    }
+
+    // ── File I/O tests ──────────────────────────────────
+
+    #[test]
+    fn file_exists_true() {
+        let b = builtins();
+        // Cargo.toml always exists at the workspace root (CWD during tests)
+        let result = call(&b, "file-exists?", &[Value::Str("Cargo.toml".into())]).unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn file_exists_false() {
+        let b = builtins();
+        let result = call(&b, "file-exists?", &[Value::Str("nonexistent_file_xyz.airl".into())]).unwrap();
+        assert_eq!(result, Value::Bool(false));
+    }
+
+    #[test]
+    fn read_write_file_round_trip() {
+        let b = builtins();
+        let tmp_path = "test_output_rw_roundtrip.tmp";
+        let content = "hello from AIRL";
+
+        // Write
+        let write_result = call(&b, "write-file", &[
+            Value::Str(tmp_path.into()),
+            Value::Str(content.into()),
+        ]).unwrap();
+        assert_eq!(write_result, Value::Bool(true));
+
+        // Read back
+        let read_result = call(&b, "read-file", &[Value::Str(tmp_path.into())]).unwrap();
+        assert_eq!(read_result, Value::Str(content.into()));
+
+        // Exists
+        let exists = call(&b, "file-exists?", &[Value::Str(tmp_path.into())]).unwrap();
+        assert_eq!(exists, Value::Bool(true));
+
+        // Clean up
+        std::fs::remove_file(tmp_path).ok();
+    }
+
+    #[test]
+    fn read_file_not_found() {
+        let b = builtins();
+        let result = call(&b, "read-file", &[Value::Str("no_such_file.txt".into())]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn sandbox_rejects_absolute_path() {
+        let b = builtins();
+        let result = call(&b, "read-file", &[Value::Str("/etc/passwd".into())]);
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("must be relative"), "error: {}", err);
+    }
+
+    #[test]
+    fn sandbox_rejects_dotdot() {
+        let b = builtins();
+        let result = call(&b, "read-file", &[Value::Str("../../../etc/passwd".into())]);
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains(".."), "error: {}", err);
+    }
+
+    #[test]
+    fn write_file_sandbox_rejects_absolute() {
+        let b = builtins();
+        let result = call(&b, "write-file", &[
+            Value::Str("/tmp/airl_sandbox_test.txt".into()),
+            Value::Str("nope".into()),
+        ]);
+        assert!(result.is_err());
     }
 }
