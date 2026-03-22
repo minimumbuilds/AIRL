@@ -57,7 +57,24 @@ Prove that AIRL's self-hosted compiler is correctly bootstrapped through two com
 - Lists: list literals, head/tail/cons
 - Variants: constructor calls, nested variants
 
-**Key detail:** `eval-program` returns AIRL `Value` variants (`ValInt`, `ValStr`, etc.) while `run-ir` returns Rust `Value` types (`Int`, `Str`, etc.). Both are compared at the AIRL level after `run-ir` returns — the Rust VM's return values are auto-marshalled back to AIRL values by the runtime.
+**Comparison strategy:** `eval-program` (bootstrap evaluator) returns tagged variants like `(ValInt 42)`, while `run-ir` returns native runtime values like `42`. These are different representations. The test must unwrap bootstrap eval results before comparing:
+
+```clojure
+(defn unwrap-val
+  :sig [(v : List) -> List]
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValInt x)   x
+    (ValFloat x) x
+    (ValStr x)   x
+    (ValBool x)  x
+    (ValNil)     nil
+    (ValList xs) (map (fn [item] (unwrap-val item)) xs)
+    _            v))
+```
+
+Each test asserts `(= (unwrap-val eval-result) compiled-result)`.
 
 ### Test 2: Compiler Fixpoint
 
@@ -104,6 +121,8 @@ Same approach as Tier 1, but the test program IS the compiler source itself. The
 
 This proves: the compiler compiled by itself produces the same IR as the compiler compiled by the interpreter.
 
+**Note:** `read-file` is an existing builtin (registered in `builtins.rs`). It reads a file path and returns its contents as a string. The compiler source is loaded at runtime, avoiding string escaping issues. The compiler source does contain string literals (error messages like `"compile-expr: unknown node type"`, separator strings like `""` and `":"`), so inline embedding would require escaping — `read-file` is the correct approach for Tier 2+.
+
 #### Tier 3 (stretch): Full chain fixpoint
 
 The test program is the full lexer + parser + compiler (1,514 lines). This is the ultimate bootstrap proof but may be slow. Gate behind a flag or separate test file.
@@ -122,6 +141,8 @@ This is needed because:
 - Deterministic serialization ensures no false negatives from ordering differences
 
 The serializer recursively traverses IR variant nodes (`IRInt`, `IRCall`, `IRFunc`, etc.) and produces a canonical string form. It must handle all IR node types, all IR pattern types, `IRBinding`, and `IRArm`.
+
+**Correctness is load-bearing:** Any IR node type the serializer silently skips or mishandles will produce a false positive in the fixpoint test. The serializer must have an explicit wildcard arm that produces an error string (e.g., `"<UNKNOWN-IR-NODE>"`) so unhandled types are visible in output, not silently swallowed.
 
 ## String Escaping
 
