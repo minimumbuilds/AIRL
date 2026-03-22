@@ -10,6 +10,26 @@ use std::io::{BufReader, BufWriter};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 
+/// Result of a single eval step — either a final value or a continuation
+enum EvalResult {
+    Done(Value),
+    Continue(ContinueWith),
+}
+
+/// What to do next when eval_inner returns Continue
+enum ContinueWith {
+    /// Re-evaluate this expression (tail position in if/do)
+    Expr(Expr),
+    /// Self-recursive tail call: rebind params and re-evaluate body
+    TailCall(Vec<Value>),
+}
+
+/// Result of eval_body — like EvalResult but surfaces TailCall to call_fn_inner
+enum BodyResult {
+    Value(Value),
+    SelfTailCall(Vec<Value>),
+}
+
 struct LiveAgent {
     name: String,
     writer: Arc<Mutex<BufWriter<std::process::ChildStdin>>>,
@@ -32,6 +52,8 @@ pub struct Interpreter {
     /// Current execution target override from `:execute-on` annotation.
     /// `None` means auto-detect (try GPU → MLIR CPU → Cranelift → interpreted).
     exec_target: Option<ExecTarget>,
+    /// Name of the function currently being evaluated (for self-TCO detection)
+    current_fn_name: Option<String>,
 }
 
 impl Interpreter {
@@ -49,6 +71,7 @@ impl Interpreter {
             next_send_id: 0,
             recursion_depth: 0,
             exec_target: None,
+            current_fn_name: None,
         };
         // Register all builtin names in the environment so symbol lookups resolve them
         interp.register_builtin_symbols();
