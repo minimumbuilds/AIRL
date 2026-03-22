@@ -505,3 +505,22 @@
           (if (empty? (tail nodes))
             (Ok pair)
             (eval-program (tail nodes) (at pair 1))))))
+
+;; ─── Full Pipeline ───────────────────────────────────────
+
+(defn run-source
+  :sig [(source : Str) -> Any]
+  :intent "Lex, parse, and evaluate an AIRL source string"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err e) (Err e)
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err e)
+          (Ok sexprs)
+            (match (parse-program sexprs)
+              (Err e) (Err e)
+              (Ok ast-nodes)
+                (eval-program ast-nodes (make-initial-env 0))))))
