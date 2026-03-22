@@ -200,6 +200,8 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **Lexer UTF-8 String Support** — `lex_string` in `crates/airl-syntax/src/lexer.rs` now properly decodes multi-byte UTF-8 characters in string literals, instead of treating each byte as a separate `char`. Detects UTF-8 sequence length from leading byte and uses `std::str::from_utf8` to decode.
 - **TCO Through Match/Let Arms** — `match` and `let` body evaluation in `eval.rs` now uses inline trampolines that preserve `in_tail_context`, enabling tail-call optimization for recursive functions that recurse inside `match` arms (e.g., `lex-loop`). Previously, these called `eval()` which cleared the tail context flag.
 - **Bootstrap Self-Parse Milestone** — The self-hosted lexer can lex its own source (`bootstrap/lexer.airl`, 15,691 chars → 3,400 tokens). Timing: ~56s release, ~100s debug.
+- **Bootstrap Type Checker** — Self-hosted type checker in AIRL (`bootstrap/types.airl` ~215 lines, `bootstrap/typecheck.airl` ~500 lines). Two-pass architecture: registration (deftype → constructor registry, defn → function signatures) then checking (expressions, functions, patterns). Eliminates all `Any` usage from bootstrap code (95 in eval, 24 in parser, 1 in lexer). Lexer type-checks cleanly via the bootstrap type checker.
+- **`deftype` Parsing** — Bootstrap parser handles `(deftype Name [Params] (| ...))` sum types and `(deftype Name (& ...))` product types. Includes `parse-variant`, `parse-field`, `parse-sum-body`, `parse-product-body`, `parse-type-params`, `parse-deftype`. Bootstrap lexer updated to include `|` in symbol characters.
 
 ---
 
@@ -209,11 +211,13 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 #### 1. Self-Hosting (Phase 3)
 
-**Status:** Lexer, parser, and evaluator complete. The self-hosted lexer (`bootstrap/lexer.airl`, ~360 lines) tokenizes AIRL source strings. The self-hosted parser (`bootstrap/parser.airl`, ~750 lines) converts token streams to typed AST nodes. The self-hosted evaluator (`bootstrap/eval.airl`, ~520 lines) interprets AST nodes using tagged value variants (`ValInt`, `ValStr`, etc.), a map-based environment frame stack, and builtin delegation to the Rust runtime. The full lex→parse→eval pipeline is tested by `bootstrap/pipeline_test.airl`.
+**Status:** Lexer, parser, evaluator, and type checker complete. The self-hosted lexer (`bootstrap/lexer.airl`, ~365 lines) tokenizes AIRL source strings. The self-hosted parser (`bootstrap/parser.airl`, ~930 lines) converts token streams to typed AST nodes, including `deftype` declarations. The self-hosted evaluator (`bootstrap/eval.airl`, ~616 lines) interprets AST nodes using tagged value variants (`ValInt`, `ValStr`, etc.), a map-based environment frame stack, and builtin delegation to the Rust runtime. The self-hosted type checker (`bootstrap/types.airl` + `bootstrap/typecheck.airl`, ~715 lines) enforces the type system with a two-pass architecture. The full lex→parse→eval pipeline is tested by `bootstrap/pipeline_test.airl`.
 
 **Self-parse verified:** The bootstrap lexer successfully lexes its own source (15,691 chars → 3,400 tokens, ~56s release). TCO through `match`/`let` arms is required for this to work — without it, `lex-loop`'s recursion overflows the stack.
 
-**Next steps:** The bootstrap compiler can now lex, parse, and evaluate AIRL programs entirely in AIRL. Potential future work includes self-hosting the type checker or adding optimization passes.
+**Type-check verified:** The bootstrap lexer passes the self-hosted type checker cleanly. All `Any` annotations have been eliminated from the bootstrap codebase (replaced with `List`).
+
+**Next steps:** Type-check the parser and evaluator modules via integration tests. Potential future work includes optimization passes or a self-hosted code generator.
 
 ---
 
@@ -226,6 +230,9 @@ cargo run -- run bootstrap/parser_test.airl      # Parser unit tests
 cargo run -- run bootstrap/integration_test.airl # Parser integration tests
 cargo run -- run bootstrap/eval_test.airl        # Evaluator unit tests
 cargo run -- run bootstrap/pipeline_test.airl    # Full lex→parse→eval pipeline tests
+cargo run -- run bootstrap/deftype_test.airl     # Deftype parsing tests
+cargo run -- run bootstrap/types_test.airl       # Type representation tests
+cargo run --release -- run bootstrap/typecheck_test.airl  # Type checker tests (use --release, slow in debug)
 ```
 
 **Important AIRL constraints for bootstrap code:**
