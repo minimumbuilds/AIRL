@@ -862,6 +862,245 @@
         (Err e) (Err e))
       (Err (ParseError "try requires exactly one argument" line col))))
 
+;; ── Signature parsing ─────────────────────────────
+
+(defn parse-param
+  :sig [(sexpr : Any) -> List]
+  :intent "Parse a parameter (name : Type) from S-expression"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (< (length items) 3)
+          (Err (ParseError "parameter requires (name : Type)" line col))
+          (let (name-sexpr : Any (at items 0))
+            (match name-sexpr
+              (SAtom tok)
+                (match tok
+                  (Token kind name _ _)
+                    (if (= kind "symbol")
+                      ;; items[1] = colon, items[2] = type
+                      (let (type-sexpr : Any (at items 2))
+                        (match type-sexpr
+                          (SAtom type-tok)
+                            (match type-tok
+                              (Token tk tv _ _)
+                                (if (= tk "symbol")
+                                  (Ok (ASTParam name tv))
+                                  (Err (ParseError "expected type name in parameter" line col))))
+                          _ (Err (ParseError "expected type name in parameter" line col))))
+                      (Err (ParseError "expected symbol name in parameter" line col))))
+              _ (Err (ParseError "expected symbol name in parameter" line col)))))
+      _ (Err (ParseError "parameter must be a list" 0 0))))
+
+(defn parse-sig-params
+  :sig [(items : List) (pos : i64) (arrow-pos : i64) -> List]
+  :intent "Parse signature parameters from items[pos..arrow-pos]"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos arrow-pos)
+      (Ok [])
+      (match (parse-param (at items pos))
+        (Ok param)
+          (match (parse-sig-params items (+ pos 1) arrow-pos)
+            (Ok rest) (Ok (cons param rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn find-arrow
+  :sig [(items : List) (pos : i64) -> i64]
+  :intent "Find index of -> arrow token in S-expr list, return -1 if not found"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (- 0 1)
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind _ _ _)
+              (if (= kind "arrow")
+                pos
+                (find-arrow items (+ pos 1))))
+        _ (find-arrow items (+ pos 1)))))
+
+(defn parse-sig
+  :sig [(sexpr : Any) -> List]
+  :intent "Parse :sig [(params...) -> ReturnType] from bracket S-expression"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SBracket items line col)
+        (let (arrow-idx : i64 (find-arrow items 0))
+          (if (< arrow-idx 0)
+            ;; No arrow — all params, default return type
+            (match (parse-sig-params items 0 (length items))
+              (Ok params) (Ok (ASTSig params "Unit"))
+              (Err e) (Err e))
+            ;; Arrow found — params before, return type after
+            (match (parse-sig-params items 0 arrow-idx)
+              (Ok params)
+                (if (>= (+ arrow-idx 1) (length items))
+                  (Err (ParseError "expected return type after ->" line col))
+                  (match (at items (+ arrow-idx 1))
+                    (SAtom tok)
+                      (match tok
+                        (Token kind value _ _)
+                          (if (= kind "symbol")
+                            (Ok (ASTSig params value))
+                            (Err (ParseError "expected type name after ->" line col))))
+                    _ (Err (ParseError "expected type name after ->" line col))))
+              (Err e) (Err e))))
+      _ (Err (ParseError "sig must be a bracket list" 0 0))))
+
+;; ── defn clause walker ────────────────────────────
+
+(defn walk-defn-clauses
+  :sig [(items : List) (pos : i64) (sig : Any) (intent : String) (requires : List) (ensures : List) (body : Any) -> List]
+  :intent "Walk keyword clauses in defn, accumulate values"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      ;; Done — return accumulated values
+      (Ok [sig intent requires ensures body])
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind value _ _)
+              (if (= kind "keyword")
+                ;; Keyword clause — need value at pos+1
+                (if (>= (+ pos 1) (length items))
+                  (Err (ParseError (+ "missing value for :" value) 0 0))
+                  (let (val-sexpr : Any (at items (+ pos 1)))
+                    (if (= value "sig")
+                      (match (parse-sig val-sexpr)
+                        (Ok new-sig) (walk-defn-clauses items (+ pos 2) new-sig intent requires ensures body)
+                        (Err e) (Err e))
+                    (if (= value "intent")
+                      (match val-sexpr
+                        (SAtom itok)
+                          (match itok
+                            (Token ik iv _ _)
+                              (if (= ik "string")
+                                (walk-defn-clauses items (+ pos 2) sig iv requires ensures body)
+                                (Err (ParseError "intent must be a string" 0 0))))
+                        _ (Err (ParseError "intent must be a string" 0 0)))
+                    (if (= value "requires")
+                      (match val-sexpr
+                        (SBracket req-items _ _)
+                          (match (parse-list-items req-items 0)
+                            (Ok req-exprs) (walk-defn-clauses items (+ pos 2) sig intent req-exprs ensures body)
+                            (Err e) (Err e))
+                        _ (Err (ParseError "requires must be a bracket list" 0 0)))
+                    (if (= value "ensures")
+                      (match val-sexpr
+                        (SBracket ens-items _ _)
+                          (match (parse-list-items ens-items 0)
+                            (Ok ens-exprs) (walk-defn-clauses items (+ pos 2) sig intent requires ens-exprs body)
+                            (Err e) (Err e))
+                        _ (Err (ParseError "ensures must be a bracket list" 0 0)))
+                    (if (= value "body")
+                      (match (parse-expr val-sexpr)
+                        (Ok body-node) (walk-defn-clauses items (+ pos 2) sig intent requires ensures body-node)
+                        (Err e) (Err e))
+                      ;; Unknown keyword — skip
+                      (walk-defn-clauses items (+ pos 2) sig intent requires ensures body))))))))
+                ;; Non-keyword token — error
+                (Err (ParseError "expected keyword clause in defn" 0 0))))
+        ;; Non-atom — error
+        _ (Err (ParseError "expected keyword clause in defn" 0 0)))))
+
+(defn parse-defn
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (defn name :clause value ...) definition"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items[0] = "defn", items[1] = name, items[2..] = keyword clauses
+    (if (< (length items) 2)
+      (Err (ParseError "defn requires a name" line col))
+      (match (at items 1)
+        (SAtom tok)
+          (match tok
+            (Token kind name _ _)
+              (if (= kind "symbol")
+                (match (walk-defn-clauses items 2 nil "" [] [] nil)
+                  (Ok clause-vals)
+                    (Ok (ASTDefn name
+                      (at clause-vals 0)   ;; sig
+                      (at clause-vals 1)   ;; intent
+                      (at clause-vals 2)   ;; requires
+                      (at clause-vals 3)   ;; ensures
+                      (at clause-vals 4)   ;; body
+                      line col))
+                  (Err e) (Err e))
+                (Err (ParseError "defn name must be a symbol" line col))))
+        _ (Err (ParseError "defn name must be a symbol" line col)))))
+
+;; ── Top-level and entry point ─────────────────────
+
+(defn parse-top-level
+  :sig [(sexpr : Any) -> List]
+  :intent "Parse a top-level S-expression into an AST node"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (empty? items)
+          (parse-expr sexpr)
+          (match (head items)
+            (SAtom tok)
+              (match tok
+                (Token kind value _ _)
+                  (if (= kind "symbol")
+                    (if (= value "defn")
+                      (parse-defn items line col)
+                      (parse-expr sexpr))
+                    (parse-expr sexpr)))
+            _ (parse-expr sexpr)))
+      _ (parse-expr sexpr)))
+
+(defn parse-top-levels
+  :sig [(sexprs : List) (pos : i64) -> List]
+  :intent "Parse all top-level S-expressions into AST nodes"
+  :requires [(valid sexprs)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length sexprs))
+      (Ok [])
+      (match (parse-top-level (at sexprs pos))
+        (Ok node)
+          (match (parse-top-levels sexprs (+ pos 1))
+            (Ok rest) (Ok (cons node rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn parse-program
+  :sig [(sexprs : List) -> List]
+  :intent "Parse a list of S-expressions into AST nodes"
+  :requires [(valid sexprs)]
+  :ensures [(valid result)]
+  :body (parse-top-levels sexprs 0))
+
+(defn parse
+  :sig [(source : String) -> List]
+  :intent "Full pipeline: source → tokens → S-exprs → AST"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err msg) (Err msg)
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err e)
+          (Ok sexprs)
+            (parse-program sexprs))))
+
 ;; ── Test helper ───────────────────────────────────
 
 (defn assert-eq
@@ -979,7 +1218,7 @@
           (Ok sexprs)
             (if (empty? sexprs)
               (Err (ParseError "no expression" 0 0))
-              (parse-expr (head sexprs))))))
+              (parse-top-level (head sexprs))))))
 
 ;; Atoms
 (match (parse-one-expr "42")
@@ -1207,3 +1446,66 @@
   (Err e) (print "FAIL: error"))
 
 (print "=== Task 5 tests complete ===")
+
+;; ── defn parsing tests ──────────────────────────
+
+;; Minimal defn
+(match (parse-one-expr "(defn foo :body 42)")
+  (Ok node) (match node
+    (ASTDefn name sig intent requires ensures body _ _)
+      (do
+        (assert-eq name "foo")
+        (match body (ASTInt v _ _) (assert-eq v 42) _ (print "FAIL")))
+    _ (print "FAIL: expected ASTDefn"))
+  (Err e) (print "FAIL: error"))
+
+;; Full defn with all clauses
+(let (src : String "(defn add :sig [(a : i32) (b : i32) -> i32] :intent \"Add two numbers\" :requires [(valid a)] :ensures [(valid result)] :body (+ a b))")
+  (match (parse-one-expr src)
+    (Ok node) (match node
+      (ASTDefn name sig intent requires ensures body _ _)
+        (do
+          (assert-eq name "add")
+          (match sig
+            (ASTSig params ret-type)
+              (do
+                (assert-eq (length params) 2)
+                (assert-eq ret-type "i32")
+                (match (head params)
+                  (ASTParam pname ptype) (do (assert-eq pname "a")
+                                             (assert-eq ptype "i32"))
+                  _ (print "FAIL: expected ASTParam")))
+            _ (print "FAIL: expected ASTSig"))
+          (assert-eq intent "Add two numbers")
+          (assert-eq (length requires) 1)
+          (assert-eq (length ensures) 1))
+      _ (print "FAIL: expected ASTDefn"))
+    (Err e) (print "FAIL: error" e)))
+
+;; defn with clauses in different order
+(match (parse-one-expr "(defn bar :body 1 :intent \"test\" :sig [(x : i32) -> i32])")
+  (Ok node) (match node
+    (ASTDefn name sig intent _ _ body _ _)
+      (do
+        (assert-eq name "bar")
+        (assert-eq intent "test")
+        (match body (ASTInt v _ _) (assert-eq v 1) _ (print "FAIL")))
+    _ (print "FAIL: expected ASTDefn"))
+  (Err e) (print "FAIL: error"))
+
+;; parse entry point: full pipeline
+(match (parse "(defn id :sig [(x : i32) -> i32] :body x)")
+  (Ok nodes)
+    (do
+      (assert-eq (length nodes) 1)
+      (match (head nodes)
+        (ASTDefn name _ _ _ _ _ _ _) (assert-eq name "id")
+        _ (print "FAIL: expected ASTDefn")))
+  (Err e) (print "FAIL: parse error"))
+
+;; parse multiple top-level forms
+(match (parse "(defn a :body 1) (defn b :body 2)")
+  (Ok nodes) (assert-eq (length nodes) 2)
+  (Err e) (print "FAIL: error"))
+
+(print "=== Task 6 tests complete ===")
