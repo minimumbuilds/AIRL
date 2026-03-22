@@ -682,6 +682,12 @@ impl TypeChecker {
         self.diags
     }
 
+    /// Drain diagnostics without consuming the checker.
+    /// Useful for REPL where the checker persists across inputs.
+    pub fn drain_diagnostics(&mut self) -> Diagnostics {
+        std::mem::replace(&mut self.diags, Diagnostics::new())
+    }
+
     pub fn has_errors(&self) -> bool {
         self.diags.has_errors()
     }

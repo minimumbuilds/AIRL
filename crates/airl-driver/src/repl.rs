@@ -1,6 +1,7 @@
 use std::io::{self, Write, BufRead};
 use airl_runtime::eval::Interpreter;
 use airl_runtime::value::Value;
+use airl_types::checker::TypeChecker;
 use crate::pipeline::eval_prelude;
 
 fn print_env(interp: &Interpreter) {
@@ -44,13 +45,72 @@ fn print_env(interp: &Interpreter) {
     }
 }
 
+fn print_help() {
+    println!("AIRL REPL Commands:");
+    println!("  :help          Show this help message");
+    println!("  :quit / :q     Exit the REPL");
+    println!("  :env           Show all user-defined bindings");
+    println!("  :type <expr>   Show the type of an expression without evaluating");
+    println!("  :load <file>   Load and evaluate an AIRL source file");
+    println!();
+    println!("Enter any AIRL expression to evaluate it.");
+    println!("Multi-line input is supported — keep typing until parens balance.");
+}
+
+fn repl_type_check(input: &str, tc: &mut TypeChecker) {
+    let mut lexer = airl_syntax::Lexer::new(input);
+    let tokens = match lexer.lex_all() {
+        Ok(t) => t,
+        Err(d) => { eprintln!("error: {}", d.message); return; }
+    };
+    let sexprs = match airl_syntax::parse_sexpr_all(&tokens) {
+        Ok(s) => s,
+        Err(d) => { eprintln!("error: {}", d.message); return; }
+    };
+
+    for sexpr in &sexprs {
+        let mut diags = airl_syntax::Diagnostics::new();
+        let expr = match airl_syntax::parser::parse_expr(sexpr, &mut diags) {
+            Ok(e) => e,
+            Err(d) => { eprintln!("error: {}", d.message); return; }
+        };
+
+        match tc.check_expr(&expr) {
+            Ok(ty) => println!("{}", ty),
+            Err(_) => {
+                let d = tc.drain_diagnostics();
+                for diag in d.iter() {
+                    eprintln!("type error: {}", diag.message);
+                }
+            }
+        }
+    }
+}
+
+fn repl_load(path: &str, interp: &mut Interpreter) {
+    let source = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => { eprintln!("error: cannot load '{}': {}", path, e); return; }
+    };
+    match eval_repl_input(&source, interp) {
+        Ok(val) => {
+            if val != Value::Unit {
+                println!("{}", val);
+            }
+            println!("loaded {}", path);
+        }
+        Err(e) => eprintln!("error in {}: {}", path, e),
+    }
+}
+
 pub fn run_repl() {
     let stdin = io::stdin();
     let mut input = String::new();
     let mut interp = Interpreter::new();
+    let mut tc = TypeChecker::new();
     eval_prelude(&mut interp);
 
-    println!("AIRL v0.1.0 — Type :quit to exit");
+    println!("AIRL v0.1.0 — Type :help for commands, :quit to exit");
 
     loop {
         let prompt = if input.is_empty() { "airl> " } else { "...   " };
@@ -66,8 +126,20 @@ pub fn run_repl() {
         if trimmed == ":quit" || trimmed == ":q" {
             break;
         }
+        if trimmed == ":help" || trimmed == ":h" {
+            print_help();
+            continue;
+        }
         if trimmed == ":env" {
             print_env(&interp);
+            continue;
+        }
+        if let Some(expr_str) = trimmed.strip_prefix(":type ") {
+            repl_type_check(expr_str.trim(), &mut tc);
+            continue;
+        }
+        if let Some(path) = trimmed.strip_prefix(":load ") {
+            repl_load(path.trim(), &mut interp);
             continue;
         }
 
