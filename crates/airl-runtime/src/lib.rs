@@ -7,6 +7,7 @@ pub mod builtins;
 pub mod eval;
 pub mod agent_client;
 pub mod ir;
+pub mod ir_vm;
 
 // Convenience re-exports
 pub use error::RuntimeError;
