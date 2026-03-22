@@ -273,6 +273,35 @@
 
 ;; ─── Eval Core Functions ────────────────────────────────
 
+(defn eval-let-bindings
+  :sig [(bindings : List) (env : List) -> Any]
+  :intent "Evaluate let bindings sequentially, threading env"
+  :requires [(valid bindings)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? bindings) (Ok env)
+      (match (head bindings)
+        (ASTBinding name _ val-expr)
+          (match (eval-node val-expr env)
+            (Err e) (Err e)
+            (Ok pair)
+              (eval-let-bindings (tail bindings) (env-bind (at pair 1) name (at pair 0))))
+        _ (Err "eval: invalid let binding"))))
+
+(defn eval-do
+  :sig [(exprs : List) (env : List) -> Any]
+  :intent "Evaluate a sequence of expressions, threading env, return last value"
+  :requires [(valid exprs)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? exprs) (Ok [(ValNil) env])
+      (match (eval-node (head exprs) env)
+        (Err e) (Err e)
+        (Ok pair)
+          (if (empty? (tail exprs))
+            (Ok pair)
+            (eval-do (tail exprs) (at pair 1))))))
+
 (defn eval-list-items
   :sig [(items : List) (env : List) (acc : List) -> Any]
   :intent "Evaluate list literal items left-to-right"
@@ -325,6 +354,28 @@
                             (Ok val) (Ok [val env3])
                             (Err e) (Err e))
                         _ (Err "eval: not callable"))))))))
+
+    (ASTIf cond then-expr else-expr _ _)
+      (match (eval-node cond env)
+        (Err e) (Err e)
+        (Ok cond-pair)
+          (let (cond-val : Any (at cond-pair 0))
+            (let (env2 : Any (at cond-pair 1))
+              (if (unwrap-bool cond-val)
+                (eval-node then-expr env2)
+                (eval-node else-expr env2)))))
+
+    (ASTLet bindings body _ _)
+      (let (env2 : Any (env-push env))
+        (match (eval-let-bindings bindings env2)
+          (Err e) (Err e)
+          (Ok bound-env)
+            (match (eval-node body bound-env)
+              (Err e) (Err e)
+              (Ok pair) (Ok [(at pair 0) (env-pop (at pair 1))]))))
+
+    (ASTDo exprs _ _)
+      (eval-do exprs env)
 
     _ (Err "eval-node: unknown node type")))
 
@@ -419,3 +470,53 @@
       (Err e) (print "  FAIL:" e))))
 
 (print "=== Task 4 tests complete ===")
+
+;; ─── Task 5: Control Flow Tests ─────────────────────────
+
+(print "=== Task 5: Control flow ===")
+
+(let (env : Any (make-initial-env 0))
+  (do
+    ;; If true branch
+    (match (eval-node (ASTIf (ASTBool true 0 0) (ASTInt 1 0 0) (ASTInt 2 0 0) 0 0) env)
+      (Ok pair) (assert-eq (unwrap-int (at pair 0)) 1)
+      (Err e) (print "  FAIL:" e))
+
+    ;; If false branch
+    (match (eval-node (ASTIf (ASTBool false 0 0) (ASTInt 1 0 0) (ASTInt 2 0 0) 0 0) env)
+      (Ok pair) (assert-eq (unwrap-int (at pair 0)) 2)
+      (Err e) (print "  FAIL:" e))
+
+    ;; Let binding: (let ([x 10]) (+ x 1)) -> 11
+    (match (eval-node
+      (ASTLet [(ASTBinding "x" "i64" (ASTInt 10 0 0))]
+        (ASTCall (ASTSymbol "+" 0 0) [(ASTSymbol "x" 0 0) (ASTInt 1 0 0)] 0 0)
+        0 0)
+      env)
+      (Ok pair) (assert-eq (unwrap-int (at pair 0)) 11)
+      (Err e) (print "  FAIL:" e))
+
+    ;; Let with multiple bindings: (let ([a 3] [b 4]) (+ a b)) -> 7
+    (match (eval-node
+      (ASTLet [(ASTBinding "a" "i64" (ASTInt 3 0 0))
+               (ASTBinding "b" "i64" (ASTInt 4 0 0))]
+        (ASTCall (ASTSymbol "+" 0 0) [(ASTSymbol "a" 0 0) (ASTSymbol "b" 0 0)] 0 0)
+        0 0)
+      env)
+      (Ok pair) (assert-eq (unwrap-int (at pair 0)) 7)
+      (Err e) (print "  FAIL:" e))
+
+    ;; Do block: (do 1 2 3) -> 3
+    (match (eval-node (ASTDo [(ASTInt 1 0 0) (ASTInt 2 0 0) (ASTInt 3 0 0)] 0 0) env)
+      (Ok pair) (assert-eq (unwrap-int (at pair 0)) 3)
+      (Err e) (print "  FAIL:" e))
+
+    ;; If with comparison: (if (= 1 1) 42 0)
+    (match (eval-node
+      (ASTIf (ASTCall (ASTSymbol "=" 0 0) [(ASTInt 1 0 0) (ASTInt 1 0 0)] 0 0)
+        (ASTInt 42 0 0) (ASTInt 0 0 0) 0 0)
+      env)
+      (Ok pair) (assert-eq (unwrap-int (at pair 0)) 42)
+      (Err e) (print "  FAIL:" e))))
+
+(print "=== Task 5 tests complete ===")
