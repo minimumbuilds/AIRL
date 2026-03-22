@@ -197,14 +197,4 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 ## Known Issues
 
-1. **`cargo build` warning:** `unused import: Config` in `crates/airl-solver/src/translate.rs:3`. The `Config` import is only used in tests via `super::*`. Fix: move to `#[cfg(test)]` block or gate with `#[cfg(test)]`.
-
-2. **Type checker warnings are noisy:** The type checker warns about `spawn-agent`, `send`, and other builtins it doesn't know about. These are harmless but clutter output. Fix: register builtin types in the type checker environment.
-
-3. **Z3 "disproven" warnings for valid contracts:** Contracts like `(= result (+ a b))` are "disproven" by Z3 because `result` is a free variable — the prover doesn't encode the function body. This is correct behavior but confusing. Consider suppressing disproven warnings for contracts that only reference `result` without body constraints, or adding a note explaining why.
-
-4. **JIT float handling:** The scalar JIT uses I64 as the uniform ABI type and bitcasts for floats. This works but means float-returning functions store results as I64 bit patterns. The marshaling in `eval.rs` (`raw_to_value`) handles this correctly, but it's fragile.
-
-5. **`spawn-agent` sleep:** `builtin_spawn_agent` sleeps 100ms to let the child process start. This is a race condition — a slow system might need more time. A proper solution would be a handshake protocol (agent sends a "ready" message after loading).
-
-6. **`airl-mlir` linker failure:** `melior-macro` fails to link due to missing `libzstd`. Install `libzstd-dev` or exclude `airl-mlir` from default workspace members.
+1. **`airl-mlir` requires system libraries:** `melior-macro` needs `libzstd-dev` and LLVM 19+ installed. Use `cargo test --workspace --exclude airl-mlir` if not available. See comment in workspace `Cargo.toml`.

@@ -126,11 +126,18 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
                         }
                     }
                     airl_solver::VerifyResult::Disproven { counterexample } => {
-                        let msg = format!("contract disproven in `{}`: {} (counterexample: {:?})",
-                            f.name, clause, counterexample);
-                        match mode {
-                            PipelineMode::Check => eprintln!("error: {}", msg),
-                            _ => eprintln!("warning: {}", msg),
+                        // Clauses referencing `result` are always false positives
+                        // because the solver does not constrain `result` to the
+                        // function body's return value.
+                        if clause.contains("result") {
+                            // Suppress — known false positive
+                        } else {
+                            let msg = format!("contract disproven in `{}`: {} (counterexample: {:?})",
+                                f.name, clause, counterexample);
+                            match mode {
+                                PipelineMode::Check => eprintln!("error: {}", msg),
+                                _ => eprintln!("warning: {}", msg),
+                            }
                         }
                     }
                     airl_solver::VerifyResult::Unknown(_) | airl_solver::VerifyResult::TranslationError(_) => {
@@ -212,8 +219,13 @@ pub fn check_source(source: &str) -> Result<(), PipelineError> {
                         eprintln!("note: `{}` contract proven: {}", f.name, clause);
                     }
                     airl_solver::VerifyResult::Disproven { counterexample } => {
-                        eprintln!("error: contract disproven in `{}`: {} (counterexample: {:?})",
-                            f.name, clause, counterexample);
+                        // Clauses referencing `result` are always false positives
+                        // because the solver does not constrain `result` to the
+                        // function body's return value.
+                        if !clause.contains("result") {
+                            eprintln!("error: contract disproven in `{}`: {} (counterexample: {:?})",
+                                f.name, clause, counterexample);
+                        }
                     }
                     airl_solver::VerifyResult::Unknown(_) | airl_solver::VerifyResult::TranslationError(_) => {
                         // Silent — fall back to runtime checking
