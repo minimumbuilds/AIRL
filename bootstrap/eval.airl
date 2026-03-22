@@ -102,3 +102,42 @@
     (if (map-has (head env) name)
       (Ok (map-get (head env) name))
       (env-get (tail env) name))))
+
+;; ─── Evaluator Core ──────────────────────────────────────
+
+(defn eval-list-items
+  :sig [(items : List) (env : List) (acc : List) -> Any]
+  :intent "Evaluate list literal items left-to-right"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? items) (Ok [acc env])
+      (match (eval-node (head items) env)
+        (Err e) (Err e)
+        (Ok pair)
+          (eval-list-items (tail items) (at pair 1) (append acc (at pair 0))))))
+
+(defn eval-node
+  :sig [(node : Any) (env : List) -> Any]
+  :intent "Evaluate a single AST node, returning (Ok [val env]) or (Err msg)"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTInt v _ _) (Ok [(ValInt v) env])
+    (ASTFloat v _ _) (Ok [(ValFloat v) env])
+    (ASTStr v _ _) (Ok [(ValStr v) env])
+    (ASTBool v _ _) (Ok [(ValBool v) env])
+    (ASTNil _ _) (Ok [(ValNil) env])
+    (ASTKeyword k _ _) (Ok [(ValStr (+ ":" k)) env])
+
+    (ASTSymbol name _ _)
+      (match (env-get env name)
+        (Ok val) (Ok [val env])
+        (Err msg) (Err msg))
+
+    (ASTList items _ _)
+      (match (eval-list-items items env [])
+        (Err e) (Err e)
+        (Ok pair) (Ok [(ValList (at pair 0)) (at pair 1)]))
+
+    _ (Err "eval-node: unknown node type")))

@@ -161,3 +161,92 @@
       (Err _) (print "  FAIL: y not visible in inner frame"))))
 
 (print "=== Task 2 tests complete ===")
+
+;; ─── Eval Core Functions ────────────────────────────────
+
+(defn eval-list-items
+  :sig [(items : List) (env : List) (acc : List) -> Any]
+  :intent "Evaluate list literal items left-to-right"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? items) (Ok [acc env])
+      (match (eval-node (head items) env)
+        (Err e) (Err e)
+        (Ok pair)
+          (eval-list-items (tail items) (at pair 1) (append acc (at pair 0))))))
+
+(defn eval-node
+  :sig [(node : Any) (env : List) -> Any]
+  :intent "Evaluate a single AST node, returning (Ok [val env]) or (Err msg)"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTInt v _ _) (Ok [(ValInt v) env])
+    (ASTFloat v _ _) (Ok [(ValFloat v) env])
+    (ASTStr v _ _) (Ok [(ValStr v) env])
+    (ASTBool v _ _) (Ok [(ValBool v) env])
+    (ASTNil _ _) (Ok [(ValNil) env])
+    (ASTKeyword k _ _) (Ok [(ValStr (+ ":" k)) env])
+
+    (ASTSymbol name _ _)
+      (match (env-get env name)
+        (Ok val) (Ok [val env])
+        (Err msg) (Err msg))
+
+    (ASTList items _ _)
+      (match (eval-list-items items env [])
+        (Err e) (Err e)
+        (Ok pair) (Ok [(ValList (at pair 0)) (at pair 1)]))
+
+    _ (Err "eval-node: unknown node type")))
+
+;; ─── Task 3: Atom and Symbol Tests ───────────────────────
+
+(print "=== Task 3: Atoms and symbols ===")
+
+(let (env : Any (env-new 0))
+  (do
+    ;; Integer literal
+    (match (eval-node (ASTInt 42 0 0) env)
+      (Ok pair) (assert-eq (unwrap-int (at pair 0)) 42)
+      (Err e) (print "  FAIL:" e))
+
+    ;; String literal
+    (match (eval-node (ASTStr "hello" 0 0) env)
+      (Ok pair) (assert-eq (unwrap-str (at pair 0)) "hello")
+      (Err e) (print "  FAIL:" e))
+
+    ;; Bool literal
+    (match (eval-node (ASTBool true 0 0) env)
+      (Ok pair) (assert-eq (unwrap-bool (at pair 0)) true)
+      (Err e) (print "  FAIL:" e))
+
+    ;; Nil literal
+    (match (eval-node (ASTNil 0 0) env)
+      (Ok pair) (assert-eq (unwrap-raw (at pair 0)) nil)
+      (Err e) (print "  FAIL:" e))
+
+    ;; Keyword
+    (match (eval-node (ASTKeyword "foo" 0 0) env)
+      (Ok pair) (assert-eq (unwrap-str (at pair 0)) ":foo")
+      (Err e) (print "  FAIL:" e))))
+
+;; Symbol lookup
+(let (env : Any (env-bind (env-new 0) "x" (ValInt 99)))
+  (match (eval-node (ASTSymbol "x" 0 0) env)
+    (Ok pair) (assert-eq (unwrap-int (at pair 0)) 99)
+    (Err e) (print "  FAIL:" e)))
+
+;; Undefined symbol
+(match (eval-node (ASTSymbol "nope" 0 0) (env-new 0))
+  (Ok _) (print "  FAIL: should error on undefined")
+  (Err msg) (assert-eq (contains msg "undefined") true))
+
+;; List literal: [1 2 3]
+(let (env : Any (env-new 0))
+  (match (eval-node (ASTList [(ASTInt 1 0 0) (ASTInt 2 0 0) (ASTInt 3 0 0)] 0 0) env)
+    (Ok pair) (assert-eq (length (unwrap-list (at pair 0))) 3)
+    (Err e) (print "  FAIL:" e)))
+
+(print "=== Task 3 tests complete ===")
