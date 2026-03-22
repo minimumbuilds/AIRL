@@ -271,6 +271,80 @@
   :ensures [(valid result)]
   :body (eval-args-acc args env []))
 
+;; ─── Pattern Matching ────────────────────────────────────
+
+(defn try-match-patterns
+  :sig [(patterns : List) (values : List) -> Any]
+  :intent "Match a list of patterns against a list of values, collecting bindings"
+  :requires [(valid patterns)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? patterns) (Ok [])
+      (if (empty? values) (Err "no match")
+        (match (try-match-pattern (head patterns) (head values))
+          (Err e) (Err e)
+          (Ok binds1)
+            (match (try-match-patterns (tail patterns) (tail values))
+              (Err e) (Err e)
+              (Ok binds2) (Ok (concat binds1 binds2)))))))
+
+(defn try-match-pattern
+  :sig [(pattern : Any) (value : Any) -> Any]
+  :intent "Try to match a pattern against a value"
+  :requires [(valid pattern)]
+  :ensures [(valid result)]
+  :body (match pattern
+    (PatWild _ _) (Ok [])
+    (PatBind name _ _) (Ok [[name value]])
+    (PatLit lit-val _ _)
+      (if (= (unwrap-raw value) lit-val) (Ok [])
+        (Err "no match"))
+    (PatVariant tag sub-pats _ _)
+      (match value
+        (ValVariant vtag inner)
+          (if (= tag vtag)
+            (if (empty? sub-pats)
+              (Ok [])
+              (if (= (length sub-pats) 1)
+                (try-match-pattern (head sub-pats) inner)
+                (match inner
+                  (ValList items) (try-match-patterns sub-pats items)
+                  _ (Err "no match"))))
+            (Err "no match"))
+        _ (Err "no match"))
+    _ (Err "no match")))
+
+(defn bind-match-bindings
+  :sig [(env : List) (bindings : List) -> List]
+  :intent "Bind pattern match capture bindings into the top frame"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? bindings) env
+      (let (pair : Any (head bindings))
+        (bind-match-bindings
+          (env-bind env (at pair 0) (at pair 1))
+          (tail bindings)))))
+
+(defn eval-match-arms
+  :sig [(arms : List) (value : Any) (env : List) -> Any]
+  :intent "Try each match arm against the scrutinee value"
+  :requires [(valid arms)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? arms)
+      (Err "non-exhaustive match")
+      (match (head arms)
+        (ASTArm pattern body)
+          (match (try-match-pattern pattern value)
+            (Ok bindings)
+              (let (match-env : Any (bind-match-bindings (env-push env) bindings))
+                (match (eval-node body match-env)
+                  (Err e) (Err e)
+                  (Ok pair) (Ok [(at pair 0) (env-pop (at pair 1))])))
+            (Err _) (eval-match-arms (tail arms) value env))
+        _ (Err "eval: invalid match arm"))))
+
 ;; ─── Function Helpers ────────────────────────────────────
 
 (defn extract-param-names
@@ -413,6 +487,36 @@
 
     (ASTDo exprs _ _)
       (eval-do exprs env)
+
+    (ASTMatch scrutinee arms _ _)
+      (match (eval-node scrutinee env)
+        (Err e) (Err e)
+        (Ok scr-pair)
+          (eval-match-arms arms (at scr-pair 0) (at scr-pair 1)))
+
+    (ASTVariant name args _ _)
+      (if (empty? args)
+        (Ok [(ValVariant name (ValNil)) env])
+        (match (eval-args args env)
+          (Err e) (Err e)
+          (Ok args-pair)
+            (let (vals : Any (at args-pair 0))
+              (let (env2 : Any (at args-pair 1))
+                (if (= (length vals) 1)
+                  (Ok [(ValVariant name (head vals)) env2])
+                  (Ok [(ValVariant name (ValList vals)) env2]))))))
+
+    (ASTTry expr _ _)
+      (match (eval-node expr env)
+        (Err e) (Err e)
+        (Ok pair)
+          (match (at pair 0)
+            (ValVariant "Ok" inner) (Ok [inner (at pair 1)])
+            (ValVariant "Err" inner) (Err (+ "Err: " (unwrap-raw inner)))
+            _ (Err "try on non-Result value")))
+
+    (ASTLambda params body _ _)
+      (Ok [(ValLambda params body env) env])
 
     _ (Err "eval-node: unknown node type")))
 
@@ -628,3 +732,60 @@
         (Err e) (print "  FAIL:" e)))))
 
 (print "=== Task 6 tests complete ===")
+
+;; ─── Task 7: Pattern Matching Tests ─────────────────────
+
+(print "=== Task 7: Pattern matching ===")
+
+(let (env : Any (make-initial-env 0))
+  (do
+    ;; Match on variant: (match (Ok 42) (Ok v) v (Err _) 0) -> 42
+    (match (eval-node
+      (ASTMatch
+        (ASTVariant "Ok" [(ASTInt 42 0 0)] 0 0)
+        [(ASTArm (PatVariant "Ok" [(PatBind "v" 0 0)] 0 0) (ASTSymbol "v" 0 0))
+         (ASTArm (PatVariant "Err" [(PatWild 0 0)] 0 0) (ASTInt 0 0 0))]
+        0 0) env)
+      (Ok pair) (assert-eq (unwrap-int (at pair 0)) 42)
+      (Err e) (print "  FAIL:" e))
+
+    ;; Match with wildcard
+    (match (eval-node
+      (ASTMatch (ASTInt 99 0 0)
+        [(ASTArm (PatWild 0 0) (ASTStr "matched" 0 0))]
+        0 0) env)
+      (Ok pair) (assert-eq (unwrap-str (at pair 0)) "matched")
+      (Err e) (print "  FAIL:" e))
+
+    ;; Match with literal pattern
+    (match (eval-node
+      (ASTMatch (ASTInt 1 0 0)
+        [(ASTArm (PatLit 1 0 0) (ASTStr "one" 0 0))
+         (ASTArm (PatLit 2 0 0) (ASTStr "two" 0 0))
+         (ASTArm (PatWild 0 0) (ASTStr "other" 0 0))]
+        0 0) env)
+      (Ok pair) (assert-eq (unwrap-str (at pair 0)) "one")
+      (Err e) (print "  FAIL:" e))
+
+    ;; Variant constructor: (Ok 10)
+    (match (eval-node (ASTVariant "Ok" [(ASTInt 10 0 0)] 0 0) env)
+      (Ok pair) (match (at pair 0)
+        (ValVariant tag inner) (do (assert-eq tag "Ok") (assert-eq (unwrap-int inner) 10))
+        _ (print "  FAIL: not a variant"))
+      (Err e) (print "  FAIL:" e))
+
+    ;; Try: (try (Ok 7)) -> 7
+    (match (eval-node (ASTTry (ASTVariant "Ok" [(ASTInt 7 0 0)] 0 0) 0 0) env)
+      (Ok pair) (assert-eq (unwrap-int (at pair 0)) 7)
+      (Err e) (print "  FAIL:" e))
+
+    ;; Lambda: ((fn [x] (+ x 1)) 10) -> 11
+    (match (eval-node
+      (ASTCall
+        (ASTLambda ["x"] (ASTCall (ASTSymbol "+" 0 0) [(ASTSymbol "x" 0 0) (ASTInt 1 0 0)] 0 0) 0 0)
+        [(ASTInt 10 0 0)]
+        0 0) env)
+      (Ok pair) (assert-eq (unwrap-int (at pair 0)) 11)
+      (Err e) (print "  FAIL:" e))))
+
+(print "=== Task 7 tests complete ===")
