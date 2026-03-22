@@ -215,9 +215,9 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 **Self-parse verified:** The bootstrap lexer successfully lexes its own source (15,691 chars → 3,400 tokens, ~56s release). TCO through `match`/`let` arms is required for this to work — without it, `lex-loop`'s recursion overflows the stack.
 
-**Type-check verified:** The bootstrap lexer passes the self-hosted type checker cleanly. All `Any` annotations have been eliminated from the bootstrap codebase (replaced with `List`).
+**Type-check verified:** All three bootstrap modules (lexer, parser, eval) pass the self-hosted type checker cleanly. All `Any` annotations have been eliminated from the bootstrap codebase (~120 replacements). The integration tests parse each module through the bootstrap parser and type-check the AST — slow (~5-10 min total in release mode) but comprehensive.
 
-**Next steps:** Type-check the parser and evaluator modules via integration tests. Potential future work includes optimization passes or a self-hosted code generator.
+**Next steps:** Potential future work includes optimization passes or a self-hosted code generator.
 
 ---
 
