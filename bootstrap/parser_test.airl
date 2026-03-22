@@ -601,6 +601,108 @@
                       (Err e) (Err e))
                   (Err e) (Err e)))))))
 
+;; ── Compound expression parsers ───────────────────
+
+(defn parse-if
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (if cond then else) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [if-sym cond then else]
+    (if (= (length items) 4)
+      (match (parse-expr (at items 1))
+        (Ok cond-node)
+          (match (parse-expr (at items 2))
+            (Ok then-node)
+              (match (parse-expr (at items 3))
+                (Ok else-node)
+                  (Ok (ASTIf cond-node then-node else-node line col))
+                (Err e) (Err e))
+            (Err e) (Err e))
+        (Err e) (Err e))
+      (Err (ParseError "if requires exactly 3 arguments (cond then else)" line col))))
+
+(defn parse-let-binding
+  :sig [(sexpr : Any) -> List]
+  :intent "Parse a single let binding (name : Type value)"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (< (length items) 4)
+          (Err (ParseError "let binding requires (name : Type value)" line col))
+          (let (name-sexpr : Any (at items 0))
+            (match name-sexpr
+              (SAtom tok)
+                (match tok
+                  (Token kind name _ _)
+                    (if (= kind "symbol")
+                      ;; items[1] should be colon, items[2] should be type, items[3] should be value
+                      (let (type-sexpr : Any (at items 2))
+                        (match type-sexpr
+                          (SAtom type-tok)
+                            (match type-tok
+                              (Token tk tv _ _)
+                                (if (= tk "symbol")
+                                  (match (parse-expr (at items 3))
+                                    (Ok val-node) (Ok (ASTBinding name tv val-node))
+                                    (Err e) (Err e))
+                                  (Err (ParseError "expected type name in let binding" line col))))
+                          _ (Err (ParseError "expected type name in let binding" line col))))
+                      (Err (ParseError "expected symbol name in let binding" line col))))
+              _ (Err (ParseError "expected symbol name in let binding" line col)))))
+      _ (Err (ParseError "let binding must be a list" 0 0))))
+
+(defn parse-let-bindings
+  :sig [(items : List) (pos : i64) (end : i64) -> List]
+  :intent "Parse let bindings from items[pos] to items[end-1], return (Ok bindings)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos end)
+      (Ok [])
+      (match (parse-let-binding (at items pos))
+        (Ok binding)
+          (match (parse-let-bindings items (+ pos 1) end)
+            (Ok rest) (Ok (cons binding rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn parse-let
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (let (bindings...) body) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [let-sym binding1 binding2 ... body]
+    ;; At least 3 items: let + one binding + body
+    (if (< (length items) 3)
+      (Err (ParseError "let requires at least one binding and a body" line col))
+      ;; bindings are items[1] to items[n-2], body is items[n-1]
+      (let (num-items : i64 (length items))
+        (let (body-idx : i64 (- num-items 1))
+          (match (parse-let-bindings items 1 body-idx)
+            (Ok bindings)
+              (match (parse-expr (at items body-idx))
+                (Ok body-node) (Ok (ASTLet bindings body-node line col))
+                (Err e) (Err e))
+            (Err e) (Err e))))))
+
+(defn parse-do
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (do expr1 expr2 ...) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [do-sym expr1 expr2 ...]
+    (if (< (length items) 2)
+      (Err (ParseError "do requires at least one expression" line col))
+      (match (parse-list-items items 1)
+        (Ok exprs) (Ok (ASTDo exprs line col))
+        (Err e) (Err e))))
+
 ;; ── Test helper ───────────────────────────────────
 
 (defn assert-eq
@@ -803,3 +905,55 @@
   (Err e) (print "FAIL: error"))
 
 (print "=== Task 3 tests complete ===")
+
+;; ── Compound expression tests ───────────────────
+
+;; if expression
+(match (parse-one-expr "(if true 1 2)")
+  (Ok node) (match node
+    (ASTIf cond then-e else-e _ _)
+      (do
+        (match cond (ASTBool v _ _) (assert-eq v true) _ (print "FAIL: if cond"))
+        (match then-e (ASTInt v _ _) (assert-eq v 1) _ (print "FAIL: if then"))
+        (match else-e (ASTInt v _ _) (assert-eq v 2) _ (print "FAIL: if else")))
+    _ (print "FAIL: expected ASTIf"))
+  (Err e) (print "FAIL: error"))
+
+;; if with wrong arg count
+(match (parse-one-expr "(if true 1)")
+  (Ok _) (print "FAIL: if with 2 args should error")
+  (Err _) (assert-eq true true))
+
+;; let expression
+(match (parse-one-expr "(let (x : i32 5) (+ x 1))")
+  (Ok node) (match node
+    (ASTLet bindings body _ _)
+      (do
+        (assert-eq (length bindings) 1)
+        (match (head bindings)
+          (ASTBinding name type-name expr)
+            (do
+              (assert-eq name "x")
+              (assert-eq type-name "i32")
+              (match expr (ASTInt v _ _) (assert-eq v 5) _ (print "FAIL")))
+          _ (print "FAIL: expected ASTBinding")))
+    _ (print "FAIL: expected ASTLet"))
+  (Err e) (print "FAIL: error"))
+
+;; let with multiple bindings
+(match (parse-one-expr "(let (x : i32 1) (y : i32 2) (+ x y))")
+  (Ok node) (match node
+    (ASTLet bindings body _ _)
+      (assert-eq (length bindings) 2)
+    _ (print "FAIL: expected ASTLet"))
+  (Err e) (print "FAIL: error"))
+
+;; do expression
+(match (parse-one-expr "(do 1 2 3)")
+  (Ok node) (match node
+    (ASTDo exprs _ _)
+      (assert-eq (length exprs) 3)
+    _ (print "FAIL: expected ASTDo"))
+  (Err e) (print "FAIL: error"))
+
+(print "=== Task 4 tests complete ===")
