@@ -3,17 +3,23 @@ use airl_driver::fmt::format_source;
 use airl_agent::transport::Transport;
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    match args.get(1).map(|s| s.as_str()) {
-        Some("run") => cmd_run(&args[2..]),
-        Some("check") => cmd_check(&args[2..]),
-        Some("repl") => cmd_repl(),
-        Some("agent") => cmd_agent(&args[2..]),
-        Some("call") => cmd_call(&args[2..]),
-        Some("fmt") => cmd_fmt(&args[2..]),
-        Some("--version") | Some("-V") => println!("airl 0.1.0"),
-        _ => print_usage(),
-    }
+    // Spawn with larger stack to support deeply nested AIRL evaluation
+    // (e.g., bootstrap compiler's self-hosted parser)
+    let builder = std::thread::Builder::new().stack_size(1024 * 1024 * 1024);
+    let handler = builder.spawn(|| {
+        let args: Vec<String> = std::env::args().collect();
+        match args.get(1).map(|s| s.as_str()) {
+            Some("run") => cmd_run(&args[2..]),
+            Some("check") => cmd_check(&args[2..]),
+            Some("repl") => cmd_repl(),
+            Some("agent") => cmd_agent(&args[2..]),
+            Some("call") => cmd_call(&args[2..]),
+            Some("fmt") => cmd_fmt(&args[2..]),
+            Some("--version") | Some("-V") => println!("airl 0.1.0"),
+            _ => print_usage(),
+        }
+    }).expect("failed to spawn main thread");
+    handler.join().expect("main thread panicked");
 }
 
 fn cmd_run(args: &[String]) {

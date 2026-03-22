@@ -277,9 +277,10 @@
               (let (esc : String (char-at source (+ pos 1)))
                 (if (= esc "n")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\n") start-line start-col)
                 (if (= esc "t")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\t") start-line start-col)
+                (if (= esc "r")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\r") start-line start-col)
                 (if (= esc "\\") (lex-string source (+ pos 2) line (+ col 2) (+ acc "\\") start-line start-col)
                 (if (= esc "\"") (lex-string source (+ pos 2) line (+ col 2) (+ acc "\"") start-line start-col)
-                  (Err (+ "unknown escape \\" esc))))))))
+                  (Err (+ "unknown escape \\" esc)))))))))
             ;; Regular character
             (if (= ch "\n")
               (lex-string source (+ pos 1) (+ line 1) 0 (+ acc ch) start-line start-col)
@@ -1509,3 +1510,5 @@
   (Err e) (print "FAIL: error"))
 
 (print "=== Task 6 tests complete ===")
+(print "=== All unit tests complete ===")
+;; Integration tests are in bootstrap/integration_test.airl (separate file)
