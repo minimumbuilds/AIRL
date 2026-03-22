@@ -190,11 +190,11 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 #### 1. Self-Hosting (Phase 3)
 
-**Status:** Lexer and parser complete. The self-hosted lexer (`bootstrap/lexer.airl`, ~360 lines) tokenizes AIRL source strings. The self-hosted parser (`bootstrap/parser.airl`, ~250 lines) converts token streams to typed AST nodes using a two-phase architecture (tokens → S-expressions → AST). Handles the bootstrap subset: defn, if, let, do, match, fn, try, function calls, variant constructors, and pattern matching. Tested by `bootstrap/parser_test.airl` (unit tests) and `bootstrap/integration_test.airl` (pipeline tests).
+**Status:** Lexer, parser, and evaluator complete. The self-hosted lexer (`bootstrap/lexer.airl`, ~360 lines) tokenizes AIRL source strings. The self-hosted parser (`bootstrap/parser.airl`, ~750 lines) converts token streams to typed AST nodes. The self-hosted evaluator (`bootstrap/eval.airl`, ~520 lines) interprets AST nodes using tagged value variants (`ValInt`, `ValStr`, etc.), a map-based environment frame stack, and builtin delegation to the Rust runtime. The full lex→parse→eval pipeline is tested by `bootstrap/pipeline_test.airl`.
 
 **Known limitation:** Parsing deeply nested files is computationally intensive in the tree-walking interpreter but no longer causes stack overflow thanks to the trampoline. Full lexer self-parse may be slow but terminates correctly.
 
-**Next steps:** Evaluator in AIRL. The parser produces AST nodes that the evaluator will walk to interpret programs.
+**Next steps:** The bootstrap compiler can now lex, parse, and evaluate AIRL programs entirely in AIRL. Potential future work includes self-hosting the type checker or adding optimization passes.
 
 ---
 
@@ -205,6 +205,8 @@ The self-hosted compiler lives in `bootstrap/`. Run tests with:
 cargo run -- run bootstrap/lexer_test.airl       # Lexer tests
 cargo run -- run bootstrap/parser_test.airl      # Parser unit tests
 cargo run -- run bootstrap/integration_test.airl # Parser integration tests
+cargo run -- run bootstrap/eval_test.airl        # Evaluator unit tests
+cargo run -- run bootstrap/pipeline_test.airl    # Full lex→parse→eval pipeline tests
 ```
 
 **Important AIRL constraints for bootstrap code:**
