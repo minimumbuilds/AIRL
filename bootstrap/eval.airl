@@ -65,7 +65,7 @@
 ;; Environment is a list of maps (frame stack). Head = innermost scope.
 
 (defn env-new
-  :sig [(_u : List) -> List]
+  :sig [(_u : i64) -> List]
   :intent "Create a new environment with one empty frame"
   :requires [(valid _u)]
   :ensures [(valid result)]
@@ -228,7 +228,7 @@
     ))))))))))))))))))))))))))))))))))))))))))))))))))))
 
 (defn make-initial-env
-  :sig [(_u : List) -> List]
+  :sig [(_u : i64) -> List]
   :intent "Create environment with all builtins bound"
   :requires [(valid _u)]
   :ensures [(valid result)]
@@ -610,7 +610,7 @@
   :requires [(valid path)]
   :ensures [(valid result)]
   :body
-    (let (source : List(read-file path))
+    (let (source : String (read-file path))
       (match (run-source source)
         (Ok pair) (Ok (at pair 0))
         (Err e) (do (print "Error:" e) (Err e)))))

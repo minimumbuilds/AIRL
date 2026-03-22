@@ -179,8 +179,11 @@
         _ (match a
           ;; TyNever is bottom type — compatible with anything
           (TyNever) true
+          ;; TyUnit (nil) is compatible with anything — used as placeholder
+          (TyUnit) true
           _ (match b
             (TyNever) true
+            (TyUnit) true
             _ (if (is-int-type a)
                 (if (is-int-type b) true false)
                 (if (is-float-type a)
