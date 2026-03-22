@@ -4,7 +4,7 @@
 ;; ─── Value Unwrap Helpers ─────────────────────────────────
 
 (defn unwrap-int
-  :sig [(v : Any) -> i64]
+  :sig [(v : List) -> i64]
   :intent "Extract integer from ValInt"
   :requires [(valid v)]
   :ensures [(valid result)]
@@ -13,7 +13,7 @@
     _ (do (print "ERROR: expected ValInt, got" v) 0)))
 
 (defn unwrap-float
-  :sig [(v : Any) -> f64]
+  :sig [(v : List) -> f64]
   :intent "Extract float from ValFloat"
   :requires [(valid v)]
   :ensures [(valid result)]
@@ -22,7 +22,7 @@
     _ (do (print "ERROR: expected ValFloat, got" v) 0.0)))
 
 (defn unwrap-str
-  :sig [(v : Any) -> Str]
+  :sig [(v : List) -> Str]
   :intent "Extract string from ValStr"
   :requires [(valid v)]
   :ensures [(valid result)]
@@ -31,7 +31,7 @@
     _ (do (print "ERROR: expected ValStr, got" v) "")))
 
 (defn unwrap-bool
-  :sig [(v : Any) -> Bool]
+  :sig [(v : List) -> Bool]
   :intent "Extract bool from ValBool"
   :requires [(valid v)]
   :ensures [(valid result)]
@@ -40,7 +40,7 @@
     _ (do (print "ERROR: expected ValBool, got" v) false)))
 
 (defn unwrap-list
-  :sig [(v : Any) -> List]
+  :sig [(v : List) -> List]
   :intent "Extract list from ValList"
   :requires [(valid v)]
   :ensures [(valid result)]
@@ -49,7 +49,7 @@
     _ (do (print "ERROR: expected ValList, got" v) [])))
 
 (defn unwrap-raw
-  :sig [(v : Any) -> Any]
+  :sig [(v : List) -> List]
   :intent "Extract the raw AIRL value from any Val wrapper"
   :requires [(valid v)]
   :ensures [(valid result)]
@@ -65,7 +65,7 @@
 ;; Environment is a list of maps (frame stack). Head = innermost scope.
 
 (defn env-new
-  :sig [(_u : Any) -> List]
+  :sig [(_u : List) -> List]
   :intent "Create a new environment with one empty frame"
   :requires [(valid _u)]
   :ensures [(valid result)]
@@ -86,14 +86,14 @@
   :body (tail env))
 
 (defn env-bind
-  :sig [(env : List) (name : Str) (val : Any) -> List]
+  :sig [(env : List) (name : Str) (val : List) -> List]
   :intent "Bind a name to a value in the top frame"
   :requires [(valid env)]
   :ensures [(valid result)]
   :body (cons (map-set (head env) name val) (tail env)))
 
 (defn env-get
-  :sig [(env : List) (name : Str) -> Any]
+  :sig [(env : List) (name : Str) -> List]
   :intent "Look up a name in the environment, searching from innermost frame outward"
   :requires [(valid env)]
   :ensures [(valid result)]
@@ -106,7 +106,7 @@
 ;; ─── Builtin Dispatch ────────────────────────────────────
 
 (defn print-val-args
-  :sig [(args : List) -> Any]
+  :sig [(args : List) -> List]
   :intent "Print all Val-wrapped arguments via the real print builtin"
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -120,7 +120,7 @@
           (print (unwrap-raw (at args 0)) (unwrap-raw (at args 1)) (unwrap-raw (at args 2)) (unwrap-raw (at args 3))))))))
 
 (defn call-builtin
-  :sig [(name : Str) (args : List) -> Any]
+  :sig [(name : Str) (args : List) -> List]
   :intent "Dispatch a builtin call by name, returning (Ok val) or (Err msg)"
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -186,7 +186,7 @@
     ;; Map operations
     (if (= name "map-new")     (Ok (ValMap (map-new)))
     (if (= name "map-from")    (Ok (ValMap (map-from (unwrap-raw (at args 0)))))
-    (if (= name "map-get")     (let (v : Any (map-get (unwrap-raw (at args 0)) (unwrap-str (at args 1))))
+    (if (= name "map-get")     (let (v : List(map-get (unwrap-raw (at args 0)) (unwrap-str (at args 1))))
                                   (if (= v nil) (Ok (ValNil)) (Ok v)))
     (if (= name "map-get-or")  (Ok (map-get-or (unwrap-raw (at args 0)) (unwrap-str (at args 1)) (at args 2)))
     (if (= name "map-set")     (Ok (ValMap (map-set (unwrap-raw (at args 0)) (unwrap-str (at args 1)) (at args 2))))
@@ -228,67 +228,67 @@
     ))))))))))))))))))))))))))))))))))))))))))))))))))))
 
 (defn make-initial-env
-  :sig [(_u : Any) -> List]
+  :sig [(_u : List) -> List]
   :intent "Create environment with all builtins bound"
   :requires [(valid _u)]
   :ensures [(valid result)]
   :body
-    (let (e : Any (env-new 0))
-    (let (e : Any (env-bind e "+" (ValBuiltin "+")))
-    (let (e : Any (env-bind e "-" (ValBuiltin "-")))
-    (let (e : Any (env-bind e "*" (ValBuiltin "*")))
-    (let (e : Any (env-bind e "/" (ValBuiltin "/")))
-    (let (e : Any (env-bind e "%" (ValBuiltin "%")))
-    (let (e : Any (env-bind e "=" (ValBuiltin "=")))
-    (let (e : Any (env-bind e "!=" (ValBuiltin "!=")))
-    (let (e : Any (env-bind e "<" (ValBuiltin "<")))
-    (let (e : Any (env-bind e ">" (ValBuiltin ">")))
-    (let (e : Any (env-bind e "<=" (ValBuiltin "<=")))
-    (let (e : Any (env-bind e ">=" (ValBuiltin ">=")))
-    (let (e : Any (env-bind e "not" (ValBuiltin "not")))
-    (let (e : Any (env-bind e "and" (ValBuiltin "and")))
-    (let (e : Any (env-bind e "or" (ValBuiltin "or")))
-    (let (e : Any (env-bind e "head" (ValBuiltin "head")))
-    (let (e : Any (env-bind e "tail" (ValBuiltin "tail")))
-    (let (e : Any (env-bind e "cons" (ValBuiltin "cons")))
-    (let (e : Any (env-bind e "empty?" (ValBuiltin "empty?")))
-    (let (e : Any (env-bind e "length" (ValBuiltin "length")))
-    (let (e : Any (env-bind e "at" (ValBuiltin "at")))
-    (let (e : Any (env-bind e "append" (ValBuiltin "append")))
-    (let (e : Any (env-bind e "char-at" (ValBuiltin "char-at")))
-    (let (e : Any (env-bind e "substring" (ValBuiltin "substring")))
-    (let (e : Any (env-bind e "chars" (ValBuiltin "chars")))
-    (let (e : Any (env-bind e "contains" (ValBuiltin "contains")))
-    (let (e : Any (env-bind e "starts-with" (ValBuiltin "starts-with")))
-    (let (e : Any (env-bind e "ends-with" (ValBuiltin "ends-with")))
-    (let (e : Any (env-bind e "index-of" (ValBuiltin "index-of")))
-    (let (e : Any (env-bind e "trim" (ValBuiltin "trim")))
-    (let (e : Any (env-bind e "to-upper" (ValBuiltin "to-upper")))
-    (let (e : Any (env-bind e "to-lower" (ValBuiltin "to-lower")))
-    (let (e : Any (env-bind e "replace" (ValBuiltin "replace")))
-    (let (e : Any (env-bind e "split" (ValBuiltin "split")))
-    (let (e : Any (env-bind e "join" (ValBuiltin "join")))
-    (let (e : Any (env-bind e "map-new" (ValBuiltin "map-new")))
-    (let (e : Any (env-bind e "map-from" (ValBuiltin "map-from")))
-    (let (e : Any (env-bind e "map-get" (ValBuiltin "map-get")))
-    (let (e : Any (env-bind e "map-get-or" (ValBuiltin "map-get-or")))
-    (let (e : Any (env-bind e "map-set" (ValBuiltin "map-set")))
-    (let (e : Any (env-bind e "map-has" (ValBuiltin "map-has")))
-    (let (e : Any (env-bind e "map-remove" (ValBuiltin "map-remove")))
-    (let (e : Any (env-bind e "map-keys" (ValBuiltin "map-keys")))
-    (let (e : Any (env-bind e "map-values" (ValBuiltin "map-values")))
-    (let (e : Any (env-bind e "map-size" (ValBuiltin "map-size")))
-    (let (e : Any (env-bind e "read-file" (ValBuiltin "read-file")))
-    (let (e : Any (env-bind e "write-file" (ValBuiltin "write-file")))
-    (let (e : Any (env-bind e "file-exists?" (ValBuiltin "file-exists?")))
-    (let (e : Any (env-bind e "print" (ValBuiltin "print")))
-    (let (e : Any (env-bind e "type-of" (ValBuiltin "type-of")))
-    (let (e : Any (env-bind e "valid" (ValBuiltin "valid")))
-    (let (e : Any (env-bind e "xor" (ValBuiltin "xor")))
+    (let (e : List(env-new 0))
+    (let (e : List(env-bind e "+" (ValBuiltin "+")))
+    (let (e : List(env-bind e "-" (ValBuiltin "-")))
+    (let (e : List(env-bind e "*" (ValBuiltin "*")))
+    (let (e : List(env-bind e "/" (ValBuiltin "/")))
+    (let (e : List(env-bind e "%" (ValBuiltin "%")))
+    (let (e : List(env-bind e "=" (ValBuiltin "=")))
+    (let (e : List(env-bind e "!=" (ValBuiltin "!=")))
+    (let (e : List(env-bind e "<" (ValBuiltin "<")))
+    (let (e : List(env-bind e ">" (ValBuiltin ">")))
+    (let (e : List(env-bind e "<=" (ValBuiltin "<=")))
+    (let (e : List(env-bind e ">=" (ValBuiltin ">=")))
+    (let (e : List(env-bind e "not" (ValBuiltin "not")))
+    (let (e : List(env-bind e "and" (ValBuiltin "and")))
+    (let (e : List(env-bind e "or" (ValBuiltin "or")))
+    (let (e : List(env-bind e "head" (ValBuiltin "head")))
+    (let (e : List(env-bind e "tail" (ValBuiltin "tail")))
+    (let (e : List(env-bind e "cons" (ValBuiltin "cons")))
+    (let (e : List(env-bind e "empty?" (ValBuiltin "empty?")))
+    (let (e : List(env-bind e "length" (ValBuiltin "length")))
+    (let (e : List(env-bind e "at" (ValBuiltin "at")))
+    (let (e : List(env-bind e "append" (ValBuiltin "append")))
+    (let (e : List(env-bind e "char-at" (ValBuiltin "char-at")))
+    (let (e : List(env-bind e "substring" (ValBuiltin "substring")))
+    (let (e : List(env-bind e "chars" (ValBuiltin "chars")))
+    (let (e : List(env-bind e "contains" (ValBuiltin "contains")))
+    (let (e : List(env-bind e "starts-with" (ValBuiltin "starts-with")))
+    (let (e : List(env-bind e "ends-with" (ValBuiltin "ends-with")))
+    (let (e : List(env-bind e "index-of" (ValBuiltin "index-of")))
+    (let (e : List(env-bind e "trim" (ValBuiltin "trim")))
+    (let (e : List(env-bind e "to-upper" (ValBuiltin "to-upper")))
+    (let (e : List(env-bind e "to-lower" (ValBuiltin "to-lower")))
+    (let (e : List(env-bind e "replace" (ValBuiltin "replace")))
+    (let (e : List(env-bind e "split" (ValBuiltin "split")))
+    (let (e : List(env-bind e "join" (ValBuiltin "join")))
+    (let (e : List(env-bind e "map-new" (ValBuiltin "map-new")))
+    (let (e : List(env-bind e "map-from" (ValBuiltin "map-from")))
+    (let (e : List(env-bind e "map-get" (ValBuiltin "map-get")))
+    (let (e : List(env-bind e "map-get-or" (ValBuiltin "map-get-or")))
+    (let (e : List(env-bind e "map-set" (ValBuiltin "map-set")))
+    (let (e : List(env-bind e "map-has" (ValBuiltin "map-has")))
+    (let (e : List(env-bind e "map-remove" (ValBuiltin "map-remove")))
+    (let (e : List(env-bind e "map-keys" (ValBuiltin "map-keys")))
+    (let (e : List(env-bind e "map-values" (ValBuiltin "map-values")))
+    (let (e : List(env-bind e "map-size" (ValBuiltin "map-size")))
+    (let (e : List(env-bind e "read-file" (ValBuiltin "read-file")))
+    (let (e : List(env-bind e "write-file" (ValBuiltin "write-file")))
+    (let (e : List(env-bind e "file-exists?" (ValBuiltin "file-exists?")))
+    (let (e : List(env-bind e "print" (ValBuiltin "print")))
+    (let (e : List(env-bind e "type-of" (ValBuiltin "type-of")))
+    (let (e : List(env-bind e "valid" (ValBuiltin "valid")))
+    (let (e : List(env-bind e "xor" (ValBuiltin "xor")))
       e)))))))))))))))))))))))))))))))))))))))))))))))))))))
 
 (defn eval-args-acc
-  :sig [(args : List) (env : List) (acc : List) -> Any]
+  :sig [(args : List) (env : List) (acc : List) -> List]
   :intent "Accumulate evaluated argument values"
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -300,7 +300,7 @@
           (eval-args-acc (tail args) (at pair 1) (append acc (at pair 0))))))
 
 (defn eval-args
-  :sig [(args : List) (env : List) -> Any]
+  :sig [(args : List) (env : List) -> List]
   :intent "Evaluate a list of argument expressions left-to-right"
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -309,7 +309,7 @@
 ;; ─── Control Flow Helpers ────────────────────────────────
 
 (defn eval-let-bindings
-  :sig [(bindings : List) (env : List) -> Any]
+  :sig [(bindings : List) (env : List) -> List]
   :intent "Evaluate let bindings sequentially, threading env"
   :requires [(valid bindings)]
   :ensures [(valid result)]
@@ -324,7 +324,7 @@
         _ (Err "eval: invalid let binding"))))
 
 (defn eval-do
-  :sig [(exprs : List) (env : List) -> Any]
+  :sig [(exprs : List) (env : List) -> List]
   :intent "Evaluate a sequence of expressions, threading env, return last value"
   :requires [(valid exprs)]
   :ensures [(valid result)]
@@ -340,7 +340,7 @@
 ;; ─── Pattern Matching ────────────────────────────────────
 
 (defn try-match-patterns
-  :sig [(patterns : List) (values : List) -> Any]
+  :sig [(patterns : List) (values : List) -> List]
   :intent "Match a list of patterns against a list of values, collecting bindings"
   :requires [(valid patterns)]
   :ensures [(valid result)]
@@ -355,7 +355,7 @@
               (Ok binds2) (Ok (concat binds1 binds2)))))))
 
 (defn try-match-pattern
-  :sig [(pattern : Any) (value : Any) -> Any]
+  :sig [(pattern : List) (value : List) -> List]
   :intent "Try to match a pattern against a value, returning (Ok bindings) or (Err msg)"
   :requires [(valid pattern)]
   :ensures [(valid result)]
@@ -387,13 +387,13 @@
   :ensures [(valid result)]
   :body
     (if (empty? bindings) env
-      (let (pair : Any (head bindings))
+      (let (pair : List(head bindings))
         (bind-match-bindings
           (env-bind env (at pair 0) (at pair 1))
           (tail bindings)))))
 
 (defn eval-match-arms
-  :sig [(arms : List) (value : Any) (env : List) -> Any]
+  :sig [(arms : List) (value : List) (env : List) -> List]
   :intent "Try each match arm against the scrutinee value"
   :requires [(valid arms)]
   :ensures [(valid result)]
@@ -404,7 +404,7 @@
         (ASTArm pattern body)
           (match (try-match-pattern pattern value)
             (Ok bindings)
-              (let (match-env : Any (bind-match-bindings (env-push env) bindings))
+              (let (match-env : List(bind-match-bindings (env-push env) bindings))
                 (match (eval-node body match-env)
                   (Err e) (Err e)
                   (Ok pair) (Ok [(at pair 0) (env-pop (at pair 1))])))
@@ -414,7 +414,7 @@
 ;; ─── Function Helpers ────────────────────────────────────
 
 (defn extract-param-names
-  :sig [(sig : Any) -> List]
+  :sig [(sig : List) -> List]
   :intent "Extract parameter name strings from an ASTSig node"
   :requires [(valid sig)]
   :ensures [(valid result)]
@@ -438,7 +438,7 @@
 ;; ─── Evaluator Core ──────────────────────────────────────
 
 (defn eval-list-items
-  :sig [(items : List) (env : List) (acc : List) -> Any]
+  :sig [(items : List) (env : List) (acc : List) -> List]
   :intent "Evaluate list literal items left-to-right"
   :requires [(valid items)]
   :ensures [(valid result)]
@@ -450,7 +450,7 @@
           (eval-list-items (tail items) (at pair 1) (append acc (at pair 0))))))
 
 (defn eval-node
-  :sig [(node : Any) (env : List) -> Any]
+  :sig [(node : List) (env : List) -> List]
   :intent "Evaluate a single AST node, returning (Ok [val env]) or (Err msg)"
   :requires [(valid node)]
   :ensures [(valid result)]
@@ -476,13 +476,13 @@
       (match (eval-node callee env)
         (Err e) (Err e)
         (Ok callee-pair)
-          (let (callee-val : Any (at callee-pair 0))
-            (let (env2 : Any (at callee-pair 1))
+          (let (callee-val : List(at callee-pair 0))
+            (let (env2 : List(at callee-pair 1))
               (match (eval-args args env2)
                 (Err e) (Err e)
                 (Ok args-pair)
-                  (let (arg-vals : Any (at args-pair 0))
-                    (let (env3 : Any (at args-pair 1))
+                  (let (arg-vals : List(at args-pair 0))
+                    (let (env3 : List(at args-pair 1))
                       (match callee-val
                         (ValBuiltin name)
                           (match (call-builtin name arg-vals)
@@ -490,13 +490,13 @@
                             (Err e) (Err e))
 
                         (ValFn fn-name params body captured-env)
-                          (let (call-env : Any (env-bind (bind-params (env-push captured-env) params arg-vals) fn-name callee-val))
+                          (let (call-env : List(env-bind (bind-params (env-push captured-env) params arg-vals) fn-name callee-val))
                             (match (eval-node body call-env)
                               (Err e) (Err e)
                               (Ok pair) (Ok [(at pair 0) env3])))
 
                         (ValLambda params body captured-env)
-                          (let (call-env : Any (bind-params (env-push captured-env) params arg-vals))
+                          (let (call-env : List(bind-params (env-push captured-env) params arg-vals))
                             (match (eval-node body call-env)
                               (Err e) (Err e)
                               (Ok pair) (Ok [(at pair 0) env3])))
@@ -507,14 +507,14 @@
       (match (eval-node cond env)
         (Err e) (Err e)
         (Ok cond-pair)
-          (let (cond-val : Any (at cond-pair 0))
-            (let (env2 : Any (at cond-pair 1))
+          (let (cond-val : List(at cond-pair 0))
+            (let (env2 : List(at cond-pair 1))
               (if (unwrap-bool cond-val)
                 (eval-node then-expr env2)
                 (eval-node else-expr env2)))))
 
     (ASTLet bindings body _ _)
-      (let (env2 : Any (env-push env))
+      (let (env2 : List(env-push env))
         (match (eval-let-bindings bindings env2)
           (Err e) (Err e)
           (Ok bound-env)
@@ -537,8 +537,8 @@
         (match (eval-args args env)
           (Err e) (Err e)
           (Ok args-pair)
-            (let (vals : Any (at args-pair 0))
-              (let (env2 : Any (at args-pair 1))
+            (let (vals : List(at args-pair 0))
+              (let (env2 : List(at args-pair 1))
                 (if (= (length vals) 1)
                   (Ok [(ValVariant name (head vals)) env2])
                   (Ok [(ValVariant name (ValList vals)) env2]))))))
@@ -560,19 +560,19 @@
 ;; ─── Top-Level Evaluation ────────────────────────────────
 
 (defn eval-top-level
-  :sig [(node : Any) (env : List) -> Any]
+  :sig [(node : List) (env : List) -> List]
   :intent "Evaluate a top-level node (defn or expression)"
   :requires [(valid node)]
   :ensures [(valid result)]
   :body (match node
     (ASTDefn name sig _ _ _ body _ _)
-      (let (param-names : Any (extract-param-names sig))
-        (let (fn-val : Any (ValFn name param-names body env))
+      (let (param-names : List(extract-param-names sig))
+        (let (fn-val : List(ValFn name param-names body env))
           (Ok [(ValNil) (env-bind env name fn-val)])))
     _ (eval-node node env)))
 
 (defn eval-program
-  :sig [(nodes : List) (env : List) -> Any]
+  :sig [(nodes : List) (env : List) -> List]
   :intent "Evaluate a list of top-level nodes sequentially, threading env"
   :requires [(valid nodes)]
   :ensures [(valid result)]
@@ -588,7 +588,7 @@
 ;; ─── Full Pipeline ───────────────────────────────────────
 
 (defn run-source
-  :sig [(source : Str) -> Any]
+  :sig [(source : Str) -> List]
   :intent "Lex, parse, and evaluate an AIRL source string"
   :requires [(valid source)]
   :ensures [(valid result)]
@@ -605,12 +605,12 @@
                 (eval-program ast-nodes (make-initial-env 0))))))
 
 (defn run-file
-  :sig [(path : Str) -> Any]
+  :sig [(path : Str) -> List]
   :intent "Read an AIRL source file and evaluate it through the full pipeline"
   :requires [(valid path)]
   :ensures [(valid result)]
   :body
-    (let (source : Any (read-file path))
+    (let (source : List(read-file path))
       (match (run-source source)
         (Ok pair) (Ok (at pair 0))
         (Err e) (do (print "Error:" e) (Err e)))))
