@@ -28,7 +28,7 @@
   :intent "Check if char can start a symbol"
   :requires [(valid ch)]
   :ensures [(valid result)]
-  :body (contains "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!$%&*+-./<=>?@^_~" ch))
+  :body (contains "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!$%&*+-./<=>?@^_|~" ch))
 
 (defn is-symbol-char?
   :sig [(ch : String) -> Bool]
