@@ -1,8 +1,11 @@
 use airl_syntax::*;
 use airl_syntax::parser;
+use airl_syntax::ast::{Expr, ExprKind, Pattern, PatternKind, LitPattern};
 use airl_runtime::eval::Interpreter;
 use airl_runtime::value::Value;
 use airl_runtime::error::RuntimeError;
+use airl_runtime::ir::*;
+use airl_runtime::ir_vm::IrVm;
 use airl_types::checker::TypeChecker;
 use airl_types::linearity::LinearityChecker;
 
@@ -236,6 +239,189 @@ pub fn check_source(source: &str) -> Result<(), PipelineError> {
     }
 
     Ok(())
+}
+
+// ── AST-to-IR Compiler (Rust-side, mirrors compiler.airl) ─────
+
+fn compile_expr(expr: &Expr) -> IRNode {
+    match &expr.kind {
+        ExprKind::IntLit(v) => IRNode::Int(*v),
+        ExprKind::FloatLit(v) => IRNode::Float(*v),
+        ExprKind::StrLit(s) => IRNode::Str(s.clone()),
+        ExprKind::BoolLit(b) => IRNode::Bool(*b),
+        ExprKind::NilLit => IRNode::Nil,
+        ExprKind::SymbolRef(name) => IRNode::Load(name.clone()),
+        ExprKind::KeywordLit(k) => IRNode::Str(format!(":{}", k)),
+
+        ExprKind::If(cond, then_, else_) => IRNode::If(
+            Box::new(compile_expr(cond)),
+            Box::new(compile_expr(then_)),
+            Box::new(compile_expr(else_)),
+        ),
+
+        ExprKind::Let(bindings, body) => {
+            let ir_bindings: Vec<IRBinding> = bindings.iter().map(|b| {
+                IRBinding {
+                    name: b.name.clone(),
+                    expr: compile_expr(&b.value),
+                }
+            }).collect();
+            IRNode::Let(ir_bindings, Box::new(compile_expr(body)))
+        }
+
+        ExprKind::Do(exprs) => IRNode::Do(exprs.iter().map(compile_expr).collect()),
+
+        ExprKind::FnCall(callee, args) => {
+            let ir_args: Vec<IRNode> = args.iter().map(compile_expr).collect();
+            if let ExprKind::SymbolRef(name) = &callee.kind {
+                IRNode::Call(name.clone(), ir_args)
+            } else {
+                IRNode::CallExpr(Box::new(compile_expr(callee)), ir_args)
+            }
+        }
+
+        ExprKind::Lambda(params, body) => {
+            let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+            IRNode::Lambda(param_names, Box::new(compile_expr(body)))
+        }
+
+        ExprKind::Match(scrutinee, arms) => {
+            let ir_arms: Vec<IRArm> = arms.iter().map(|arm| {
+                IRArm {
+                    pattern: compile_pattern(&arm.pattern),
+                    body: compile_expr(&arm.body),
+                }
+            }).collect();
+            IRNode::Match(Box::new(compile_expr(scrutinee)), ir_arms)
+        }
+
+        ExprKind::ListLit(items) => IRNode::List(items.iter().map(compile_expr).collect()),
+
+        ExprKind::VariantCtor(name, args) => {
+            IRNode::Variant(name.clone(), args.iter().map(compile_expr).collect())
+        }
+
+        ExprKind::Try(inner) => IRNode::Try(Box::new(compile_expr(inner))),
+
+        ExprKind::StructLit(name, fields) => {
+            // Compile struct literal as a variant with a list of key-value pairs
+            let mut items = Vec::new();
+            for (key, val) in fields {
+                items.push(IRNode::List(vec![
+                    IRNode::Str(key.clone()),
+                    compile_expr(val),
+                ]));
+            }
+            IRNode::Variant(name.clone(), vec![IRNode::List(items)])
+        }
+
+        // Quantifiers and other unsupported forms → Nil stub
+        ExprKind::Forall(..) | ExprKind::Exists(..) => IRNode::Nil,
+    }
+}
+
+fn compile_pattern(pat: &Pattern) -> IRPattern {
+    match &pat.kind {
+        PatternKind::Wildcard => IRPattern::Wild,
+        PatternKind::Binding(name) => IRPattern::Bind(name.clone()),
+        PatternKind::Literal(lit) => {
+            let val = match lit {
+                LitPattern::Int(v) => Value::Int(*v),
+                LitPattern::Float(v) => Value::Float(*v),
+                LitPattern::Str(s) => Value::Str(s.clone()),
+                LitPattern::Bool(b) => Value::Bool(*b),
+                LitPattern::Nil => Value::Nil,
+            };
+            IRPattern::Lit(val)
+        }
+        PatternKind::Variant(name, sub_pats) => {
+            IRPattern::Variant(name.clone(), sub_pats.iter().map(compile_pattern).collect())
+        }
+    }
+}
+
+fn compile_top_level(top: &airl_syntax::ast::TopLevel) -> IRNode {
+    match top {
+        airl_syntax::ast::TopLevel::Defn(f) => {
+            let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
+            IRNode::Func(f.name.clone(), param_names, Box::new(compile_expr(&f.body)))
+        }
+        airl_syntax::ast::TopLevel::Expr(e) => compile_expr(e),
+        _ => IRNode::Nil, // Module, DefType, Task, UseDecl — no runtime effect in compiled mode
+    }
+}
+
+// ── Compiled Pipeline ─────────────────────────────────────
+
+fn compile_and_load_stdlib(vm: &mut IrVm, source: &str, name: &str) -> Result<(), PipelineError> {
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.lex_all().unwrap_or_else(|e| panic!("{} lexing failed: {}", name, e.message));
+    let sexprs = parse_sexpr_all(&tokens).unwrap_or_else(|e| panic!("{} s-expr parsing failed: {}", name, e.message));
+    let mut diags = Diagnostics::new();
+
+    let mut tops = Vec::new();
+    for sexpr in &sexprs {
+        match parser::parse_top_level(sexpr, &mut diags) {
+            Ok(top) => tops.push(top),
+            Err(d) => panic!("{} parse error: {}", name, d.message),
+        }
+    }
+
+    let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
+    vm.exec_program(&ir_nodes)
+        .unwrap_or_else(|e| panic!("{} stdlib load failed: {}", name, e));
+    Ok(())
+}
+
+/// Run source through the compiled pipeline: parse → compile → IR VM
+pub fn run_source_compiled(source: &str) -> Result<Value, PipelineError> {
+    // Lex + parse (same as interpreted path)
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
+    let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
+    let mut diags = Diagnostics::new();
+
+    let mut tops = Vec::new();
+    for sexpr in &sexprs {
+        match parser::parse_top_level(sexpr, &mut diags) {
+            Ok(top) => tops.push(top),
+            Err(d) => {
+                let mut diags2 = Diagnostics::new();
+                match parser::parse_expr(sexpr, &mut diags2) {
+                    Ok(expr) => tops.push(airl_syntax::ast::TopLevel::Expr(expr)),
+                    Err(_) => return Err(PipelineError::Syntax(d)),
+                }
+            }
+        }
+    }
+    if diags.has_errors() {
+        return Err(PipelineError::Parse(diags));
+    }
+
+    // Compile to IR
+    let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
+
+    // Create VM, load stdlib, execute
+    let mut vm = IrVm::new();
+
+    for (src, name) in &[
+        (COLLECTIONS_SOURCE, "collections"),
+        (MATH_SOURCE, "math"),
+        (RESULT_SOURCE, "result"),
+        (STRING_SOURCE, "string"),
+        (MAP_SOURCE, "map"),
+    ] {
+        compile_and_load_stdlib(&mut vm, src, name)?;
+    }
+
+    // Execute user code
+    vm.exec_program(&ir_nodes).map_err(PipelineError::Runtime)
+}
+
+pub fn run_file_compiled(path: &str) -> Result<Value, PipelineError> {
+    let source = std::fs::read_to_string(path)
+        .map_err(|e| PipelineError::Io(e.to_string()))?;
+    run_source_compiled(&source)
 }
 
 pub fn check_file(path: &str) -> Result<(), PipelineError> {

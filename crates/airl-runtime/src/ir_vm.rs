@@ -58,7 +58,21 @@ impl IrVm {
             IRNode::Bool(b) => Ok(Value::Bool(*b)),
             IRNode::Nil => Ok(Value::Nil),
 
-            IRNode::Load(name) => self.env_lookup(name),
+            IRNode::Load(name) => {
+                match self.env_lookup(name) {
+                    Ok(val) => Ok(val),
+                    Err(_) => {
+                        // Fall back: if name is a known function, return a reference
+                        if self.functions.contains_key(name.as_str()) {
+                            Ok(Value::IRFuncRef(name.clone()))
+                        } else if self.builtins.get(name).is_some() {
+                            Ok(Value::BuiltinFn(name.clone()))
+                        } else {
+                            Err(RuntimeError::UndefinedSymbol(name.clone()))
+                        }
+                    }
+                }
+            }
 
             IRNode::If(cond, then_, else_) => {
                 let cond_val = self.exec(cond)?;
