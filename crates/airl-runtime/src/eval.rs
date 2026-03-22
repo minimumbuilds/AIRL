@@ -22,11 +22,16 @@ pub struct Interpreter {
     builtins: Builtins,
     pub jit: Option<airl_codegen::JitCache>,
     pub tensor_jit: Option<airl_codegen::TensorJit>,
+    #[cfg(feature = "mlir")]
+    pub mlir_jit: Option<airl_mlir::MlirTensorJit>,
     agents: Vec<LiveAgent>,
     pending_results: HashMap<String, mpsc::Receiver<Result<Value, String>>>,
     next_agent_id: u32,
     next_send_id: u32,
     recursion_depth: usize,
+    /// Current execution target override from `:execute-on` annotation.
+    /// `None` means auto-detect (try GPU → MLIR CPU → Cranelift → interpreted).
+    exec_target: Option<ExecTarget>,
 }
 
 impl Interpreter {
@@ -36,11 +41,14 @@ impl Interpreter {
             builtins: Builtins::new(),
             jit: airl_codegen::JitCache::new().ok(),
             tensor_jit: airl_codegen::TensorJit::new().ok(),
+            #[cfg(feature = "mlir")]
+            mlir_jit: airl_mlir::MlirTensorJit::new().ok(),
             agents: Vec::new(),
             pending_results: HashMap::new(),
             next_agent_id: 0,
             next_send_id: 0,
             recursion_depth: 0,
+            exec_target: None,
         };
         // Register all builtin names in the environment so symbol lookups resolve them
         interp.register_builtin_symbols();
@@ -289,7 +297,46 @@ impl Interpreter {
                     }
                 }
 
-                // Try tensor JIT for supported ops before regular dispatch
+                // Try MLIR JIT first (if available), then Cranelift, then interpreted.
+                // Respects :execute-on — skip MLIR/GPU path if target is Cpu.
+                #[cfg(feature = "mlir")]
+                if !matches!(self.exec_target, Some(ExecTarget::Cpu)) {
+                if let Value::BuiltinFn(ref name) = callee_val {
+                    if matches!(name.as_str(), "tensor.add" | "tensor.mul" | "tensor.matmul" | "tensor.softmax" | "tensor.transpose") {
+                        if let Some(mut mjit) = self.mlir_jit.take() {
+                            let result = try_mlir_tensor_jit(&mut mjit, name, &arg_vals);
+                            self.mlir_jit = Some(mjit);
+                            match result {
+                                Ok(Some(val)) => {
+                                    for (bname, is_mutable) in &borrow_ledger {
+                                        if *is_mutable {
+                                            self.env.release_mutable_borrow(bname);
+                                        } else {
+                                            self.env.release_immutable_borrow(bname);
+                                        }
+                                    }
+                                    return Ok(val);
+                                }
+                                Err(e) => {
+                                    for (bname, is_mutable) in &borrow_ledger {
+                                        if *is_mutable {
+                                            self.env.release_mutable_borrow(bname);
+                                        } else {
+                                            self.env.release_immutable_borrow(bname);
+                                        }
+                                    }
+                                    return Err(e);
+                                }
+                                Ok(None) => {} // fall through to Cranelift JIT
+                            }
+                        }
+                    }
+                }
+                } // end exec_target != Cpu guard
+
+                // Try Cranelift tensor JIT for supported ops before regular dispatch.
+                // Skip if :execute-on gpu (force GPU-only path).
+                if !matches!(self.exec_target, Some(ExecTarget::Gpu)) {
                 if let Value::BuiltinFn(ref name) = callee_val {
                     if matches!(name.as_str(), "tensor.add" | "tensor.mul" | "tensor.matmul") {
                         if let Some(mut tjit) = self.tensor_jit.take() {
@@ -322,6 +369,7 @@ impl Interpreter {
                         }
                     }
                 }
+                } // end exec_target != Gpu guard
 
                 let result = match callee_val {
                     Value::BuiltinFn(ref name) => {
@@ -400,6 +448,17 @@ impl Interpreter {
     }
 
     fn call_fn(&mut self, fn_val: &FnValue, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        // Set :execute-on target for the duration of this call, restore on exit
+        let prev_target = self.exec_target.clone();
+        if let Some(ref target) = fn_val.def.execute_on {
+            self.exec_target = Some(target.clone());
+        }
+        let result = self.call_fn_inner(fn_val, args);
+        self.exec_target = prev_target;
+        result
+    }
+
+    fn call_fn_inner(&mut self, fn_val: &FnValue, args: Vec<Value>) -> Result<Value, RuntimeError> {
         if self.recursion_depth >= 50_000 {
             return Err(RuntimeError::TypeError(
                 "maximum recursion depth (50000) exceeded".into(),
@@ -1193,6 +1252,88 @@ fn try_tensor_jit(
                 .map_err(|e| RuntimeError::Custom(e))?;
             Ok(Some(Value::Tensor(Box::new(crate::tensor::TensorValue {
                 dtype: a.dtype, shape: vec![m, n], data: out,
+            }))))
+        }
+        _ => Ok(None),
+    }
+}
+
+#[cfg(feature = "mlir")]
+fn try_mlir_tensor_jit(
+    mjit: &mut airl_mlir::MlirTensorJit,
+    op: &str,
+    args: &[Value],
+) -> Result<Option<Value>, RuntimeError> {
+    match op {
+        "tensor.add" | "tensor.mul" => {
+            if args.len() != 2 { return Ok(None); }
+            let (a, b) = match (&args[0], &args[1]) {
+                (Value::Tensor(a), Value::Tensor(b)) => (a.as_ref(), b.as_ref()),
+                _ => return Ok(None),
+            };
+            if a.shape != b.shape {
+                return Err(RuntimeError::ShapeMismatch {
+                    expected: a.shape.clone(), got: b.shape.clone(),
+                });
+            }
+            let mut out = vec![0.0f64; a.data.len()];
+            let r = if op == "tensor.add" {
+                mjit.add(&a.data, &b.data, &mut out)
+            } else {
+                mjit.mul(&a.data, &b.data, &mut out)
+            };
+            r.map_err(|e| RuntimeError::Custom(e))?;
+            Ok(Some(Value::Tensor(Box::new(crate::tensor::TensorValue {
+                dtype: a.dtype, shape: a.shape.clone(), data: out,
+            }))))
+        }
+        "tensor.matmul" => {
+            if args.len() != 2 { return Ok(None); }
+            let (a, b) = match (&args[0], &args[1]) {
+                (Value::Tensor(a), Value::Tensor(b)) => (a.as_ref(), b.as_ref()),
+                _ => return Ok(None),
+            };
+            if a.shape.len() != 2 || b.shape.len() != 2 { return Ok(None); }
+            let (m, k1) = (a.shape[0], a.shape[1]);
+            let (k2, n) = (b.shape[0], b.shape[1]);
+            if k1 != k2 {
+                return Err(RuntimeError::ShapeMismatch {
+                    expected: vec![m, k1], got: vec![k2, n],
+                });
+            }
+            let mut out = vec![0.0f64; m * n];
+            mjit.matmul(&a.data, &b.data, &mut out, m, k1, n)
+                .map_err(|e| RuntimeError::Custom(e))?;
+            Ok(Some(Value::Tensor(Box::new(crate::tensor::TensorValue {
+                dtype: a.dtype, shape: vec![m, n], data: out,
+            }))))
+        }
+        "tensor.softmax" => {
+            if args.len() != 1 { return Ok(None); }
+            let t = match &args[0] {
+                Value::Tensor(t) => t.as_ref(),
+                _ => return Ok(None),
+            };
+            let mut out = vec![0.0f64; t.data.len()];
+            mjit.softmax(&t.data, &mut out)
+                .map_err(|e| RuntimeError::Custom(e))?;
+            Ok(Some(Value::Tensor(Box::new(crate::tensor::TensorValue {
+                dtype: t.dtype, shape: t.shape.clone(), data: out,
+            }))))
+        }
+        "tensor.transpose" => {
+            if args.len() != 1 { return Ok(None); }
+            let t = match &args[0] {
+                Value::Tensor(t) => t.as_ref(),
+                _ => return Ok(None),
+            };
+            if t.shape.len() != 2 { return Ok(None); }
+            let (rows, cols) = (t.shape[0], t.shape[1]);
+            let mut out = vec![0.0f64; rows * cols];
+            mjit.transpose(&t.data, &mut out, rows, cols)
+                .map_err(|e| RuntimeError::Custom(e))?;
+            Ok(Some(Value::Tensor(Box::new(crate::tensor::TensorValue {
+                dtype: t.dtype, shape: vec![cols, rows], data: out,
             }))))
         }
         _ => Ok(None),
