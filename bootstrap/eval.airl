@@ -60,3 +60,45 @@
     (ValBool b) b
     (ValNil) nil
     _ v))
+
+;; ─── Environment Operations ──────────────────────────────
+;; Environment is a list of maps (frame stack). Head = innermost scope.
+
+(defn env-new
+  :sig [(_u : Any) -> List]
+  :intent "Create a new environment with one empty frame"
+  :requires [(valid _u)]
+  :ensures [(valid result)]
+  :body [(map-new)])
+
+(defn env-push
+  :sig [(env : List) -> List]
+  :intent "Push a new empty frame onto the environment"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (cons (map-new) env))
+
+(defn env-pop
+  :sig [(env : List) -> List]
+  :intent "Pop the innermost frame from the environment"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (tail env))
+
+(defn env-bind
+  :sig [(env : List) (name : Str) (val : Any) -> List]
+  :intent "Bind a name to a value in the top frame"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (cons (map-set (head env) name val) (tail env)))
+
+(defn env-get
+  :sig [(env : List) (name : Str) -> Any]
+  :intent "Look up a name in the environment, searching from innermost frame outward"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (if (empty? env)
+    (Err (join ["undefined symbol: " name] ""))
+    (if (map-has (head env) name)
+      (Ok (map-get (head env) name))
+      (env-get (tail env) name))))

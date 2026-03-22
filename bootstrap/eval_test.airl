@@ -72,6 +72,47 @@
     (ValNil) nil
     _ v))
 
+;; ─── Environment Operations ──────────────────────────────
+
+(defn env-new
+  :sig [(_u : Any) -> List]
+  :intent "Create a new environment with one empty frame"
+  :requires [(valid _u)]
+  :ensures [(valid result)]
+  :body [(map-new)])
+
+(defn env-push
+  :sig [(env : List) -> List]
+  :intent "Push a new empty frame onto the environment"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (cons (map-new) env))
+
+(defn env-pop
+  :sig [(env : List) -> List]
+  :intent "Pop the innermost frame from the environment"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (tail env))
+
+(defn env-bind
+  :sig [(env : List) (name : Str) (val : Any) -> List]
+  :intent "Bind a name to a value in the top frame"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (cons (map-set (head env) name val) (tail env)))
+
+(defn env-get
+  :sig [(env : List) (name : Str) -> Any]
+  :intent "Look up a name in the environment, searching from innermost frame outward"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (if (empty? env)
+    (Err (join ["undefined symbol: " name] ""))
+    (if (map-has (head env) name)
+      (Ok (map-get (head env) name))
+      (env-get (tail env) name))))
+
 ;; ─── Task 1: Value Helper Tests ──────────────────────────
 
 (print "=== Task 1: Value helpers ===")
@@ -83,3 +124,40 @@
 (assert-eq (unwrap-raw (ValStr "x")) "x")
 (assert-eq (unwrap-raw (ValBool false)) false)
 (print "=== Task 1 tests complete ===")
+
+;; ─── Task 2: Environment Tests ───────────────────────────
+
+(print "=== Task 2: Environment ===")
+
+;; Basic bind and get
+(let (e : Any (env-bind (env-new 0) "x" (ValInt 42)))
+  (match (env-get e "x")
+    (Ok v) (assert-eq (unwrap-int v) 42)
+    (Err _) (print "  FAIL: x not found")))
+
+;; Undefined symbol
+(match (env-get (env-new 0) "nope")
+  (Ok _) (print "  FAIL: should be undefined")
+  (Err msg) (assert-eq (contains msg "undefined") true))
+
+;; Push/pop frame with shadowing
+(let (e0 : Any (env-bind (env-new 0) "x" (ValInt 1)))
+  (let (e1 : Any (env-bind (env-push e0) "x" (ValInt 2)))
+    (do
+      ;; Inner frame shadows outer
+      (match (env-get e1 "x")
+        (Ok v) (assert-eq (unwrap-int v) 2)
+        (Err _) (print "  FAIL"))
+      ;; After pop, outer value restored
+      (match (env-get (env-pop e1) "x")
+        (Ok v) (assert-eq (unwrap-int v) 1)
+        (Err _) (print "  FAIL")))))
+
+;; Inner frame can see outer bindings
+(let (e0 : Any (env-bind (env-new 0) "y" (ValStr "hello")))
+  (let (e1 : Any (env-push e0))
+    (match (env-get e1 "y")
+      (Ok v) (assert-eq (unwrap-str v) "hello")
+      (Err _) (print "  FAIL: y not visible in inner frame"))))
+
+(print "=== Task 2 tests complete ===")
