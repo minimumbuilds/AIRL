@@ -428,34 +428,50 @@ impl Interpreter {
                 }
                 } // end exec_target != Gpu guard
 
-                let result = match callee_val {
+                match callee_val {
                     Value::BuiltinFn(ref name) => {
                         let f = self.builtins.get(name).ok_or_else(|| {
                             RuntimeError::UndefinedSymbol(name.clone())
                         })?;
-                        f(&arg_vals)
+                        let result = f(&arg_vals);
+                        for (name, is_mutable) in &borrow_ledger {
+                            if *is_mutable { self.env.release_mutable_borrow(name); }
+                            else { self.env.release_immutable_borrow(name); }
+                        }
+                        Ok(EvalResult::Done(result?))
                     }
                     Value::Function(ref fn_val) => {
+                        // Self-TCO: if calling the same function currently executing,
+                        // return TailCall to let call_fn_inner loop instead of recurse
+                        if let Some(ref current_name) = self.current_fn_name {
+                            if &fn_val.name == current_name {
+                                // Release borrows before returning TailCall
+                                for (name, is_mutable) in &borrow_ledger {
+                                    if *is_mutable { self.env.release_mutable_borrow(name); }
+                                    else { self.env.release_immutable_borrow(name); }
+                                }
+                                return Ok(EvalResult::Continue(ContinueWith::TailCall(arg_vals)));
+                            }
+                        }
                         let fn_val = fn_val.clone();
-                        self.call_fn(&fn_val, arg_vals)
+                        let result = self.call_fn(&fn_val, arg_vals);
+                        for (name, is_mutable) in &borrow_ledger {
+                            if *is_mutable { self.env.release_mutable_borrow(name); }
+                            else { self.env.release_immutable_borrow(name); }
+                        }
+                        Ok(EvalResult::Done(result?))
                     }
                     Value::Lambda(ref lam) => {
                         let lam = lam.clone();
-                        self.call_lambda(&lam, arg_vals)
+                        let result = self.call_lambda(&lam, arg_vals);
+                        for (name, is_mutable) in &borrow_ledger {
+                            if *is_mutable { self.env.release_mutable_borrow(name); }
+                            else { self.env.release_immutable_borrow(name); }
+                        }
+                        Ok(EvalResult::Done(result?))
                     }
                     other => Err(RuntimeError::NotCallable(format!("{}", other))),
-                };
-
-                // Release borrows taken for this call
-                for (name, is_mutable) in &borrow_ledger {
-                    if *is_mutable {
-                        self.env.release_mutable_borrow(name);
-                    } else {
-                        self.env.release_immutable_borrow(name);
-                    }
                 }
-
-                Ok(EvalResult::Done(result?))
             }
 
             ExprKind::Try(inner) => {
@@ -1850,6 +1866,20 @@ mod tests {
 
         assert_eq!(result, Value::Int(42));
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_self_tco_deep_recursion() {
+        // count-down from 100000 — would overflow without TCO
+        let code = r#"
+            (defn count-down
+              :sig [(n : i64) -> i64]
+              :requires [(valid n)]
+              :ensures [(valid result)]
+              :body (if (= n 0) 0 (count-down (- n 1))))
+            (count-down 100000)
+        "#;
+        assert_eq!(eval_str(code), Value::Int(0));
     }
 
     #[test]
