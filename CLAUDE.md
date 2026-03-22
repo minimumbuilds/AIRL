@@ -169,122 +169,24 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 ## Completed Tasks
 
-The following tasks have been implemented. Some were partially regressed during the stdlib addition (commit `09924bc`) and need re-integration — see "Remaining Tasks" below.
-
 - **Z3 Quantifier Support (`forall`/`exists`)** — `ExprKind::Forall`/`Exists` in AST, parser support via `parse_quantifier_expr`, Z3 translation via `forall_const`/`exists_const`, runtime evaluation via `eval_quantifier`.
 - **Invariant Checking** — `:invariant` clauses evaluated after body execution in both JIT and interpreted paths of `call_fn`, using `ContractKind::Invariant`.
 - **Z3 Float Arithmetic Support** — `VarSort::Real`, `declare_real()`, `translate_real()` in translator. Maps f16/f32/f64/bf16 to Z3 Reals.
 - **Nested Pattern Matching** — `try_match` in `pattern.rs` recursively destructures nested patterns like `(Ok (Ok x))`.
 - **GPU Compilation via MLIR** — `crates/airl-mlir/` crate (~1,750 lines) with tensor lowering, GPU kernel generation, JIT execution, and optimization passes. **Build issue:** requires `libzstd-dev` for LLVM/melior linking; currently excluded from `cargo test --workspace`.
+- **Async Agent Builtins** — `send-async` (background dispatch returning task ID), `await` (block on task ID with optional timeout), `parallel` (collect multiple async results). Uses `Arc<Mutex<...>>` on agent I/O handles for thread-safe sharing.
+- **Agent Coordination Builtins** — `broadcast` (fan-out to multiple agents, return first success), `retry` (exponential backoff wrapper), `escalate` (structured error notification), `any-agent` (return first spawned agent).
+- **MLIR Runtime Integration** — `exec_target: Option<ExecTarget>` on Interpreter, `call_fn`/`call_fn_inner` split for scoped `:execute-on` annotations, GPU → MLIR CPU → Cranelift → interpreted dispatch chain, `try_mlir_tensor_jit` behind `#[cfg(feature = "mlir")]`.
+- **Better Error Messages** — Contract violations use `contract.to_airl()` for readable S-expression clause display and `capture_bindings()` to show relevant variable values.
+- **REPL Enhancements** — `:help` (list commands), `:load <file>` (evaluate a file in session), `:type <expr>` (show inferred type without evaluating). `drain_diagnostics()` on `TypeChecker` for REPL persistence.
 
 ---
 
 ## Remaining Tasks
 
-### Tier 1 — Re-integrate Regressed Features
+### Tier 1 — Important for Completeness
 
-These features were implemented in commit `bdb00f0` but removed during the stdlib addition in `09924bc`. The previous implementations can be referenced via `git show bdb00f0 -- crates/airl-runtime/src/eval.rs`.
-
-#### 1. Async Agent Builtins: `send-async`, `await`, `parallel`
-
-**Status:** Previously implemented, then removed. `await` and `parallel` are still registered as builtin names in `crates/airl-agent/src/builtins.rs` but have no backing code in `eval.rs`.
-
-**What to restore/build:**
-
-`send-async` — Returns a task ID immediately, spawns a background thread for the send. Requires re-adding `pending_results: HashMap<String, mpsc::Receiver<Result<Value, String>>>` field to Interpreter, plus `Arc<Mutex<...>>` wrappers on agent reader/writer.
-
-`await` — Takes a task ID and timeout. Blocks on the channel receiver from `pending_results`.
-
-`parallel` — Takes a list of task expressions, dispatches concurrently (one thread per task), collects results via channels, applies a merge function.
-
-**Files to modify:**
-- `crates/airl-runtime/src/eval.rs` — Re-add `builtin_send_async`, `builtin_await`, `builtin_parallel` methods and `pending_results` field. Restore `Arc<Mutex<...>>` on agent I/O handles.
-- `crates/airl-agent/src/builtins.rs` — Remove from stub list once implemented.
-
-**Estimated effort:** 200-400 lines (re-integration from prior commit).
-
----
-
-#### 2. Agent Builtins: `broadcast`, `retry`, `escalate`, `any-agent`
-
-**Status:** Registered as names in `crates/airl-agent/src/builtins.rs`, zero implementation. These were never fully implemented even in `bdb00f0`.
-
-**What to build:**
-
-- `broadcast` — `(broadcast [agent1 agent2 agent3] "fn" args... :merge :first-valid)`. Send the same task to multiple agents, return first successful result. Implement as parallel sends (threads) with first-result channel.
-
-- `retry` — `(retry :max 3 :backoff :exponential (send target "fn" args...))`. Wrap a send in retry logic. Implement as a loop with sleep between retries.
-
-- `escalate` — `(escalate target :reason :timeout :partial-results data)`. Send a structured error notification to a specified agent. Implement as a special task message type.
-
-- `any-agent` — `(any-agent :with [:compute-gpu])`. Look up agents by capability in the registry. Requires the `AgentRegistry` from `airl-agent` to be accessible from the interpreter. Currently the interpreter has a simple `Vec<LiveAgent>` — would need to track capabilities per agent.
-
-**Files to modify:**
-- `crates/airl-runtime/src/eval.rs` — Add builtin methods.
-- `crates/airl-agent/src/builtins.rs` — Remove from stub list.
-
-**Estimated effort:** 400-600 lines total.
-
----
-
-#### 3. MLIR Runtime Integration
-
-**Status:** The `airl-mlir` crate exists with ~1,750 lines of code, but the runtime integration (execution target dispatch, `exec_target` field on Interpreter) was removed in `09924bc`.
-
-**What to restore:**
-- Re-add `exec_target: Option<ExecTarget>` field to Interpreter.
-- Re-add `mlir_jit: Option<airl_mlir::MlirTensorJit>` field (behind `#[cfg(feature = "mlir")]`).
-- Restore the GPU → MLIR CPU → Cranelift → interpreted fallback chain in tensor op dispatch.
-- Fix the `libzstd` linker issue (install `libzstd-dev` or make `airl-mlir` a default-off workspace member).
-
-**Files to modify:**
-- `crates/airl-runtime/src/eval.rs` — Re-add MLIR dispatch fields and logic.
-- `crates/airl-runtime/Cargo.toml` — Ensure `mlir` feature flag is properly gated.
-- `Cargo.toml` (workspace) — Consider making `airl-mlir` a non-default member.
-
-**Estimated effort:** 100-200 lines (re-integration from prior commit).
-
----
-
-### Tier 2 — New Features
-
-#### 4. Better Error Messages with Source Context
-
-**Status:** Error messages show the error type and span (line:col) but not the source code context. The `clause_source` field in contract violations uses `format!("{:?}", expr.kind)` (Rust debug output) instead of pretty-printed AIRL. A previous implementation used `contract.to_airl()` but was reverted.
-
-**What to build:**
-- Contract violations should show the contract clause as readable AIRL S-expressions and the values that violated it.
-- Use-after-move errors should show both the move site and the use site.
-- Type errors should show the expected vs actual type with source context.
-- Re-add binding capture in contract violations (currently `bindings: vec![]`).
-
-**Files to modify:**
-- `crates/airl-runtime/src/eval.rs` — Improve `clause_source` formatting, restore binding capture.
-- `crates/airl-driver/src/pipeline.rs` — Use `format_diagnostic_with_source` for all error types.
-- `crates/airl-syntax/src/diagnostic.rs` — Add helper methods for building rich diagnostics.
-
-**Estimated effort:** 150-250 lines.
-
----
-
-#### 5. REPL Enhancements
-
-**Status:** REPL has `:quit`, `:env`, and expression evaluation. Missing `:type`, `:load`, `:help`.
-
-**What to build:**
-- `:help` — Print available commands. Trivial (10 lines).
-- `:load <file>` — Read and evaluate a file in the REPL session. Use `std::fs::read_to_string` + existing `eval_repl_input`.
-- `:type <expr>` — Show the type of an expression without evaluating. Requires running the `TypeChecker` on the expression. **Challenge:** TypeChecker's `into_diagnostics()` is consuming — need to add `drain_diagnostics(&mut self)` to `crates/airl-types/src/checker.rs` for REPL persistence.
-
-**Files to modify:**
-- `crates/airl-driver/src/repl.rs` — Add command handlers.
-- `crates/airl-types/src/checker.rs` — Add `drain_diagnostics` for REPL type checking.
-
-**Estimated effort:** 100-200 lines.
-
----
-
-#### 6. Static Linearity Analysis
+#### 1. Static Linearity Analysis
 
 **Status:** The `LinearityChecker` in `crates/airl-types/src/linearity.rs` (~566 lines) tracks ownership state at the API level but is not wired into the AST walk. Runtime enforcement (in `eval.rs`) catches use-after-move for explicit `Ownership::Own` params, but doesn't detect branch divergence or scope issues.
 
@@ -299,9 +201,9 @@ These features were implemented in commit `bdb00f0` but removed during the stdli
 
 ---
 
-### Tier 3 — Long-term
+### Tier 2 — Long-term
 
-#### 7. Self-Hosting (Phase 3)
+#### 2. Self-Hosting (Phase 3)
 
 **Status:** Not started. The spec's Phase 3 goal is to write the AIRL compiler in AIRL itself.
 
