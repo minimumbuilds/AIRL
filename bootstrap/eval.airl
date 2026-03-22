@@ -111,14 +111,16 @@
   :requires [(valid name)]
   :ensures [(valid result)]
   :body
-    ;; Arithmetic (arity 2)
-    (if (= name "+") (Ok (ValInt (+ (unwrap-int (at args 0)) (unwrap-int (at args 1)))))
+    ;; Arithmetic — + dispatches on type (int vs string concat)
+    (if (= name "+") (match (at args 0)
+      (ValStr s) (Ok (ValStr (+ s (unwrap-str (at args 1)))))
+      _ (Ok (ValInt (+ (unwrap-int (at args 0)) (unwrap-int (at args 1))))))
     (if (= name "-") (Ok (ValInt (- (unwrap-int (at args 0)) (unwrap-int (at args 1)))))
     (if (= name "*") (Ok (ValInt (* (unwrap-int (at args 0)) (unwrap-int (at args 1)))))
     (if (= name "/") (Ok (ValInt (/ (unwrap-int (at args 0)) (unwrap-int (at args 1)))))
     (if (= name "%") (Ok (ValInt (% (unwrap-int (at args 0)) (unwrap-int (at args 1)))))
 
-    ;; Comparison (arity 2)
+    ;; Comparison
     (if (= name "=")  (Ok (ValBool (= (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))))
     (if (= name "!=") (Ok (ValBool (!= (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))))
     (if (= name "<")  (Ok (ValBool (< (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))))
@@ -130,28 +132,68 @@
     (if (= name "not") (Ok (ValBool (not (unwrap-bool (at args 0)))))
     (if (= name "and") (Ok (ValBool (if (unwrap-bool (at args 0)) (unwrap-bool (at args 1)) false)))
     (if (= name "or")  (Ok (ValBool (if (unwrap-bool (at args 0)) true (unwrap-bool (at args 1)))))
+    (if (= name "xor") (Ok (ValBool (xor (unwrap-bool (at args 0)) (unwrap-bool (at args 1)))))
 
     ;; List operations
     (if (= name "head")   (Ok (head (unwrap-list (at args 0))))
     (if (= name "tail")   (Ok (ValList (tail (unwrap-list (at args 0)))))
     (if (= name "cons")   (Ok (ValList (cons (at args 0) (unwrap-list (at args 1)))))
     (if (= name "empty?") (Ok (ValBool (empty? (unwrap-list (at args 0)))))
-    (if (= name "length") (Ok (ValInt (length (unwrap-list (at args 0)))))
     (if (= name "at")     (Ok (at (unwrap-list (at args 0)) (unwrap-int (at args 1))))
     (if (= name "append") (Ok (ValList (append (unwrap-list (at args 0)) (at args 1))))
 
-    ;; String operations
+    ;; length — works on both lists and strings
+    (if (= name "length") (match (at args 0)
+      (ValStr s) (Ok (ValInt (length s)))
+      (ValList xs) (Ok (ValInt (length xs)))
+      _ (Ok (ValInt (length (unwrap-list (at args 0))))))
+
+    ;; String operations — character access
     (if (= name "char-at")    (Ok (ValStr (char-at (unwrap-str (at args 0)) (unwrap-int (at args 1)))))
     (if (= name "substring")  (Ok (ValStr (substring (unwrap-str (at args 0)) (unwrap-int (at args 1)) (unwrap-int (at args 2)))))
-    (if (= name "contains")   (Ok (ValBool (contains (unwrap-str (at args 0)) (unwrap-str (at args 1)))))
-    (if (= name "split")      (Ok (ValList (map (fn [s] (ValStr s)) (split (unwrap-str (at args 0)) (unwrap-str (at args 1))))))
-    (if (= name "join")       (Ok (ValStr (join (map (fn [v] (unwrap-str v)) (unwrap-list (at args 0))) (unwrap-str (at args 1)))))
     (if (= name "chars")      (Ok (ValList (map (fn [c] (ValStr c)) (chars (unwrap-str (at args 0))))))
+
+    ;; String operations — search
+    (if (= name "contains")    (Ok (ValBool (contains (unwrap-str (at args 0)) (unwrap-str (at args 1)))))
+    (if (= name "starts-with") (Ok (ValBool (starts-with (unwrap-str (at args 0)) (unwrap-str (at args 1)))))
+    (if (= name "ends-with")   (Ok (ValBool (ends-with (unwrap-str (at args 0)) (unwrap-str (at args 1)))))
+    (if (= name "index-of")    (Ok (ValInt (index-of (unwrap-str (at args 0)) (unwrap-str (at args 1)))))
+
+    ;; String operations — transformation
+    (if (= name "trim")     (Ok (ValStr (trim (unwrap-str (at args 0)))))
+    (if (= name "to-upper") (Ok (ValStr (to-upper (unwrap-str (at args 0)))))
+    (if (= name "to-lower") (Ok (ValStr (to-lower (unwrap-str (at args 0)))))
+    (if (= name "replace")  (Ok (ValStr (replace (unwrap-str (at args 0)) (unwrap-str (at args 1)) (unwrap-str (at args 2)))))
+
+    ;; String operations — split/join
+    (if (= name "split") (Ok (ValList (map (fn [s] (ValStr s)) (split (unwrap-str (at args 0)) (unwrap-str (at args 1))))))
+    (if (= name "join")  (Ok (ValStr (join (map (fn [v] (unwrap-str v)) (unwrap-list (at args 0))) (unwrap-str (at args 1)))))
+
+    ;; Map operations
+    (if (= name "map-new")     (Ok (ValMap (map-new)))
+    (if (= name "map-from")    (Ok (ValMap (map-from (unwrap-raw (at args 0)))))
+    (if (= name "map-get")     (let (v : Any (map-get (unwrap-raw (at args 0)) (unwrap-str (at args 1))))
+                                  (if (= v nil) (Ok (ValNil)) (Ok v)))
+    (if (= name "map-get-or")  (Ok (map-get-or (unwrap-raw (at args 0)) (unwrap-str (at args 1)) (at args 2)))
+    (if (= name "map-set")     (Ok (ValMap (map-set (unwrap-raw (at args 0)) (unwrap-str (at args 1)) (at args 2))))
+    (if (= name "map-has")     (Ok (ValBool (map-has (unwrap-raw (at args 0)) (unwrap-str (at args 1)))))
+    (if (= name "map-remove")  (Ok (ValMap (map-remove (unwrap-raw (at args 0)) (unwrap-str (at args 1)))))
+    (if (= name "map-keys")    (Ok (ValList (map (fn [k] (ValStr k)) (map-keys (unwrap-raw (at args 0))))))
+    (if (= name "map-values")  (Ok (ValList (map-values (unwrap-raw (at args 0)))))
+    (if (= name "map-size")    (Ok (ValInt (map-size (unwrap-raw (at args 0)))))
+
+    ;; File I/O
+    (if (= name "read-file")    (match (read-file (unwrap-str (at args 0)))
+      err (Err (+ "read-file error: " err))
+      content (Ok (ValStr content)))
+    (if (= name "write-file")   (do (write-file (unwrap-str (at args 0)) (unwrap-str (at args 1))) (Ok (ValBool true)))
+    (if (= name "file-exists?") (Ok (ValBool (file-exists? (unwrap-str (at args 0)))))
 
     ;; I/O
     (if (= name "print") (do (print (unwrap-raw (at args 0))) (Ok (ValNil)))
 
-    ;; Introspection
+    ;; Utility
+    (if (= name "valid") (Ok (ValBool true))
     (if (= name "type-of")
       (match (at args 0)
         (ValInt _) (Ok (ValStr "Int"))
@@ -160,6 +202,7 @@
         (ValBool _) (Ok (ValStr "Bool"))
         (ValNil) (Ok (ValStr "Nil"))
         (ValList _) (Ok (ValStr "List"))
+        (ValMap _) (Ok (ValStr "Map"))
         (ValVariant _ _) (Ok (ValStr "Variant"))
         (ValFn _ _ _ _) (Ok (ValStr "Fn"))
         (ValLambda _ _ _) (Ok (ValStr "Lambda"))
@@ -168,7 +211,7 @@
 
     ;; Unknown builtin
     (Err (+ "unknown builtin: " name))
-    ))))))))))))))))))))))))))))))
+    ))))))))))))))))))))))))))))))))))))))))))))))))))))
 
 (defn make-initial-env
   :sig [(_u : Any) -> List]
@@ -200,13 +243,35 @@
     (let (e : Any (env-bind e "append" (ValBuiltin "append")))
     (let (e : Any (env-bind e "char-at" (ValBuiltin "char-at")))
     (let (e : Any (env-bind e "substring" (ValBuiltin "substring")))
+    (let (e : Any (env-bind e "chars" (ValBuiltin "chars")))
     (let (e : Any (env-bind e "contains" (ValBuiltin "contains")))
+    (let (e : Any (env-bind e "starts-with" (ValBuiltin "starts-with")))
+    (let (e : Any (env-bind e "ends-with" (ValBuiltin "ends-with")))
+    (let (e : Any (env-bind e "index-of" (ValBuiltin "index-of")))
+    (let (e : Any (env-bind e "trim" (ValBuiltin "trim")))
+    (let (e : Any (env-bind e "to-upper" (ValBuiltin "to-upper")))
+    (let (e : Any (env-bind e "to-lower" (ValBuiltin "to-lower")))
+    (let (e : Any (env-bind e "replace" (ValBuiltin "replace")))
     (let (e : Any (env-bind e "split" (ValBuiltin "split")))
     (let (e : Any (env-bind e "join" (ValBuiltin "join")))
-    (let (e : Any (env-bind e "chars" (ValBuiltin "chars")))
+    (let (e : Any (env-bind e "map-new" (ValBuiltin "map-new")))
+    (let (e : Any (env-bind e "map-from" (ValBuiltin "map-from")))
+    (let (e : Any (env-bind e "map-get" (ValBuiltin "map-get")))
+    (let (e : Any (env-bind e "map-get-or" (ValBuiltin "map-get-or")))
+    (let (e : Any (env-bind e "map-set" (ValBuiltin "map-set")))
+    (let (e : Any (env-bind e "map-has" (ValBuiltin "map-has")))
+    (let (e : Any (env-bind e "map-remove" (ValBuiltin "map-remove")))
+    (let (e : Any (env-bind e "map-keys" (ValBuiltin "map-keys")))
+    (let (e : Any (env-bind e "map-values" (ValBuiltin "map-values")))
+    (let (e : Any (env-bind e "map-size" (ValBuiltin "map-size")))
+    (let (e : Any (env-bind e "read-file" (ValBuiltin "read-file")))
+    (let (e : Any (env-bind e "write-file" (ValBuiltin "write-file")))
+    (let (e : Any (env-bind e "file-exists?" (ValBuiltin "file-exists?")))
     (let (e : Any (env-bind e "print" (ValBuiltin "print")))
     (let (e : Any (env-bind e "type-of" (ValBuiltin "type-of")))
-      e)))))))))))))))))))))))))))))))
+    (let (e : Any (env-bind e "valid" (ValBuiltin "valid")))
+    (let (e : Any (env-bind e "xor" (ValBuiltin "xor")))
+      e)))))))))))))))))))))))))))))))))))))))))))))))))))))
 
 (defn eval-args-acc
   :sig [(args : List) (env : List) (acc : List) -> Any]
