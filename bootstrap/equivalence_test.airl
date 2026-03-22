@@ -1,0 +1,2262 @@
+;; bootstrap/lexer.airl — Self-hosted AIRL lexer
+
+(deftype Token
+  (& (kind : String) (value : String) (line : i64) (col : i64)))
+
+;; ── Helper predicates ───────────────────────────────
+
+(defn is-whitespace?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if single-char string is whitespace"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (or (= ch " ") (or (= ch "\t") (or (= ch "\n") (= ch "\r")))))
+
+(defn is-digit?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if single-char string is a decimal digit"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (contains "0123456789" ch))
+
+(defn digit-value
+  :sig [(ch : String) -> i64]
+  :intent "Return numeric value of a digit character"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (index-of "0123456789" ch))
+
+(defn is-symbol-start?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if char can start a symbol"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (contains "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!$%&*+-./<=>?@^_|~" ch))
+
+(defn is-symbol-char?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if char can continue a symbol"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (or (is-symbol-start? ch) (is-digit? ch)))
+
+;; ── Helper: safe peek at next char ──────────────────
+
+(defn peek-next-is?
+  :sig [(source : String) (pos : i64) (expected : String) -> Bool]
+  :intent "Check if char at pos+1 equals expected, bounds-safe"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (< (+ pos 1) (length source))
+      (= (char-at source (+ pos 1)) expected)
+      false))
+
+;; ── Whitespace and comment skipping ─────────────────
+
+(defn skip-block-comment
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (depth : i64) -> List]
+  :intent "Skip nestable block comment, return (Ok [pos line col]) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      (Err "unterminated block comment")
+      (let (ch : String (char-at source pos))
+        (if (= ch "#")
+          (if (peek-next-is? source pos "|")
+            ;; Nested open
+            (skip-block-comment source (+ pos 2) line (+ col 2) (+ depth 1))
+            ;; Just a # inside comment
+            (skip-block-comment source (+ pos 1) line (+ col 1) depth))
+          (if (= ch "|")
+            (if (peek-next-is? source pos "#")
+              ;; Close
+              (if (= depth 1)
+                (Ok [(+ pos 2) line (+ col 2)])
+                (skip-block-comment source (+ pos 2) line (+ col 2) (- depth 1)))
+              ;; Just a | inside comment
+              (skip-block-comment source (+ pos 1) line (+ col 1) depth))
+            ;; Regular char inside comment
+            (if (= ch "\n")
+              (skip-block-comment source (+ pos 1) (+ line 1) 0 depth)
+              (skip-block-comment source (+ pos 1) line (+ col 1) depth)))))))
+
+(defn skip-line-comment
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
+  :intent "Skip to end of line, then continue skipping whitespace"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      (Ok [pos line col])
+      (if (= (char-at source pos) "\n")
+        (skip-ws source (+ pos 1) (+ line 1) 0)
+        (skip-line-comment source (+ pos 1) line (+ col 1)))))
+
+(defn skip-ws
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
+  :intent "Skip whitespace and comments, return (Ok [pos line col]) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      (Ok [pos line col])
+      (let (ch : String (char-at source pos))
+        (if (= ch "\n")
+          (skip-ws source (+ pos 1) (+ line 1) 0)
+          (if (or (= ch " ") (or (= ch "\t") (= ch "\r")))
+            (skip-ws source (+ pos 1) line (+ col 1))
+            (if (= ch ";")
+              ;; Line comment — skip to end of line
+              (skip-line-comment source (+ pos 1) line col)
+              (if (= ch "#")
+                (if (peek-next-is? source pos "|")
+                  ;; Block comment
+                  (match (skip-block-comment source (+ pos 2) line (+ col 2) 1)
+                    (Ok state) (skip-ws source (head state) (at state 1) (at state 2))
+                    (Err msg) (Err msg))
+                  ;; Not whitespace (just a # char)
+                  (Ok [pos line col]))
+                ;; Not whitespace
+                (Ok [pos line col]))))))))
+
+;; ── Sub-lexers ──────────────────────────────────────
+
+(defn read-symbol-chars
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) -> List]
+  :intent "Read consecutive symbol characters, return [text pos line col]"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      [acc pos line col]
+      (let (ch : String (char-at source pos))
+        (if (is-symbol-char? ch)
+          (read-symbol-chars source (+ pos 1) line (+ col 1) (+ acc ch))
+          [acc pos line col]))))
+
+(defn lex-symbol
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
+  :intent "Lex a symbol, checking for true/false/nil"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (let (r : List (read-symbol-chars source pos line col acc))
+      (let (text : String (head r))
+        (let (new-pos : i64 (at r 1))
+          (let (new-line : i64 (at r 2))
+            (let (new-col : i64 (at r 3))
+              (if (= text "true")  (Ok [(Token "bool" true start-line start-col) new-pos new-line new-col])
+              (if (= text "false") (Ok [(Token "bool" false start-line start-col) new-pos new-line new-col])
+              (if (= text "nil")   (Ok [(Token "nil" nil start-line start-col) new-pos new-line new-col])
+                (Ok [(Token "symbol" text start-line start-col) new-pos new-line new-col]))))))))))
+
+(defn lex-keyword
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
+  :intent "Lex a keyword (colon already consumed)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (let (r : List (read-symbol-chars source pos line col acc))
+      (let (text : String (head r))
+        (let (new-pos : i64 (at r 1))
+          (let (new-line : i64 (at r 2))
+            (let (new-col : i64 (at r 3))
+              (Ok [(Token "keyword" text start-line start-col) new-pos new-line new-col])))))))
+
+;; ── Numeric helpers ──────────────────────────────────
+
+(defn digit-value-f
+  :sig [(ch : String) -> f64]
+  :intent "Return float value of a digit character"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body
+    (if (= ch "0") 0.0
+    (if (= ch "1") 1.0
+    (if (= ch "2") 2.0
+    (if (= ch "3") 3.0
+    (if (= ch "4") 4.0
+    (if (= ch "5") 5.0
+    (if (= ch "6") 6.0
+    (if (= ch "7") 7.0
+    (if (= ch "8") 8.0
+      9.0))))))))))
+
+(defn int-to-float
+  :sig [(n : i64) -> f64]
+  :intent "Convert integer to float"
+  :requires [(valid n)]
+  :ensures [(valid result)]
+  :body
+    (if (= n 0) 0.0
+    (if (< n 0)
+      (- 0.0 (int-to-float (- 0 n)))
+      (+ 1.0 (int-to-float (- n 1))))))
+
+;; ── Number sub-lexer ────────────────────────────────
+
+(defn read-digits
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : i64) -> List]
+  :intent "Read consecutive digits, accumulate integer value, return [value pos line col]"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      [acc pos line col]
+      (let (ch : String (char-at source pos))
+        (if (is-digit? ch)
+          (read-digits source (+ pos 1) line (+ col 1) (+ (* acc 10) (digit-value ch)))
+          [acc pos line col]))))
+
+(defn read-frac-digits
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : f64) (divisor : f64) -> List]
+  :intent "Read fractional digits after '.', return [frac-value pos line col]"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      [acc pos line col]
+      (let (ch : String (char-at source pos))
+        (if (is-digit? ch)
+          (read-frac-digits source (+ pos 1) line (+ col 1)
+            (+ acc (/ (digit-value-f ch) divisor))
+            (* divisor 10.0))
+          [acc pos line col]))))
+
+(defn lex-number
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : i64) (negative : Bool) (start-line : i64) (start-col : i64) -> List]
+  :intent "Lex an integer or float literal"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (let (int-result : List (read-digits source pos line col acc))
+      (let (int-val : i64 (head int-result))
+        (let (new-pos : i64 (at int-result 1))
+          (let (new-line : i64 (at int-result 2))
+            (let (new-col : i64 (at int-result 3))
+              ;; Check for '.' followed by digit -> float
+              (if (< new-pos (length source))
+                (if (= (char-at source new-pos) ".")
+                  (if (< (+ new-pos 1) (length source))
+                    (if (is-digit? (char-at source (+ new-pos 1)))
+                      ;; Float
+                      (let (frac-result : List (read-frac-digits source (+ new-pos 1) new-line (+ new-col 1) 0.0 10.0))
+                        (let (frac-val : f64 (head frac-result))
+                          (let (fp : i64 (at frac-result 1))
+                            (let (fl : i64 (at frac-result 2))
+                              (let (fc : i64 (at frac-result 3))
+                                (let (float-val : f64 (+ (int-to-float int-val) frac-val))
+                                  (Ok [(Token "float" (if negative (- 0.0 float-val) float-val) start-line start-col) fp fl fc])))))))
+                      ;; Integer (dot followed by non-digit)
+                      (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
+                    ;; Integer (dot at end of input)
+                    (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
+                  ;; Integer (no dot)
+                  (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
+                ;; Integer (end of input)
+                (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))))))))
+
+;; ── String sub-lexer ────────────────────────────────
+
+(defn lex-string
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
+  :intent "Lex a string literal (opening quote already consumed)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      (Err "unterminated string")
+      (let (ch : String (char-at source pos))
+        (if (= ch "\"")
+          ;; Closing quote
+          (Ok [(Token "string" acc start-line start-col) (+ pos 1) line (+ col 1)])
+          (if (= ch "\\")
+            ;; Escape sequence
+            (if (>= (+ pos 1) (length source))
+              (Err "unterminated escape in string")
+              (let (esc : String (char-at source (+ pos 1)))
+                (if (= esc "n")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\n") start-line start-col)
+                (if (= esc "t")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\t") start-line start-col)
+                (if (= esc "r")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\r") start-line start-col)
+                (if (= esc "0")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\0") start-line start-col)
+                (if (= esc "\\") (lex-string source (+ pos 2) line (+ col 2) (+ acc "\\") start-line start-col)
+                (if (= esc "\"") (lex-string source (+ pos 2) line (+ col 2) (+ acc "\"") start-line start-col)
+                  (Err (+ "unknown escape \\" esc))))))))))
+            ;; Regular character
+            (if (= ch "\n")
+              (lex-string source (+ pos 1) (+ line 1) 0 (+ acc ch) start-line start-col)
+              (lex-string source (+ pos 1) line (+ col 1) (+ acc ch) start-line start-col)))))))
+
+;; ── Core lexer ──────────────────────────────────────
+
+(defn next-token
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
+  :intent "Read next token from source at pos, return (Ok [token pos line col]) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (skip-ws source pos line col)
+      (Err msg) (Err msg)
+      (Ok ws-state)
+        (let (p : i64 (head ws-state))
+          (let (ln : i64 (at ws-state 1))
+            (let (c : i64 (at ws-state 2))
+              (if (>= p (length source))
+                (Ok [(Token "eof" nil ln c) p ln c])
+                (let (ch : String (char-at source p))
+                  (if (= ch "(") (Ok [(Token "lparen" "(" ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch ")") (Ok [(Token "rparen" ")" ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch "[") (Ok [(Token "lbracket" "[" ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch "]") (Ok [(Token "rbracket" "]" ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch ",") (Ok [(Token "comma" "," ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch "\"") (lex-string source (+ p 1) ln (+ c 1) "" ln c)
+                  (if (= ch ":")
+                    (if (< (+ p 1) (length source))
+                      (if (is-symbol-start? (char-at source (+ p 1)))
+                        (lex-keyword source (+ p 1) ln (+ c 1) "" ln c)
+                        (Ok [(Token "colon" ":" ln c) (+ p 1) ln (+ c 1)]))
+                      (Ok [(Token "colon" ":" ln c) (+ p 1) ln (+ c 1)]))
+                  (if (= ch "-")
+                    (if (peek-next-is? source p ">")
+                      (Ok [(Token "arrow" "->" ln c) (+ p 2) ln (+ c 2)])
+                      (if (< (+ p 1) (length source))
+                        (if (is-digit? (char-at source (+ p 1)))
+                          (lex-number source (+ p 1) ln (+ c 1) 0 true ln c)
+                          (lex-symbol source p ln c "" ln c))
+                        (lex-symbol source p ln c "" ln c)))
+                  (if (is-digit? ch)
+                    (lex-number source p ln c 0 false ln c)
+                  (if (is-symbol-start? ch)
+                    (lex-symbol source p ln c "" ln c)
+                    (Err (+ "unexpected character '" (+ ch "'")))))
+                  )))))))))))))))
+
+(defn lex-loop
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (tokens : List) -> List]
+  :intent "Accumulate tokens until EOF, return (Ok tokens) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (next-token source pos line col)
+      (Err msg) (Err msg)
+      (Ok tok-state)
+        (let (tok : List (head tok-state))
+          (let (new-pos : i64 (at tok-state 1))
+            (let (new-line : i64 (at tok-state 2))
+              (let (new-col : i64 (at tok-state 3))
+                (let (new-tokens : List (cons tok tokens))
+                  (match tok
+                    (Token kind _ _ _)
+                      (if (= kind "eof")
+                        (Ok new-tokens)
+                        (lex-loop source new-pos new-line new-col new-tokens))))))))))
+
+(defn lex
+  :sig [(source : String) -> List]
+  :intent "Tokenize source string, return (Ok token-list) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex-loop source 0 1 0 [])
+      (Ok tokens) (Ok (reverse tokens))
+      (Err msg) (Err msg)))
+;; bootstrap/parser.airl — Self-hosted AIRL parser
+;; Requires: bootstrap/lexer.airl (loaded first)
+
+;; ── Helpers ───────────────────────────────────────
+
+(defn is-upper?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if single-char string is uppercase letter"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (contains "ABCDEFGHIJKLMNOPQRSTUVWXYZ" ch))
+
+(defn parse-error
+  :sig [(msg : String) (line : i64) (col : i64) -> List]
+  :intent "Create a structured parse error"
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (Err (ParseError msg line col)))
+
+(defn token-line
+  :sig [(tok : List) -> i64]
+  :intent "Extract line number from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token _ _ line _) line))
+
+(defn token-col
+  :sig [(tok : List) -> i64]
+  :intent "Extract column number from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token _ _ _ col) col))
+
+(defn token-kind
+  :sig [(tok : List) -> String]
+  :intent "Extract kind string from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token kind _ _ _) kind))
+
+(defn token-value
+  :sig [(tok : List) -> List]
+  :intent "Extract value from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token _ value _ _) value))
+
+;; ── Phase 1: Token → S-Expression grouping ────────
+
+(defn parse-sexpr
+  :sig [(tokens : List) (pos : i64) -> List]
+  :intent "Parse one S-expression from token list at pos, return (Ok [sexpr new-pos]) or (Err ...)"
+  :requires [(valid tokens)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length tokens))
+      (Err (ParseError "unexpected end of input" 0 0))
+      (let (tok : List (at tokens pos))
+        (match tok
+          (Token kind value line col)
+            (if (= kind "lparen")
+              ;; Parse list contents until rparen
+              (match (parse-sexprs tokens (+ pos 1) "rparen")
+                (Ok result)
+                  (let (items : List (at result 0))
+                    (let (end-pos : i64 (at result 1))
+                      ;; Check for closing rparen
+                      (if (>= end-pos (length tokens))
+                        (Err (ParseError "unclosed parenthesis" line col))
+                        (let (closer : List (at tokens end-pos))
+                          (match closer
+                            (Token ck _ _ _)
+                              (if (= ck "rparen")
+                                (Ok [(SList items line col) (+ end-pos 1)])
+                                (Err (ParseError "unclosed parenthesis" line col))))))))
+                (Err e) (Err e))
+              (if (= kind "lbracket")
+                ;; Parse bracket contents until rbracket
+                (match (parse-sexprs tokens (+ pos 1) "rbracket")
+                  (Ok result)
+                    (let (items : List (at result 0))
+                      (let (end-pos : i64 (at result 1))
+                        (if (>= end-pos (length tokens))
+                          (Err (ParseError "unclosed bracket" line col))
+                          (let (closer : List (at tokens end-pos))
+                            (match closer
+                              (Token ck _ _ _)
+                                (if (= ck "rbracket")
+                                  (Ok [(SBracket items line col) (+ end-pos 1)])
+                                  (Err (ParseError "unclosed bracket" line col))))))))
+                  (Err e) (Err e))
+                (if (= kind "rparen")
+                  (Err (ParseError "unexpected ')'" line col))
+                  (if (= kind "rbracket")
+                    (Err (ParseError "unexpected ']'" line col))
+                    (if (= kind "eof")
+                      (Err (ParseError "unexpected end of input" line col))
+                      ;; Any other token is an atom
+                      (Ok [(SAtom tok) (+ pos 1)]))))))))))
+
+(defn parse-sexprs
+  :sig [(tokens : List) (pos : i64) (stop-kind : String) -> List]
+  :intent "Parse S-expressions until stop token or EOF, return (Ok [sexprs pos])"
+  :requires [(valid tokens)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length tokens))
+      (Ok [[] pos])
+      (let (tok : List (at tokens pos))
+        (match tok
+          (Token kind _ _ _)
+            (if (= kind stop-kind)
+              ;; Hit the stop token — return what we have
+              (Ok [[] pos])
+              (if (= kind "eof")
+                ;; EOF — return what we have
+                (Ok [[] pos])
+                ;; Parse one sexpr, then continue
+                (match (parse-sexpr tokens pos)
+                  (Ok result)
+                    (let (sexpr : List (at result 0))
+                      (let (new-pos : i64 (at result 1))
+                        (match (parse-sexprs tokens new-pos stop-kind)
+                          (Ok rest-result)
+                            (let (rest-sexprs : List (at rest-result 0))
+                              (let (final-pos : i64 (at rest-result 1))
+                                (Ok [(cons sexpr rest-sexprs) final-pos])))
+                          (Err e) (Err e))))
+                  (Err e) (Err e))))))))
+
+(defn parse-sexpr-all
+  :sig [(tokens : List) -> List]
+  :intent "Parse all tokens into S-expressions, return (Ok sexprs) or (Err ...)"
+  :requires [(valid tokens)]
+  :ensures [(valid result)]
+  :body
+    (match (parse-sexprs tokens 0 "eof")
+      (Ok result) (Ok (at result 0))
+      (Err e) (Err e)))
+
+;; ── Phase 2: S-Expression → AST ──────────────────
+
+(defn parse-atom
+  :sig [(tok : List) -> List]
+  :intent "Convert a token to an AST atom node"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body
+    (match tok
+      (Token kind value line col)
+        (if (= kind "integer") (Ok (ASTInt value line col))
+        (if (= kind "float")   (Ok (ASTFloat value line col))
+        (if (= kind "string")  (Ok (ASTStr value line col))
+        (if (= kind "bool")    (Ok (ASTBool value line col))
+        (if (= kind "nil")     (Ok (ASTNil line col))
+        (if (= kind "keyword") (Ok (ASTKeyword value line col))
+        (if (= kind "symbol")
+          ;; Check if it's a capitalized symbol (nullary variant)
+          (if (is-upper? (char-at value 0))
+            (Ok (ASTVariant value [] line col))
+            (Ok (ASTSymbol value line col)))
+          (Err (ParseError (+ "unexpected token kind: " kind) line col)))))))))))
+
+(defn parse-list-items
+  :sig [(sexprs : List) (pos : i64) -> List]
+  :intent "Parse a list of S-expressions into AST exprs, return (Ok exprs) or (Err ...)"
+  :requires [(valid sexprs)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length sexprs))
+      (Ok [])
+      (match (parse-expr (at sexprs pos))
+        (Ok node)
+          (match (parse-list-items sexprs (+ pos 1))
+            (Ok rest) (Ok (cons node rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn parse-expr
+  :sig [(sexpr : List) -> List]
+  :intent "Parse an S-expression into an AST expression node"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      ;; Atom — delegate to parse-atom
+      (SAtom tok) (parse-atom tok)
+
+      ;; Bracket list — list literal [1 2 3]
+      (SBracket items line col)
+        (match (parse-list-items items 0)
+          (Ok exprs) (Ok (ASTList exprs line col))
+          (Err e) (Err e))
+
+      ;; Parenthesized list — dispatch on head
+      (SList items line col)
+        (if (empty? items)
+          (Ok (ASTNil line col))
+          (let (first : List (head items))
+            (match first
+              ;; Head is an atom token — check if it's a special form
+              (SAtom tok)
+                (match tok
+                  (Token kind value _ _)
+                    (if (= kind "symbol")
+                      ;; Dispatch on symbol name
+                      (if (= value "if")      (parse-if items line col)
+                      (if (= value "let")     (parse-let items line col)
+                      (if (= value "do")      (parse-do items line col)
+                      (if (= value "match")   (parse-match items line col)
+                      (if (= value "fn")      (parse-lambda items line col)
+                      (if (= value "try")     (parse-try items line col)
+                      ;; Check for variant constructor (capitalized)
+                      (if (is-upper? (char-at value 0))
+                        (match (parse-list-items items 1)
+                          (Ok args) (Ok (ASTVariant value args line col))
+                          (Err e) (Err e))
+                        ;; Regular function call
+                        (match (parse-expr first)
+                          (Ok callee)
+                            (match (parse-list-items items 1)
+                              (Ok args) (Ok (ASTCall callee args line col))
+                              (Err e) (Err e))
+                          (Err e) (Err e)))))))))
+                      ;; Non-symbol atom as head — function call with computed callee
+                      (match (parse-expr first)
+                        (Ok callee)
+                          (match (parse-list-items items 1)
+                            (Ok args) (Ok (ASTCall callee args line col))
+                            (Err e) (Err e))
+                        (Err e) (Err e))))
+
+              ;; Head is a list or bracket — computed callee: ((fn [x] x) 42)
+              _
+                (match (parse-expr first)
+                  (Ok callee)
+                    (match (parse-list-items items 1)
+                      (Ok args) (Ok (ASTCall callee args line col))
+                      (Err e) (Err e))
+                  (Err e) (Err e)))))))
+
+;; ── Compound expression parsers ───────────────────
+
+(defn parse-if
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (if cond then else) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [if-sym cond then else]
+    (if (= (length items) 4)
+      (match (parse-expr (at items 1))
+        (Ok cond-node)
+          (match (parse-expr (at items 2))
+            (Ok then-node)
+              (match (parse-expr (at items 3))
+                (Ok else-node)
+                  (Ok (ASTIf cond-node then-node else-node line col))
+                (Err e) (Err e))
+            (Err e) (Err e))
+        (Err e) (Err e))
+      (Err (ParseError "if requires exactly 3 arguments (cond then else)" line col))))
+
+(defn parse-let-binding
+  :sig [(sexpr : List) -> List]
+  :intent "Parse a single let binding (name : Type value)"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (< (length items) 4)
+          (Err (ParseError "let binding requires (name : Type value)" line col))
+          (let (name-sexpr : List (at items 0))
+            (match name-sexpr
+              (SAtom tok)
+                (match tok
+                  (Token kind name _ _)
+                    (if (= kind "symbol")
+                      ;; items[1] should be colon, items[2] should be type, items[3] should be value
+                      (let (type-sexpr : List (at items 2))
+                        (match type-sexpr
+                          (SAtom type-tok)
+                            (match type-tok
+                              (Token tk tv _ _)
+                                (if (= tk "symbol")
+                                  (match (parse-expr (at items 3))
+                                    (Ok val-node) (Ok (ASTBinding name tv val-node))
+                                    (Err e) (Err e))
+                                  (Err (ParseError "expected type name in let binding" line col))))
+                          _ (Err (ParseError "expected type name in let binding" line col))))
+                      (Err (ParseError "expected symbol name in let binding" line col))))
+              _ (Err (ParseError "expected symbol name in let binding" line col)))))
+      _ (Err (ParseError "let binding must be a list" 0 0))))
+
+(defn parse-let-bindings
+  :sig [(items : List) (pos : i64) (end : i64) -> List]
+  :intent "Parse let bindings from items[pos] to items[end-1], return (Ok bindings)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos end)
+      (Ok [])
+      (match (parse-let-binding (at items pos))
+        (Ok binding)
+          (match (parse-let-bindings items (+ pos 1) end)
+            (Ok rest) (Ok (cons binding rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn parse-let
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (let (bindings...) body) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [let-sym binding1 binding2 ... body]
+    ;; At least 3 items: let + one binding + body
+    (if (< (length items) 3)
+      (Err (ParseError "let requires at least one binding and a body" line col))
+      ;; bindings are items[1] to items[n-2], body is items[n-1]
+      (let (num-items : i64 (length items))
+        (let (body-idx : i64 (- num-items 1))
+          (match (parse-let-bindings items 1 body-idx)
+            (Ok bindings)
+              (match (parse-expr (at items body-idx))
+                (Ok body-node) (Ok (ASTLet bindings body-node line col))
+                (Err e) (Err e))
+            (Err e) (Err e))))))
+
+(defn parse-do
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (do expr1 expr2 ...) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [do-sym expr1 expr2 ...]
+    (if (< (length items) 2)
+      (Err (ParseError "do requires at least one expression" line col))
+      (match (parse-list-items items 1)
+        (Ok exprs) (Ok (ASTDo exprs line col))
+        (Err e) (Err e))))
+
+;; ── Pattern parsing ───────────────────────────────
+
+(defn parse-pattern
+  :sig [(sexpr : List) -> List]
+  :intent "Parse an S-expression into a pattern node"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SAtom tok)
+        (match tok
+          (Token kind value line col)
+            (if (= kind "symbol")
+              (if (= value "_")
+                (Ok (PatWild line col))
+                ;; Capitalized = nullary variant pattern, lowercase = binding
+                (if (is-upper? (char-at value 0))
+                  (Ok (PatVariant value [] line col))
+                  (Ok (PatBind value line col))))
+              ;; Literal pattern
+              (if (= kind "integer") (Ok (PatLit value line col))
+              (if (= kind "float")   (Ok (PatLit value line col))
+              (if (= kind "string")  (Ok (PatLit value line col))
+              (if (= kind "bool")    (Ok (PatLit value line col))
+              (if (= kind "nil")     (Ok (PatLit nil line col))
+                (Err (ParseError (+ "unexpected token in pattern: " kind) line col)))))))))
+
+      (SList items line col)
+        (if (empty? items)
+          (Err (ParseError "empty list in pattern" line col))
+          (let (head-sexpr : List (head items))
+            (match head-sexpr
+              (SAtom tok)
+                (match tok
+                  (Token kind value _ _)
+                    (if (= kind "symbol")
+                      (if (is-upper? (char-at value 0))
+                        ;; Variant pattern: (Ok v), (Token kind _ _ _)
+                        (match (parse-patterns items 1)
+                          (Ok sub-pats) (Ok (PatVariant value sub-pats line col))
+                          (Err e) (Err e))
+                        (Err (ParseError "pattern list must start with capitalized variant" line col)))
+                      (Err (ParseError "pattern list must start with symbol" line col))))
+              _ (Err (ParseError "pattern list must start with symbol" line col)))))
+
+      _ (Err (ParseError "unexpected S-expression in pattern" 0 0))))
+
+(defn parse-patterns
+  :sig [(items : List) (pos : i64) -> List]
+  :intent "Parse sub-patterns from items[pos..], return (Ok patterns)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [])
+      (match (parse-pattern (at items pos))
+        (Ok pat)
+          (match (parse-patterns items (+ pos 1))
+            (Ok rest) (Ok (cons pat rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+;; ── Match expression ──────────────────────────────
+
+(defn parse-match-arms
+  :sig [(items : List) (pos : i64) -> List]
+  :intent "Parse pattern/body pairs from items[pos..], return (Ok arms)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [])
+      ;; Need at least 2 more items (pattern + body)
+      (if (>= (+ pos 1) (length items))
+        (Err (ParseError "match arms must come in pairs (pattern body)" 0 0))
+        (match (parse-pattern (at items pos))
+          (Ok pat)
+            (match (parse-expr (at items (+ pos 1)))
+              (Ok body)
+                (match (parse-match-arms items (+ pos 2))
+                  (Ok rest) (Ok (cons (ASTArm pat body) rest))
+                  (Err e) (Err e))
+              (Err e) (Err e))
+          (Err e) (Err e)))))
+
+(defn parse-match
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (match scrutinee pattern body ...) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [match-sym scrutinee pat1 body1 pat2 body2 ...]
+    (if (< (length items) 4)
+      (Err (ParseError "match requires scrutinee and at least one arm" line col))
+      ;; Check even number of remaining items after scrutinee
+      (let (arm-count : i64 (- (length items) 2))
+        (if (= (% arm-count 2) 1)
+          (Err (ParseError "match arms must come in pairs (pattern body)" line col))
+          (match (parse-expr (at items 1))
+            (Ok scrutinee)
+              (match (parse-match-arms items 2)
+                (Ok arms) (Ok (ASTMatch scrutinee arms line col))
+                (Err e) (Err e))
+            (Err e) (Err e))))))
+
+;; ── Lambda ────────────────────────────────────────
+
+(defn parse-lambda-params
+  :sig [(items : List) (pos : i64) -> List]
+  :intent "Parse lambda parameter names from bracket items"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [])
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind value _ _)
+              (if (= kind "symbol")
+                (match (parse-lambda-params items (+ pos 1))
+                  (Ok rest) (Ok (cons value rest))
+                  (Err e) (Err e))
+                (Err (ParseError "lambda parameter must be a symbol" 0 0))))
+        _ (Err (ParseError "lambda parameter must be a symbol" 0 0)))))
+
+(defn parse-lambda
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (fn [params] body) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [fn-sym params-bracket body]
+    (if (= (length items) 3)
+      (match (at items 1)
+        (SBracket param-items _ _)
+          (match (parse-lambda-params param-items 0)
+            (Ok params)
+              (match (parse-expr (at items 2))
+                (Ok body) (Ok (ASTLambda params body line col))
+                (Err e) (Err e))
+            (Err e) (Err e))
+        _ (Err (ParseError "fn expects [params] as second argument" line col)))
+      (Err (ParseError "fn requires [params] and body" line col))))
+
+;; ── Try ───────────────────────────────────────────
+
+(defn parse-try
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (try expr) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (= (length items) 2)
+      (match (parse-expr (at items 1))
+        (Ok expr) (Ok (ASTTry expr line col))
+        (Err e) (Err e))
+      (Err (ParseError "try requires exactly one argument" line col))))
+
+;; ── Signature parsing ─────────────────────────────
+
+(defn parse-param
+  :sig [(sexpr : List) -> List]
+  :intent "Parse a parameter (name : Type) from S-expression"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (< (length items) 3)
+          (Err (ParseError "parameter requires (name : Type)" line col))
+          (let (name-sexpr : List (at items 0))
+            (match name-sexpr
+              (SAtom tok)
+                (match tok
+                  (Token kind name _ _)
+                    (if (= kind "symbol")
+                      ;; items[1] = colon, items[2] = type
+                      (let (type-sexpr : List (at items 2))
+                        (match type-sexpr
+                          (SAtom type-tok)
+                            (match type-tok
+                              (Token tk tv _ _)
+                                (if (= tk "symbol")
+                                  (Ok (ASTParam name tv))
+                                  (Err (ParseError "expected type name in parameter" line col))))
+                          _ (Err (ParseError "expected type name in parameter" line col))))
+                      (Err (ParseError "expected symbol name in parameter" line col))))
+              _ (Err (ParseError "expected symbol name in parameter" line col)))))
+      _ (Err (ParseError "parameter must be a list" 0 0))))
+
+(defn parse-sig-params
+  :sig [(items : List) (pos : i64) (arrow-pos : i64) -> List]
+  :intent "Parse signature parameters from items[pos..arrow-pos]"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos arrow-pos)
+      (Ok [])
+      (match (parse-param (at items pos))
+        (Ok param)
+          (match (parse-sig-params items (+ pos 1) arrow-pos)
+            (Ok rest) (Ok (cons param rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn find-arrow
+  :sig [(items : List) (pos : i64) -> i64]
+  :intent "Find index of -> arrow token in S-expr list, return -1 if not found"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (- 0 1)
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind _ _ _)
+              (if (= kind "arrow")
+                pos
+                (find-arrow items (+ pos 1))))
+        _ (find-arrow items (+ pos 1)))))
+
+(defn parse-sig
+  :sig [(sexpr : List) -> List]
+  :intent "Parse :sig [(params...) -> ReturnType] from bracket S-expression"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SBracket items line col)
+        (let (arrow-idx : i64 (find-arrow items 0))
+          (if (< arrow-idx 0)
+            ;; No arrow — all params, default return type
+            (match (parse-sig-params items 0 (length items))
+              (Ok params) (Ok (ASTSig params "Unit"))
+              (Err e) (Err e))
+            ;; Arrow found — params before, return type after
+            (match (parse-sig-params items 0 arrow-idx)
+              (Ok params)
+                (if (>= (+ arrow-idx 1) (length items))
+                  (Err (ParseError "expected return type after ->" line col))
+                  (match (at items (+ arrow-idx 1))
+                    (SAtom tok)
+                      (match tok
+                        (Token kind value _ _)
+                          (if (= kind "symbol")
+                            (Ok (ASTSig params value))
+                            (Err (ParseError "expected type name after ->" line col))))
+                    _ (Err (ParseError "expected type name after ->" line col))))
+              (Err e) (Err e))))
+      _ (Err (ParseError "sig must be a bracket list" 0 0))))
+
+;; ── defn clause walker ────────────────────────────
+
+(defn walk-defn-clauses
+  :sig [(items : List) (pos : i64) (sig : List) (intent : String) (requires : List) (ensures : List) (body : List) -> List]
+  :intent "Walk keyword clauses in defn, accumulate values"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      ;; Done — return accumulated values
+      (Ok [sig intent requires ensures body])
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind value _ _)
+              (if (= kind "keyword")
+                ;; Keyword clause — need value at pos+1
+                (if (>= (+ pos 1) (length items))
+                  (Err (ParseError (+ "missing value for :" value) 0 0))
+                  (let (val-sexpr : List (at items (+ pos 1)))
+                    (if (= value "sig")
+                      (match (parse-sig val-sexpr)
+                        (Ok new-sig) (walk-defn-clauses items (+ pos 2) new-sig intent requires ensures body)
+                        (Err e) (Err e))
+                    (if (= value "intent")
+                      (match val-sexpr
+                        (SAtom itok)
+                          (match itok
+                            (Token ik iv _ _)
+                              (if (= ik "string")
+                                (walk-defn-clauses items (+ pos 2) sig iv requires ensures body)
+                                (Err (ParseError "intent must be a string" 0 0))))
+                        _ (Err (ParseError "intent must be a string" 0 0)))
+                    (if (= value "requires")
+                      (match val-sexpr
+                        (SBracket req-items _ _)
+                          (match (parse-list-items req-items 0)
+                            (Ok req-exprs) (walk-defn-clauses items (+ pos 2) sig intent req-exprs ensures body)
+                            (Err e) (Err e))
+                        _ (Err (ParseError "requires must be a bracket list" 0 0)))
+                    (if (= value "ensures")
+                      (match val-sexpr
+                        (SBracket ens-items _ _)
+                          (match (parse-list-items ens-items 0)
+                            (Ok ens-exprs) (walk-defn-clauses items (+ pos 2) sig intent requires ens-exprs body)
+                            (Err e) (Err e))
+                        _ (Err (ParseError "ensures must be a bracket list" 0 0)))
+                    (if (= value "body")
+                      (match (parse-expr val-sexpr)
+                        (Ok body-node) (walk-defn-clauses items (+ pos 2) sig intent requires ensures body-node)
+                        (Err e) (Err e))
+                      ;; Unknown keyword — skip
+                      (walk-defn-clauses items (+ pos 2) sig intent requires ensures body))))))))
+                ;; Non-keyword token — error
+                (Err (ParseError "expected keyword clause in defn" 0 0))))
+        ;; Non-atom — error
+        _ (Err (ParseError "expected keyword clause in defn" 0 0)))))
+
+(defn parse-defn
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (defn name :clause value ...) definition"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items[0] = "defn", items[1] = name, items[2..] = keyword clauses
+    (if (< (length items) 2)
+      (Err (ParseError "defn requires a name" line col))
+      (match (at items 1)
+        (SAtom tok)
+          (match tok
+            (Token kind name _ _)
+              (if (= kind "symbol")
+                (match (walk-defn-clauses items 2 nil "" [] [] nil)
+                  (Ok clause-vals)
+                    (Ok (ASTDefn name
+                      (at clause-vals 0)   ;; sig
+                      (at clause-vals 1)   ;; intent
+                      (at clause-vals 2)   ;; requires
+                      (at clause-vals 3)   ;; ensures
+                      (at clause-vals 4)   ;; body
+                      line col))
+                  (Err e) (Err e))
+                (Err (ParseError "defn name must be a symbol" line col))))
+        _ (Err (ParseError "defn name must be a symbol" line col)))))
+
+;; ── deftype parsing ──────────────────────────────
+
+(defn parse-variant
+  :sig [(sexpr : List) -> List]
+  :intent "Parse a sum variant: (Name Type1 Type2 ...) → (ASTVariantDef name field-type-names)"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (empty? items)
+          (Err (ParseError "empty variant" line col))
+          (match (head items)
+            (SAtom tok)
+              (match tok
+                (Token kind value _ _)
+                  (if (= kind "symbol")
+                    (Ok (ASTVariantDef value (tail items)))
+                    (Err (ParseError "variant name must be a symbol" line col))))
+            _ (Err (ParseError "variant name must be a symbol" line col))))
+      _ (Err (ParseError "variant must be a list" 0 0))))
+
+(defn parse-field
+  :sig [(sexpr : List) -> List]
+  :intent "Parse a product field: (name : Type) → (ASTFieldDef name type-name)"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (< (length items) 3)
+          (Err (ParseError "field requires (name : Type)" line col))
+          (match (at items 0)
+            (SAtom tok0)
+              (match tok0
+                (Token k0 name _ _)
+                  (if (= k0 "symbol")
+                    (match (at items 2)
+                      (SAtom tok2)
+                        (match tok2
+                          (Token k2 type-name _ _)
+                            (if (= k2 "symbol")
+                              (Ok (ASTFieldDef name type-name))
+                              (Err (ParseError "field type must be a symbol" line col))))
+                      _ (Err (ParseError "field type must be a symbol" line col)))
+                    (Err (ParseError "field name must be a symbol" line col))))
+            _ (Err (ParseError "field name must be a symbol" line col))))
+      _ (Err (ParseError "field must be a list" 0 0))))
+
+(defn parse-variants-acc
+  :sig [(items : List) (pos : i64) (acc : List) -> List]
+  :intent "Accumulate parsed variants from items list"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok (reverse acc))
+      (match (parse-variant (at items pos))
+        (Ok v) (parse-variants-acc items (+ pos 1) (cons v acc))
+        (Err e) (Err e))))
+
+(defn parse-sum-body
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse sum type body: (| (Variant1 ...) (Variant2 ...)) → (ASTSumBody variants)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (match (parse-variants-acc items 1 [])
+      (Ok variants) (Ok (ASTSumBody variants))
+      (Err e) (Err e)))
+
+(defn parse-fields-acc
+  :sig [(items : List) (pos : i64) (acc : List) -> List]
+  :intent "Accumulate parsed fields from items list"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok (reverse acc))
+      (match (parse-field (at items pos))
+        (Ok f) (parse-fields-acc items (+ pos 1) (cons f acc))
+        (Err e) (Err e))))
+
+(defn parse-product-body
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse product type body: (& (f1 : T1) (f2 : T2)) → (ASTProductBody fields)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (match (parse-fields-acc items 1 [])
+      (Ok fields) (Ok (ASTProductBody fields))
+      (Err e) (Err e)))
+
+(defn parse-type-params-acc
+  :sig [(items : List) (pos : i64) (acc : List) -> List]
+  :intent "Parse type parameters from bracket items"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok (reverse acc))
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind value _ _)
+              (if (= kind "symbol")
+                (if (< (+ pos 1) (length items))
+                  (match (at items (+ pos 1))
+                    (SAtom colon-tok)
+                      (match colon-tok
+                        (Token ck cv _ _)
+                          (if (= cv ":")
+                            (if (< (+ pos 2) (length items))
+                              (match (at items (+ pos 2))
+                                (SAtom bound-tok)
+                                  (match bound-tok
+                                    (Token bk bv _ _)
+                                      (parse-type-params-acc items (+ pos 3)
+                                        (cons (ASTTypeParam value bv) acc)))
+                                _ (Err (ParseError "expected type bound" 0 0)))
+                              (Err (ParseError "expected type bound after :" 0 0)))
+                            (parse-type-params-acc items (+ pos 1)
+                              (cons (ASTTypeParam value "Type") acc))))
+                    _ (parse-type-params-acc items (+ pos 1)
+                        (cons (ASTTypeParam value "Type") acc)))
+                  (parse-type-params-acc items (+ pos 1)
+                    (cons (ASTTypeParam value "Type") acc)))
+                (Err (ParseError "type param must be a symbol" 0 0))))
+        _ (Err (ParseError "type param must be an atom" 0 0)))))
+
+(defn parse-deftype-body
+  :sig [(rest-item : List) (line : i64) (col : i64) (name : String) (params : List) -> List]
+  :intent "Parse the body part of a deftype declaration"
+  :requires [(valid rest-item)]
+  :ensures [(valid result)]
+  :body
+    (match rest-item
+      (SList body-items bl bc)
+        (if (empty? body-items)
+          (Err (ParseError "empty deftype body" bl bc))
+          (match (head body-items)
+            (SAtom head-tok)
+              (match head-tok
+                (Token hk hv _ _)
+                  (if (= hv "|")
+                    (match (parse-sum-body body-items bl bc)
+                      (Ok body) (Ok (ASTDefType name params body line col))
+                      (Err e) (Err e))
+                    (if (= hv "&")
+                      (match (parse-product-body body-items bl bc)
+                        (Ok body) (Ok (ASTDefType name params body line col))
+                        (Err e) (Err e))
+                      (Err (ParseError "deftype body must start with | or &" bl bc)))))
+            _ (Err (ParseError "deftype body must start with | or &" bl bc))))
+      _ (Err (ParseError "deftype body must be a list" line col))))
+
+(defn parse-deftype
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (deftype Name [Params] Body) → (ASTDefType ...)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? items)
+      (Err (ParseError "deftype requires a name" line col))
+      (match (head items)
+        (SAtom tok)
+          (match tok
+            (Token kind name _ _)
+              (if (= kind "symbol")
+                (let (rest : List (tail items))
+                  (if (empty? rest)
+                    (Err (ParseError "deftype requires a body" line col))
+                    (match (head rest)
+                      (SBracket bp-items bp-line bp-col)
+                        (if (< (length rest) 2)
+                          (Err (ParseError "deftype requires a body after type params" line col))
+                          (match (parse-type-params-acc bp-items 0 [])
+                            (Ok params)
+                              (parse-deftype-body (at rest 1) line col name params)
+                            (Err e) (Err e)))
+                      _ (parse-deftype-body (head rest) line col name []))))
+                (Err (ParseError "deftype name must be a symbol" line col))))
+        _ (Err (ParseError "deftype name must be a symbol" line col)))))
+
+;; ── Top-level and entry point ─────────────────────
+
+(defn parse-top-level
+  :sig [(sexpr : List) -> List]
+  :intent "Parse a top-level S-expression into an AST node"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (empty? items)
+          (parse-expr sexpr)
+          (match (head items)
+            (SAtom tok)
+              (match tok
+                (Token kind value _ _)
+                  (if (= kind "symbol")
+                    (if (= value "defn")
+                      (parse-defn items line col)
+                      (if (= value "deftype")
+                        (parse-deftype (tail items) line col)
+                        (parse-expr sexpr)))
+                    (parse-expr sexpr)))
+            _ (parse-expr sexpr)))
+      _ (parse-expr sexpr)))
+
+(defn parse-top-levels
+  :sig [(sexprs : List) (pos : i64) -> List]
+  :intent "Parse all top-level S-expressions into AST nodes"
+  :requires [(valid sexprs)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length sexprs))
+      (Ok [])
+      (match (parse-top-level (at sexprs pos))
+        (Ok node)
+          (match (parse-top-levels sexprs (+ pos 1))
+            (Ok rest) (Ok (cons node rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn parse-program
+  :sig [(sexprs : List) -> List]
+  :intent "Parse a list of S-expressions into AST nodes"
+  :requires [(valid sexprs)]
+  :ensures [(valid result)]
+  :body (parse-top-levels sexprs 0))
+
+(defn parse
+  :sig [(source : String) -> List]
+  :intent "Full pipeline: source → tokens → S-exprs → AST"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err msg) (Err msg)
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err e)
+          (Ok sexprs)
+            (parse-program sexprs))))
+;; bootstrap/eval.airl — Bootstrap evaluator for AIRL
+;; Interprets AST nodes produced by bootstrap/parser.airl
+
+;; ─── Value Unwrap Helpers ─────────────────────────────────
+
+(defn unwrap-int
+  :sig [(v : List) -> i64]
+  :intent "Extract integer from ValInt"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValInt n) n
+    _ (do (print "ERROR: expected ValInt, got" v) 0)))
+
+(defn unwrap-float
+  :sig [(v : List) -> f64]
+  :intent "Extract float from ValFloat"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValFloat n) n
+    _ (do (print "ERROR: expected ValFloat, got" v) 0.0)))
+
+(defn unwrap-str
+  :sig [(v : List) -> Str]
+  :intent "Extract string from ValStr"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValStr s) s
+    _ (do (print "ERROR: expected ValStr, got" v) "")))
+
+(defn unwrap-bool
+  :sig [(v : List) -> Bool]
+  :intent "Extract bool from ValBool"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValBool b) b
+    _ (do (print "ERROR: expected ValBool, got" v) false)))
+
+(defn unwrap-list
+  :sig [(v : List) -> List]
+  :intent "Extract list from ValList"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValList xs) xs
+    _ (do (print "ERROR: expected ValList, got" v) [])))
+
+(defn unwrap-raw
+  :sig [(v : List) -> List]
+  :intent "Extract the raw AIRL value from any Val wrapper"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValInt n) n
+    (ValFloat n) n
+    (ValStr s) s
+    (ValBool b) b
+    (ValNil) nil
+    _ v))
+
+;; ─── Environment Operations ──────────────────────────────
+;; Environment is a list of maps (frame stack). Head = innermost scope.
+
+(defn env-new
+  :sig [(_u : i64) -> List]
+  :intent "Create a new environment with one empty frame"
+  :requires [(valid _u)]
+  :ensures [(valid result)]
+  :body [(map-new)])
+
+(defn env-push
+  :sig [(env : List) -> List]
+  :intent "Push a new empty frame onto the environment"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (cons (map-new) env))
+
+(defn env-pop
+  :sig [(env : List) -> List]
+  :intent "Pop the innermost frame from the environment"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (tail env))
+
+(defn env-bind
+  :sig [(env : List) (name : Str) (val : List) -> List]
+  :intent "Bind a name to a value in the top frame"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (cons (map-set (head env) name val) (tail env)))
+
+(defn env-get
+  :sig [(env : List) (name : Str) -> List]
+  :intent "Look up a name in the environment, searching from innermost frame outward"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (if (empty? env)
+    (Err (join ["undefined symbol: " name] ""))
+    (if (map-has (head env) name)
+      (Ok (map-get (head env) name))
+      (env-get (tail env) name))))
+
+;; ─── Builtin Dispatch ────────────────────────────────────
+
+(defn print-val-args
+  :sig [(args : List) -> List]
+  :intent "Print all Val-wrapped arguments via the real print builtin"
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args) nil
+    (if (= (length args) 1)
+      (print (unwrap-raw (head args)))
+      (if (= (length args) 2)
+        (print (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))
+        (if (= (length args) 3)
+          (print (unwrap-raw (at args 0)) (unwrap-raw (at args 1)) (unwrap-raw (at args 2)))
+          (print (unwrap-raw (at args 0)) (unwrap-raw (at args 1)) (unwrap-raw (at args 2)) (unwrap-raw (at args 3))))))))
+
+(defn call-builtin
+  :sig [(name : Str) (args : List) -> List]
+  :intent "Dispatch a builtin call by name, returning (Ok val) or (Err msg)"
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body
+    ;; Arithmetic — + dispatches on type (int vs string concat)
+    (if (= name "+") (match (at args 0)
+      (ValStr s) (Ok (ValStr (+ s (unwrap-str (at args 1)))))
+      _ (Ok (ValInt (+ (unwrap-int (at args 0)) (unwrap-int (at args 1))))))
+    (if (= name "-") (Ok (ValInt (- (unwrap-int (at args 0)) (unwrap-int (at args 1)))))
+    (if (= name "*") (Ok (ValInt (* (unwrap-int (at args 0)) (unwrap-int (at args 1)))))
+    (if (= name "/") (Ok (ValInt (/ (unwrap-int (at args 0)) (unwrap-int (at args 1)))))
+    (if (= name "%") (Ok (ValInt (% (unwrap-int (at args 0)) (unwrap-int (at args 1)))))
+
+    ;; Comparison
+    (if (= name "=")  (Ok (ValBool (= (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))))
+    (if (= name "!=") (Ok (ValBool (!= (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))))
+    (if (= name "<")  (Ok (ValBool (< (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))))
+    (if (= name ">")  (Ok (ValBool (> (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))))
+    (if (= name "<=") (Ok (ValBool (<= (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))))
+    (if (= name ">=") (Ok (ValBool (>= (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))))
+
+    ;; Logic
+    (if (= name "not") (Ok (ValBool (not (unwrap-bool (at args 0)))))
+    (if (= name "and") (Ok (ValBool (if (unwrap-bool (at args 0)) (unwrap-bool (at args 1)) false)))
+    (if (= name "or")  (Ok (ValBool (if (unwrap-bool (at args 0)) true (unwrap-bool (at args 1)))))
+    (if (= name "xor") (Ok (ValBool (xor (unwrap-bool (at args 0)) (unwrap-bool (at args 1)))))
+
+    ;; List operations
+    (if (= name "head")   (Ok (head (unwrap-list (at args 0))))
+    (if (= name "tail")   (Ok (ValList (tail (unwrap-list (at args 0)))))
+    (if (= name "cons")   (Ok (ValList (cons (at args 0) (unwrap-list (at args 1)))))
+    (if (= name "empty?") (Ok (ValBool (empty? (unwrap-list (at args 0)))))
+    (if (= name "at")     (Ok (at (unwrap-list (at args 0)) (unwrap-int (at args 1))))
+    (if (= name "append") (Ok (ValList (append (unwrap-list (at args 0)) (at args 1))))
+
+    ;; length — works on both lists and strings
+    (if (= name "length") (match (at args 0)
+      (ValStr s) (Ok (ValInt (length s)))
+      (ValList xs) (Ok (ValInt (length xs)))
+      _ (Ok (ValInt (length (unwrap-list (at args 0))))))
+
+    ;; String operations — character access
+    (if (= name "char-at")    (Ok (ValStr (char-at (unwrap-str (at args 0)) (unwrap-int (at args 1)))))
+    (if (= name "substring")  (Ok (ValStr (substring (unwrap-str (at args 0)) (unwrap-int (at args 1)) (unwrap-int (at args 2)))))
+    (if (= name "chars")      (Ok (ValList (map (fn [c] (ValStr c)) (chars (unwrap-str (at args 0))))))
+
+    ;; String operations — search
+    (if (= name "contains")    (Ok (ValBool (contains (unwrap-str (at args 0)) (unwrap-str (at args 1)))))
+    (if (= name "starts-with") (Ok (ValBool (starts-with (unwrap-str (at args 0)) (unwrap-str (at args 1)))))
+    (if (= name "ends-with")   (Ok (ValBool (ends-with (unwrap-str (at args 0)) (unwrap-str (at args 1)))))
+    (if (= name "index-of")    (Ok (ValInt (index-of (unwrap-str (at args 0)) (unwrap-str (at args 1)))))
+
+    ;; String operations — transformation
+    (if (= name "trim")     (Ok (ValStr (trim (unwrap-str (at args 0)))))
+    (if (= name "to-upper") (Ok (ValStr (to-upper (unwrap-str (at args 0)))))
+    (if (= name "to-lower") (Ok (ValStr (to-lower (unwrap-str (at args 0)))))
+    (if (= name "replace")  (Ok (ValStr (replace (unwrap-str (at args 0)) (unwrap-str (at args 1)) (unwrap-str (at args 2)))))
+
+    ;; String operations — split/join
+    (if (= name "split") (Ok (ValList (map (fn [s] (ValStr s)) (split (unwrap-str (at args 0)) (unwrap-str (at args 1))))))
+    (if (= name "join")  (Ok (ValStr (join (map (fn [v] (unwrap-str v)) (unwrap-list (at args 0))) (unwrap-str (at args 1)))))
+
+    ;; Map operations
+    (if (= name "map-new")     (Ok (ValMap (map-new)))
+    (if (= name "map-from")    (Ok (ValMap (map-from (unwrap-raw (at args 0)))))
+    (if (= name "map-get")     (let (v : List(map-get (unwrap-raw (at args 0)) (unwrap-str (at args 1))))
+                                  (if (= v nil) (Ok (ValNil)) (Ok v)))
+    (if (= name "map-get-or")  (Ok (map-get-or (unwrap-raw (at args 0)) (unwrap-str (at args 1)) (at args 2)))
+    (if (= name "map-set")     (Ok (ValMap (map-set (unwrap-raw (at args 0)) (unwrap-str (at args 1)) (at args 2))))
+    (if (= name "map-has")     (Ok (ValBool (map-has (unwrap-raw (at args 0)) (unwrap-str (at args 1)))))
+    (if (= name "map-remove")  (Ok (ValMap (map-remove (unwrap-raw (at args 0)) (unwrap-str (at args 1)))))
+    (if (= name "map-keys")    (Ok (ValList (map (fn [k] (ValStr k)) (map-keys (unwrap-raw (at args 0))))))
+    (if (= name "map-values")  (Ok (ValList (map-values (unwrap-raw (at args 0)))))
+    (if (= name "map-size")    (Ok (ValInt (map-size (unwrap-raw (at args 0)))))
+
+    ;; File I/O
+    (if (= name "read-file")    (match (read-file (unwrap-str (at args 0)))
+      err (Err (+ "read-file error: " err))
+      content (Ok (ValStr content)))
+    (if (= name "write-file")   (do (write-file (unwrap-str (at args 0)) (unwrap-str (at args 1))) (Ok (ValBool true)))
+    (if (= name "file-exists?") (Ok (ValBool (file-exists? (unwrap-str (at args 0)))))
+
+    ;; I/O — print is variadic, print all args
+    (if (= name "print") (do (print-val-args args) (Ok (ValNil)))
+
+    ;; Utility
+    (if (= name "valid") (Ok (ValBool true))
+    (if (= name "type-of")
+      (match (at args 0)
+        (ValInt _) (Ok (ValStr "Int"))
+        (ValFloat _) (Ok (ValStr "Float"))
+        (ValStr _) (Ok (ValStr "Str"))
+        (ValBool _) (Ok (ValStr "Bool"))
+        (ValNil) (Ok (ValStr "Nil"))
+        (ValList _) (Ok (ValStr "List"))
+        (ValMap _) (Ok (ValStr "Map"))
+        (ValVariant _ _) (Ok (ValStr "Variant"))
+        (ValFn _ _ _ _) (Ok (ValStr "Fn"))
+        (ValLambda _ _ _) (Ok (ValStr "Lambda"))
+        (ValBuiltin _) (Ok (ValStr "Builtin"))
+        _ (Ok (ValStr "Unknown")))
+
+    ;; Unknown builtin
+    (Err (+ "unknown builtin: " name))
+    ))))))))))))))))))))))))))))))))))))))))))))))))))))
+
+(defn make-initial-env
+  :sig [(_u : i64) -> List]
+  :intent "Create environment with all builtins bound"
+  :requires [(valid _u)]
+  :ensures [(valid result)]
+  :body
+    (let (e : List(env-new 0))
+    (let (e : List(env-bind e "+" (ValBuiltin "+")))
+    (let (e : List(env-bind e "-" (ValBuiltin "-")))
+    (let (e : List(env-bind e "*" (ValBuiltin "*")))
+    (let (e : List(env-bind e "/" (ValBuiltin "/")))
+    (let (e : List(env-bind e "%" (ValBuiltin "%")))
+    (let (e : List(env-bind e "=" (ValBuiltin "=")))
+    (let (e : List(env-bind e "!=" (ValBuiltin "!=")))
+    (let (e : List(env-bind e "<" (ValBuiltin "<")))
+    (let (e : List(env-bind e ">" (ValBuiltin ">")))
+    (let (e : List(env-bind e "<=" (ValBuiltin "<=")))
+    (let (e : List(env-bind e ">=" (ValBuiltin ">=")))
+    (let (e : List(env-bind e "not" (ValBuiltin "not")))
+    (let (e : List(env-bind e "and" (ValBuiltin "and")))
+    (let (e : List(env-bind e "or" (ValBuiltin "or")))
+    (let (e : List(env-bind e "head" (ValBuiltin "head")))
+    (let (e : List(env-bind e "tail" (ValBuiltin "tail")))
+    (let (e : List(env-bind e "cons" (ValBuiltin "cons")))
+    (let (e : List(env-bind e "empty?" (ValBuiltin "empty?")))
+    (let (e : List(env-bind e "length" (ValBuiltin "length")))
+    (let (e : List(env-bind e "at" (ValBuiltin "at")))
+    (let (e : List(env-bind e "append" (ValBuiltin "append")))
+    (let (e : List(env-bind e "char-at" (ValBuiltin "char-at")))
+    (let (e : List(env-bind e "substring" (ValBuiltin "substring")))
+    (let (e : List(env-bind e "chars" (ValBuiltin "chars")))
+    (let (e : List(env-bind e "contains" (ValBuiltin "contains")))
+    (let (e : List(env-bind e "starts-with" (ValBuiltin "starts-with")))
+    (let (e : List(env-bind e "ends-with" (ValBuiltin "ends-with")))
+    (let (e : List(env-bind e "index-of" (ValBuiltin "index-of")))
+    (let (e : List(env-bind e "trim" (ValBuiltin "trim")))
+    (let (e : List(env-bind e "to-upper" (ValBuiltin "to-upper")))
+    (let (e : List(env-bind e "to-lower" (ValBuiltin "to-lower")))
+    (let (e : List(env-bind e "replace" (ValBuiltin "replace")))
+    (let (e : List(env-bind e "split" (ValBuiltin "split")))
+    (let (e : List(env-bind e "join" (ValBuiltin "join")))
+    (let (e : List(env-bind e "map-new" (ValBuiltin "map-new")))
+    (let (e : List(env-bind e "map-from" (ValBuiltin "map-from")))
+    (let (e : List(env-bind e "map-get" (ValBuiltin "map-get")))
+    (let (e : List(env-bind e "map-get-or" (ValBuiltin "map-get-or")))
+    (let (e : List(env-bind e "map-set" (ValBuiltin "map-set")))
+    (let (e : List(env-bind e "map-has" (ValBuiltin "map-has")))
+    (let (e : List(env-bind e "map-remove" (ValBuiltin "map-remove")))
+    (let (e : List(env-bind e "map-keys" (ValBuiltin "map-keys")))
+    (let (e : List(env-bind e "map-values" (ValBuiltin "map-values")))
+    (let (e : List(env-bind e "map-size" (ValBuiltin "map-size")))
+    (let (e : List(env-bind e "read-file" (ValBuiltin "read-file")))
+    (let (e : List(env-bind e "write-file" (ValBuiltin "write-file")))
+    (let (e : List(env-bind e "file-exists?" (ValBuiltin "file-exists?")))
+    (let (e : List(env-bind e "print" (ValBuiltin "print")))
+    (let (e : List(env-bind e "type-of" (ValBuiltin "type-of")))
+    (let (e : List(env-bind e "valid" (ValBuiltin "valid")))
+    (let (e : List(env-bind e "xor" (ValBuiltin "xor")))
+      e)))))))))))))))))))))))))))))))))))))))))))))))))))))
+
+(defn eval-args-acc
+  :sig [(args : List) (env : List) (acc : List) -> List]
+  :intent "Accumulate evaluated argument values"
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? args) (Ok [acc env])
+      (match (eval-node (head args) env)
+        (Err e) (Err e)
+        (Ok pair)
+          (eval-args-acc (tail args) (at pair 1) (append acc (at pair 0))))))
+
+(defn eval-args
+  :sig [(args : List) (env : List) -> List]
+  :intent "Evaluate a list of argument expressions left-to-right"
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (eval-args-acc args env []))
+
+;; ─── Control Flow Helpers ────────────────────────────────
+
+(defn eval-let-bindings
+  :sig [(bindings : List) (env : List) -> List]
+  :intent "Evaluate let bindings sequentially, threading env"
+  :requires [(valid bindings)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? bindings) (Ok env)
+      (match (head bindings)
+        (ASTBinding name _ val-expr)
+          (match (eval-node val-expr env)
+            (Err e) (Err e)
+            (Ok pair)
+              (eval-let-bindings (tail bindings) (env-bind (at pair 1) name (at pair 0))))
+        _ (Err "eval: invalid let binding"))))
+
+(defn eval-do
+  :sig [(exprs : List) (env : List) -> List]
+  :intent "Evaluate a sequence of expressions, threading env, return last value"
+  :requires [(valid exprs)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? exprs) (Ok [(ValNil) env])
+      (match (eval-node (head exprs) env)
+        (Err e) (Err e)
+        (Ok pair)
+          (if (empty? (tail exprs))
+            (Ok pair)
+            (eval-do (tail exprs) (at pair 1))))))
+
+;; ─── Pattern Matching ────────────────────────────────────
+
+(defn try-match-patterns
+  :sig [(patterns : List) (values : List) -> List]
+  :intent "Match a list of patterns against a list of values, collecting bindings"
+  :requires [(valid patterns)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? patterns) (Ok [])
+      (if (empty? values) (Err "no match")
+        (match (try-match-pattern (head patterns) (head values))
+          (Err e) (Err e)
+          (Ok binds1)
+            (match (try-match-patterns (tail patterns) (tail values))
+              (Err e) (Err e)
+              (Ok binds2) (Ok (concat binds1 binds2)))))))
+
+(defn try-match-pattern
+  :sig [(pattern : List) (value : List) -> List]
+  :intent "Try to match a pattern against a value, returning (Ok bindings) or (Err msg)"
+  :requires [(valid pattern)]
+  :ensures [(valid result)]
+  :body (match pattern
+    (PatWild _ _) (Ok [])
+    (PatBind name _ _) (Ok [[name value]])
+    (PatLit lit-val _ _)
+      (if (= (unwrap-raw value) lit-val) (Ok [])
+        (Err "no match"))
+    (PatVariant tag sub-pats _ _)
+      (match value
+        (ValVariant vtag inner)
+          (if (= tag vtag)
+            (if (empty? sub-pats)
+              (Ok [])
+              (if (= (length sub-pats) 1)
+                (try-match-pattern (head sub-pats) inner)
+                (match inner
+                  (ValList items) (try-match-patterns sub-pats items)
+                  _ (Err "no match"))))
+            (Err "no match"))
+        _ (Err "no match"))
+    _ (Err "no match")))
+
+(defn bind-match-bindings
+  :sig [(env : List) (bindings : List) -> List]
+  :intent "Bind pattern match capture bindings into the top frame"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? bindings) env
+      (let (pair : List(head bindings))
+        (bind-match-bindings
+          (env-bind env (at pair 0) (at pair 1))
+          (tail bindings)))))
+
+(defn eval-match-arms
+  :sig [(arms : List) (value : List) (env : List) -> List]
+  :intent "Try each match arm against the scrutinee value"
+  :requires [(valid arms)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? arms)
+      (Err "non-exhaustive match")
+      (match (head arms)
+        (ASTArm pattern body)
+          (match (try-match-pattern pattern value)
+            (Ok bindings)
+              (let (match-env : List(bind-match-bindings (env-push env) bindings))
+                (match (eval-node body match-env)
+                  (Err e) (Err e)
+                  (Ok pair) (Ok [(at pair 0) (env-pop (at pair 1))])))
+            (Err _) (eval-match-arms (tail arms) value env))
+        _ (Err "eval: invalid match arm"))))
+
+;; ─── Function Helpers ────────────────────────────────────
+
+(defn extract-param-names
+  :sig [(sig : List) -> List]
+  :intent "Extract parameter name strings from an ASTSig node"
+  :requires [(valid sig)]
+  :ensures [(valid result)]
+  :body (match sig
+    (ASTSig params _)
+      (map (fn [p] (match p (ASTParam name _) name _ "?")) params)
+    _ []))
+
+(defn bind-params
+  :sig [(env : List) (names : List) (vals : List) -> List]
+  :intent "Bind parameter names to argument values in the top frame"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? names) env
+      (bind-params
+        (env-bind env (head names) (if (empty? vals) (ValNil) (head vals)))
+        (tail names)
+        (if (empty? vals) [] (tail vals)))))
+
+;; ─── Evaluator Core ──────────────────────────────────────
+
+(defn eval-list-items
+  :sig [(items : List) (env : List) (acc : List) -> List]
+  :intent "Evaluate list literal items left-to-right"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? items) (Ok [acc env])
+      (match (eval-node (head items) env)
+        (Err e) (Err e)
+        (Ok pair)
+          (eval-list-items (tail items) (at pair 1) (append acc (at pair 0))))))
+
+(defn eval-node
+  :sig [(node : List) (env : List) -> List]
+  :intent "Evaluate a single AST node, returning (Ok [val env]) or (Err msg)"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTInt v _ _) (Ok [(ValInt v) env])
+    (ASTFloat v _ _) (Ok [(ValFloat v) env])
+    (ASTStr v _ _) (Ok [(ValStr v) env])
+    (ASTBool v _ _) (Ok [(ValBool v) env])
+    (ASTNil _ _) (Ok [(ValNil) env])
+    (ASTKeyword k _ _) (Ok [(ValStr (+ ":" k)) env])
+
+    (ASTSymbol name _ _)
+      (match (env-get env name)
+        (Ok val) (Ok [val env])
+        (Err msg) (Err msg))
+
+    (ASTList items _ _)
+      (match (eval-list-items items env [])
+        (Err e) (Err e)
+        (Ok pair) (Ok [(ValList (at pair 0)) (at pair 1)]))
+
+    (ASTCall callee args _ _)
+      (match (eval-node callee env)
+        (Err e) (Err e)
+        (Ok callee-pair)
+          (let (callee-val : List(at callee-pair 0))
+            (let (env2 : List(at callee-pair 1))
+              (match (eval-args args env2)
+                (Err e) (Err e)
+                (Ok args-pair)
+                  (let (arg-vals : List(at args-pair 0))
+                    (let (env3 : List(at args-pair 1))
+                      (match callee-val
+                        (ValBuiltin name)
+                          (match (call-builtin name arg-vals)
+                            (Ok val) (Ok [val env3])
+                            (Err e) (Err e))
+
+                        (ValFn fn-name params body captured-env)
+                          (let (call-env : List(env-bind (bind-params (env-push captured-env) params arg-vals) fn-name callee-val))
+                            (match (eval-node body call-env)
+                              (Err e) (Err e)
+                              (Ok pair) (Ok [(at pair 0) env3])))
+
+                        (ValLambda params body captured-env)
+                          (let (call-env : List(bind-params (env-push captured-env) params arg-vals))
+                            (match (eval-node body call-env)
+                              (Err e) (Err e)
+                              (Ok pair) (Ok [(at pair 0) env3])))
+
+                        _ (Err "eval: not callable"))))))))
+
+    (ASTIf cond then-expr else-expr _ _)
+      (match (eval-node cond env)
+        (Err e) (Err e)
+        (Ok cond-pair)
+          (let (cond-val : List(at cond-pair 0))
+            (let (env2 : List(at cond-pair 1))
+              (if (unwrap-bool cond-val)
+                (eval-node then-expr env2)
+                (eval-node else-expr env2)))))
+
+    (ASTLet bindings body _ _)
+      (let (env2 : List(env-push env))
+        (match (eval-let-bindings bindings env2)
+          (Err e) (Err e)
+          (Ok bound-env)
+            (match (eval-node body bound-env)
+              (Err e) (Err e)
+              (Ok pair) (Ok [(at pair 0) (env-pop (at pair 1))]))))
+
+    (ASTDo exprs _ _)
+      (eval-do exprs env)
+
+    (ASTMatch scrutinee arms _ _)
+      (match (eval-node scrutinee env)
+        (Err e) (Err e)
+        (Ok scr-pair)
+          (eval-match-arms arms (at scr-pair 0) (at scr-pair 1)))
+
+    (ASTVariant name args _ _)
+      (if (empty? args)
+        (Ok [(ValVariant name (ValNil)) env])
+        (match (eval-args args env)
+          (Err e) (Err e)
+          (Ok args-pair)
+            (let (vals : List(at args-pair 0))
+              (let (env2 : List(at args-pair 1))
+                (if (= (length vals) 1)
+                  (Ok [(ValVariant name (head vals)) env2])
+                  (Ok [(ValVariant name (ValList vals)) env2]))))))
+
+    (ASTTry expr _ _)
+      (match (eval-node expr env)
+        (Err e) (Err e)
+        (Ok pair)
+          (match (at pair 0)
+            (ValVariant "Ok" inner) (Ok [inner (at pair 1)])
+            (ValVariant "Err" inner) (Err (+ "Err: " (unwrap-raw inner)))
+            _ (Err "try on non-Result value")))
+
+    (ASTLambda params body _ _)
+      (Ok [(ValLambda params body env) env])
+
+    _ (Err "eval-node: unknown node type")))
+
+;; ─── Top-Level Evaluation ────────────────────────────────
+
+(defn eval-top-level
+  :sig [(node : List) (env : List) -> List]
+  :intent "Evaluate a top-level node (defn or expression)"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTDefn name sig _ _ _ body _ _)
+      (let (param-names : List(extract-param-names sig))
+        (let (fn-val : List(ValFn name param-names body env))
+          (Ok [(ValNil) (env-bind env name fn-val)])))
+    _ (eval-node node env)))
+
+(defn eval-program
+  :sig [(nodes : List) (env : List) -> List]
+  :intent "Evaluate a list of top-level nodes sequentially, threading env"
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? nodes) (Ok [(ValNil) env])
+      (match (eval-top-level (head nodes) env)
+        (Err e) (Err e)
+        (Ok pair)
+          (if (empty? (tail nodes))
+            (Ok pair)
+            (eval-program (tail nodes) (at pair 1))))))
+
+;; ─── Full Pipeline ───────────────────────────────────────
+
+(defn run-source
+  :sig [(source : Str) -> List]
+  :intent "Lex, parse, and evaluate an AIRL source string"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err e) (Err e)
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err e)
+          (Ok sexprs)
+            (match (parse-program sexprs)
+              (Err e) (Err e)
+              (Ok ast-nodes)
+                (eval-program ast-nodes (make-initial-env 0))))))
+
+(defn run-file
+  :sig [(path : Str) -> List]
+  :intent "Read an AIRL source file and evaluate it through the full pipeline"
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body
+    (let (source : String (read-file path))
+      (match (run-source source)
+        (Ok pair) (Ok (at pair 0))
+        (Err e) (do (print "Error:" e) (Err e)))))
+;; bootstrap/compiler.airl — Self-hosted AIRL-to-IR compiler
+;; Requires: bootstrap/lexer.airl, bootstrap/parser.airl (loaded first)
+;;
+;; Transforms AST nodes (from the parser) into IR nodes (consumed by run-ir).
+
+;; ── Core expression compiler ──────────────────────────────
+
+(defn compile-expr
+  :sig [(node : List) -> List]
+  :intent "Compile an AST expression to an IR node"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTInt v _ _)       (Ok (IRInt v))
+    (ASTFloat v _ _)     (Ok (IRFloat v))
+    (ASTStr s _ _)       (Ok (IRStr s))
+    (ASTBool b _ _)      (Ok (IRBool b))
+    (ASTNil _ _)         (Ok (IRNil nil))
+    (ASTKeyword k _ _)   (Ok (IRStr (join [":" k] "")))
+    (ASTSymbol name _ _) (Ok (IRLoad name))
+
+    (ASTIf cond then else-branch _ _)
+      (match (compile-expr cond)
+        (Err e) (Err e)
+        (Ok cc) (match (compile-expr then)
+          (Err e) (Err e)
+          (Ok ct) (match (compile-expr else-branch)
+            (Err e) (Err e)
+            (Ok ce) (Ok (IRIf [cc ct ce])))))
+
+    (ASTCall callee args _ _)
+      (match callee
+        (ASTSymbol name _ _)
+          (match (compile-args args)
+            (Err e) (Err e)
+            (Ok cargs) (Ok (IRCall [name cargs])))
+        _ (match (compile-expr callee)
+            (Err e) (Err e)
+            (Ok cc) (match (compile-args args)
+              (Err e) (Err e)
+              (Ok cargs) (Ok (IRCallExpr [cc cargs])))))
+
+    (ASTLet bindings body _ _)
+      (match (compile-let-bindings bindings)
+        (Err e) (Err e)
+        (Ok cbindings) (match (compile-expr body)
+          (Err e) (Err e)
+          (Ok cbody) (Ok (IRLet [cbindings cbody]))))
+
+    (ASTDo exprs _ _)
+      (match (compile-args exprs)
+        (Err e) (Err e)
+        (Ok cexprs) (Ok (IRDo cexprs)))
+
+    (ASTMatch scrutinee arms _ _)
+      (match (compile-expr scrutinee)
+        (Err e) (Err e)
+        (Ok cscr) (match (compile-match-arms arms)
+          (Err e) (Err e)
+          (Ok carms) (Ok (IRMatch [cscr carms]))))
+
+    (ASTLambda params body _ _)
+      (match (compile-expr body)
+        (Err e) (Err e)
+        (Ok cbody) (Ok (IRLambda [params cbody])))
+
+    (ASTVariant name args _ _)
+      (match (compile-args args)
+        (Err e) (Err e)
+        (Ok cargs) (Ok (IRVariant [name cargs])))
+
+    (ASTList items _ _)
+      (match (compile-args items)
+        (Err e) (Err e)
+        (Ok citems) (Ok (IRList citems)))
+
+    (ASTTry expr _ _)
+      (match (compile-expr expr)
+        (Err e) (Err e)
+        (Ok cexpr) (Ok (IRTry cexpr)))
+
+    _ (Err "compile-expr: unknown node type")))
+
+;; ── Compile a list of expressions ─────────────────────────
+
+(defn compile-args
+  :sig [(nodes : List) -> List]
+  :intent "Compile a list of AST expressions to a list of IR nodes"
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? nodes) (Ok [])
+      (match (compile-expr (head nodes))
+        (Err e) (Err e)
+        (Ok compiled) (match (compile-args (tail nodes))
+          (Err e) (Err e)
+          (Ok rest) (Ok (cons compiled rest))))))
+
+;; ── Compile let bindings ──────────────────────────────────
+
+(defn compile-let-bindings
+  :sig [(bindings : List) -> List]
+  :intent "Compile let bindings to IR bindings"
+  :requires [(valid bindings)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? bindings) (Ok [])
+      (match (head bindings)
+        (ASTBinding name _ val-expr)
+          (match (compile-expr val-expr)
+            (Err e) (Err e)
+            (Ok cval) (match (compile-let-bindings (tail bindings))
+              (Err e) (Err e)
+              (Ok rest) (Ok (cons (IRBinding [name cval]) rest))))
+        _ (Err "compile-let-bindings: invalid let binding"))))
+
+;; ── Compile patterns ──────────────────────────────────────
+
+(defn compile-pattern
+  :sig [(pat : List) -> List]
+  :intent "Convert an AST pattern to an IR pattern"
+  :requires [(valid pat)]
+  :ensures [(valid result)]
+  :body (match pat
+    (PatWild _ _)             (Ok (IRPatWild nil))
+    (PatBind name _ _)        (Ok (IRPatBind name))
+    (PatLit value _ _)        (Ok (IRPatLit value))
+    (PatVariant name sub-pats _ _)
+      (match (compile-patterns sub-pats)
+        (Err e) (Err e)
+        (Ok cpats) (Ok (IRPatVariant [name cpats])))
+    _ (Err "compile-pattern: unknown pattern type")))
+
+(defn compile-patterns
+  :sig [(pats : List) -> List]
+  :intent "Compile a list of AST patterns to IR patterns"
+  :requires [(valid pats)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? pats) (Ok [])
+      (match (compile-pattern (head pats))
+        (Err e) (Err e)
+        (Ok cpat) (match (compile-patterns (tail pats))
+          (Err e) (Err e)
+          (Ok rest) (Ok (cons cpat rest))))))
+
+;; ── Compile match arms ────────────────────────────────────
+
+(defn compile-match-arms
+  :sig [(arms : List) -> List]
+  :intent "Compile match arms to IR arms"
+  :requires [(valid arms)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? arms) (Ok [])
+      (match (head arms)
+        (ASTArm pat body)
+          (match (compile-pattern pat)
+            (Err e) (Err e)
+            (Ok cpat) (match (compile-expr body)
+              (Err e) (Err e)
+              (Ok cbody) (match (compile-match-arms (tail arms))
+                (Err e) (Err e)
+                (Ok rest) (Ok (cons (IRArm [cpat cbody]) rest)))))
+        _ (Err "compile-match-arms: invalid match arm"))))
+
+;; ── Compile top-level forms ───────────────────────────────
+
+(defn compile-top-level
+  :sig [(node : List) -> List]
+  :intent "Compile a top-level AST node to an IR node"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTDefn name sig _ _ _ body _ _)
+      (match sig
+        (ASTSig params ret-name)
+          (let (param-names : List (map (fn [p] (match p (ASTParam n _) n _ "?")) params))
+            (match (compile-expr body)
+              (Err e) (Err e)
+              (Ok cbody) (Ok (IRFunc [name param-names cbody]))))
+        _ (Err "compile-top-level: defn requires sig"))
+    (ASTDefType _ _ _ _ _) (Ok (IRNil nil))
+    _ (compile-expr node)))
+
+;; ── Compile a full program ────────────────────────────────
+
+(defn compile-program
+  :sig [(nodes : List) -> List]
+  :intent "Compile all top-level AST nodes to IR nodes"
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? nodes) (Ok [])
+      (match (compile-top-level (head nodes))
+        (Err e) (Err e)
+        (Ok compiled) (match (compile-program (tail nodes))
+          (Err e) (Err e)
+          (Ok rest) (Ok (cons compiled rest))))))
+
+;; ── Full compiled pipeline ──────────────────────────
+
+(defn run-compiled
+  :sig [(source : String) -> List]
+  :intent "Full compiled pipeline: source -> lex -> parse -> compile -> run-ir"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err e) (Err e)
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err e)
+          (Ok sexprs)
+            (match (parse-program sexprs)
+              (Err e) (Err e)
+              (Ok ast-nodes)
+                (match (compile-program ast-nodes)
+                  (Err e) (Err e)
+                  (Ok ir-nodes) (Ok (run-ir ir-nodes)))))))
+
+;; ── Equivalence Test Infrastructure ────────────────────────
+
+(defn assert-eq
+  :sig [(actual : List) (expected : List) (name : String) -> List]
+  :requires [(valid actual)]
+  :ensures [(valid result)]
+  :body (if (= actual expected)
+    (do (print "PASS:" name) true)
+    (do (print "FAIL:" name "expected" expected "got" actual) false)))
+
+;; Unwrap bootstrap eval ValXxx variants to raw values for comparison
+(defn unwrap-val
+  :sig [(v : List) -> List]
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValInt x)   x
+    (ValFloat x) x
+    (ValStr x)   x
+    (ValBool x)  x
+    (ValNil)     nil
+    (ValList xs) (map (fn [item] (unwrap-val item)) xs)
+    _            v))
+
+;; Run source through the bootstrap interpreted eval, return unwrapped value
+(defn eval-interpreted
+  :sig [(source : String) -> List]
+  :intent "Evaluate source via bootstrap eval-program, return (Ok raw-value)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (run-source source)
+      (Err e) (Err e)
+      (Ok pair) (Ok (unwrap-val (at pair 0)))))
+
+;; Run source through the compiled pipeline, return value
+(defn eval-compiled
+  :sig [(source : String) -> List]
+  :intent "Compile and run source via compile-program + run-ir"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err e) (Err e)
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err e)
+          (Ok sexprs)
+            (match (parse-program sexprs)
+              (Err e) (Err e)
+              (Ok ast-nodes)
+                (match (compile-program ast-nodes)
+                  (Err e) (Err e)
+                  (Ok ir-nodes) (Ok (run-ir ir-nodes)))))))
+
+;; Compare both paths for a given source string
+(defn test-equiv
+  :sig [(source : String) (name : String) -> List]
+  :intent "Assert interpreted and compiled paths produce the same result"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (let (interp : List (eval-interpreted source))
+      (let (compiled : List (eval-compiled source))
+        (assert-eq interp compiled name))))
+
+;; ── Equivalence Tests ────────────────────────────────
+
+;; Literals
+(test-equiv "42" "int literal")
+(test-equiv "3.14" "float literal")
+(test-equiv "true" "bool true")
+(test-equiv "false" "bool false")
+(test-equiv "nil" "nil literal")
+
+;; Arithmetic
+(test-equiv "(+ 1 2)" "addition")
+(test-equiv "(- 10 3)" "subtraction")
+(test-equiv "(* 3 4)" "multiplication")
+(test-equiv "(/ 10 2)" "division")
+(test-equiv "(% 7 3)" "modulo")
+
+;; Comparisons
+(test-equiv "(< 1 2)" "less than")
+(test-equiv "(= 5 5)" "equality")
+
+;; Control flow
+(test-equiv "(if true 1 2)" "if true")
+(test-equiv "(if false 1 2)" "if false")
+(test-equiv "(if (< 1 2) 10 20)" "if with comparison")
+
+;; Let bindings
+(test-equiv "(let (x : i64 10) (+ x 5))" "let binding")
+(test-equiv "(let (x : i64 5) (let (y : i64 10) (+ x y)))" "nested let")
+
+;; Do block
+(test-equiv "(do 1 2 3)" "do block")
+
+;; Functions
+(test-equiv "(defn add1 :sig [(x : i64) -> i64] :requires [(valid x)] :ensures [(valid result)] :body (+ x 1)) (add1 99)" "defn and call")
+(test-equiv "(defn add :sig [(a : i64) (b : i64) -> i64] :requires [(valid a)] :ensures [(valid result)] :body (+ a b)) (add 3 4)" "multi-arg function")
+
+;; Recursion
+(test-equiv "(defn fact :sig [(n : i64) -> i64] :requires [(valid n)] :ensures [(valid result)] :body (if (<= n 1) 1 (* n (fact (- n 1))))) (fact 5)" "factorial")
+(test-equiv "(defn fib :sig [(n : i64) -> i64] :requires [(valid n)] :ensures [(valid result)] :body (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2))))) (fib 10)" "fibonacci")
+
+;; Match
+(test-equiv "(match (Ok 42) (Ok v) v _ 0)" "match Ok")
+(test-equiv "(match (Err 99) (Ok v) v (Err e) e _ 0)" "match Err")
+
+;; Lambda
+(test-equiv "((fn [x] (+ x 1)) 10)" "lambda application")
+
+;; Closure capture
+(test-equiv "(let (offset : i64 100) ((fn [x] (+ x offset)) 5))" "closure capture")
+
+;; Higher-order function
+(test-equiv "(defn apply-twice :sig [(f : fn) (x : i64) -> i64] :requires [(valid f)] :ensures [(valid result)] :body (f (f x))) (apply-twice (fn [x] (+ x 1)) 10)" "higher-order function")
+
+;; List operations
+(test-equiv "(head [10 20 30])" "list head")
+(test-equiv "(head (tail [10 20 30]))" "list tail")
+(test-equiv "(head (cons 1 [2 3]))" "list cons")
+
+;; Nested variant match
+(test-equiv "(match (Ok (Ok 42)) (Ok (Ok v)) v _ 0)" "nested variant match")
+
+;; Multiple definitions
+(test-equiv "(defn double :sig [(x : i64) -> i64] :requires [(valid x)] :ensures [(valid result)] :body (* x 2)) (defn quad :sig [(x : i64) -> i64] :requires [(valid x)] :ensures [(valid result)] :body (double (double x))) (quad 3)" "multi-function")
+
+(print "equivalence tests complete")
