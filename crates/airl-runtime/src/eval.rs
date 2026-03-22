@@ -1907,6 +1907,90 @@ mod tests {
     }
 
     #[test]
+    fn test_tco_accumulator_pattern() {
+        // Tail-recursive sum with accumulator
+        let code = r#"
+            (defn sum-acc
+              :sig [(n : i64) (acc : i64) -> i64]
+              :requires [(valid n)]
+              :ensures [(valid result)]
+              :body (if (= n 0) acc (sum-acc (- n 1) (+ acc n))))
+            (sum-acc 10000 0)
+        "#;
+        assert_eq!(eval_str(code), Value::Int(50005000));
+    }
+
+    #[test]
+    fn test_tco_with_match_in_body() {
+        // Self-recursive function with match → if → tail call
+        let code = r#"
+            (defn process
+              :sig [(xs : List) (acc : i64) -> i64]
+              :requires [(valid xs)]
+              :ensures [(valid result)]
+              :body (match xs
+                (Ok v) (+ acc v)
+                (Err _) acc))
+            (process (Ok 42) 10)
+        "#;
+        assert_eq!(eval_str(code), Value::Int(52));
+    }
+
+    #[test]
+    fn test_non_tail_call_still_works() {
+        // (+ (f x) 1) — f is NOT in tail position
+        let code = r#"
+            (defn double
+              :sig [(x : i64) -> i64]
+              :requires [(valid x)]
+              :ensures [(valid result)]
+              :body (* x 2))
+            (+ (double 21) 0)
+        "#;
+        assert_eq!(eval_str(code), Value::Int(42));
+    }
+
+    #[test]
+    fn test_contracts_on_tco_function() {
+        // :ensures is only checked on the final return
+        let code = r#"
+            (defn count-up
+              :sig [(n : i64) (target : i64) -> i64]
+              :requires [(valid n)]
+              :ensures [(= result target)]
+              :body (if (= n target) n (count-up (+ n 1) target)))
+            (count-up 0 100)
+        "#;
+        assert_eq!(eval_str(code), Value::Int(100));
+    }
+
+    #[test]
+    fn test_do_tail_position() {
+        // Last expr in do is trampolined
+        let code = "(do 1 2 3 (if true 42 0))";
+        assert_eq!(eval_str(code), Value::Int(42));
+    }
+
+    #[test]
+    fn test_mutual_recursion_still_works() {
+        // Mutual recursion doesn't use TCO (different function names)
+        let code = r#"
+            (defn is-even
+              :sig [(n : i64) -> Bool]
+              :requires [(valid n)]
+              :ensures [(valid result)]
+              :body (if (= n 0) true (is-odd (- n 1))))
+            (defn is-odd
+              :sig [(n : i64) -> Bool]
+              :requires [(valid n)]
+              :ensures [(valid result)]
+              :body (if (= n 0) false (is-even (- n 1))))
+            (is-even 10)
+        "#;
+        assert_eq!(eval_str(code), Value::Bool(true));
+    }
+
+    #[test]
     fn test_deep_if_chain() {
         // 200-deep nested if chain — exercises trampoline without overflowing
         // parser stack (parser is still recursive, so extreme depth blows the
