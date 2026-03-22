@@ -1247,6 +1247,29 @@ mod tests {
     }
 
     #[test]
+    fn length_str_non_ascii() {
+        let b = builtins();
+        // "café" is 4 characters but 5 bytes (é is 2 bytes in UTF-8)
+        assert_eq!(
+            call(&b, "length", &[Value::Str("café".into())]).unwrap(),
+            Value::Int(4)
+        );
+        // em-dash "—" is 1 character but 3 bytes
+        assert_eq!(
+            call(&b, "length", &[Value::Str("a—b".into())]).unwrap(),
+            Value::Int(3)
+        );
+        // length and char-at must agree: char-at at last valid index should succeed
+        let s = Value::Str("café".into());
+        let len = call(&b, "length", &[s.clone()]).unwrap();
+        if let Value::Int(n) = len {
+            // char-at at index n-1 should work, index n should fail
+            assert!(call(&b, "char-at", &[s.clone(), Value::Int(n - 1)]).is_ok());
+            assert!(call(&b, "char-at", &[s, Value::Int(n)]).is_err());
+        }
+    }
+
+    #[test]
     fn at_list() {
         let b = builtins();
         let list = Value::List(vec![Value::Int(10), Value::Int(20), Value::Int(30)]);
