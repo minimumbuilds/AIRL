@@ -104,25 +104,40 @@ impl Interpreter {
     }
 
     pub fn eval(&mut self, expr: &Expr) -> Result<Value, RuntimeError> {
+        let mut current = expr.clone();
+        loop {
+            match self.eval_inner(&current)? {
+                EvalResult::Done(val) => return Ok(val),
+                EvalResult::Continue(ContinueWith::Expr(next)) => {
+                    current = next;
+                }
+                EvalResult::Continue(ContinueWith::TailCall(_)) => {
+                    unreachable!("TailCall should only appear inside eval_body");
+                }
+            }
+        }
+    }
+
+    fn eval_inner(&mut self, expr: &Expr) -> Result<EvalResult, RuntimeError> {
         match &expr.kind {
-            ExprKind::IntLit(v) => Ok(Value::Int(*v)),
-            ExprKind::FloatLit(v) => Ok(Value::Float(*v)),
-            ExprKind::BoolLit(v) => Ok(Value::Bool(*v)),
-            ExprKind::StrLit(v) => Ok(Value::Str(v.clone())),
-            ExprKind::NilLit => Ok(Value::Nil),
-            ExprKind::KeywordLit(k) => Ok(Value::Str(format!(":{}", k))),
+            ExprKind::IntLit(v) => Ok(EvalResult::Done(Value::Int(*v))),
+            ExprKind::FloatLit(v) => Ok(EvalResult::Done(Value::Float(*v))),
+            ExprKind::BoolLit(v) => Ok(EvalResult::Done(Value::Bool(*v))),
+            ExprKind::StrLit(v) => Ok(EvalResult::Done(Value::Str(v.clone()))),
+            ExprKind::NilLit => Ok(EvalResult::Done(Value::Nil)),
+            ExprKind::KeywordLit(k) => Ok(EvalResult::Done(Value::Str(format!(":{}", k)))),
 
             ExprKind::SymbolRef(name) => {
                 // Check builtins first (in case env was modified)
-                self.env.get(name).cloned()
+                Ok(EvalResult::Done(self.env.get(name)?.clone()))
             }
 
             ExprKind::If(cond, then_branch, else_branch) => {
                 let cond_val = self.eval(cond)?;
                 if is_truthy(&cond_val) {
-                    self.eval(then_branch)
+                    Ok(EvalResult::Done(self.eval(then_branch)?))
                 } else {
-                    self.eval(else_branch)
+                    Ok(EvalResult::Done(self.eval(else_branch)?))
                 }
             }
 
@@ -134,7 +149,7 @@ impl Interpreter {
                 }
                 let result = self.eval(body);
                 self.env.pop_frame();
-                result
+                Ok(EvalResult::Done(result?))
             }
 
             ExprKind::Do(exprs) => {
@@ -142,7 +157,7 @@ impl Interpreter {
                 for e in exprs {
                     result = self.eval(e)?;
                 }
-                Ok(result)
+                Ok(EvalResult::Done(result))
             }
 
             ExprKind::Match(scrutinee, arms) => {
@@ -155,7 +170,7 @@ impl Interpreter {
                         }
                         let result = self.eval(&arm.body);
                         self.env.pop_frame();
-                        return result;
+                        return Ok(EvalResult::Done(result?));
                     }
                 }
                 Err(RuntimeError::NonExhaustiveMatch {
@@ -164,21 +179,21 @@ impl Interpreter {
             }
 
             ExprKind::Forall(param, where_clause, body) => {
-                self.eval_quantifier(&param.name, where_clause.as_deref(), body, true)
+                Ok(EvalResult::Done(self.eval_quantifier(&param.name, where_clause.as_deref(), body, true)?))
             }
 
             ExprKind::Exists(param, where_clause, body) => {
-                self.eval_quantifier(&param.name, where_clause.as_deref(), body, false)
+                Ok(EvalResult::Done(self.eval_quantifier(&param.name, where_clause.as_deref(), body, false)?))
             }
 
             ExprKind::Lambda(params, body) => {
                 // Capture the current environment bindings
                 let captures = self.capture_env();
-                Ok(Value::Lambda(LambdaValue {
+                Ok(EvalResult::Done(Value::Lambda(LambdaValue {
                     params: params.clone(),
                     body: (**body).clone(),
                     captures,
-                }))
+                })))
             }
 
             ExprKind::FnCall(callee, args) => {
@@ -251,7 +266,7 @@ impl Interpreter {
                                 if *is_mutable { self.env.release_mutable_borrow(bname); }
                                 else { self.env.release_immutable_borrow(bname); }
                             }
-                            return result;
+                            return Ok(EvalResult::Done(result?));
                         }
                         "send" => {
                             let result = self.builtin_send(&arg_vals);
@@ -259,7 +274,7 @@ impl Interpreter {
                                 if *is_mutable { self.env.release_mutable_borrow(bname); }
                                 else { self.env.release_immutable_borrow(bname); }
                             }
-                            return result;
+                            return Ok(EvalResult::Done(result?));
                         }
                         "send-async" => {
                             let result = self.builtin_send_async(&arg_vals);
@@ -267,7 +282,7 @@ impl Interpreter {
                                 if *is_mutable { self.env.release_mutable_borrow(bname); }
                                 else { self.env.release_immutable_borrow(bname); }
                             }
-                            return result;
+                            return Ok(EvalResult::Done(result?));
                         }
                         "await" => {
                             let result = self.builtin_await(&arg_vals);
@@ -275,7 +290,7 @@ impl Interpreter {
                                 if *is_mutable { self.env.release_mutable_borrow(bname); }
                                 else { self.env.release_immutable_borrow(bname); }
                             }
-                            return result;
+                            return Ok(EvalResult::Done(result?));
                         }
                         "parallel" => {
                             let result = self.builtin_parallel(&arg_vals);
@@ -283,7 +298,7 @@ impl Interpreter {
                                 if *is_mutable { self.env.release_mutable_borrow(bname); }
                                 else { self.env.release_immutable_borrow(bname); }
                             }
-                            return result;
+                            return Ok(EvalResult::Done(result?));
                         }
                         "broadcast" => {
                             let result = self.builtin_broadcast(&arg_vals);
@@ -291,7 +306,7 @@ impl Interpreter {
                                 if *is_mutable { self.env.release_mutable_borrow(bname); }
                                 else { self.env.release_immutable_borrow(bname); }
                             }
-                            return result;
+                            return Ok(EvalResult::Done(result?));
                         }
                         "retry" => {
                             let result = self.builtin_retry(&arg_vals);
@@ -299,7 +314,7 @@ impl Interpreter {
                                 if *is_mutable { self.env.release_mutable_borrow(bname); }
                                 else { self.env.release_immutable_borrow(bname); }
                             }
-                            return result;
+                            return Ok(EvalResult::Done(result?));
                         }
                         "escalate" => {
                             let result = self.builtin_escalate(&arg_vals);
@@ -307,7 +322,7 @@ impl Interpreter {
                                 if *is_mutable { self.env.release_mutable_borrow(bname); }
                                 else { self.env.release_immutable_borrow(bname); }
                             }
-                            return result;
+                            return Ok(EvalResult::Done(result?));
                         }
                         "any-agent" => {
                             let result = self.builtin_any_agent(&arg_vals);
@@ -315,7 +330,7 @@ impl Interpreter {
                                 if *is_mutable { self.env.release_mutable_borrow(bname); }
                                 else { self.env.release_immutable_borrow(bname); }
                             }
-                            return result;
+                            return Ok(EvalResult::Done(result?));
                         }
                         _ => {}
                     }
@@ -339,7 +354,7 @@ impl Interpreter {
                                             self.env.release_immutable_borrow(bname);
                                         }
                                     }
-                                    return Ok(val);
+                                    return Ok(EvalResult::Done(val));
                                 }
                                 Err(e) => {
                                     for (bname, is_mutable) in &borrow_ledger {
@@ -376,7 +391,7 @@ impl Interpreter {
                                             self.env.release_immutable_borrow(bname);
                                         }
                                     }
-                                    return Ok(val);
+                                    return Ok(EvalResult::Done(val));
                                 }
                                 Err(e) => {
                                     for (bname, is_mutable) in &borrow_ledger {
@@ -422,14 +437,14 @@ impl Interpreter {
                     }
                 }
 
-                result
+                Ok(EvalResult::Done(result?))
             }
 
             ExprKind::Try(inner) => {
                 let val = self.eval(inner)?;
                 match val {
                     Value::Variant(ref name, ref inner_val) if name == "Ok" => {
-                        Ok(inner_val.as_ref().clone())
+                        Ok(EvalResult::Done(inner_val.as_ref().clone()))
                     }
                     Value::Variant(ref name, ref inner_val) if name == "Err" => {
                         Err(RuntimeError::Custom(format!("Err: {}", inner_val)))
@@ -450,7 +465,7 @@ impl Interpreter {
                     }
                     Value::Tuple(vals)
                 };
-                Ok(Value::Variant(name.clone(), Box::new(inner)))
+                Ok(EvalResult::Done(Value::Variant(name.clone(), Box::new(inner))))
             }
 
             ExprKind::StructLit(_name, fields) => {
@@ -458,7 +473,7 @@ impl Interpreter {
                 for (field_name, field_expr) in fields {
                     map.insert(field_name.clone(), self.eval(field_expr)?);
                 }
-                Ok(Value::Struct(map))
+                Ok(EvalResult::Done(Value::Struct(map)))
             }
 
             ExprKind::ListLit(items) => {
@@ -466,7 +481,7 @@ impl Interpreter {
                 for item in items {
                     vals.push(self.eval(item)?);
                 }
-                Ok(Value::List(vals))
+                Ok(EvalResult::Done(Value::List(vals)))
             }
         }
     }
