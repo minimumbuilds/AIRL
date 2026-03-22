@@ -48,3 +48,96 @@
   :ensures [(valid result)]
   :body (match tok
     (Token _ value _ _) value))
+
+;; ── Phase 1: Token → S-Expression grouping ────────
+
+(defn parse-sexpr
+  :sig [(tokens : List) (pos : i64) -> List]
+  :intent "Parse one S-expression from token list at pos, return (Ok [sexpr new-pos]) or (Err ...)"
+  :requires [(valid tokens)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length tokens))
+      (Err (ParseError "unexpected end of input" 0 0))
+      (let (tok : Any (at tokens pos))
+        (match tok
+          (Token kind value line col)
+            (if (= kind "lparen")
+              ;; Parse list contents until rparen
+              (match (parse-sexprs tokens (+ pos 1) "rparen")
+                (Ok result)
+                  (let (items : List (at result 0))
+                    (let (end-pos : i64 (at result 1))
+                      ;; Check for closing rparen
+                      (if (>= end-pos (length tokens))
+                        (Err (ParseError "unclosed parenthesis" line col))
+                        (let (closer : Any (at tokens end-pos))
+                          (match closer
+                            (Token ck _ _ _)
+                              (if (= ck "rparen")
+                                (Ok [(SList items line col) (+ end-pos 1)])
+                                (Err (ParseError "unclosed parenthesis" line col))))))))
+                (Err e) (Err e))
+              (if (= kind "lbracket")
+                ;; Parse bracket contents until rbracket
+                (match (parse-sexprs tokens (+ pos 1) "rbracket")
+                  (Ok result)
+                    (let (items : List (at result 0))
+                      (let (end-pos : i64 (at result 1))
+                        (if (>= end-pos (length tokens))
+                          (Err (ParseError "unclosed bracket" line col))
+                          (let (closer : Any (at tokens end-pos))
+                            (match closer
+                              (Token ck _ _ _)
+                                (if (= ck "rbracket")
+                                  (Ok [(SBracket items line col) (+ end-pos 1)])
+                                  (Err (ParseError "unclosed bracket" line col))))))))
+                  (Err e) (Err e))
+                (if (= kind "rparen")
+                  (Err (ParseError "unexpected ')'" line col))
+                  (if (= kind "rbracket")
+                    (Err (ParseError "unexpected ']'" line col))
+                    (if (= kind "eof")
+                      (Err (ParseError "unexpected end of input" line col))
+                      ;; Any other token is an atom
+                      (Ok [(SAtom tok) (+ pos 1)]))))))))))
+
+(defn parse-sexprs
+  :sig [(tokens : List) (pos : i64) (stop-kind : String) -> List]
+  :intent "Parse S-expressions until stop token or EOF, return (Ok [sexprs pos])"
+  :requires [(valid tokens)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length tokens))
+      (Ok [[] pos])
+      (let (tok : Any (at tokens pos))
+        (match tok
+          (Token kind _ _ _)
+            (if (= kind stop-kind)
+              ;; Hit the stop token — return what we have
+              (Ok [[] pos])
+              (if (= kind "eof")
+                ;; EOF — return what we have
+                (Ok [[] pos])
+                ;; Parse one sexpr, then continue
+                (match (parse-sexpr tokens pos)
+                  (Ok result)
+                    (let (sexpr : Any (at result 0))
+                      (let (new-pos : i64 (at result 1))
+                        (match (parse-sexprs tokens new-pos stop-kind)
+                          (Ok rest-result)
+                            (let (rest-sexprs : List (at rest-result 0))
+                              (let (final-pos : i64 (at rest-result 1))
+                                (Ok [(cons sexpr rest-sexprs) final-pos])))
+                          (Err e) (Err e))))
+                  (Err e) (Err e))))))))
+
+(defn parse-sexpr-all
+  :sig [(tokens : List) -> List]
+  :intent "Parse all tokens into S-expressions, return (Ok sexprs) or (Err ...)"
+  :requires [(valid tokens)]
+  :ensures [(valid result)]
+  :body
+    (match (parse-sexprs tokens 0 "eof")
+      (Ok result) (Ok (at result 0))
+      (Err e) (Err e)))
