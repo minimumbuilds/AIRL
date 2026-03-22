@@ -271,6 +271,30 @@
   :ensures [(valid result)]
   :body (eval-args-acc args env []))
 
+;; ─── Function Helpers ────────────────────────────────────
+
+(defn extract-param-names
+  :sig [(sig : Any) -> List]
+  :intent "Extract parameter name strings from an ASTSig node"
+  :requires [(valid sig)]
+  :ensures [(valid result)]
+  :body (match sig
+    (ASTSig params _)
+      (map (fn [p] (match p (ASTParam name _) name _ "?")) params)
+    _ []))
+
+(defn bind-params
+  :sig [(env : List) (names : List) (vals : List) -> List]
+  :intent "Bind parameter names to argument values in the top frame"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? names) env
+      (bind-params
+        (env-bind env (head names) (if (empty? vals) (ValNil) (head vals)))
+        (tail names)
+        (if (empty? vals) [] (tail vals)))))
+
 ;; ─── Eval Core Functions ────────────────────────────────
 
 (defn eval-let-bindings
@@ -353,6 +377,19 @@
                           (match (call-builtin name arg-vals)
                             (Ok val) (Ok [val env3])
                             (Err e) (Err e))
+
+                        (ValFn fn-name params body captured-env)
+                          (let (call-env : Any (env-bind (bind-params (env-push captured-env) params arg-vals) fn-name callee-val))
+                            (match (eval-node body call-env)
+                              (Err e) (Err e)
+                              (Ok pair) (Ok [(at pair 0) env3])))
+
+                        (ValLambda params body captured-env)
+                          (let (call-env : Any (bind-params (env-push captured-env) params arg-vals))
+                            (match (eval-node body call-env)
+                              (Err e) (Err e)
+                              (Ok pair) (Ok [(at pair 0) env3])))
+
                         _ (Err "eval: not callable"))))))))
 
     (ASTIf cond then-expr else-expr _ _)
@@ -520,3 +557,74 @@
       (Err e) (print "  FAIL:" e))))
 
 (print "=== Task 5 tests complete ===")
+
+;; ─── Top-Level Evaluation ────────────────────────────────
+
+(defn eval-top-level
+  :sig [(node : Any) (env : List) -> Any]
+  :intent "Evaluate a top-level node (defn or expression)"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTDefn name sig _ _ _ body _ _)
+      (let (param-names : Any (extract-param-names sig))
+        (let (fn-val : Any (ValFn name param-names body env))
+          (Ok [(ValNil) (env-bind env name fn-val)])))
+    _ (eval-node node env)))
+
+(defn eval-program
+  :sig [(nodes : List) (env : List) -> Any]
+  :intent "Evaluate a list of top-level nodes sequentially, threading env"
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? nodes) (Ok [(ValNil) env])
+      (match (eval-top-level (head nodes) env)
+        (Err e) (Err e)
+        (Ok pair)
+          (if (empty? (tail nodes))
+            (Ok pair)
+            (eval-program (tail nodes) (at pair 1))))))
+
+;; ─── Task 6: Function Tests ─────────────────────────────
+
+(print "=== Task 6: Functions ===")
+
+;; Define and call a simple function
+;; (defn double :sig [(x : i64) -> i64] :body (* x 2))
+;; (double 21) -> 42
+(let (env : Any (make-initial-env 0))
+  (let (defn-node : Any (ASTDefn "double"
+    (ASTSig [(ASTParam "x" "i64")] "i64")
+    nil [] []
+    (ASTCall (ASTSymbol "*" 0 0) [(ASTSymbol "x" 0 0) (ASTInt 2 0 0)] 0 0)
+    0 0))
+    (let (call-node : Any (ASTCall (ASTSymbol "double" 0 0) [(ASTInt 21 0 0)] 0 0))
+      (match (eval-program [defn-node call-node] env)
+        (Ok pair) (assert-eq (unwrap-int (at pair 0)) 42)
+        (Err e) (print "  FAIL:" e)))))
+
+;; Recursive function: factorial
+;; (defn fact :sig [(n : i64) -> i64] :body (if (= n 0) 1 (* n (fact (- n 1)))))
+;; (fact 5) -> 120
+(let (env : Any (make-initial-env 0))
+  (let (defn-node : Any (ASTDefn "fact"
+    (ASTSig [(ASTParam "n" "i64")] "i64")
+    nil [] []
+    (ASTIf
+      (ASTCall (ASTSymbol "=" 0 0) [(ASTSymbol "n" 0 0) (ASTInt 0 0 0)] 0 0)
+      (ASTInt 1 0 0)
+      (ASTCall (ASTSymbol "*" 0 0)
+        [(ASTSymbol "n" 0 0)
+         (ASTCall (ASTSymbol "fact" 0 0)
+           [(ASTCall (ASTSymbol "-" 0 0) [(ASTSymbol "n" 0 0) (ASTInt 1 0 0)] 0 0)]
+           0 0)]
+        0 0)
+      0 0)
+    0 0))
+    (let (call-node : Any (ASTCall (ASTSymbol "fact" 0 0) [(ASTInt 5 0 0)] 0 0))
+      (match (eval-program [defn-node call-node] env)
+        (Ok pair) (assert-eq (unwrap-int (at pair 0)) 120)
+        (Err e) (print "  FAIL:" e)))))
+
+(print "=== Task 6 tests complete ===")

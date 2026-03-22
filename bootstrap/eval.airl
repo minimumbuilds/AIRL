@@ -258,6 +258,30 @@
             (Ok pair)
             (eval-do (tail exprs) (at pair 1))))))
 
+;; ─── Function Helpers ────────────────────────────────────
+
+(defn extract-param-names
+  :sig [(sig : Any) -> List]
+  :intent "Extract parameter name strings from an ASTSig node"
+  :requires [(valid sig)]
+  :ensures [(valid result)]
+  :body (match sig
+    (ASTSig params _)
+      (map (fn [p] (match p (ASTParam name _) name _ "?")) params)
+    _ []))
+
+(defn bind-params
+  :sig [(env : List) (names : List) (vals : List) -> List]
+  :intent "Bind parameter names to argument values in the top frame"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? names) env
+      (bind-params
+        (env-bind env (head names) (if (empty? vals) (ValNil) (head vals)))
+        (tail names)
+        (if (empty? vals) [] (tail vals)))))
+
 ;; ─── Evaluator Core ──────────────────────────────────────
 
 (defn eval-list-items
@@ -311,6 +335,19 @@
                           (match (call-builtin name arg-vals)
                             (Ok val) (Ok [val env3])
                             (Err e) (Err e))
+
+                        (ValFn fn-name params body captured-env)
+                          (let (call-env : Any (env-bind (bind-params (env-push captured-env) params arg-vals) fn-name callee-val))
+                            (match (eval-node body call-env)
+                              (Err e) (Err e)
+                              (Ok pair) (Ok [(at pair 0) env3])))
+
+                        (ValLambda params body captured-env)
+                          (let (call-env : Any (bind-params (env-push captured-env) params arg-vals))
+                            (match (eval-node body call-env)
+                              (Err e) (Err e)
+                              (Ok pair) (Ok [(at pair 0) env3])))
+
                         _ (Err "eval: not callable"))))))))
 
     (ASTIf cond then-expr else-expr _ _)
@@ -336,3 +373,31 @@
       (eval-do exprs env)
 
     _ (Err "eval-node: unknown node type")))
+
+;; ─── Top-Level Evaluation ────────────────────────────────
+
+(defn eval-top-level
+  :sig [(node : Any) (env : List) -> Any]
+  :intent "Evaluate a top-level node (defn or expression)"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTDefn name sig _ _ _ body _ _)
+      (let (param-names : Any (extract-param-names sig))
+        (let (fn-val : Any (ValFn name param-names body env))
+          (Ok [(ValNil) (env-bind env name fn-val)])))
+    _ (eval-node node env)))
+
+(defn eval-program
+  :sig [(nodes : List) (env : List) -> Any]
+  :intent "Evaluate a list of top-level nodes sequentially, threading env"
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? nodes) (Ok [(ValNil) env])
+      (match (eval-top-level (head nodes) env)
+        (Err e) (Err e)
+        (Ok pair)
+          (if (empty? (tail nodes))
+            (Ok pair)
+            (eval-program (tail nodes) (at pair 1))))))
