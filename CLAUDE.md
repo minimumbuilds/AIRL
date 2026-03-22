@@ -5,6 +5,8 @@
 AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 8 crates, 428 tests, ~13K lines of code.
 
 **Language spec:** `AIRL-Language-Specification-v0.1.0.md`
+**LLM guide:** `AIRL-LLM-Guide.md` — **MUST read this file before writing any AIRL code.** It contains critical language idioms, pitfalls, and patterns that prevent common mistakes.
+**Stdlib docs:** `stdlib/*.md` — **MUST read before writing AIRL code that uses library functions.** Five modules: `collections.md` (map/filter/fold/sort), `math.md` (abs/pow/gcd), `result.md` (Result combinators), `string.md` (13 Rust builtins + 10 AIRL functions), `map.md` (10 Rust builtins + 8 AIRL functions). Also read the stdlib source (`stdlib/*.airl`) for exact signatures and implementations.
 **Design specs:** `docs/superpowers/specs/`
 **Implementation plans:** `docs/superpowers/plans/`
 
