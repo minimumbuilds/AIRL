@@ -167,132 +167,47 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 ---
 
+## Completed Tasks
+
+The following tasks have been implemented. Some were partially regressed during the stdlib addition (commit `09924bc`) and need re-integration — see "Remaining Tasks" below.
+
+- **Z3 Quantifier Support (`forall`/`exists`)** — `ExprKind::Forall`/`Exists` in AST, parser support via `parse_quantifier_expr`, Z3 translation via `forall_const`/`exists_const`, runtime evaluation via `eval_quantifier`.
+- **Invariant Checking** — `:invariant` clauses evaluated after body execution in both JIT and interpreted paths of `call_fn`, using `ContractKind::Invariant`.
+- **Z3 Float Arithmetic Support** — `VarSort::Real`, `declare_real()`, `translate_real()` in translator. Maps f16/f32/f64/bf16 to Z3 Reals.
+- **Nested Pattern Matching** — `try_match` in `pattern.rs` recursively destructures nested patterns like `(Ok (Ok x))`.
+- **GPU Compilation via MLIR** — `crates/airl-mlir/` crate (~1,750 lines) with tensor lowering, GPU kernel generation, JIT execution, and optimization passes. **Build issue:** requires `libzstd-dev` for LLVM/melior linking; currently excluded from `cargo test --workspace`.
+
+---
+
 ## Remaining Tasks
 
-### Tier 1 — High Priority
+### Tier 1 — Re-integrate Regressed Features
 
-#### 1. Async Agent Builtins: `await`, `parallel`
+These features were implemented in commit `bdb00f0` but removed during the stdlib addition in `09924bc`. The previous implementations can be referenced via `git show bdb00f0 -- crates/airl-runtime/src/eval.rs`.
 
-**Status:** `await` and `parallel` are registered as builtin names in `crates/airl-agent/src/builtins.rs` but have zero implementation. Currently calling them produces `UndefinedSymbol` at runtime.
+#### 1. Async Agent Builtins: `send-async`, `await`, `parallel`
 
-**What to build:**
+**Status:** Previously implemented, then removed. `await` and `parallel` are still registered as builtin names in `crates/airl-agent/src/builtins.rs` but have no backing code in `eval.rs`.
 
-`await` — Takes a task ID (from a future async `send`) and a timeout duration. Blocks until the result arrives or timeout expires. For Phase 1, `send` is already synchronous, so `await` only makes sense if `send` gets an async mode. **Recommended approach:** Add `send-async` that returns a task ID immediately (spawns a background thread for the send), then `await` blocks on a channel receiver with timeout.
+**What to restore/build:**
+
+`send-async` — Returns a task ID immediately, spawns a background thread for the send. Requires re-adding `pending_results: HashMap<String, mpsc::Receiver<Result<Value, String>>>` field to Interpreter, plus `Arc<Mutex<...>>` wrappers on agent reader/writer.
+
+`await` — Takes a task ID and timeout. Blocks on the channel receiver from `pending_results`.
+
+`parallel` — Takes a list of task expressions, dispatches concurrently (one thread per task), collects results via channels, applies a merge function.
 
 **Files to modify:**
-- `crates/airl-runtime/src/eval.rs` — Add `builtin_await`, `builtin_send_async` methods on Interpreter. Add a `pending_results: HashMap<String, mpsc::Receiver<Value>>` field.
+- `crates/airl-runtime/src/eval.rs` — Re-add `builtin_send_async`, `builtin_await`, `builtin_parallel` methods and `pending_results` field. Restore `Arc<Mutex<...>>` on agent I/O handles.
 - `crates/airl-agent/src/builtins.rs` — Remove from stub list once implemented.
 
-`parallel` — Takes a list of task expressions, dispatches them concurrently (one thread per task), collects results, applies a merge function. **Recommended approach:** `(parallel [(send w1 "fn" args...) (send w2 "fn" args...)] :merge (fn [results] ...))`. Spawn a thread per task, each does a synchronous send, collect via channels, apply merge.
-
-**Files to modify:**
-- `crates/airl-runtime/src/eval.rs` — Add `builtin_parallel`. Needs `std::thread::spawn` + channels.
-
-**Estimated effort:** 300-500 lines total.
+**Estimated effort:** 200-400 lines (re-integration from prior commit).
 
 ---
 
-#### 2. Z3 Quantifier Support (`forall`/`exists`)
+#### 2. Agent Builtins: `broadcast`, `retry`, `escalate`, `any-agent`
 
-**Status:** The language spec (§4.4) defines quantified contracts but they are not parseable or translatable to Z3.
-
-**What to build:**
-
-Step 1 — Parse `forall`/`exists` in contracts. Currently the parser treats them as regular function calls. Add `ExprKind::Forall` and `ExprKind::Exists` to the AST (`crates/airl-syntax/src/ast.rs`), and recognize them in the form parser (`crates/airl-syntax/src/parser.rs`).
-
-Syntax from spec:
-```clojure
-(forall [i : Nat]
-  (where (< i (length result)))
-  (>= (at result i) 0))
-```
-
-Step 2 — Translate to Z3. The `z3` crate supports quantifiers via `z3::ast::forall_const` and `z3::ast::exists_const`. Add handlers in `crates/airl-solver/src/translate.rs`.
-
-Step 3 — Runtime evaluation. In `checked` mode, quantifiers over collections need to be evaluated by iterating. Add evaluation logic in `crates/airl-runtime/src/eval.rs` — `forall` iterates and short-circuits on first false, `exists` short-circuits on first true. Cap iteration at 10,000 elements.
-
-**Files to modify:**
-- `crates/airl-syntax/src/ast.rs` — Add `Forall`/`Exists` to `ExprKind`
-- `crates/airl-syntax/src/parser.rs` — Recognize `forall`/`exists` forms
-- `crates/airl-solver/src/translate.rs` — Translate to Z3 quantifiers
-- `crates/airl-runtime/src/eval.rs` — Runtime evaluation via iteration
-- `crates/airl-contracts/src/checked.rs` — May need updates for quantifier evaluation
-
-**Estimated effort:** 300-400 lines total.
-
----
-
-#### 3. Invariant Checking
-
-**Status:** `:invariant` is parsed and stored on `FnDef` but never evaluated at runtime. The `invariants` field exists in the AST but `call_fn` in `eval.rs` ignores it.
-
-**What to build:** In `eval.rs`'s `call_fn`, after evaluating the body (and before `:ensures`), check invariant clauses. For loops/recursive calls, invariants should be checked at each iteration entry — but since AIRL doesn't have explicit loops (recursion only), check invariants on each recursive re-entry.
-
-**Simpler approach for Phase 1:** Check invariants once after body evaluation, same timing as ensures. This is less powerful than continuous verification but catches the common case.
-
-**Files to modify:**
-- `crates/airl-runtime/src/eval.rs` — In `call_fn`, add invariant checking block between body evaluation and ensures checking.
-
-**Estimated effort:** 30-50 lines.
-
----
-
-### Tier 2 — Important for Completeness
-
-#### 4. Z3 Float Arithmetic Support
-
-**Status:** The Z3 translator (`crates/airl-solver/src/translate.rs`) only handles integer types. Any function with `f32`/`f64` params returns `VerifyResult::Unknown("unsupported parameter types")`.
-
-**What to build:** Add `z3::ast::Float` (or `z3::ast::Real`) support to the translator. Z3 has a real arithmetic theory (`QF_LRA`) that handles `+`, `-`, `*`, `/`, comparisons on reals. Map `f32`/`f64` to Z3 Reals (not IEEE floats — Z3's float theory is slow and incomplete). This is an approximation but covers most contract patterns.
-
-**Files to modify:**
-- `crates/airl-solver/src/translate.rs` — Add `translate_real`, `declare_real`, `VarSort::Real`. Update comparison operators to handle real operands.
-- `crates/airl-solver/src/prover.rs` — Update `sort_from_type_name` to map f32/f64 to Real.
-
-**Estimated effort:** 150-200 lines.
-
----
-
-#### 5. Better Error Messages with Source Context
-
-**Status:** Error messages show the error type and span (line:col) but not the source code context. The infrastructure exists (`format_diagnostic_with_source` in `pipeline.rs` and `Diagnostic` with notes in `diagnostic.rs`) but is underused.
-
-**What to build:**
-- Contract violations should show the contract clause source text and the values that violated it.
-- Use-after-move errors should show both the move site and the use site.
-- Type errors should show the expected vs actual type with source context.
-
-**Key improvement:** The `ContractViolation` struct's `clause_source` field currently contains `format!("{:?}", expr.kind)` (Rust debug output). Replace with a pretty-printed AIRL S-expression of the clause.
-
-**Files to modify:**
-- `crates/airl-runtime/src/eval.rs` — Improve `clause_source` formatting in contract violation construction.
-- `crates/airl-driver/src/pipeline.rs` — Use `format_diagnostic_with_source` for all error types, not just syntax errors.
-- `crates/airl-syntax/src/diagnostic.rs` — Add helper methods for building rich diagnostics.
-
-**Estimated effort:** 150-250 lines.
-
----
-
-#### 6. REPL Enhancements
-
-**Status:** REPL has `:quit`, `:env`, and expression evaluation. Missing `:type`, `:load`, `:help`.
-
-**What to build:**
-- `:help` — Print available commands. Trivial (10 lines).
-- `:load <file>` — Read and evaluate a file in the REPL session. Use `std::fs::read_to_string` + existing `eval_repl_input`.
-- `:type <expr>` — Show the type of an expression without evaluating. Requires running the `TypeChecker` on the expression. **Challenge:** TypeChecker's `into_diagnostics()` is consuming — need to add `drain_diagnostics(&mut self)` to `crates/airl-types/src/checker.rs` for REPL persistence.
-
-**Files to modify:**
-- `crates/airl-driver/src/repl.rs` — Add command handlers.
-- `crates/airl-types/src/checker.rs` — Add `drain_diagnostics` for REPL type checking.
-
-**Estimated effort:** 100-200 lines.
-
----
-
-#### 7. Agent Builtins: `broadcast`, `retry`, `escalate`, `any-agent`
-
-**Status:** Registered as names in `crates/airl-agent/src/builtins.rs`, zero implementation.
+**Status:** Registered as names in `crates/airl-agent/src/builtins.rs`, zero implementation. These were never fully implemented even in `bdb00f0`.
 
 **What to build:**
 
@@ -312,11 +227,66 @@ Step 3 — Runtime evaluation. In `checked` mode, quantifiers over collections n
 
 ---
 
-### Tier 3 — Nice to Have
+#### 3. MLIR Runtime Integration
 
-#### 8. Static Linearity Analysis
+**Status:** The `airl-mlir` crate exists with ~1,750 lines of code, but the runtime integration (execution target dispatch, `exec_target` field on Interpreter) was removed in `09924bc`.
 
-**Status:** The `LinearityChecker` in `crates/airl-types/src/linearity.rs` tracks ownership state at the API level but is not wired into the AST walk. Runtime enforcement (in `eval.rs`) catches use-after-move for explicit `Ownership::Own` params, but doesn't detect branch divergence or scope issues.
+**What to restore:**
+- Re-add `exec_target: Option<ExecTarget>` field to Interpreter.
+- Re-add `mlir_jit: Option<airl_mlir::MlirTensorJit>` field (behind `#[cfg(feature = "mlir")]`).
+- Restore the GPU → MLIR CPU → Cranelift → interpreted fallback chain in tensor op dispatch.
+- Fix the `libzstd` linker issue (install `libzstd-dev` or make `airl-mlir` a default-off workspace member).
+
+**Files to modify:**
+- `crates/airl-runtime/src/eval.rs` — Re-add MLIR dispatch fields and logic.
+- `crates/airl-runtime/Cargo.toml` — Ensure `mlir` feature flag is properly gated.
+- `Cargo.toml` (workspace) — Consider making `airl-mlir` a non-default member.
+
+**Estimated effort:** 100-200 lines (re-integration from prior commit).
+
+---
+
+### Tier 2 — New Features
+
+#### 4. Better Error Messages with Source Context
+
+**Status:** Error messages show the error type and span (line:col) but not the source code context. The `clause_source` field in contract violations uses `format!("{:?}", expr.kind)` (Rust debug output) instead of pretty-printed AIRL. A previous implementation used `contract.to_airl()` but was reverted.
+
+**What to build:**
+- Contract violations should show the contract clause as readable AIRL S-expressions and the values that violated it.
+- Use-after-move errors should show both the move site and the use site.
+- Type errors should show the expected vs actual type with source context.
+- Re-add binding capture in contract violations (currently `bindings: vec![]`).
+
+**Files to modify:**
+- `crates/airl-runtime/src/eval.rs` — Improve `clause_source` formatting, restore binding capture.
+- `crates/airl-driver/src/pipeline.rs` — Use `format_diagnostic_with_source` for all error types.
+- `crates/airl-syntax/src/diagnostic.rs` — Add helper methods for building rich diagnostics.
+
+**Estimated effort:** 150-250 lines.
+
+---
+
+#### 5. REPL Enhancements
+
+**Status:** REPL has `:quit`, `:env`, and expression evaluation. Missing `:type`, `:load`, `:help`.
+
+**What to build:**
+- `:help` — Print available commands. Trivial (10 lines).
+- `:load <file>` — Read and evaluate a file in the REPL session. Use `std::fs::read_to_string` + existing `eval_repl_input`.
+- `:type <expr>` — Show the type of an expression without evaluating. Requires running the `TypeChecker` on the expression. **Challenge:** TypeChecker's `into_diagnostics()` is consuming — need to add `drain_diagnostics(&mut self)` to `crates/airl-types/src/checker.rs` for REPL persistence.
+
+**Files to modify:**
+- `crates/airl-driver/src/repl.rs` — Add command handlers.
+- `crates/airl-types/src/checker.rs` — Add `drain_diagnostics` for REPL type checking.
+
+**Estimated effort:** 100-200 lines.
+
+---
+
+#### 6. Static Linearity Analysis
+
+**Status:** The `LinearityChecker` in `crates/airl-types/src/linearity.rs` (~566 lines) tracks ownership state at the API level but is not wired into the AST walk. Runtime enforcement (in `eval.rs`) catches use-after-move for explicit `Ownership::Own` params, but doesn't detect branch divergence or scope issues.
 
 **What to build:** A control-flow-sensitive pass that walks function bodies and tracks ownership state through branches. For `if`/`match`, both arms must leave bindings in compatible states. This is essentially a simplified version of Rust's borrow checker.
 
@@ -329,37 +299,13 @@ Step 3 — Runtime evaluation. In `checked` mode, quantifiers over collections n
 
 ---
 
-#### 9. Nested Pattern Matching
+### Tier 3 — Long-term
 
-**Status:** Pattern matching works for top-level variants (`(Ok v)`, `(Err e)`) but not nested patterns (`(Ok (Pair a b))`).
-
-**What to build:** Extend `try_match` in `crates/airl-runtime/src/pattern.rs` to recursively destructure nested patterns. Also extend the parser to recognize nested pattern syntax.
-
-**Files to modify:**
-- `crates/airl-runtime/src/pattern.rs` — Recursive matching.
-- `crates/airl-syntax/src/parser.rs` — Parse nested patterns in match arms.
-
-**Estimated effort:** 100-200 lines.
-
----
-
-#### 10. GPU Compilation via MLIR
-
-**Status:** Not started. The spec's Phase 2 calls for MLIR lowering to target GPUs. Research found `melior` (Rust MLIR bindings, alpha, requires LLVM 21 system install).
-
-**What to build:** A new `airl-mlir` crate (optional feature) that lowers tensor operations to MLIR's tensor/linalg/gpu dialects, runs MLIR optimization passes, and compiles to GPU kernels via CUDA/ROCm.
-
-**Prerequisite:** LLVM 21 installed. This is a major effort (1000+ lines) and should be its own sub-project.
-
-**Files:** New crate `crates/airl-mlir/`.
-
----
-
-#### 11. Self-Hosting (Phase 3)
+#### 7. Self-Hosting (Phase 3)
 
 **Status:** Not started. The spec's Phase 3 goal is to write the AIRL compiler in AIRL itself.
 
-**Prerequisite:** The language needs string manipulation, file I/O, and sufficient expressiveness to implement a parser and evaluator. Currently AIRL has no file I/O builtins.
+**Prerequisite:** The language needs file I/O builtins and sufficient expressiveness to implement a parser and evaluator. Currently AIRL has no file I/O builtins. String manipulation was added with the stdlib.
 
 ---
 
@@ -374,3 +320,5 @@ Step 3 — Runtime evaluation. In `checked` mode, quantifiers over collections n
 4. **JIT float handling:** The scalar JIT uses I64 as the uniform ABI type and bitcasts for floats. This works but means float-returning functions store results as I64 bit patterns. The marshaling in `eval.rs` (`raw_to_value`) handles this correctly, but it's fragile.
 
 5. **`spawn-agent` sleep:** `builtin_spawn_agent` sleeps 100ms to let the child process start. This is a race condition — a slow system might need more time. A proper solution would be a handshake protocol (agent sends a "ready" message after loading).
+
+6. **`airl-mlir` linker failure:** `melior-macro` fails to link due to missing `libzstd`. Install `libzstd-dev` or exclude `airl-mlir` from default workspace members.
