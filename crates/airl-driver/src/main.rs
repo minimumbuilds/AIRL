@@ -1,4 +1,4 @@
-use airl_driver::pipeline::{run_file, check_file, format_diagnostic_with_source, PipelineError};
+use airl_driver::pipeline::{run_file, run_file_compiled, check_file, format_diagnostic_with_source, PipelineError};
 use airl_driver::fmt::format_source;
 use airl_agent::transport::Transport;
 
@@ -24,11 +24,27 @@ fn main() {
 
 fn cmd_run(args: &[String]) {
     if args.is_empty() {
-        eprintln!("Usage: airl run <file.airl>");
+        eprintln!("Usage: airl run [--compiled] <file.airl>");
         std::process::exit(1);
     }
-    let path = &args[0];
-    match run_file(path) {
+
+    let (compiled, path) = if args[0] == "--compiled" {
+        if args.len() < 2 {
+            eprintln!("Usage: airl run --compiled <file.airl>");
+            std::process::exit(1);
+        }
+        (true, &args[1])
+    } else {
+        (false, &args[0])
+    };
+
+    let result = if compiled {
+        run_file_compiled(path)
+    } else {
+        run_file(path)
+    };
+
+    match result {
         Ok(val) => {
             // Only print non-unit results
             if !matches!(val, airl_runtime::value::Value::Unit) {
@@ -258,7 +274,7 @@ fn print_usage() {
 Usage: airl <command> [args]
 
 Commands:
-  run <file>       Run an AIRL source file
+  run <file>       Run an AIRL source file (--compiled for IR VM)
   check <file>     Parse and check a file without running
   repl             Start the interactive REPL
   agent <file>     Run an agent worker (--listen <endpoint>)
