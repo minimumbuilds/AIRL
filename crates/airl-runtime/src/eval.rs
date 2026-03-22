@@ -54,6 +54,9 @@ pub struct Interpreter {
     exec_target: Option<ExecTarget>,
     /// Name of the function currently being evaluated (for self-TCO detection)
     current_fn_name: Option<String>,
+    /// True when eval_body's trampoline is driving — enables TailCall returns.
+    /// False inside nested self.eval() calls (sub-expressions, contract checks).
+    in_tail_context: bool,
 }
 
 impl Interpreter {
@@ -72,6 +75,7 @@ impl Interpreter {
             recursion_depth: 0,
             exec_target: None,
             current_fn_name: None,
+            in_tail_context: false,
         };
         // Register all builtin names in the environment so symbol lookups resolve them
         interp.register_builtin_symbols();
@@ -104,10 +108,13 @@ impl Interpreter {
     }
 
     pub fn eval(&mut self, expr: &Expr) -> Result<Value, RuntimeError> {
+        // Save and clear tail context — sub-expression evaluation is never in tail position
+        let was_tail = self.in_tail_context;
+        self.in_tail_context = false;
         let mut current = expr.clone();
-        loop {
+        let result = loop {
             match self.eval_inner(&current)? {
-                EvalResult::Done(val) => return Ok(val),
+                EvalResult::Done(val) => break Ok(val),
                 EvalResult::Continue(ContinueWith::Expr(next)) => {
                     current = next;
                 }
@@ -115,16 +122,21 @@ impl Interpreter {
                     unreachable!("TailCall should only appear inside eval_body");
                 }
             }
-        }
+        };
+        self.in_tail_context = was_tail;
+        result
     }
 
     /// Like eval(), but returns BodyResult to surface self-tail-calls to call_fn_inner
     fn eval_body(&mut self, expr: &Expr) -> Result<BodyResult, RuntimeError> {
+        self.in_tail_context = true;
         let mut current = expr.clone();
         loop {
             match self.eval_inner(&current)? {
                 EvalResult::Done(val) => return Ok(BodyResult::Value(val)),
                 EvalResult::Continue(ContinueWith::Expr(next)) => {
+                    // Re-enable tail context for the next iteration
+                    self.in_tail_context = true;
                     current = next;
                 }
                 EvalResult::Continue(ContinueWith::TailCall(args)) => {
@@ -441,8 +453,10 @@ impl Interpreter {
                         Ok(EvalResult::Done(result?))
                     }
                     Value::Function(ref fn_val) => {
-                        // Self-TCO: if calling the same function currently executing,
+                        // Self-TCO: if calling the same function currently executing
+                        // and we're in a tail context (eval_body's trampoline),
                         // return TailCall to let call_fn_inner loop instead of recurse
+                        if self.in_tail_context {
                         if let Some(ref current_name) = self.current_fn_name {
                             if &fn_val.name == current_name {
                                 // Release borrows before returning TailCall
@@ -452,6 +466,7 @@ impl Interpreter {
                                 }
                                 return Ok(EvalResult::Continue(ContinueWith::TailCall(arg_vals)));
                             }
+                        }
                         }
                         let fn_val = fn_val.clone();
                         let result = self.call_fn(&fn_val, arg_vals);
@@ -532,159 +547,168 @@ impl Interpreter {
     }
 
     fn call_fn_inner(&mut self, fn_val: &FnValue, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        if self.recursion_depth >= 50_000 {
-            return Err(RuntimeError::TypeError(
-                "maximum recursion depth (50000) exceeded".into(),
-            ));
-        }
-        self.recursion_depth += 1;
-
+        let mut current_args = args;
         let def = &fn_val.def;
 
-        // 1. Push Function frame
-        self.env.push_frame(FrameKind::Function);
-
-        // 2. Bind params to arg values
-        for (i, param) in def.params.iter().enumerate() {
-            let val = args.get(i).cloned().unwrap_or(Value::Nil);
-            self.env.bind(param.name.clone(), val);
-        }
-
-        // 3. Check :requires contracts
-        for contract in &def.requires {
-            let contract_result = self.eval(contract)?;
-            if contract_result != Value::Bool(true) {
-                self.recursion_depth -= 1;
-                self.env.pop_frame();
-                return Err(RuntimeError::ContractViolation(
-                    airl_contracts::violation::ContractViolation {
-                        function: fn_val.name.clone(),
-                        contract_kind: airl_contracts::violation::ContractKind::Requires,
-                        clause_source: contract.to_airl(),
-                        bindings: self.capture_bindings(),
-                        evaluated: format!("{}", contract_result),
-                        span: contract.span,
-                    },
+        'tco: loop {
+            if self.recursion_depth >= 50_000 {
+                return Err(RuntimeError::TypeError(
+                    "maximum recursion depth (50000) exceeded".into(),
                 ));
             }
-        }
+            self.recursion_depth += 1;
 
-        // 4. Try JIT path
-        if let Some(ref mut jit) = self.jit {
-            let raw_args: Result<Vec<_>, _> = args.iter().map(|val| {
-                value_to_raw(val)
-            }).collect();
+            // 1. Push Function frame
+            self.env.push_frame(FrameKind::Function);
 
-            if let Ok(raw_args) = raw_args {
-                match jit.try_call(def, &raw_args) {
-                    Ok(Some(raw_result)) => {
-                        let result_val = raw_to_value(raw_result, &def.return_type);
-                        self.env.bind("result".to_string(), result_val.clone());
-                        // Check :invariant contracts
-                        for contract in &def.invariants {
-                            let contract_result = self.eval(contract)?;
-                            if contract_result != Value::Bool(true) {
-                                self.recursion_depth -= 1;
-                                self.env.pop_frame();
-                                return Err(RuntimeError::ContractViolation(
-                                    airl_contracts::violation::ContractViolation {
-                                        function: fn_val.name.clone(),
-                                        contract_kind: airl_contracts::violation::ContractKind::Invariant,
-                                        clause_source: contract.to_airl(),
-                                        bindings: self.capture_bindings(),
-                                        evaluated: format!("{}", contract_result),
-                                        span: contract.span,
-                                    },
-                                ));
+            // 2. Bind params to arg values
+            for (i, param) in def.params.iter().enumerate() {
+                let val = current_args.get(i).cloned().unwrap_or(Value::Nil);
+                self.env.bind(param.name.clone(), val);
+            }
+
+            // 3. Check :requires contracts
+            for contract in &def.requires {
+                let contract_result = self.eval(contract)?;
+                if contract_result != Value::Bool(true) {
+                    self.recursion_depth -= 1;
+                    self.env.pop_frame();
+                    return Err(RuntimeError::ContractViolation(
+                        airl_contracts::violation::ContractViolation {
+                            function: fn_val.name.clone(),
+                            contract_kind: airl_contracts::violation::ContractKind::Requires,
+                            clause_source: contract.to_airl(),
+                            bindings: self.capture_bindings(),
+                            evaluated: format!("{}", contract_result),
+                            span: contract.span,
+                        },
+                    ));
+                }
+            }
+
+            // 4. Try JIT path (unchanged — JIT doesn't self-recurse through AIRL)
+            if let Some(ref mut jit) = self.jit {
+                let raw_args: Result<Vec<_>, _> = current_args.iter().map(|val| {
+                    value_to_raw(val)
+                }).collect();
+
+                if let Ok(raw_args) = raw_args {
+                    match jit.try_call(def, &raw_args) {
+                        Ok(Some(raw_result)) => {
+                            let result_val = raw_to_value(raw_result, &def.return_type);
+                            self.env.bind("result".to_string(), result_val.clone());
+                            for contract in &def.invariants {
+                                let contract_result = self.eval(contract)?;
+                                if contract_result != Value::Bool(true) {
+                                    self.recursion_depth -= 1;
+                                    self.env.pop_frame();
+                                    return Err(RuntimeError::ContractViolation(
+                                        airl_contracts::violation::ContractViolation {
+                                            function: fn_val.name.clone(),
+                                            contract_kind: airl_contracts::violation::ContractKind::Invariant,
+                                            clause_source: contract.to_airl(),
+                                            bindings: self.capture_bindings(),
+                                            evaluated: format!("{}", contract_result),
+                                            span: contract.span,
+                                        },
+                                    ));
+                                }
                             }
-                        }
-                        // Check :ensures contracts
-                        for contract in &def.ensures {
-                            let contract_result = self.eval(contract)?;
-                            if contract_result != Value::Bool(true) {
-                                self.recursion_depth -= 1;
-                                self.env.pop_frame();
-                                return Err(RuntimeError::ContractViolation(
-                                    airl_contracts::violation::ContractViolation {
-                                        function: fn_val.name.clone(),
-                                        contract_kind: airl_contracts::violation::ContractKind::Ensures,
-                                        clause_source: contract.to_airl(),
-                                        bindings: self.capture_bindings(),
-                                        evaluated: format!("{}", contract_result),
-                                        span: contract.span,
-                                    },
-                                ));
+                            for contract in &def.ensures {
+                                let contract_result = self.eval(contract)?;
+                                if contract_result != Value::Bool(true) {
+                                    self.recursion_depth -= 1;
+                                    self.env.pop_frame();
+                                    return Err(RuntimeError::ContractViolation(
+                                        airl_contracts::violation::ContractViolation {
+                                            function: fn_val.name.clone(),
+                                            contract_kind: airl_contracts::violation::ContractKind::Ensures,
+                                            clause_source: contract.to_airl(),
+                                            bindings: self.capture_bindings(),
+                                            evaluated: format!("{}", contract_result),
+                                            span: contract.span,
+                                        },
+                                    ));
+                                }
                             }
+                            self.recursion_depth -= 1;
+                            self.env.pop_frame();
+                            return Ok(result_val);
                         }
-                        self.recursion_depth -= 1;
-                        self.env.pop_frame();
-                        return Ok(result_val);
-                    }
-                    Ok(None) => {} // not compilable, fall through to interpreter
-                    Err(_e) => {
-                        // JIT error, fall through to interpreter silently
+                        Ok(None) => {} // not compilable, fall through
+                        Err(_e) => {} // JIT error, fall through
                     }
                 }
             }
-        }
 
-        // 5. Eval body (interpreted path)
-        let result = self.eval(&def.body);
+            // 5. Set current_fn_name for self-TCO detection
+            let prev_fn = self.current_fn_name.take();
+            self.current_fn_name = Some(fn_val.name.clone());
 
-        match result {
-            Ok(result_val) => {
-                // 5. Bind `result` for contract checking
-                self.env.bind("result".to_string(), result_val.clone());
+            // 6. Eval body via eval_body (trampoline + TailCall detection)
+            let body_result = self.eval_body(&def.body);
 
-                // 6. Check :invariant contracts
-                for contract in &def.invariants {
-                    let contract_result = self.eval(contract)?;
-                    if contract_result != Value::Bool(true) {
-                        self.recursion_depth -= 1;
-                        self.env.pop_frame();
-                        return Err(RuntimeError::ContractViolation(
-                            airl_contracts::violation::ContractViolation {
-                                function: fn_val.name.clone(),
-                                contract_kind: airl_contracts::violation::ContractKind::Invariant,
-                                clause_source: contract.to_airl(),
-                                bindings: self.capture_bindings(),
-                                evaluated: format!("{}", contract_result),
-                                span: contract.span,
-                            },
-                        ));
+            // 7. Restore current_fn_name
+            self.current_fn_name = prev_fn;
+
+            match body_result {
+                Ok(BodyResult::Value(result_val)) => {
+                    // 8. Check contracts on final result
+                    self.env.bind("result".to_string(), result_val.clone());
+
+                    for contract in &def.invariants {
+                        let contract_result = self.eval(contract)?;
+                        if contract_result != Value::Bool(true) {
+                            self.recursion_depth -= 1;
+                            self.env.pop_frame();
+                            return Err(RuntimeError::ContractViolation(
+                                airl_contracts::violation::ContractViolation {
+                                    function: fn_val.name.clone(),
+                                    contract_kind: airl_contracts::violation::ContractKind::Invariant,
+                                    clause_source: contract.to_airl(),
+                                    bindings: self.capture_bindings(),
+                                    evaluated: format!("{}", contract_result),
+                                    span: contract.span,
+                                },
+                            ));
+                        }
                     }
-                }
 
-                // 7. Check :ensures contracts
-                for contract in &def.ensures {
-                    let contract_result = self.eval(contract)?;
-                    if contract_result != Value::Bool(true) {
-                        self.recursion_depth -= 1;
-                        self.env.pop_frame();
-                        return Err(RuntimeError::ContractViolation(
-                            airl_contracts::violation::ContractViolation {
-                                function: fn_val.name.clone(),
-                                contract_kind: airl_contracts::violation::ContractKind::Ensures,
-                                clause_source: contract.to_airl(),
-                                bindings: self.capture_bindings(),
-                                evaluated: format!("{}", contract_result),
-                                span: contract.span,
-                            },
-                        ));
+                    for contract in &def.ensures {
+                        let contract_result = self.eval(contract)?;
+                        if contract_result != Value::Bool(true) {
+                            self.recursion_depth -= 1;
+                            self.env.pop_frame();
+                            return Err(RuntimeError::ContractViolation(
+                                airl_contracts::violation::ContractViolation {
+                                    function: fn_val.name.clone(),
+                                    contract_kind: airl_contracts::violation::ContractKind::Ensures,
+                                    clause_source: contract.to_airl(),
+                                    bindings: self.capture_bindings(),
+                                    evaluated: format!("{}", contract_result),
+                                    span: contract.span,
+                                },
+                            ));
+                        }
                     }
+
+                    // 9. Cleanup and return
+                    self.recursion_depth -= 1;
+                    self.env.pop_frame();
+                    return Ok(result_val);
                 }
-
-                // 7. Pop frame
-                self.recursion_depth -= 1;
-                self.env.pop_frame();
-
-                // 8. Return result
-                Ok(result_val)
-            }
-            Err(e) => {
-                self.recursion_depth -= 1;
-                self.env.pop_frame();
-                Err(e)
+                Ok(BodyResult::SelfTailCall(new_args)) => {
+                    // 10. Self-TCO: pop frame, loop with new args
+                    self.env.pop_frame();
+                    self.recursion_depth -= 1;
+                    current_args = new_args;
+                    continue 'tco;
+                }
+                Err(e) => {
+                    self.recursion_depth -= 1;
+                    self.env.pop_frame();
+                    return Err(e);
+                }
             }
         }
     }
