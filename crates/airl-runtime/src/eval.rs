@@ -59,6 +59,7 @@ impl Interpreter {
             "length", "at", "append", "head", "tail", "empty?", "cons",
             "print", "type-of", "shape", "valid",
             "spawn-agent", "send", "send-async", "await", "parallel",
+            "broadcast", "retry", "escalate", "any-agent",
             "char-at", "substring", "split", "join", "contains",
             "starts-with", "ends-with", "trim", "to-upper", "to-lower",
             "replace", "index-of", "chars",
@@ -246,6 +247,38 @@ impl Interpreter {
                         }
                         "parallel" => {
                             let result = self.builtin_parallel(&arg_vals);
+                            for (bname, is_mutable) in &borrow_ledger {
+                                if *is_mutable { self.env.release_mutable_borrow(bname); }
+                                else { self.env.release_immutable_borrow(bname); }
+                            }
+                            return result;
+                        }
+                        "broadcast" => {
+                            let result = self.builtin_broadcast(&arg_vals);
+                            for (bname, is_mutable) in &borrow_ledger {
+                                if *is_mutable { self.env.release_mutable_borrow(bname); }
+                                else { self.env.release_immutable_borrow(bname); }
+                            }
+                            return result;
+                        }
+                        "retry" => {
+                            let result = self.builtin_retry(&arg_vals);
+                            for (bname, is_mutable) in &borrow_ledger {
+                                if *is_mutable { self.env.release_mutable_borrow(bname); }
+                                else { self.env.release_immutable_borrow(bname); }
+                            }
+                            return result;
+                        }
+                        "escalate" => {
+                            let result = self.builtin_escalate(&arg_vals);
+                            for (bname, is_mutable) in &borrow_ledger {
+                                if *is_mutable { self.env.release_mutable_borrow(bname); }
+                                else { self.env.release_immutable_borrow(bname); }
+                            }
+                            return result;
+                        }
+                        "any-agent" => {
+                            let result = self.builtin_any_agent(&arg_vals);
                             for (bname, is_mutable) in &borrow_ledger {
                                 if *is_mutable { self.env.release_mutable_borrow(bname); }
                                 else { self.env.release_immutable_borrow(bname); }
@@ -849,6 +882,212 @@ impl Interpreter {
         }
 
         Ok(Value::List(results))
+    }
+
+    /// broadcast: send the same task to multiple agents concurrently.
+    /// Usage: (broadcast [agent1 agent2 ...] "fn" args...)
+    /// Sends to all agents in parallel and returns the first successful result.
+    fn builtin_broadcast(&mut self, args: &[Value]) -> Result<Value, RuntimeError> {
+        if args.len() < 2 {
+            return Err(RuntimeError::TypeError(
+                "broadcast requires at least 2 args: [agents], function, [args...]".into(),
+            ));
+        }
+
+        let targets = match &args[0] {
+            Value::List(ids) => {
+                let mut result = Vec::new();
+                for id in ids {
+                    match id {
+                        Value::Str(s) => result.push(s.clone()),
+                        _ => return Err(RuntimeError::TypeError(
+                            "broadcast requires a list of agent name strings".into(),
+                        )),
+                    }
+                }
+                result
+            }
+            _ => return Err(RuntimeError::TypeError(
+                "broadcast first arg must be a list of agent names".into(),
+            )),
+        };
+
+        let fn_name = match &args[1] {
+            Value::Str(s) => s.clone(),
+            _ => return Err(RuntimeError::TypeError("broadcast function name must be a string".into())),
+        };
+        let fn_args = &args[2..];
+
+        if targets.is_empty() {
+            return Err(RuntimeError::Custom("broadcast: no agents specified".into()));
+        }
+
+        // Send the same task to all agents asynchronously
+        let mut task_ids = Vec::new();
+        for target in &targets {
+            let task_id = format!("send-{}", self.next_send_id);
+            self.next_send_id += 1;
+            let task_msg = crate::agent_client::format_task(&task_id, &fn_name, fn_args);
+
+            let agent = self.agents.iter().find(|a| a.name == *target)
+                .ok_or_else(|| RuntimeError::Custom(format!("unknown agent: {}", target)))?;
+            let writer_arc = Arc::clone(&agent.writer);
+            let reader_arc = Arc::clone(&agent.reader);
+            let agent_name = agent.name.clone();
+
+            {
+                let mut writer = writer_arc.lock()
+                    .map_err(|_| RuntimeError::Custom("agent writer lock poisoned".into()))?;
+                crate::agent_client::write_frame(&mut *writer, &task_msg)
+                    .map_err(|e| RuntimeError::Custom(format!("broadcast to {} failed: {}", agent_name, e)))?;
+            }
+
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let result = (|| {
+                    let mut reader = reader_arc.lock()
+                        .map_err(|_| "agent reader lock poisoned".to_string())?;
+                    let response = crate::agent_client::read_frame(&mut *reader)
+                        .map_err(|e| format!("recv from {} failed: {}", agent_name, e))?;
+                    crate::agent_client::parse_result_message(&response)
+                })();
+                let _ = tx.send(result);
+            });
+
+            task_ids.push((task_id, rx));
+        }
+
+        // Return first successful result
+        let mut last_err = String::from("all agents failed");
+        for (task_id, rx) in task_ids {
+            match rx.recv() {
+                Ok(Ok(val)) => return Ok(val),
+                Ok(Err(e)) => { last_err = format!("task {}: {}", task_id, e); }
+                Err(e) => { last_err = format!("task {}: channel error: {}", task_id, e); }
+            }
+        }
+        Err(RuntimeError::Custom(format!("broadcast: {}", last_err)))
+    }
+
+    /// retry: wrap a synchronous send in retry logic with exponential backoff.
+    /// Usage: (retry target "fn" args... :max N)
+    /// Optional :max N (default 3). Backoff: 100ms, 200ms, 400ms...
+    fn builtin_retry(&mut self, args: &[Value]) -> Result<Value, RuntimeError> {
+        if args.len() < 2 {
+            return Err(RuntimeError::TypeError(
+                "retry requires at least 2 args: target, function, [args...] [:max N]".into(),
+            ));
+        }
+
+        // Parse args, looking for optional :max keyword
+        let mut max_retries: u32 = 3;
+        let mut send_args = Vec::new();
+
+        let mut i = 0;
+        while i < args.len() {
+            if let Value::Str(s) = &args[i] {
+                if s == ":max" {
+                    if let Some(Value::Int(n)) = args.get(i + 1) {
+                        max_retries = *n as u32;
+                        i += 2;
+                        continue;
+                    }
+                }
+            }
+            send_args.push(args[i].clone());
+            i += 1;
+        }
+
+        let mut last_err = String::new();
+        for attempt in 0..=max_retries {
+            match self.builtin_send(&send_args) {
+                Ok(val) => return Ok(val),
+                Err(e) => {
+                    last_err = format!("{}", e);
+                    if attempt < max_retries {
+                        let backoff = 100 * (1u64 << attempt);
+                        std::thread::sleep(std::time::Duration::from_millis(backoff));
+                    }
+                }
+            }
+        }
+
+        Err(RuntimeError::Custom(format!(
+            "retry: all {} attempts failed, last error: {}", max_retries + 1, last_err
+        )))
+    }
+
+    /// escalate: send a structured error notification to an agent.
+    /// Usage: (escalate target :reason "msg" :data value)
+    fn builtin_escalate(&mut self, args: &[Value]) -> Result<Value, RuntimeError> {
+        if args.is_empty() {
+            return Err(RuntimeError::TypeError(
+                "escalate requires at least a target agent".into(),
+            ));
+        }
+
+        let target = match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => return Err(RuntimeError::TypeError("escalate target must be a string".into())),
+        };
+
+        // Parse keyword arguments
+        let mut reason = String::from("unknown");
+        let mut data = Value::Nil;
+
+        let mut i = 1;
+        while i < args.len() {
+            if let Value::Str(s) = &args[i] {
+                match s.as_str() {
+                    ":reason" => {
+                        if let Some(Value::Str(r)) = args.get(i + 1) {
+                            reason = r.clone();
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    ":data" => {
+                        if let Some(d) = args.get(i + 1) {
+                            data = d.clone();
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            i += 1;
+        }
+
+        // Format as a special escalation task
+        let task_id = format!("send-{}", self.next_send_id);
+        self.next_send_id += 1;
+
+        let escalation_args = [
+            Value::Str(reason.clone()),
+            data,
+        ];
+        let task_msg = crate::agent_client::format_task(&task_id, "__escalate__", &escalation_args);
+
+        // Try to send; if the agent doesn't handle __escalate__, return structured value
+        match self.send_to_agent(&target, &task_msg) {
+            Ok(val) => Ok(val),
+            Err(_) => {
+                Ok(Value::Variant(
+                    "Escalation".into(),
+                    Box::new(Value::Str(format!("to={} reason={}", target, reason))),
+                ))
+            }
+        }
+    }
+
+    /// any-agent: return the name of the first available spawned agent.
+    /// Usage: (any-agent) — returns agent name string, or error if none spawned.
+    fn builtin_any_agent(&self, _args: &[Value]) -> Result<Value, RuntimeError> {
+        if self.agents.is_empty() {
+            return Err(RuntimeError::Custom("any-agent: no agents spawned".into()));
+        }
+        Ok(Value::Str(self.agents[0].name.clone()))
     }
 
     pub fn eval_top_level(&mut self, top: &TopLevel) -> Result<Value, RuntimeError> {
