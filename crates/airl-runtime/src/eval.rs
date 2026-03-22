@@ -5,13 +5,15 @@ use crate::builtins::Builtins;
 use crate::pattern::try_match;
 use airl_syntax::ast::*;
 
+use std::collections::HashMap;
 use std::io::{BufReader, BufWriter};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex, mpsc};
 
 struct LiveAgent {
     name: String,
-    writer: BufWriter<std::process::ChildStdin>,
-    reader: BufReader<std::process::ChildStdout>,
+    writer: Arc<Mutex<BufWriter<std::process::ChildStdin>>>,
+    reader: Arc<Mutex<BufReader<std::process::ChildStdout>>>,
     child: Child,
 }
 
@@ -21,6 +23,7 @@ pub struct Interpreter {
     pub jit: Option<airl_codegen::JitCache>,
     pub tensor_jit: Option<airl_codegen::TensorJit>,
     agents: Vec<LiveAgent>,
+    pending_results: HashMap<String, mpsc::Receiver<Result<Value, String>>>,
     next_agent_id: u32,
     next_send_id: u32,
     recursion_depth: usize,
@@ -34,6 +37,7 @@ impl Interpreter {
             jit: airl_codegen::JitCache::new().ok(),
             tensor_jit: airl_codegen::TensorJit::new().ok(),
             agents: Vec::new(),
+            pending_results: HashMap::new(),
             next_agent_id: 0,
             next_send_id: 0,
             recursion_depth: 0,
@@ -54,7 +58,7 @@ impl Interpreter {
             "tensor.slice",
             "length", "at", "append", "head", "tail", "empty?", "cons",
             "print", "type-of", "shape", "valid",
-            "spawn-agent", "send",
+            "spawn-agent", "send", "send-async", "await", "parallel",
             "char-at", "substring", "split", "join", "contains",
             "starts-with", "ends-with", "trim", "to-upper", "to-lower",
             "replace", "index-of", "chars",
@@ -218,6 +222,30 @@ impl Interpreter {
                         }
                         "send" => {
                             let result = self.builtin_send(&arg_vals);
+                            for (bname, is_mutable) in &borrow_ledger {
+                                if *is_mutable { self.env.release_mutable_borrow(bname); }
+                                else { self.env.release_immutable_borrow(bname); }
+                            }
+                            return result;
+                        }
+                        "send-async" => {
+                            let result = self.builtin_send_async(&arg_vals);
+                            for (bname, is_mutable) in &borrow_ledger {
+                                if *is_mutable { self.env.release_mutable_borrow(bname); }
+                                else { self.env.release_immutable_borrow(bname); }
+                            }
+                            return result;
+                        }
+                        "await" => {
+                            let result = self.builtin_await(&arg_vals);
+                            for (bname, is_mutable) in &borrow_ledger {
+                                if *is_mutable { self.env.release_mutable_borrow(bname); }
+                                else { self.env.release_immutable_borrow(bname); }
+                            }
+                            return result;
+                        }
+                        "parallel" => {
+                            let result = self.builtin_parallel(&arg_vals);
                             for (bname, is_mutable) in &borrow_ledger {
                                 if *is_mutable { self.env.release_mutable_borrow(bname); }
                                 else { self.env.release_immutable_borrow(bname); }
@@ -611,8 +639,8 @@ impl Interpreter {
 
         self.agents.push(LiveAgent {
             name: name.clone(),
-            writer: BufWriter::new(stdin),
-            reader: BufReader::new(stdout),
+            writer: Arc::new(Mutex::new(BufWriter::new(stdin))),
+            reader: Arc::new(Mutex::new(BufReader::new(stdout))),
             child,
         });
 
@@ -672,16 +700,155 @@ impl Interpreter {
     }
 
     fn send_to_agent(&mut self, name: &str, task_msg: &str) -> Result<Value, RuntimeError> {
-        let agent = self.agents.iter_mut().find(|a| a.name == name)
+        let agent = self.agents.iter().find(|a| a.name == name)
             .ok_or_else(|| RuntimeError::Custom(format!("unknown agent: {}", name)))?;
 
-        crate::agent_client::write_frame(&mut agent.writer, task_msg)
+        let mut writer = agent.writer.lock()
+            .map_err(|_| RuntimeError::Custom("agent writer lock poisoned".into()))?;
+        let mut reader = agent.reader.lock()
+            .map_err(|_| RuntimeError::Custom("agent reader lock poisoned".into()))?;
+
+        crate::agent_client::write_frame(&mut *writer, task_msg)
             .map_err(|e| RuntimeError::Custom(format!("send to {} failed: {}", name, e)))?;
-        let response = crate::agent_client::read_frame(&mut agent.reader)
+        let response = crate::agent_client::read_frame(&mut *reader)
             .map_err(|e| RuntimeError::Custom(format!("recv from {} failed: {}", name, e)))?;
 
         crate::agent_client::parse_result_message(&response)
             .map_err(|e| RuntimeError::Custom(e))
+    }
+
+    /// send-async: dispatch a task to an agent without waiting for the result.
+    /// Returns a task ID string that can be passed to `await`.
+    fn builtin_send_async(&mut self, args: &[Value]) -> Result<Value, RuntimeError> {
+        if args.len() < 2 {
+            return Err(RuntimeError::TypeError(
+                "send-async requires at least 2 args: target, function, [args...]".into(),
+            ));
+        }
+
+        let target = match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => return Err(RuntimeError::TypeError("send-async target must be a string".into())),
+        };
+        let fn_name = match &args[1] {
+            Value::Str(s) => s.clone(),
+            _ => return Err(RuntimeError::TypeError("send-async function name must be a string".into())),
+        };
+        let fn_args = &args[2..];
+
+        let task_id = format!("send-{}", self.next_send_id);
+        self.next_send_id += 1;
+        let task_msg = crate::agent_client::format_task(&task_id, &fn_name, fn_args);
+
+        // Find the agent and get Arc handles to its reader/writer
+        let agent = self.agents.iter().find(|a| a.name == target)
+            .ok_or_else(|| RuntimeError::Custom(format!("unknown agent: {}", target)))?;
+        let writer_arc = Arc::clone(&agent.writer);
+        let reader_arc = Arc::clone(&agent.reader);
+        let agent_name = agent.name.clone();
+
+        // Write the task frame (synchronous — fast, just writes to pipe buffer)
+        {
+            let mut writer = writer_arc.lock()
+                .map_err(|_| RuntimeError::Custom("agent writer lock poisoned".into()))?;
+            crate::agent_client::write_frame(&mut *writer, &task_msg)
+                .map_err(|e| RuntimeError::Custom(format!("send-async to {} failed: {}", agent_name, e)))?;
+        }
+
+        // Spawn background thread to read the response
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = (|| {
+                let mut reader = reader_arc.lock()
+                    .map_err(|_| "agent reader lock poisoned".to_string())?;
+                let response = crate::agent_client::read_frame(&mut *reader)
+                    .map_err(|e| format!("recv from {} failed: {}", agent_name, e))?;
+                crate::agent_client::parse_result_message(&response)
+            })();
+            let _ = tx.send(result);
+        });
+
+        self.pending_results.insert(task_id.clone(), rx);
+        Ok(Value::Str(task_id))
+    }
+
+    /// await: block until an async task completes, with optional timeout in milliseconds.
+    /// Usage: (await task-id) or (await task-id 5000)
+    fn builtin_await(&mut self, args: &[Value]) -> Result<Value, RuntimeError> {
+        let task_id = match args.first() {
+            Some(Value::Str(s)) => s.clone(),
+            _ => return Err(RuntimeError::TypeError("await requires a task ID string".into())),
+        };
+
+        let rx = self.pending_results.remove(&task_id)
+            .ok_or_else(|| RuntimeError::Custom(format!("unknown task ID: {}", task_id)))?;
+
+        // Optional timeout in milliseconds (second argument)
+        let result = match args.get(1) {
+            Some(Value::Int(ms)) => {
+                let timeout = std::time::Duration::from_millis(*ms as u64);
+                rx.recv_timeout(timeout)
+                    .map_err(|e| RuntimeError::Custom(format!("await {} timed out: {}", task_id, e)))?
+            }
+            _ => {
+                // No timeout — block indefinitely
+                rx.recv()
+                    .map_err(|e| RuntimeError::Custom(format!("await {} failed: {}", task_id, e)))?
+            }
+        };
+
+        result.map_err(|e| RuntimeError::Custom(e))
+    }
+
+    /// parallel: collect results from multiple async tasks.
+    /// Usage: (parallel [task-id-1 task-id-2 ...]) or (parallel [task-id-1 ...] timeout-ms)
+    /// Returns a list of results in the same order as the task IDs.
+    fn builtin_parallel(&mut self, args: &[Value]) -> Result<Value, RuntimeError> {
+        let task_ids = match args.first() {
+            Some(Value::List(ids)) => {
+                let mut result = Vec::new();
+                for id in ids {
+                    match id {
+                        Value::Str(s) => result.push(s.clone()),
+                        _ => return Err(RuntimeError::TypeError(
+                            "parallel requires a list of task ID strings".into()
+                        )),
+                    }
+                }
+                result
+            }
+            _ => return Err(RuntimeError::TypeError(
+                "parallel requires a list of task IDs".into()
+            )),
+        };
+
+        // Optional timeout in milliseconds (second argument)
+        let timeout = match args.get(1) {
+            Some(Value::Int(ms)) => Some(std::time::Duration::from_millis(*ms as u64)),
+            _ => None,
+        };
+
+        // Collect all results
+        let mut results = Vec::new();
+        for task_id in &task_ids {
+            let rx = self.pending_results.remove(task_id)
+                .ok_or_else(|| RuntimeError::Custom(format!("unknown task ID: {}", task_id)))?;
+
+            let result = match timeout {
+                Some(t) => rx.recv_timeout(t)
+                    .map_err(|e| RuntimeError::Custom(
+                        format!("parallel: task {} timed out: {}", task_id, e)
+                    ))?,
+                None => rx.recv()
+                    .map_err(|e| RuntimeError::Custom(
+                        format!("parallel: task {} failed: {}", task_id, e)
+                    ))?,
+            };
+
+            results.push(result.map_err(|e| RuntimeError::Custom(e))?);
+        }
+
+        Ok(Value::List(results))
     }
 
     pub fn eval_top_level(&mut self, top: &TopLevel) -> Result<Value, RuntimeError> {
