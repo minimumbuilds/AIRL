@@ -5,7 +5,7 @@ use airl_agent::transport::Transport;
 fn main() {
     // Spawn with larger stack to support deeply nested AIRL evaluation
     // (e.g., bootstrap compiler's self-hosted parser)
-    let builder = std::thread::Builder::new().stack_size(1024 * 1024 * 1024);
+    let builder = std::thread::Builder::new().stack_size(64 * 1024 * 1024);
     let handler = builder.spawn(|| {
         let args: Vec<String> = std::env::args().collect();
         match args.get(1).map(|s| s.as_str()) {
