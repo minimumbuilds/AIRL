@@ -12,6 +12,11 @@ pub struct IrVm {
     recursion_depth: usize,
 }
 
+enum TcoResult {
+    Value(Value),
+    TailCall(Vec<Value>),
+}
+
 impl IrVm {
     pub fn new() -> Self {
         IrVm {
@@ -116,10 +121,237 @@ impl IrVm {
                 }
             }
 
-            // Stubs for function/match/lambda — implemented in Task 3
-            _ => Err(RuntimeError::Custom(
-                "IR VM: unimplemented node type".to_string(),
-            )),
+            IRNode::Func(name, params, body) => {
+                let func = IRFunc {
+                    name: name.clone(),
+                    params: params.clone(),
+                    body: *body.clone(),
+                };
+                self.functions.insert(name.clone(), func);
+                Ok(Value::Nil)
+            }
+
+            IRNode::Lambda(params, body) => {
+                let mut captured = vec![];
+                for frame in self.env.iter().rev() {
+                    for (k, v) in frame {
+                        captured.push((k.clone(), v.clone()));
+                    }
+                }
+                Ok(Value::IRClosure(IRClosureValue {
+                    params: params.clone(),
+                    body: body.clone(),
+                    captured_env: captured,
+                }))
+            }
+
+            IRNode::Call(name, args) => {
+                let arg_vals: Vec<Value> = args
+                    .iter()
+                    .map(|a| self.exec(a))
+                    .collect::<Result<_, _>>()?;
+                self.call_function(name, arg_vals)
+            }
+
+            IRNode::CallExpr(callee_expr, args) => {
+                let callee = self.exec(callee_expr)?;
+                let arg_vals: Vec<Value> = args
+                    .iter()
+                    .map(|a| self.exec(a))
+                    .collect::<Result<_, _>>()?;
+                match callee {
+                    Value::IRClosure(closure) => {
+                        self.push_frame();
+                        for (name, val) in &closure.captured_env {
+                            self.env_bind(name, val.clone());
+                        }
+                        for (param, val) in closure.params.iter().zip(arg_vals) {
+                            self.env_bind(&param, val);
+                        }
+                        let result = self.exec(&closure.body);
+                        self.pop_frame();
+                        result
+                    }
+                    Value::IRFuncRef(name) => self.call_function(&name, arg_vals),
+                    Value::BuiltinFn(name) => {
+                        if let Some(func) = self.builtins.get(&name) {
+                            func(&arg_vals)
+                        } else {
+                            Err(RuntimeError::UndefinedSymbol(name))
+                        }
+                    }
+                    _ => Err(RuntimeError::NotCallable(format!("{}", callee))),
+                }
+            }
+
+            IRNode::Match(scrutinee, arms) => {
+                let scr_val = self.exec(scrutinee)?;
+                for arm in arms {
+                    if let Some(bindings) = self.try_match_pattern(&arm.pattern, &scr_val) {
+                        self.push_frame();
+                        for (name, val) in bindings {
+                            self.env_bind(&name, val);
+                        }
+                        let result = self.exec(&arm.body);
+                        self.pop_frame();
+                        return result;
+                    }
+                }
+                Err(RuntimeError::NonExhaustiveMatch {
+                    value: format!("{}", scr_val),
+                })
+            }
+        }
+    }
+
+    pub fn exec_program(&mut self, nodes: &[IRNode]) -> Result<Value, RuntimeError> {
+        let mut result = Value::Nil;
+        for node in nodes {
+            match node {
+                IRNode::Func(name, params, body) => {
+                    let func = IRFunc {
+                        name: name.clone(),
+                        params: params.clone(),
+                        body: *body.clone(),
+                    };
+                    self.functions.insert(name.clone(), func);
+                }
+                _ => {
+                    result = self.exec(node)?;
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    fn call_function(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        // Try builtin first
+        if let Some(func) = self.builtins.get(name) {
+            return func(&args);
+        }
+        // User-defined function with self-TCO
+        if let Some(func) = self.functions.get(name).cloned() {
+            self.recursion_depth += 1;
+            if self.recursion_depth > 50_000 {
+                self.recursion_depth -= 1;
+                return Err(RuntimeError::Custom("stack overflow".into()));
+            }
+            let mut current_args = args;
+            let result = loop {
+                self.push_frame();
+                for (param, val) in func.params.iter().zip(current_args.iter()) {
+                    self.env_bind(param, val.clone());
+                }
+                self.env_bind(name, Value::IRFuncRef(name.to_string()));
+                match self.exec_tco(&func.body, name)? {
+                    TcoResult::Value(v) => {
+                        self.pop_frame();
+                        break Ok(v);
+                    }
+                    TcoResult::TailCall(new_args) => {
+                        self.pop_frame();
+                        current_args = new_args;
+                    }
+                }
+            };
+            self.recursion_depth -= 1;
+            return result;
+        }
+        Err(RuntimeError::UndefinedSymbol(name.to_string()))
+    }
+
+    fn exec_tco(&mut self, node: &IRNode, fn_name: &str) -> Result<TcoResult, RuntimeError> {
+        match node {
+            IRNode::If(cond, then_, else_) => {
+                let cond_val = self.exec(cond)?;
+                match cond_val {
+                    Value::Bool(true) => self.exec_tco(then_, fn_name),
+                    Value::Bool(false) => self.exec_tco(else_, fn_name),
+                    _ => Err(RuntimeError::TypeError("if: condition must be Bool".into())),
+                }
+            }
+            IRNode::Do(exprs) => {
+                if exprs.is_empty() {
+                    return Ok(TcoResult::Value(Value::Nil));
+                }
+                for expr in &exprs[..exprs.len() - 1] {
+                    self.exec(expr)?;
+                }
+                self.exec_tco(exprs.last().unwrap(), fn_name)
+            }
+            IRNode::Let(bindings, body) => {
+                self.push_frame();
+                for binding in bindings {
+                    let val = self.exec(&binding.expr)?;
+                    self.env_bind(&binding.name, val);
+                }
+                let result = self.exec_tco(body, fn_name);
+                self.pop_frame();
+                result
+            }
+            IRNode::Match(scrutinee, arms) => {
+                let scr_val = self.exec(scrutinee)?;
+                for arm in arms {
+                    if let Some(bindings) = self.try_match_pattern(&arm.pattern, &scr_val) {
+                        self.push_frame();
+                        for (name, val) in bindings {
+                            self.env_bind(&name, val);
+                        }
+                        let result = self.exec_tco(&arm.body, fn_name);
+                        self.pop_frame();
+                        return result;
+                    }
+                }
+                Err(RuntimeError::NonExhaustiveMatch {
+                    value: format!("{}", scr_val),
+                })
+            }
+            IRNode::Call(callee_name, args) if callee_name == fn_name => {
+                let arg_vals: Vec<Value> = args
+                    .iter()
+                    .map(|a| self.exec(a))
+                    .collect::<Result<_, _>>()?;
+                Ok(TcoResult::TailCall(arg_vals))
+            }
+            _ => Ok(TcoResult::Value(self.exec(node)?)),
+        }
+    }
+
+    fn try_match_pattern(&self, pattern: &IRPattern, value: &Value) -> Option<Vec<(String, Value)>> {
+        match pattern {
+            IRPattern::Wild => Some(vec![]),
+            IRPattern::Bind(name) => Some(vec![(name.clone(), value.clone())]),
+            IRPattern::Lit(lit_val) => {
+                if value == lit_val {
+                    Some(vec![])
+                } else {
+                    None
+                }
+            }
+            IRPattern::Variant(tag, sub_pats) => match value {
+                Value::Variant(vtag, inner) if vtag == tag => {
+                    if sub_pats.is_empty() {
+                        Some(vec![])
+                    } else if sub_pats.len() == 1 {
+                        self.try_match_pattern(&sub_pats[0], inner)
+                    } else {
+                        match inner.as_ref() {
+                            Value::List(items) if items.len() == sub_pats.len() => {
+                                let mut bindings = vec![];
+                                for (pat, val) in sub_pats.iter().zip(items) {
+                                    match self.try_match_pattern(pat, val) {
+                                        Some(bs) => bindings.extend(bs),
+                                        None => return None,
+                                    }
+                                }
+                                Some(bindings)
+                            }
+                            _ => None,
+                        }
+                    }
+                }
+                _ => None,
+            },
         }
     }
 }
@@ -284,5 +516,95 @@ mod tests {
             Box::new(IRNode::Int(3)),
         );
         assert!(matches!(vm.exec(&node), Err(RuntimeError::TypeError(_))));
+    }
+
+    #[test]
+    fn test_function_call() {
+        let mut vm = IrVm::new();
+        let prog = vec![
+            IRNode::Func(
+                "double".into(),
+                vec!["x".into()],
+                Box::new(IRNode::Call(
+                    "*".into(),
+                    vec![IRNode::Load("x".into()), IRNode::Int(2)],
+                )),
+            ),
+        ];
+        vm.exec_program(&prog).unwrap();
+        let result = vm.exec(&IRNode::Call("double".into(), vec![IRNode::Int(21)])).unwrap();
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[test]
+    fn test_recursion() {
+        let mut vm = IrVm::new();
+        let fact_body = IRNode::If(
+            Box::new(IRNode::Call("<=".into(), vec![IRNode::Load("n".into()), IRNode::Int(1)])),
+            Box::new(IRNode::Int(1)),
+            Box::new(IRNode::Call("*".into(), vec![
+                IRNode::Load("n".into()),
+                IRNode::Call("fact".into(), vec![
+                    IRNode::Call("-".into(), vec![IRNode::Load("n".into()), IRNode::Int(1)]),
+                ]),
+            ])),
+        );
+        vm.exec_program(&[IRNode::Func("fact".into(), vec!["n".into()], Box::new(fact_body))]).unwrap();
+        let result = vm.exec(&IRNode::Call("fact".into(), vec![IRNode::Int(5)])).unwrap();
+        assert_eq!(result, Value::Int(120));
+    }
+
+    #[test]
+    fn test_match() {
+        let mut vm = IrVm::new();
+        let node = IRNode::Match(
+            Box::new(IRNode::Variant("Ok".into(), vec![IRNode::Int(42)])),
+            vec![
+                IRArm {
+                    pattern: IRPattern::Variant("Ok".into(), vec![IRPattern::Bind("v".into())]),
+                    body: IRNode::Load("v".into()),
+                },
+                IRArm {
+                    pattern: IRPattern::Wild,
+                    body: IRNode::Int(0),
+                },
+            ],
+        );
+        assert_eq!(vm.exec(&node).unwrap(), Value::Int(42));
+    }
+
+    #[test]
+    fn test_lambda() {
+        let mut vm = IrVm::new();
+        let node = IRNode::CallExpr(
+            Box::new(IRNode::Lambda(
+                vec!["x".into()],
+                Box::new(IRNode::Call("+".into(), vec![IRNode::Load("x".into()), IRNode::Int(1)])),
+            )),
+            vec![IRNode::Int(10)],
+        );
+        assert_eq!(vm.exec(&node).unwrap(), Value::Int(11));
+    }
+
+    #[test]
+    fn test_tco_no_overflow() {
+        let mut vm = IrVm::new();
+        let body = IRNode::If(
+            Box::new(IRNode::Call("=".into(), vec![IRNode::Load("n".into()), IRNode::Int(0)])),
+            Box::new(IRNode::Int(0)),
+            Box::new(IRNode::Call("count-down".into(), vec![
+                IRNode::Call("-".into(), vec![IRNode::Load("n".into()), IRNode::Int(1)]),
+            ])),
+        );
+        vm.exec_program(&[IRNode::Func("count-down".into(), vec!["n".into()], Box::new(body))]).unwrap();
+        let result = vm.exec(&IRNode::Call("count-down".into(), vec![IRNode::Int(100_000)])).unwrap();
+        assert_eq!(result, Value::Int(0));
+    }
+
+    #[test]
+    fn test_builtin_arithmetic() {
+        let mut vm = IrVm::new();
+        let node = IRNode::Call("+".into(), vec![IRNode::Int(3), IRNode::Int(4)]);
+        assert_eq!(vm.exec(&node).unwrap(), Value::Int(7));
     }
 }
