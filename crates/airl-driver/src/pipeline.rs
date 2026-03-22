@@ -4,6 +4,7 @@ use airl_runtime::eval::Interpreter;
 use airl_runtime::value::Value;
 use airl_runtime::error::RuntimeError;
 use airl_types::checker::TypeChecker;
+use airl_types::linearity::LinearityChecker;
 
 const COLLECTIONS_SOURCE: &str = include_str!("../../../stdlib/prelude.airl");
 const MATH_SOURCE: &str = include_str!("../../../stdlib/math.airl");
@@ -89,6 +90,29 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
         }
     }
 
+    // Linearity check
+    let mut lin_checker = LinearityChecker::new();
+    for top in &tops {
+        if let airl_syntax::ast::TopLevel::Defn(f) = top {
+            lin_checker.check_fn(f);
+        }
+    }
+    if lin_checker.has_errors() {
+        let lin_diags = lin_checker.drain_diagnostics();
+        match mode {
+            PipelineMode::Check => {
+                for d in lin_diags.errors() {
+                    eprintln!("linearity error: {}", d.message);
+                }
+            }
+            PipelineMode::Run | PipelineMode::Repl => {
+                for d in lin_diags.errors() {
+                    eprintln!("warning (linearity): {}", d.message);
+                }
+            }
+        }
+    }
+
     // Z3 contract verification
     let z3_prover = airl_solver::prover::Z3Prover::new();
     for top in &tops {
@@ -161,6 +185,20 @@ pub fn check_source(source: &str) -> Result<(), PipelineError> {
     }
     if checker.has_errors() {
         return Err(PipelineError::TypeCheck(checker.into_diagnostics()));
+    }
+
+    // Linearity check (strict mode)
+    let mut lin_checker = LinearityChecker::new();
+    for top in &tops {
+        if let airl_syntax::ast::TopLevel::Defn(f) = top {
+            lin_checker.check_fn(f);
+        }
+    }
+    if lin_checker.has_errors() {
+        let lin_diags = lin_checker.drain_diagnostics();
+        for d in lin_diags.errors() {
+            eprintln!("linearity error: {}", d.message);
+        }
     }
 
     // Z3 contract verification
@@ -338,5 +376,70 @@ mod tests {
         // Valid source should pass check
         let result = check_source("(+ 1 2)");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn linearity_checker_detects_use_after_move() {
+        // The static linearity checker should detect that `x` is moved
+        // twice when passed as `own` — once in consume1 and again in consume2.
+        let source = r#"
+            (defn consume1
+              :sig [(own x : i32) -> i32]
+              :intent "consume"
+              :requires [(valid x)]
+              :ensures [(valid result)]
+              :body x)
+            (defn consume2
+              :sig [(own x : i32) -> i32]
+              :intent "consume"
+              :requires [(valid x)]
+              :ensures [(valid result)]
+              :body x)
+            (defn double-use
+              :sig [(own val : i32) -> i32]
+              :intent "use val twice"
+              :requires [(valid val)]
+              :ensures [(valid result)]
+              :body (+ (consume1 val) (consume2 val)))
+        "#;
+        // The static checker should detect the double move of val
+        let mut lin = LinearityChecker::new();
+        let mut lexer = Lexer::new(source);
+        let tokens = lexer.lex_all().unwrap();
+        let sexprs = parse_sexpr_all(&tokens).unwrap();
+        let mut diags = Diagnostics::new();
+        for sexpr in &sexprs {
+            if let Ok(airl_syntax::ast::TopLevel::Defn(f)) = parser::parse_top_level(sexpr, &mut diags) {
+                lin.check_fn(&f);
+            }
+        }
+        assert!(lin.has_errors(), "linearity checker should detect use-after-move");
+        let lin_diags = lin.drain_diagnostics();
+        let err_msg = lin_diags.errors().next().unwrap().message.clone();
+        assert!(err_msg.contains("moved"), "error should mention 'moved', got: {}", err_msg);
+    }
+
+    #[test]
+    fn linearity_checker_allows_default_ownership() {
+        // Default ownership (no annotation) should not trigger linearity errors.
+        let source = r#"
+            (defn use-twice
+              :sig [(x : i32) -> i32]
+              :intent "use x twice"
+              :requires [(valid x)]
+              :ensures [(valid result)]
+              :body (+ x x))
+        "#;
+        let mut lin = LinearityChecker::new();
+        let mut lexer = Lexer::new(source);
+        let tokens = lexer.lex_all().unwrap();
+        let sexprs = parse_sexpr_all(&tokens).unwrap();
+        let mut diags = Diagnostics::new();
+        for sexpr in &sexprs {
+            if let Ok(airl_syntax::ast::TopLevel::Defn(f)) = parser::parse_top_level(sexpr, &mut diags) {
+                lin.check_fn(&f);
+            }
+        }
+        assert!(!lin.has_errors(), "default ownership should not trigger linearity errors");
     }
 }
