@@ -162,6 +162,115 @@
 
 (print "=== Task 2 tests complete ===")
 
+;; ─── Builtin Dispatch ────────────────────────────────────
+
+(defn call-builtin
+  :sig [(name : Str) (args : List) -> Any]
+  :intent "Dispatch a builtin call by name"
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body
+    (if (= name "+") (Ok (ValInt (+ (unwrap-int (at args 0)) (unwrap-int (at args 1)))))
+    (if (= name "-") (Ok (ValInt (- (unwrap-int (at args 0)) (unwrap-int (at args 1)))))
+    (if (= name "*") (Ok (ValInt (* (unwrap-int (at args 0)) (unwrap-int (at args 1)))))
+    (if (= name "/") (Ok (ValInt (/ (unwrap-int (at args 0)) (unwrap-int (at args 1)))))
+    (if (= name "%") (Ok (ValInt (% (unwrap-int (at args 0)) (unwrap-int (at args 1)))))
+    (if (= name "=")  (Ok (ValBool (= (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))))
+    (if (= name "!=") (Ok (ValBool (!= (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))))
+    (if (= name "<")  (Ok (ValBool (< (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))))
+    (if (= name ">")  (Ok (ValBool (> (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))))
+    (if (= name "<=") (Ok (ValBool (<= (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))))
+    (if (= name ">=") (Ok (ValBool (>= (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))))
+    (if (= name "not") (Ok (ValBool (not (unwrap-bool (at args 0)))))
+    (if (= name "and") (Ok (ValBool (if (unwrap-bool (at args 0)) (unwrap-bool (at args 1)) false)))
+    (if (= name "or")  (Ok (ValBool (if (unwrap-bool (at args 0)) true (unwrap-bool (at args 1)))))
+    (if (= name "head")   (Ok (head (unwrap-list (at args 0))))
+    (if (= name "tail")   (Ok (ValList (tail (unwrap-list (at args 0)))))
+    (if (= name "cons")   (Ok (ValList (cons (at args 0) (unwrap-list (at args 1)))))
+    (if (= name "empty?") (Ok (ValBool (empty? (unwrap-list (at args 0)))))
+    (if (= name "length") (Ok (ValInt (length (unwrap-list (at args 0)))))
+    (if (= name "at")     (Ok (at (unwrap-list (at args 0)) (unwrap-int (at args 1))))
+    (if (= name "append") (Ok (ValList (append (unwrap-list (at args 0)) (at args 1))))
+    (if (= name "char-at")    (Ok (ValStr (char-at (unwrap-str (at args 0)) (unwrap-int (at args 1)))))
+    (if (= name "substring")  (Ok (ValStr (substring (unwrap-str (at args 0)) (unwrap-int (at args 1)) (unwrap-int (at args 2)))))
+    (if (= name "contains")   (Ok (ValBool (contains (unwrap-str (at args 0)) (unwrap-str (at args 1)))))
+    (if (= name "split")      (Ok (ValList (map (fn [s] (ValStr s)) (split (unwrap-str (at args 0)) (unwrap-str (at args 1))))))
+    (if (= name "join")       (Ok (ValStr (join (map (fn [v] (unwrap-str v)) (unwrap-list (at args 0))) (unwrap-str (at args 1)))))
+    (if (= name "chars")      (Ok (ValList (map (fn [c] (ValStr c)) (chars (unwrap-str (at args 0))))))
+    (if (= name "print") (do (print (unwrap-raw (at args 0))) (Ok (ValNil)))
+    (if (= name "type-of")
+      (match (at args 0)
+        (ValInt _) (Ok (ValStr "Int"))
+        (ValFloat _) (Ok (ValStr "Float"))
+        (ValStr _) (Ok (ValStr "Str"))
+        (ValBool _) (Ok (ValStr "Bool"))
+        (ValNil) (Ok (ValStr "Nil"))
+        (ValList _) (Ok (ValStr "List"))
+        (ValVariant _ _) (Ok (ValStr "Variant"))
+        (ValFn _ _ _ _) (Ok (ValStr "Fn"))
+        (ValLambda _ _ _) (Ok (ValStr "Lambda"))
+        (ValBuiltin _) (Ok (ValStr "Builtin"))
+        _ (Ok (ValStr "Unknown")))
+    (Err (+ "unknown builtin: " name))
+    ))))))))))))))))))))))))))))))
+
+(defn make-initial-env
+  :sig [(_u : Any) -> List]
+  :intent "Create environment with all builtins bound"
+  :requires [(valid _u)]
+  :ensures [(valid result)]
+  :body
+    (let (e : Any (env-new 0))
+    (let (e : Any (env-bind e "+" (ValBuiltin "+")))
+    (let (e : Any (env-bind e "-" (ValBuiltin "-")))
+    (let (e : Any (env-bind e "*" (ValBuiltin "*")))
+    (let (e : Any (env-bind e "/" (ValBuiltin "/")))
+    (let (e : Any (env-bind e "%" (ValBuiltin "%")))
+    (let (e : Any (env-bind e "=" (ValBuiltin "=")))
+    (let (e : Any (env-bind e "!=" (ValBuiltin "!=")))
+    (let (e : Any (env-bind e "<" (ValBuiltin "<")))
+    (let (e : Any (env-bind e ">" (ValBuiltin ">")))
+    (let (e : Any (env-bind e "<=" (ValBuiltin "<=")))
+    (let (e : Any (env-bind e ">=" (ValBuiltin ">=")))
+    (let (e : Any (env-bind e "not" (ValBuiltin "not")))
+    (let (e : Any (env-bind e "and" (ValBuiltin "and")))
+    (let (e : Any (env-bind e "or" (ValBuiltin "or")))
+    (let (e : Any (env-bind e "head" (ValBuiltin "head")))
+    (let (e : Any (env-bind e "tail" (ValBuiltin "tail")))
+    (let (e : Any (env-bind e "cons" (ValBuiltin "cons")))
+    (let (e : Any (env-bind e "empty?" (ValBuiltin "empty?")))
+    (let (e : Any (env-bind e "length" (ValBuiltin "length")))
+    (let (e : Any (env-bind e "at" (ValBuiltin "at")))
+    (let (e : Any (env-bind e "append" (ValBuiltin "append")))
+    (let (e : Any (env-bind e "char-at" (ValBuiltin "char-at")))
+    (let (e : Any (env-bind e "substring" (ValBuiltin "substring")))
+    (let (e : Any (env-bind e "contains" (ValBuiltin "contains")))
+    (let (e : Any (env-bind e "split" (ValBuiltin "split")))
+    (let (e : Any (env-bind e "join" (ValBuiltin "join")))
+    (let (e : Any (env-bind e "chars" (ValBuiltin "chars")))
+    (let (e : Any (env-bind e "print" (ValBuiltin "print")))
+    (let (e : Any (env-bind e "type-of" (ValBuiltin "type-of")))
+      e)))))))))))))))))))))))))))))))
+
+(defn eval-args-acc
+  :sig [(args : List) (env : List) (acc : List) -> Any]
+  :intent "Accumulate evaluated argument values"
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? args) (Ok [acc env])
+      (match (eval-node (head args) env)
+        (Err e) (Err e)
+        (Ok pair)
+          (eval-args-acc (tail args) (at pair 1) (append acc (at pair 0))))))
+
+(defn eval-args
+  :sig [(args : List) (env : List) -> Any]
+  :intent "Evaluate a list of argument expressions left-to-right"
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (eval-args-acc args env []))
+
 ;; ─── Eval Core Functions ────────────────────────────────
 
 (defn eval-list-items
@@ -198,6 +307,24 @@
       (match (eval-list-items items env [])
         (Err e) (Err e)
         (Ok pair) (Ok [(ValList (at pair 0)) (at pair 1)]))
+
+    (ASTCall callee args _ _)
+      (match (eval-node callee env)
+        (Err e) (Err e)
+        (Ok callee-pair)
+          (let (callee-val : Any (at callee-pair 0))
+            (let (env2 : Any (at callee-pair 1))
+              (match (eval-args args env2)
+                (Err e) (Err e)
+                (Ok args-pair)
+                  (let (arg-vals : Any (at args-pair 0))
+                    (let (env3 : Any (at args-pair 1))
+                      (match callee-val
+                        (ValBuiltin name)
+                          (match (call-builtin name arg-vals)
+                            (Ok val) (Ok [val env3])
+                            (Err e) (Err e))
+                        _ (Err "eval: not callable"))))))))
 
     _ (Err "eval-node: unknown node type")))
 
@@ -250,3 +377,45 @@
     (Err e) (print "  FAIL:" e)))
 
 (print "=== Task 3 tests complete ===")
+
+;; ─── Task 4: Builtin Tests ──────────────────────────────
+
+(print "=== Task 4: Builtins ===")
+
+(let (env : Any (make-initial-env 0))
+  (do
+    ;; Arithmetic: (+ 2 3) -> 5
+    (match (eval-node (ASTCall (ASTSymbol "+" 0 0) [(ASTInt 2 0 0) (ASTInt 3 0 0)] 0 0) env)
+      (Ok pair) (assert-eq (unwrap-int (at pair 0)) 5)
+      (Err e) (print "  FAIL:" e))
+
+    ;; Comparison: (= 1 1) -> true
+    (match (eval-node (ASTCall (ASTSymbol "=" 0 0) [(ASTInt 1 0 0) (ASTInt 1 0 0)] 0 0) env)
+      (Ok pair) (assert-eq (unwrap-bool (at pair 0)) true)
+      (Err e) (print "  FAIL:" e))
+
+    ;; Comparison: (< 1 2) -> true
+    (match (eval-node (ASTCall (ASTSymbol "<" 0 0) [(ASTInt 1 0 0) (ASTInt 2 0 0)] 0 0) env)
+      (Ok pair) (assert-eq (unwrap-bool (at pair 0)) true)
+      (Err e) (print "  FAIL:" e))
+
+    ;; Logic: (not true) -> false
+    (match (eval-node (ASTCall (ASTSymbol "not" 0 0) [(ASTBool true 0 0)] 0 0) env)
+      (Ok pair) (assert-eq (unwrap-bool (at pair 0)) false)
+      (Err e) (print "  FAIL:" e))
+
+    ;; List: (head [1 2 3])
+    (match (eval-node (ASTCall (ASTSymbol "head" 0 0) [(ASTList [(ASTInt 1 0 0) (ASTInt 2 0 0) (ASTInt 3 0 0)] 0 0)] 0 0) env)
+      (Ok pair) (assert-eq (unwrap-int (at pair 0)) 1)
+      (Err e) (print "  FAIL:" e))
+
+    ;; Nested: (* (+ 1 2) (- 5 3)) -> 6
+    (match (eval-node
+      (ASTCall (ASTSymbol "*" 0 0)
+        [(ASTCall (ASTSymbol "+" 0 0) [(ASTInt 1 0 0) (ASTInt 2 0 0)] 0 0)
+         (ASTCall (ASTSymbol "-" 0 0) [(ASTInt 5 0 0) (ASTInt 3 0 0)] 0 0)]
+        0 0) env)
+      (Ok pair) (assert-eq (unwrap-int (at pair 0)) 6)
+      (Err e) (print "  FAIL:" e))))
+
+(print "=== Task 4 tests complete ===")
