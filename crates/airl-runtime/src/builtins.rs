@@ -1004,6 +1004,8 @@ fn type_name(val: &Value) -> &'static str {
         Value::Function(_) => "Function",
         Value::Lambda(_) => "Lambda",
         Value::BuiltinFn(_) => "BuiltinFn",
+        Value::IRClosure(_) => "IRClosure",
+        Value::IRFuncRef(_) => "IRFuncRef",
     }
 }
 

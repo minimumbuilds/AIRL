@@ -37,6 +37,8 @@ pub enum Value {
     Function(FnValue),
     Lambda(LambdaValue),
     BuiltinFn(String),
+    IRClosure(crate::ir::IRClosureValue),
+    IRFuncRef(String),
 }
 
 impl fmt::Display for Value {
@@ -99,6 +101,8 @@ impl fmt::Display for Value {
             Value::Function(fv) => write!(f, "<fn {}>", fv.name),
             Value::Lambda(_) => write!(f, "<lambda>"),
             Value::BuiltinFn(name) => write!(f, "<builtin {}>", name),
+            Value::IRClosure(_) => write!(f, "<ir-closure>"),
+            Value::IRFuncRef(name) => write!(f, "<ir-fn:{}>", name),
         }
     }
 }
@@ -130,6 +134,9 @@ impl PartialEq for Value {
             // Functions and lambdas are never equal
             (Value::Function(_), Value::Function(_)) => false,
             (Value::Lambda(_), Value::Lambda(_)) => false,
+            (Value::IRClosure(_), _) => false,
+            (Value::IRFuncRef(a), Value::IRFuncRef(b)) => a == b,
+            (Value::IRFuncRef(_), _) => false,
             _ => false,
         }
     }
