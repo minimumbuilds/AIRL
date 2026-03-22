@@ -1,0 +1,14 @@
+;; test_program.airl - A simple program to be evaluated by the bootstrap compiler
+
+(defn square
+  :sig [(x : i64) -> i64]
+  :ensures [(valid result)]
+  :body (* x x))
+
+(defn sum-squares
+  :sig [(n : i64) -> i64]
+  :ensures [(valid result)]
+  :body (if (= n 0) 0 (+ (square n) (sum-squares (- n 1)))))
+
+(print "Square of 7:" (square 7))
+(print "Sum of squares 1..5:" (sum-squares 5))
