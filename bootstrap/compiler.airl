@@ -1,0 +1,199 @@
+;; bootstrap/compiler.airl — Self-hosted AIRL-to-IR compiler
+;; Requires: bootstrap/lexer.airl, bootstrap/parser.airl (loaded first)
+;;
+;; Transforms AST nodes (from the parser) into IR nodes (consumed by run-ir).
+
+;; ── Core expression compiler ──────────────────────────────
+
+(defn compile-expr
+  :sig [(node : List) -> List]
+  :intent "Compile an AST expression to an IR node"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTInt v _ _)       (Ok (IRInt v))
+    (ASTFloat v _ _)     (Ok (IRFloat v))
+    (ASTStr s _ _)       (Ok (IRStr s))
+    (ASTBool b _ _)      (Ok (IRBool b))
+    (ASTNil _ _)         (Ok (IRNil nil))
+    (ASTKeyword k _ _)   (Ok (IRStr (join [":" k] "")))
+    (ASTSymbol name _ _) (Ok (IRLoad name))
+
+    (ASTIf cond then else-branch _ _)
+      (match (compile-expr cond)
+        (Err e) (Err e)
+        (Ok cc) (match (compile-expr then)
+          (Err e) (Err e)
+          (Ok ct) (match (compile-expr else-branch)
+            (Err e) (Err e)
+            (Ok ce) (Ok (IRIf [cc ct ce])))))
+
+    (ASTCall callee args _ _)
+      (match callee
+        (ASTSymbol name _ _)
+          (match (compile-args args)
+            (Err e) (Err e)
+            (Ok cargs) (Ok (IRCall [name cargs])))
+        _ (match (compile-expr callee)
+            (Err e) (Err e)
+            (Ok cc) (match (compile-args args)
+              (Err e) (Err e)
+              (Ok cargs) (Ok (IRCallExpr [cc cargs])))))
+
+    (ASTLet bindings body _ _)
+      (match (compile-let-bindings bindings)
+        (Err e) (Err e)
+        (Ok cbindings) (match (compile-expr body)
+          (Err e) (Err e)
+          (Ok cbody) (Ok (IRLet [cbindings cbody]))))
+
+    (ASTDo exprs _ _)
+      (match (compile-args exprs)
+        (Err e) (Err e)
+        (Ok cexprs) (Ok (IRDo cexprs)))
+
+    (ASTMatch scrutinee arms _ _)
+      (match (compile-expr scrutinee)
+        (Err e) (Err e)
+        (Ok cscr) (match (compile-match-arms arms)
+          (Err e) (Err e)
+          (Ok carms) (Ok (IRMatch [cscr carms]))))
+
+    (ASTLambda params body _ _)
+      (match (compile-expr body)
+        (Err e) (Err e)
+        (Ok cbody) (Ok (IRLambda [params cbody])))
+
+    (ASTVariant name args _ _)
+      (match (compile-args args)
+        (Err e) (Err e)
+        (Ok cargs) (Ok (IRVariant [name cargs])))
+
+    (ASTList items _ _)
+      (match (compile-args items)
+        (Err e) (Err e)
+        (Ok citems) (Ok (IRList citems)))
+
+    (ASTTry expr _ _)
+      (match (compile-expr expr)
+        (Err e) (Err e)
+        (Ok cexpr) (Ok (IRTry cexpr)))
+
+    _ (Err "compile-expr: unknown node type")))
+
+;; ── Compile a list of expressions ─────────────────────────
+
+(defn compile-args
+  :sig [(nodes : List) -> List]
+  :intent "Compile a list of AST expressions to a list of IR nodes"
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? nodes) (Ok [])
+      (match (compile-expr (head nodes))
+        (Err e) (Err e)
+        (Ok compiled) (match (compile-args (tail nodes))
+          (Err e) (Err e)
+          (Ok rest) (Ok (cons compiled rest))))))
+
+;; ── Compile let bindings ──────────────────────────────────
+
+(defn compile-let-bindings
+  :sig [(bindings : List) -> List]
+  :intent "Compile let bindings to IR bindings"
+  :requires [(valid bindings)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? bindings) (Ok [])
+      (match (head bindings)
+        (ASTBinding name _ val-expr)
+          (match (compile-expr val-expr)
+            (Err e) (Err e)
+            (Ok cval) (match (compile-let-bindings (tail bindings))
+              (Err e) (Err e)
+              (Ok rest) (Ok (cons (IRBinding [name cval]) rest))))
+        _ (Err "compile-let-bindings: invalid let binding"))))
+
+;; ── Compile patterns ──────────────────────────────────────
+
+(defn compile-pattern
+  :sig [(pat : List) -> List]
+  :intent "Convert an AST pattern to an IR pattern"
+  :requires [(valid pat)]
+  :ensures [(valid result)]
+  :body (match pat
+    (PatWild _ _)             (Ok (IRPatWild nil))
+    (PatBind name _ _)        (Ok (IRPatBind name))
+    (PatLit value _ _)        (Ok (IRPatLit value))
+    (PatVariant name sub-pats _ _)
+      (match (compile-patterns sub-pats)
+        (Err e) (Err e)
+        (Ok cpats) (Ok (IRPatVariant [name cpats])))
+    _ (Err "compile-pattern: unknown pattern type")))
+
+(defn compile-patterns
+  :sig [(pats : List) -> List]
+  :intent "Compile a list of AST patterns to IR patterns"
+  :requires [(valid pats)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? pats) (Ok [])
+      (match (compile-pattern (head pats))
+        (Err e) (Err e)
+        (Ok cpat) (match (compile-patterns (tail pats))
+          (Err e) (Err e)
+          (Ok rest) (Ok (cons cpat rest))))))
+
+;; ── Compile match arms ────────────────────────────────────
+
+(defn compile-match-arms
+  :sig [(arms : List) -> List]
+  :intent "Compile match arms to IR arms"
+  :requires [(valid arms)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? arms) (Ok [])
+      (match (head arms)
+        (ASTArm pat body)
+          (match (compile-pattern pat)
+            (Err e) (Err e)
+            (Ok cpat) (match (compile-expr body)
+              (Err e) (Err e)
+              (Ok cbody) (match (compile-match-arms (tail arms))
+                (Err e) (Err e)
+                (Ok rest) (Ok (cons (IRArm [cpat cbody]) rest)))))
+        _ (Err "compile-match-arms: invalid match arm"))))
+
+;; ── Compile top-level forms ───────────────────────────────
+
+(defn compile-top-level
+  :sig [(node : List) -> List]
+  :intent "Compile a top-level AST node to an IR node"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTDefn name sig _ _ _ body _ _)
+      (match sig
+        (ASTSig params ret-name)
+          (let (param-names : List (map (fn [p] (match p (ASTParam n _) n _ "?")) params))
+            (match (compile-expr body)
+              (Err e) (Err e)
+              (Ok cbody) (Ok (IRFunc [name param-names cbody]))))
+        _ (Err "compile-top-level: defn requires sig"))
+    (ASTDefType _ _ _ _ _) (Ok (IRNil nil))
+    _ (compile-expr node)))
+
+;; ── Compile a full program ────────────────────────────────
+
+(defn compile-program
+  :sig [(nodes : List) -> List]
+  :intent "Compile all top-level AST nodes to IR nodes"
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? nodes) (Ok [])
+      (match (compile-top-level (head nodes))
+        (Err e) (Err e)
+        (Ok compiled) (match (compile-program (tail nodes))
+          (Err e) (Err e)
+          (Ok rest) (Ok (cons compiled rest))))))
