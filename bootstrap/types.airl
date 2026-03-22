@@ -1,0 +1,217 @@
+;; bootstrap/types.airl — Type representation and environment for the bootstrap type checker
+;; Types are tagged variants (TyI64, TyStr, TyFunc, etc.)
+;; Type environment is a list of maps (scoped frame stack)
+;; Type registry maps constructor names to their parent types
+
+;; ─── Type Resolution ─────────────────────────────────
+
+(defn is-int-type
+  :sig [(ty : List) -> Bool]
+  :intent "Check if a type is an integer type"
+  :requires [(valid ty)]
+  :ensures [(valid result)]
+  :body (match ty
+    (TyI8) true
+    (TyI16) true
+    (TyI32) true
+    (TyI64) true
+    (TyU8) true
+    (TyU16) true
+    (TyU32) true
+    (TyU64) true
+    _ false))
+
+(defn is-float-type
+  :sig [(ty : List) -> Bool]
+  :intent "Check if a type is a float type"
+  :requires [(valid ty)]
+  :ensures [(valid result)]
+  :body (match ty
+    (TyF16) true
+    (TyF32) true
+    (TyF64) true
+    (TyBF16) true
+    _ false))
+
+(defn resolve-type-name
+  :sig [(name : String) (registry : List) -> List]
+  :intent "Resolve a type name string to a type variant, or Err for unknown types"
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body
+    (if (= name "bool")   (Ok (TyBool))
+    (if (= name "Bool")   (Ok (TyBool))
+    (if (= name "i8")     (Ok (TyI8))
+    (if (= name "i16")    (Ok (TyI16))
+    (if (= name "i32")    (Ok (TyI32))
+    (if (= name "i64")    (Ok (TyI64))
+    (if (= name "u8")     (Ok (TyU8))
+    (if (= name "u16")    (Ok (TyU16))
+    (if (= name "u32")    (Ok (TyU32))
+    (if (= name "u64")    (Ok (TyU64))
+    (if (= name "f16")    (Ok (TyF16))
+    (if (= name "f32")    (Ok (TyF32))
+    (if (= name "f64")    (Ok (TyF64))
+    (if (= name "bf16")   (Ok (TyBF16))
+    (if (= name "Nat")    (Ok (TyNat))
+    (if (= name "String") (Ok (TyStr))
+    (if (= name "Str")    (Ok (TyStr))
+    (if (= name "Unit")   (Ok (TyUnit))
+    (if (= name "Never")  (Ok (TyNever))
+    (if (= name "List")   (Ok (TyList (TyVar "_")))
+    (if (= name "fn")     (Ok (TyVar "fn"))
+    (if (= name "tensor") (Ok (TyVar "tensor"))
+    (if (= name "Any")    (Err "type 'Any' is not a valid AIRL type - use a specific type")
+    ;; Check registry for user-defined types
+    (if (map-has registry name)
+      (Ok (TyNamed name []))
+      (Err (join ["unknown type: " name] ""))
+    )))))))))))))))))))))))))
+
+;; ─── Type Environment ────────────────────────────────
+;; Same list-of-maps frame stack pattern as eval.airl
+
+(defn type-env-new
+  :sig [(_u : i64) -> List]
+  :intent "Create a new type environment with one empty frame"
+  :requires [(valid _u)]
+  :ensures [(valid result)]
+  :body [(map-new)])
+
+(defn type-env-push
+  :sig [(env : List) -> List]
+  :intent "Push a new empty frame onto the type environment"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (cons (map-new) env))
+
+(defn type-env-pop
+  :sig [(env : List) -> List]
+  :intent "Pop the innermost frame from the type environment"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (tail env))
+
+(defn type-env-bind
+  :sig [(env : List) (name : String) (ty : List) -> List]
+  :intent "Bind a name to a type in the top frame"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (cons (map-set (head env) name ty) (tail env)))
+
+(defn type-env-lookup
+  :sig [(env : List) (name : String) -> List]
+  :intent "Look up a name in the type environment, searching from innermost frame outward"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (if (empty? env)
+    (Err (join ["undefined symbol: " name] ""))
+    (if (map-has (head env) name)
+      (Ok (map-get (head env) name))
+      (type-env-lookup (tail env) name))))
+
+;; ─── Type Registry ───────────────────────────────────
+;; Stores deftype declarations. A single map with:
+;;   type-name → type info (stored as variant)
+;;   ctor-name → CtorInfo with parent type and field types
+
+(defn registry-new
+  :sig [(_u : i64) -> List]
+  :intent "Create a new empty type registry"
+  :requires [(valid _u)]
+  :ensures [(valid result)]
+  :body (map-new))
+
+(defn registry-add-ctor
+  :sig [(reg : List) (name : String) (info : List) -> List]
+  :intent "Register a constructor name with its CtorInfo"
+  :requires [(valid reg)]
+  :ensures [(valid result)]
+  :body (map-set reg (join ["ctor:" name] "") info))
+
+(defn registry-get-ctor
+  :sig [(reg : List) (name : String) -> List]
+  :intent "Look up a constructor by name"
+  :requires [(valid reg)]
+  :ensures [(valid result)]
+  :body
+    (let (key : String (join ["ctor:" name] ""))
+      (if (map-has reg key)
+        (Ok (map-get reg key))
+        (Err (join ["unknown constructor: " name] "")))))
+
+(defn registry-has-ctor
+  :sig [(reg : List) (name : String) -> Bool]
+  :intent "Check if a constructor is registered"
+  :requires [(valid reg)]
+  :ensures [(valid result)]
+  :body (map-has reg (join ["ctor:" name] "")))
+
+(defn registry-add-type
+  :sig [(reg : List) (name : String) (info : List) -> List]
+  :intent "Register a type name with its definition"
+  :requires [(valid reg)]
+  :ensures [(valid result)]
+  :body (map-set reg (join ["type:" name] "") info))
+
+(defn registry-has-type
+  :sig [(reg : List) (name : String) -> Bool]
+  :intent "Check if a type is registered"
+  :requires [(valid reg)]
+  :ensures [(valid result)]
+  :body (map-has reg (join ["type:" name] "")))
+
+;; ─── Type Compatibility ─────────────────────────────
+
+(defn types-compatible
+  :sig [(a : List) (b : List) -> Bool]
+  :intent "Check if two types are compatible (assignable)"
+  :requires [(valid a)]
+  :ensures [(valid result)]
+  :body
+    ;; Identical types
+    (if (= a b) true
+    ;; TyVar matches anything (polymorphic / unresolved)
+    (match a
+      (TyVar _) true
+      _ (match b
+        (TyVar _) true
+        _ (match a
+          ;; TyNever is bottom type — compatible with anything
+          (TyNever) true
+          _ (match b
+            (TyNever) true
+            _ (if (is-int-type a)
+                (if (is-int-type b) true false)
+                (if (is-float-type a)
+                  (if (is-float-type b) true false)
+                  ;; TyList compatibility
+                  (match a
+                    (TyList ea) (match b
+                      (TyList eb) (types-compatible ea eb)
+                      _ false)
+                    ;; TyNamed compatibility: same name
+                    (TyNamed na _) (match b
+                      (TyNamed nb _) (= na nb)
+                      _ false)
+                    ;; TyFunc compatibility: check params and return
+                    (TyFunc pa ra) (match b
+                      (TyFunc pb rb) (if (= (length pa) (length pb))
+                        (if (types-compatible ra rb)
+                          (types-compatible-lists pa pb)
+                          false)
+                        false)
+                      _ false)
+                    _ false)))))))))
+
+(defn types-compatible-lists
+  :sig [(as : List) (bs : List) -> Bool]
+  :intent "Check if two lists of types are pairwise compatible"
+  :requires [(valid as)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? as) true
+      (if (empty? bs) true
+        (if (types-compatible (head as) (head bs))
+          (types-compatible-lists (tail as) (tail bs))
+          false))))
