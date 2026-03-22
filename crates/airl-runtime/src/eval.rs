@@ -487,8 +487,8 @@ impl Interpreter {
                     airl_contracts::violation::ContractViolation {
                         function: fn_val.name.clone(),
                         contract_kind: airl_contracts::violation::ContractKind::Requires,
-                        clause_source: format!("{:?}", contract.kind),
-                        bindings: vec![],
+                        clause_source: contract.to_airl(),
+                        bindings: self.capture_bindings(),
                         evaluated: format!("{}", contract_result),
                         span: contract.span,
                     },
@@ -517,8 +517,8 @@ impl Interpreter {
                                     airl_contracts::violation::ContractViolation {
                                         function: fn_val.name.clone(),
                                         contract_kind: airl_contracts::violation::ContractKind::Invariant,
-                                        clause_source: format!("{:?}", contract.kind),
-                                        bindings: vec![],
+                                        clause_source: contract.to_airl(),
+                                        bindings: self.capture_bindings(),
                                         evaluated: format!("{}", contract_result),
                                         span: contract.span,
                                     },
@@ -535,8 +535,8 @@ impl Interpreter {
                                     airl_contracts::violation::ContractViolation {
                                         function: fn_val.name.clone(),
                                         contract_kind: airl_contracts::violation::ContractKind::Ensures,
-                                        clause_source: format!("{:?}", contract.kind),
-                                        bindings: vec![],
+                                        clause_source: contract.to_airl(),
+                                        bindings: self.capture_bindings(),
                                         evaluated: format!("{}", contract_result),
                                         span: contract.span,
                                     },
@@ -573,8 +573,8 @@ impl Interpreter {
                             airl_contracts::violation::ContractViolation {
                                 function: fn_val.name.clone(),
                                 contract_kind: airl_contracts::violation::ContractKind::Invariant,
-                                clause_source: format!("{:?}", contract.kind),
-                                bindings: vec![],
+                                clause_source: contract.to_airl(),
+                                bindings: self.capture_bindings(),
                                 evaluated: format!("{}", contract_result),
                                 span: contract.span,
                             },
@@ -592,8 +592,8 @@ impl Interpreter {
                             airl_contracts::violation::ContractViolation {
                                 function: fn_val.name.clone(),
                                 contract_kind: airl_contracts::violation::ContractKind::Ensures,
-                                clause_source: format!("{:?}", contract.kind),
-                                bindings: vec![],
+                                clause_source: contract.to_airl(),
+                                bindings: self.capture_bindings(),
                                 evaluated: format!("{}", contract_result),
                                 span: contract.span,
                             },
@@ -676,6 +676,20 @@ impl Interpreter {
         } else {
             Ok(Value::Bool(false))
         }
+    }
+
+    /// Capture current parameter bindings for contract violation messages.
+    /// Only includes user-defined variables, not builtins.
+    fn capture_bindings(&self) -> Vec<(String, String)> {
+        self.env.iter_bindings().iter()
+            .filter(|(name, slot)| {
+                !slot.moved
+                && *name != "result"
+                && !matches!(slot.value, Value::BuiltinFn(_))
+                && !matches!(slot.value, Value::Function(_))
+            })
+            .map(|(name, slot)| (name.to_string(), format!("{}", slot.value)))
+            .collect()
     }
 
     fn capture_env(&self) -> Vec<(String, Value)> {
