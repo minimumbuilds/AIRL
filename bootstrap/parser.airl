@@ -242,3 +242,105 @@
                       (Ok args) (Ok (ASTCall callee args line col))
                       (Err e) (Err e))
                   (Err e) (Err e)))))))
+
+;; ── Compound expression parsers ───────────────────
+
+(defn parse-if
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (if cond then else) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [if-sym cond then else]
+    (if (= (length items) 4)
+      (match (parse-expr (at items 1))
+        (Ok cond-node)
+          (match (parse-expr (at items 2))
+            (Ok then-node)
+              (match (parse-expr (at items 3))
+                (Ok else-node)
+                  (Ok (ASTIf cond-node then-node else-node line col))
+                (Err e) (Err e))
+            (Err e) (Err e))
+        (Err e) (Err e))
+      (Err (ParseError "if requires exactly 3 arguments (cond then else)" line col))))
+
+(defn parse-let-binding
+  :sig [(sexpr : Any) -> List]
+  :intent "Parse a single let binding (name : Type value)"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (< (length items) 4)
+          (Err (ParseError "let binding requires (name : Type value)" line col))
+          (let (name-sexpr : Any (at items 0))
+            (match name-sexpr
+              (SAtom tok)
+                (match tok
+                  (Token kind name _ _)
+                    (if (= kind "symbol")
+                      ;; items[1] should be colon, items[2] should be type, items[3] should be value
+                      (let (type-sexpr : Any (at items 2))
+                        (match type-sexpr
+                          (SAtom type-tok)
+                            (match type-tok
+                              (Token tk tv _ _)
+                                (if (= tk "symbol")
+                                  (match (parse-expr (at items 3))
+                                    (Ok val-node) (Ok (ASTBinding name tv val-node))
+                                    (Err e) (Err e))
+                                  (Err (ParseError "expected type name in let binding" line col))))
+                          _ (Err (ParseError "expected type name in let binding" line col))))
+                      (Err (ParseError "expected symbol name in let binding" line col))))
+              _ (Err (ParseError "expected symbol name in let binding" line col)))))
+      _ (Err (ParseError "let binding must be a list" 0 0))))
+
+(defn parse-let-bindings
+  :sig [(items : List) (pos : i64) (end : i64) -> List]
+  :intent "Parse let bindings from items[pos] to items[end-1], return (Ok bindings)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos end)
+      (Ok [])
+      (match (parse-let-binding (at items pos))
+        (Ok binding)
+          (match (parse-let-bindings items (+ pos 1) end)
+            (Ok rest) (Ok (cons binding rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn parse-let
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (let (bindings...) body) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [let-sym binding1 binding2 ... body]
+    ;; At least 3 items: let + one binding + body
+    (if (< (length items) 3)
+      (Err (ParseError "let requires at least one binding and a body" line col))
+      ;; bindings are items[1] to items[n-2], body is items[n-1]
+      (let (num-items : i64 (length items))
+        (let (body-idx : i64 (- num-items 1))
+          (match (parse-let-bindings items 1 body-idx)
+            (Ok bindings)
+              (match (parse-expr (at items body-idx))
+                (Ok body-node) (Ok (ASTLet bindings body-node line col))
+                (Err e) (Err e))
+            (Err e) (Err e))))))
+
+(defn parse-do
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (do expr1 expr2 ...) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [do-sym expr1 expr2 ...]
+    (if (< (length items) 2)
+      (Err (ParseError "do requires at least one expression" line col))
+      (match (parse-list-items items 1)
+        (Ok exprs) (Ok (ASTDo exprs line col))
+        (Err e) (Err e))))
