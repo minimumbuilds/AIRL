@@ -1,0 +1,85 @@
+;; bootstrap/eval_test.airl — Tests for the bootstrap evaluator
+
+;; ─── Test Helper ──────────────────────────────────────────
+
+(defn assert-eq
+  :sig [(a : Any) (b : Any) -> Bool]
+  :intent "Assert equality"
+  :requires [(valid a) (valid b)]
+  :ensures [(valid result)]
+  :body (if (= a b) true
+          (do (print "  FAIL: expected" b "got" a) false)))
+
+;; ─── Include eval.airl functions ──────────────────────────
+;; (All function defs from eval.airl must be copied here since
+;;  AIRL has no import system. For now, just the unwrap helpers.)
+
+(defn unwrap-int
+  :sig [(v : Any) -> i64]
+  :intent "Extract integer from ValInt"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValInt n) n
+    _ (do (print "ERROR: expected ValInt, got" v) 0)))
+
+(defn unwrap-float
+  :sig [(v : Any) -> f64]
+  :intent "Extract float from ValFloat"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValFloat n) n
+    _ (do (print "ERROR: expected ValFloat, got" v) 0.0)))
+
+(defn unwrap-str
+  :sig [(v : Any) -> Str]
+  :intent "Extract string from ValStr"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValStr s) s
+    _ (do (print "ERROR: expected ValStr, got" v) "")))
+
+(defn unwrap-bool
+  :sig [(v : Any) -> Bool]
+  :intent "Extract bool from ValBool"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValBool b) b
+    _ (do (print "ERROR: expected ValBool, got" v) false)))
+
+(defn unwrap-list
+  :sig [(v : Any) -> List]
+  :intent "Extract list from ValList"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValList xs) xs
+    _ (do (print "ERROR: expected ValList, got" v) [])))
+
+(defn unwrap-raw
+  :sig [(v : Any) -> Any]
+  :intent "Extract the raw AIRL value from any Val wrapper"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValInt n) n
+    (ValFloat n) n
+    (ValStr s) s
+    (ValBool b) b
+    (ValNil) nil
+    _ v))
+
+;; ─── Task 1: Value Helper Tests ──────────────────────────
+
+(print "=== Task 1: Value helpers ===")
+(assert-eq (unwrap-int (ValInt 42)) 42)
+(assert-eq (unwrap-str (ValStr "hi")) "hi")
+(assert-eq (unwrap-bool (ValBool true)) true)
+(assert-eq (unwrap-list (ValList [1 2 3])) [1 2 3])
+(assert-eq (unwrap-raw (ValInt 99)) 99)
+(assert-eq (unwrap-raw (ValStr "x")) "x")
+(assert-eq (unwrap-raw (ValBool false)) false)
+(print "=== Task 1 tests complete ===")

@@ -1,0 +1,62 @@
+;; bootstrap/eval.airl — Bootstrap evaluator for AIRL
+;; Interprets AST nodes produced by bootstrap/parser.airl
+
+;; ─── Value Unwrap Helpers ─────────────────────────────────
+
+(defn unwrap-int
+  :sig [(v : Any) -> i64]
+  :intent "Extract integer from ValInt"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValInt n) n
+    _ (do (print "ERROR: expected ValInt, got" v) 0)))
+
+(defn unwrap-float
+  :sig [(v : Any) -> f64]
+  :intent "Extract float from ValFloat"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValFloat n) n
+    _ (do (print "ERROR: expected ValFloat, got" v) 0.0)))
+
+(defn unwrap-str
+  :sig [(v : Any) -> Str]
+  :intent "Extract string from ValStr"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValStr s) s
+    _ (do (print "ERROR: expected ValStr, got" v) "")))
+
+(defn unwrap-bool
+  :sig [(v : Any) -> Bool]
+  :intent "Extract bool from ValBool"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValBool b) b
+    _ (do (print "ERROR: expected ValBool, got" v) false)))
+
+(defn unwrap-list
+  :sig [(v : Any) -> List]
+  :intent "Extract list from ValList"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValList xs) xs
+    _ (do (print "ERROR: expected ValList, got" v) [])))
+
+(defn unwrap-raw
+  :sig [(v : Any) -> Any]
+  :intent "Extract the raw AIRL value from any Val wrapper"
+  :requires [(valid v)]
+  :ensures [(valid result)]
+  :body (match v
+    (ValInt n) n
+    (ValFloat n) n
+    (ValStr s) s
+    (ValBool b) b
+    (ValNil) nil
+    _ v))
