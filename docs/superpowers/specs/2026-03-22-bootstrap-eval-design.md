@@ -94,7 +94,7 @@ Since AIRL maps are immutable, `env-bind` returns a new environment. The evaluat
 | `ASTLet bindings body _ _` | Push frame, bind each sequentially (threading env), eval body, pop frame |
 | `ASTDo exprs _ _` | Eval each expr sequentially (threading env), return last value |
 | `ASTMatch scrutinee arms _ _` | Eval scrutinee, try each arm's pattern, eval first matching body |
-| `ASTCall callee args _ _` | Eval callee + args, dispatch based on callee type |
+| `ASTCall callee args _ _` | Eval callee + args left-to-right. Dispatch to builtin/function/lambda. Always returns `(Ok [result-val caller-env])` — function bodies execute in their own env and don't modify the caller's. |
 | `ASTLambda params body _ _` | Capture current env, return `(ValLambda params body env)` |
 | `ASTTry expr _ _` | Eval inner; unwrap `(ValVariant "Ok" v)` → `v`, propagate Err |
 | `ASTVariant name args _ _` | Eval args, return `(ValVariant name inner)` |
@@ -124,7 +124,7 @@ Lexical scoping means the function body sees the environment from where it was *
 
 ## Builtin Dispatch
 
-`(call-builtin name args)` maps builtin name strings to actual AIRL operations. Each builtin unwraps args, calls the real AIRL builtin, and wraps the result.
+`(call-builtin name args)` maps builtin name strings to actual AIRL operations. Returns `(Ok val)` or `(Err msg)` — note: just a value, not a `[val env]` pair, since builtins never modify the environment. The `ASTCall` handler wraps the result as `(Ok [val env])`.
 
 ### Required Builtins
 
@@ -173,7 +173,7 @@ Where `bindings` is a list of `[name val]` pairs.
 | `PatWild _ _` | Always matches, bindings = `[]` |
 | `PatBind name _ _` | Always matches, bindings = `[[name value]]` |
 | `PatLit lit_val _ _` | Match if `value` equals `lit_val` (unwrap and compare). Type mismatch (e.g., int pattern vs string value) is a non-match, not an error — the evaluator tries the next arm. |
-| `PatVariant name sub_patterns _ _` | Value must be `(ValVariant name inner)`. Recursively match sub-patterns against inner fields. |
+| `PatVariant name sub_patterns _ _` | Value must be `(ValVariant name inner)`. If tag doesn't match or value isn't a variant, this is a non-match (not an error). For single sub-pattern: match it against `inner` directly. For multiple sub-patterns: `inner` must be a `ValList`, match each sub-pattern against the corresponding element. For zero sub-patterns: match succeeds if tag matches. |
 
 ### Nested Patterns
 
