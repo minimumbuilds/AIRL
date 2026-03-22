@@ -10,6 +10,19 @@ AIRL (AI Intermediate Representation Language) is a programming language designe
 **Design specs:** `docs/superpowers/specs/`
 **Implementation plans:** `docs/superpowers/plans/`
 
+## Pre-Flight Checklist (BLOCKING)
+
+**Before writing or modifying ANY `.airl` file, you MUST have read ALL of the following in the current conversation. No exceptions. No rationalizing ("this code doesn't use stdlib" is not an excuse). Complete all reads BEFORE writing a single line of AIRL.**
+
+1. `AIRL-LLM-Guide.md` — **entire file**, not partial. Contains critical pitfalls (eager `and`/`or`, no mixed int/float, etc.)
+2. `stdlib/collections.md` — `map`/`filter`/`fold`/`sort` signatures and semantics
+3. `stdlib/math.md` — `abs`/`pow`/`gcd` signatures
+4. `stdlib/result.md` — Result combinator signatures (`unwrap-or`, `and-then`, etc.)
+5. `stdlib/string.md` — 13 Rust builtins + 10 AIRL helper signatures
+6. `stdlib/map.md` — 10 Rust builtins + 8 AIRL helper signatures
+
+**If you have not read all 6 files above, STOP and read them now before proceeding.**
+
 ## Build & Test
 
 ```bash

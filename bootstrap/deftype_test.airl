@@ -1,3 +1,377 @@
+;; bootstrap/deftype_test.airl — Tests for deftype parsing
+;; Self-contained: includes all lexer + parser functions.
+
+;; ─── Test Helper ──────────────────────────────────────────
+
+(defn assert-eq
+  :sig [(a : Any) (b : Any) -> Bool]
+  :intent "Assert equality"
+  :requires [(valid a) (valid b)]
+  :ensures [(valid result)]
+  :body (if (= a b) true (do (print "FAIL: expected" b "got" a) false)))
+
+;; ═══ LEXER ═══════════════════════════════════════
+;; bootstrap/lexer.airl — Self-hosted AIRL lexer
+
+;; ── Helper predicates ───────────────────────────────
+
+(defn is-whitespace?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if single-char string is whitespace"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (or (= ch " ") (or (= ch "\t") (or (= ch "\n") (= ch "\r")))))
+
+(defn is-digit?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if single-char string is a decimal digit"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (contains "0123456789" ch))
+
+(defn digit-value
+  :sig [(ch : String) -> i64]
+  :intent "Return numeric value of a digit character"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (index-of "0123456789" ch))
+
+(defn is-symbol-start?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if char can start a symbol"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (contains "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!$%&*+-./<=>?@^_|~" ch))
+
+(defn is-symbol-char?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if char can continue a symbol"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (or (is-symbol-start? ch) (is-digit? ch)))
+
+;; ── Helper: safe peek at next char ──────────────────
+
+(defn peek-next-is?
+  :sig [(source : String) (pos : i64) (expected : String) -> Bool]
+  :intent "Check if char at pos+1 equals expected, bounds-safe"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (< (+ pos 1) (length source))
+      (= (char-at source (+ pos 1)) expected)
+      false))
+
+;; ── Whitespace and comment skipping ─────────────────
+
+(defn skip-block-comment
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (depth : i64) -> List]
+  :intent "Skip nestable block comment, return (Ok [pos line col]) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      (Err "unterminated block comment")
+      (let (ch : String (char-at source pos))
+        (if (= ch "#")
+          (if (peek-next-is? source pos "|")
+            ;; Nested open
+            (skip-block-comment source (+ pos 2) line (+ col 2) (+ depth 1))
+            ;; Just a # inside comment
+            (skip-block-comment source (+ pos 1) line (+ col 1) depth))
+          (if (= ch "|")
+            (if (peek-next-is? source pos "#")
+              ;; Close
+              (if (= depth 1)
+                (Ok [(+ pos 2) line (+ col 2)])
+                (skip-block-comment source (+ pos 2) line (+ col 2) (- depth 1)))
+              ;; Just a | inside comment
+              (skip-block-comment source (+ pos 1) line (+ col 1) depth))
+            ;; Regular char inside comment
+            (if (= ch "\n")
+              (skip-block-comment source (+ pos 1) (+ line 1) 0 depth)
+              (skip-block-comment source (+ pos 1) line (+ col 1) depth)))))))
+
+(defn skip-line-comment
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
+  :intent "Skip to end of line, then continue skipping whitespace"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      (Ok [pos line col])
+      (if (= (char-at source pos) "\n")
+        (skip-ws source (+ pos 1) (+ line 1) 0)
+        (skip-line-comment source (+ pos 1) line (+ col 1)))))
+
+(defn skip-ws
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
+  :intent "Skip whitespace and comments, return (Ok [pos line col]) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      (Ok [pos line col])
+      (let (ch : String (char-at source pos))
+        (if (= ch "\n")
+          (skip-ws source (+ pos 1) (+ line 1) 0)
+          (if (or (= ch " ") (or (= ch "\t") (= ch "\r")))
+            (skip-ws source (+ pos 1) line (+ col 1))
+            (if (= ch ";")
+              ;; Line comment — skip to end of line
+              (skip-line-comment source (+ pos 1) line col)
+              (if (= ch "#")
+                (if (peek-next-is? source pos "|")
+                  ;; Block comment
+                  (match (skip-block-comment source (+ pos 2) line (+ col 2) 1)
+                    (Ok state) (skip-ws source (head state) (at state 1) (at state 2))
+                    (Err msg) (Err msg))
+                  ;; Not whitespace (just a # char)
+                  (Ok [pos line col]))
+                ;; Not whitespace
+                (Ok [pos line col]))))))))
+
+;; ── Sub-lexers ──────────────────────────────────────
+
+(defn read-symbol-chars
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) -> List]
+  :intent "Read consecutive symbol characters, return [text pos line col]"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      [acc pos line col]
+      (let (ch : String (char-at source pos))
+        (if (is-symbol-char? ch)
+          (read-symbol-chars source (+ pos 1) line (+ col 1) (+ acc ch))
+          [acc pos line col]))))
+
+(defn lex-symbol
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
+  :intent "Lex a symbol, checking for true/false/nil"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (let (r : List (read-symbol-chars source pos line col acc))
+      (let (text : String (head r))
+        (let (new-pos : i64 (at r 1))
+          (let (new-line : i64 (at r 2))
+            (let (new-col : i64 (at r 3))
+              (if (= text "true")  (Ok [(Token "bool" true start-line start-col) new-pos new-line new-col])
+              (if (= text "false") (Ok [(Token "bool" false start-line start-col) new-pos new-line new-col])
+              (if (= text "nil")   (Ok [(Token "nil" nil start-line start-col) new-pos new-line new-col])
+                (Ok [(Token "symbol" text start-line start-col) new-pos new-line new-col]))))))))))
+
+(defn lex-keyword
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
+  :intent "Lex a keyword (colon already consumed)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (let (r : List (read-symbol-chars source pos line col acc))
+      (let (text : String (head r))
+        (let (new-pos : i64 (at r 1))
+          (let (new-line : i64 (at r 2))
+            (let (new-col : i64 (at r 3))
+              (Ok [(Token "keyword" text start-line start-col) new-pos new-line new-col])))))))
+
+;; ── Numeric helpers ──────────────────────────────────
+
+(defn digit-value-f
+  :sig [(ch : String) -> f64]
+  :intent "Return float value of a digit character"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body
+    (if (= ch "0") 0.0
+    (if (= ch "1") 1.0
+    (if (= ch "2") 2.0
+    (if (= ch "3") 3.0
+    (if (= ch "4") 4.0
+    (if (= ch "5") 5.0
+    (if (= ch "6") 6.0
+    (if (= ch "7") 7.0
+    (if (= ch "8") 8.0
+      9.0))))))))))
+
+(defn int-to-float
+  :sig [(n : i64) -> f64]
+  :intent "Convert integer to float"
+  :requires [(valid n)]
+  :ensures [(valid result)]
+  :body
+    (if (= n 0) 0.0
+    (if (< n 0)
+      (- 0.0 (int-to-float (- 0 n)))
+      (+ 1.0 (int-to-float (- n 1))))))
+
+;; ── Number sub-lexer ────────────────────────────────
+
+(defn read-digits
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : i64) -> List]
+  :intent "Read consecutive digits, accumulate integer value, return [value pos line col]"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      [acc pos line col]
+      (let (ch : String (char-at source pos))
+        (if (is-digit? ch)
+          (read-digits source (+ pos 1) line (+ col 1) (+ (* acc 10) (digit-value ch)))
+          [acc pos line col]))))
+
+(defn read-frac-digits
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : f64) (divisor : f64) -> List]
+  :intent "Read fractional digits after '.', return [frac-value pos line col]"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      [acc pos line col]
+      (let (ch : String (char-at source pos))
+        (if (is-digit? ch)
+          (read-frac-digits source (+ pos 1) line (+ col 1)
+            (+ acc (/ (digit-value-f ch) divisor))
+            (* divisor 10.0))
+          [acc pos line col]))))
+
+(defn lex-number
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : i64) (negative : Bool) (start-line : i64) (start-col : i64) -> List]
+  :intent "Lex an integer or float literal"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (let (int-result : List (read-digits source pos line col acc))
+      (let (int-val : i64 (head int-result))
+        (let (new-pos : i64 (at int-result 1))
+          (let (new-line : i64 (at int-result 2))
+            (let (new-col : i64 (at int-result 3))
+              ;; Check for '.' followed by digit -> float
+              (if (< new-pos (length source))
+                (if (= (char-at source new-pos) ".")
+                  (if (< (+ new-pos 1) (length source))
+                    (if (is-digit? (char-at source (+ new-pos 1)))
+                      ;; Float
+                      (let (frac-result : List (read-frac-digits source (+ new-pos 1) new-line (+ new-col 1) 0.0 10.0))
+                        (let (frac-val : f64 (head frac-result))
+                          (let (fp : i64 (at frac-result 1))
+                            (let (fl : i64 (at frac-result 2))
+                              (let (fc : i64 (at frac-result 3))
+                                (let (float-val : f64 (+ (int-to-float int-val) frac-val))
+                                  (Ok [(Token "float" (if negative (- 0.0 float-val) float-val) start-line start-col) fp fl fc])))))))
+                      ;; Integer (dot followed by non-digit)
+                      (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
+                    ;; Integer (dot at end of input)
+                    (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
+                  ;; Integer (no dot)
+                  (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
+                ;; Integer (end of input)
+                (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))))))))
+
+;; ── String sub-lexer ────────────────────────────────
+
+(defn lex-string
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
+  :intent "Lex a string literal (opening quote already consumed)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      (Err "unterminated string")
+      (let (ch : String (char-at source pos))
+        (if (= ch "\"")
+          ;; Closing quote
+          (Ok [(Token "string" acc start-line start-col) (+ pos 1) line (+ col 1)])
+          (if (= ch "\\")
+            ;; Escape sequence
+            (if (>= (+ pos 1) (length source))
+              (Err "unterminated escape in string")
+              (let (esc : String (char-at source (+ pos 1)))
+                (if (= esc "n")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\n") start-line start-col)
+                (if (= esc "t")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\t") start-line start-col)
+                (if (= esc "r")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\r") start-line start-col)
+                (if (= esc "0")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\0") start-line start-col)
+                (if (= esc "\\") (lex-string source (+ pos 2) line (+ col 2) (+ acc "\\") start-line start-col)
+                (if (= esc "\"") (lex-string source (+ pos 2) line (+ col 2) (+ acc "\"") start-line start-col)
+                  (Err (+ "unknown escape \\" esc))))))))))
+            ;; Regular character
+            (if (= ch "\n")
+              (lex-string source (+ pos 1) (+ line 1) 0 (+ acc ch) start-line start-col)
+              (lex-string source (+ pos 1) line (+ col 1) (+ acc ch) start-line start-col)))))))
+
+;; ── Core lexer ──────────────────────────────────────
+
+(defn next-token
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
+  :intent "Read next token from source at pos, return (Ok [token pos line col]) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (skip-ws source pos line col)
+      (Err msg) (Err msg)
+      (Ok ws-state)
+        (let (p : i64 (head ws-state))
+          (let (ln : i64 (at ws-state 1))
+            (let (c : i64 (at ws-state 2))
+              (if (>= p (length source))
+                (Ok [(Token "eof" nil ln c) p ln c])
+                (let (ch : String (char-at source p))
+                  (if (= ch "(") (Ok [(Token "lparen" "(" ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch ")") (Ok [(Token "rparen" ")" ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch "[") (Ok [(Token "lbracket" "[" ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch "]") (Ok [(Token "rbracket" "]" ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch ",") (Ok [(Token "comma" "," ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch "\"") (lex-string source (+ p 1) ln (+ c 1) "" ln c)
+                  (if (= ch ":")
+                    (if (< (+ p 1) (length source))
+                      (if (is-symbol-start? (char-at source (+ p 1)))
+                        (lex-keyword source (+ p 1) ln (+ c 1) "" ln c)
+                        (Ok [(Token "colon" ":" ln c) (+ p 1) ln (+ c 1)]))
+                      (Ok [(Token "colon" ":" ln c) (+ p 1) ln (+ c 1)]))
+                  (if (= ch "-")
+                    (if (peek-next-is? source p ">")
+                      (Ok [(Token "arrow" "->" ln c) (+ p 2) ln (+ c 2)])
+                      (if (< (+ p 1) (length source))
+                        (if (is-digit? (char-at source (+ p 1)))
+                          (lex-number source (+ p 1) ln (+ c 1) 0 true ln c)
+                          (lex-symbol source p ln c "" ln c))
+                        (lex-symbol source p ln c "" ln c)))
+                  (if (is-digit? ch)
+                    (lex-number source p ln c 0 false ln c)
+                  (if (is-symbol-start? ch)
+                    (lex-symbol source p ln c "" ln c)
+                    (Err (+ "unexpected character '" (+ ch "'")))))
+                  )))))))))))))))
+
+(defn lex-loop
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (tokens : List) -> List]
+  :intent "Accumulate tokens until EOF, return (Ok tokens) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (next-token source pos line col)
+      (Err msg) (Err msg)
+      (Ok tok-state)
+        (let (tok : Any (head tok-state))
+          (let (new-pos : i64 (at tok-state 1))
+            (let (new-line : i64 (at tok-state 2))
+              (let (new-col : i64 (at tok-state 3))
+                (let (new-tokens : List (cons tok tokens))
+                  (match tok
+                    (Token kind _ _ _)
+                      (if (= kind "eof")
+                        (Ok new-tokens)
+                        (lex-loop source new-pos new-line new-col new-tokens))))))))))
+
+(defn lex
+  :sig [(source : String) -> List]
+  :intent "Tokenize source string, return (Ok token-list) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex-loop source 0 1 0 [])
+      (Ok tokens) (Ok (reverse tokens))
+      (Err msg) (Err msg)))
 ;; bootstrap/parser.airl — Self-hosted AIRL parser
 ;; Requires: bootstrap/lexer.airl (loaded first)
 
@@ -928,3 +1302,80 @@
           (Err e) (Err e)
           (Ok sexprs)
             (parse-program sexprs))))
+
+;; ═══ DEFTYPE TESTS ═══════════════════════════════
+
+(print "=== deftype tests ===")
+
+;; Test 1: Simple sum type
+(let (r : List (parse "(deftype Color (| (Red) (Green) (Blue)))"))
+  (match r
+    (Ok nodes) (match (head nodes)
+      (ASTDefType name params body _ _)
+        (do
+          (assert-eq name "Color")
+          (assert-eq (length params) 0)
+          (match body
+            (ASTSumBody variants) (assert-eq (length variants) 3)
+            _ (print "FAIL: expected ASTSumBody")))
+      _ (print "FAIL: expected ASTDefType"))
+    (Err e) (print "FAIL:" e)))
+
+;; Test 2: Sum type with type params
+(let (r : List (parse "(deftype Result [T E] (| (Ok T) (Err E)))"))
+  (match r
+    (Ok nodes) (match (head nodes)
+      (ASTDefType name params body _ _)
+        (do
+          (assert-eq name "Result")
+          (assert-eq (length params) 2))
+      _ (print "FAIL"))
+    (Err e) (print "FAIL:" e)))
+
+;; Test 3: Product type
+(let (r : List (parse "(deftype Point (& (x : i64) (y : i64)))"))
+  (match r
+    (Ok nodes) (match (head nodes)
+      (ASTDefType name params body _ _)
+        (do
+          (assert-eq name "Point")
+          (match body
+            (ASTProductBody fields) (assert-eq (length fields) 2)
+            _ (print "FAIL: expected ASTProductBody")))
+      _ (print "FAIL"))
+    (Err e) (print "FAIL:" e)))
+
+;; Test 4: Sum with positional fields
+(let (r : List (parse "(deftype SExpr (| (SList List i64 i64) (SAtom Token)))"))
+  (match r
+    (Ok nodes) (match (head nodes)
+      (ASTDefType name params body _ _)
+        (match body
+          (ASTSumBody variants)
+            (do
+              (assert-eq (length variants) 2)
+              (match (head variants)
+                (ASTVariantDef vname field-types)
+                  (do
+                    (assert-eq vname "SList")
+                    (assert-eq (length field-types) 3))
+                _ (print "FAIL")))
+          _ (print "FAIL"))
+      _ (print "FAIL"))
+    (Err e) (print "FAIL:" e)))
+
+;; Test 5: deftype mixed with defn
+(let (r : List (parse "(deftype Token (& (kind : String) (value : String) (line : i64) (col : i64))) (defn foo :sig [(x : i64) -> i64] :requires [(valid x)] :ensures [(valid result)] :body x)"))
+  (match r
+    (Ok nodes)
+      (do
+        (assert-eq (length nodes) 2)
+        (match (head nodes)
+          (ASTDefType name _ _ _ _) (assert-eq name "Token")
+          _ (print "FAIL: first node not ASTDefType"))
+        (match (at nodes 1)
+          (ASTDefn name _ _ _ _ _ _ _) (assert-eq name "foo")
+          _ (print "FAIL: second node not ASTDefn")))
+    (Err e) (print "FAIL:" e)))
+
+(print "=== deftype tests complete ===")
