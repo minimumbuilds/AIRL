@@ -180,6 +180,7 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **Better Error Messages** — Contract violations use `contract.to_airl()` for readable S-expression clause display and `capture_bindings()` to show relevant variable values.
 - **REPL Enhancements** — `:help` (list commands), `:load <file>` (evaluate a file in session), `:type <expr>` (show inferred type without evaluating). `drain_diagnostics()` on `TypeChecker` for REPL persistence.
 - **Static Linearity Analysis** — `LinearityChecker` wired into `pipeline.rs` after type checking. Detects use-after-move, borrow conflicts, and branch divergence at compile time for `Own`/`Ref`/`Mut` annotated params. Default ownership is not tracked, avoiding false positives. Runs in both `run` and `check` modes.
+- **Trampoline Eval + Self-TCO** — `eval()` split into trampoline driver loop + `eval_inner()` single-step evaluator. Tail-position expressions (`if` branches, `do` last expr) return `Continue(Expr)` instead of recursing on Rust stack. Self-recursive function calls detected by `current_fn_name` and looped in `call_fn_inner` via `eval_body()`. `in_tail_context` flag prevents TailCall from leaking into nested sub-expression evaluation. Eliminates stack overflow for tail-recursive AIRL functions (bootstrap lexer/parser loops, fold, map). Thread stack reduced from 1GB to 64MB.
 
 ---
 
@@ -191,7 +192,7 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 **Status:** Lexer and parser complete. The self-hosted lexer (`bootstrap/lexer.airl`, ~360 lines) tokenizes AIRL source strings. The self-hosted parser (`bootstrap/parser.airl`, ~250 lines) converts token streams to typed AST nodes using a two-phase architecture (tokens → S-expressions → AST). Handles the bootstrap subset: defn, if, let, do, match, fn, try, function calls, variant constructors, and pattern matching. Tested by `bootstrap/parser_test.airl` (unit tests) and `bootstrap/integration_test.airl` (pipeline tests).
 
-**Known limitation:** Parsing deeply nested files (like `lexer.airl` with 10-deep `if` chains in `next-token`) through the self-hosted parser is too slow for the tree-walking interpreter — each nested AIRL expression evaluation multiplies Rust call frames. This will be resolved when the evaluator gets JIT compilation or iterative evaluation.
+**Known limitation:** Parsing deeply nested files is computationally intensive in the tree-walking interpreter but no longer causes stack overflow thanks to the trampoline. Full lexer self-parse may be slow but terminates correctly.
 
 **Next steps:** Evaluator in AIRL. The parser produces AST nodes that the evaluator will walk to interpret programs.
 
