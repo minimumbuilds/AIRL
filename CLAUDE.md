@@ -189,9 +189,11 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 #### 1. Self-Hosting (Phase 3)
 
-**Status:** Lexer complete. The self-hosted lexer (`bootstrap/lexer.airl`, ~15 functions) tokenizes AIRL source strings using index-walking recursion. Handles all token types (symbols, keywords, integers, floats, strings with escapes, delimiters, arrows), nestable block comments, line/col tracking, and Result-based error propagation. Tested by `bootstrap/lexer_test.airl`.
+**Status:** Lexer and parser complete. The self-hosted lexer (`bootstrap/lexer.airl`, ~360 lines) tokenizes AIRL source strings. The self-hosted parser (`bootstrap/parser.airl`, ~250 lines) converts token streams to typed AST nodes using a two-phase architecture (tokens → S-expressions → AST). Handles the bootstrap subset: defn, if, let, do, match, fn, try, function calls, variant constructors, and pattern matching. Tested by `bootstrap/parser_test.airl` (unit tests) and `bootstrap/integration_test.airl` (pipeline tests).
 
-**Next steps:** Parser and evaluator in AIRL. The language has file I/O builtins (`read-file`, `write-file`) and string manipulation via the stdlib.
+**Known limitation:** Parsing deeply nested files (like `lexer.airl` with 10-deep `if` chains in `next-token`) through the self-hosted parser is too slow for the tree-walking interpreter — each nested AIRL expression evaluation multiplies Rust call frames. This will be resolved when the evaluator gets JIT compilation or iterative evaluation.
+
+**Next steps:** Evaluator in AIRL. The parser produces AST nodes that the evaluator will walk to interpret programs.
 
 ---
 
@@ -199,7 +201,9 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 The self-hosted compiler lives in `bootstrap/`. Run tests with:
 ```bash
-cargo run -- run bootstrap/lexer_test.airl    # Lexer tests
+cargo run -- run bootstrap/lexer_test.airl       # Lexer tests
+cargo run -- run bootstrap/parser_test.airl      # Parser unit tests
+cargo run -- run bootstrap/integration_test.airl # Parser integration tests
 ```
 
 **Important AIRL constraints for bootstrap code:**
