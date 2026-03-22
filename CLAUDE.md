@@ -202,6 +202,7 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **Bootstrap Self-Parse Milestone** — The self-hosted lexer can lex its own source (`bootstrap/lexer.airl`, 15,691 chars → 3,400 tokens). Timing: ~56s release, ~100s debug.
 - **Bootstrap Type Checker** — Self-hosted type checker in AIRL (`bootstrap/types.airl` ~215 lines, `bootstrap/typecheck.airl` ~500 lines). Two-pass architecture: registration (deftype → constructor registry, defn → function signatures) then checking (expressions, functions, patterns). Eliminates all `Any` usage from bootstrap code (95 in eval, 24 in parser, 1 in lexer). Lexer type-checks cleanly via the bootstrap type checker.
 - **`deftype` Parsing** — Bootstrap parser handles `(deftype Name [Params] (| ...))` sum types and `(deftype Name (& ...))` product types. Includes `parse-variant`, `parse-field`, `parse-sum-body`, `parse-product-body`, `parse-type-params`, `parse-deftype`. Bootstrap lexer updated to include `|` in symbol characters.
+- **IR VM** — Tree-flattened IR format (`crates/airl-runtime/src/ir.rs`), Rust VM (`ir_vm.rs`) with self-TCO, value-to-IR marshalling (`ir_marshal.rs`), `run-ir` builtin. Self-hosted AIRL compiler (`bootstrap/compiler.airl`) transforms AST to IR. Rust-side compiler in `pipeline.rs` for native-speed compilation. `--compiled` flag on `cargo run -- run` for compiled execution mode. `IRClosure`/`IRFuncRef` value variants for first-class functions in compiled code.
 
 ---
 
@@ -233,6 +234,8 @@ cargo run -- run bootstrap/pipeline_test.airl    # Full lex→parse→eval pipel
 cargo run -- run bootstrap/deftype_test.airl     # Deftype parsing tests
 cargo run -- run bootstrap/types_test.airl       # Type representation tests
 cargo run --release -- run bootstrap/typecheck_test.airl  # Type checker tests (use --release, slow in debug)
+cargo run -- run bootstrap/compiler_test.airl              # IR compiler unit tests
+cargo run -- run bootstrap/compiler_integration_test.airl  # IR compiler integration tests
 ```
 
 **Important AIRL constraints for bootstrap code:**
