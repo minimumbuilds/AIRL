@@ -98,6 +98,8 @@ impl TypeChecker {
             // Stdlib: map (map.airl)
             "map-entries", "map-from-entries", "map-merge", "map-map-values",
             "map-filter", "map-update", "map-update-or", "map-count",
+            // File I/O
+            "read-file", "write-file", "file-exists?",
         ] {
             self.env.bind(name.to_string(), Ty::TypeVar("builtin".to_string()));
         }
