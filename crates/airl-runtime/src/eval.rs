@@ -743,15 +743,57 @@ impl Interpreter {
         let name = format!("agent-{}", self.next_agent_id);
         self.next_agent_id += 1;
 
+        let writer = Arc::new(Mutex::new(BufWriter::new(stdin)));
+        let reader = Arc::new(Mutex::new(BufReader::new(stdout)));
+
+        // Wait for the agent to send a "ready" handshake frame instead of
+        // blindly sleeping. The agent sends this frame after it has loaded its
+        // module and is ready to accept tasks (see airl-agent runtime.rs).
+        // Use a 10-second timeout to avoid hanging indefinitely if the agent
+        // fails to start.
+        {
+            // ChildStdout does not support read timeouts, so perform the
+            // blocking read on a background thread and wait on a channel
+            // with a timeout instead.
+            let reader_clone = Arc::clone(&reader);
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let result = match reader_clone.lock() {
+                    Ok(mut r) => crate::agent_client::read_frame(&mut *r),
+                    Err(_) => Err(std::io::Error::new(
+                        std::io::ErrorKind::Other, "reader lock poisoned",
+                    )),
+                };
+                let _ = tx.send(result);
+            });
+
+            let handshake_timeout = std::time::Duration::from_secs(10);
+            match rx.recv_timeout(handshake_timeout) {
+                Ok(Ok(msg)) if msg == "ready" => { /* agent is ready */ },
+                Ok(Ok(msg)) => {
+                    return Err(RuntimeError::Custom(
+                        format!("expected 'ready' handshake from agent, got: {}", msg),
+                    ));
+                }
+                Ok(Err(e)) => {
+                    return Err(RuntimeError::Custom(
+                        format!("agent failed to send ready handshake: {}", e),
+                    ));
+                }
+                Err(_) => {
+                    return Err(RuntimeError::Custom(
+                        "agent did not send ready handshake within 10 seconds".into(),
+                    ));
+                }
+            }
+        }
+
         self.agents.push(LiveAgent {
             name: name.clone(),
-            writer: Arc::new(Mutex::new(BufWriter::new(stdin))),
-            reader: Arc::new(Mutex::new(BufReader::new(stdout))),
+            writer,
+            reader,
             child,
         });
-
-        // Give agent a moment to load
-        std::thread::sleep(std::time::Duration::from_millis(100));
 
         Ok(Value::Str(name))
     }
@@ -1196,6 +1238,15 @@ impl Drop for Interpreter {
     }
 }
 
+/// Convert an AIRL `Value` to the JIT's uniform `RawValue` representation.
+///
+/// The scalar JIT uses I64 as the uniform ABI type for all values, including
+/// floats. Float values are bitcast to I64 via `f64::to_bits()` inside
+/// `RawValue::from_f64`. This is correct because both the marshaling (here)
+/// and the unmarshaling (`raw_to_value`) agree on the I64 ABI convention:
+/// floats are stored as their IEEE 754 bit pattern in an i64, and recovered
+/// via `f64::from_bits()` on the way out. The round-trip is lossless for all
+/// finite floats, infinities, and NaNs.
 fn value_to_raw(val: &Value) -> Result<airl_codegen::RawValue, ()> {
     match val {
         Value::Int(v) => Ok(airl_codegen::RawValue::from_i64(*v)),
@@ -1205,6 +1256,14 @@ fn value_to_raw(val: &Value) -> Result<airl_codegen::RawValue, ()> {
     }
 }
 
+/// Convert the JIT's uniform `RawValue` back to an AIRL `Value`, using the
+/// declared return type to determine the correct interpretation.
+///
+/// Because the scalar JIT uses I64 as the uniform ABI type, float results are
+/// stored as their IEEE 754 bit pattern in an i64. The type-directed dispatch
+/// here calls `to_f32()` / `to_f64()` which internally do `f64::from_bits()`
+/// to recover the original float. This completes the lossless round-trip
+/// started by `value_to_raw`.
 fn raw_to_value(raw: airl_codegen::RawValue, ty: &airl_syntax::ast::AstType) -> Value {
     match &ty.kind {
         airl_syntax::ast::AstTypeKind::Named(name) => match name.as_str() {

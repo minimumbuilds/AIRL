@@ -79,6 +79,25 @@ impl TypeChecker {
             "replace", "index-of", "chars",
             "map-new", "map-from", "map-get", "map-get-or", "map-set",
             "map-has", "map-remove", "map-keys", "map-values", "map-size",
+            // Agent builtins
+            "await", "parallel", "broadcast", "retry", "escalate", "any-agent",
+            "send-async",
+            // Stdlib: collections (prelude.airl)
+            "map", "filter", "fold", "reverse", "concat", "zip", "flatten",
+            "range", "take", "drop", "any", "all", "find", "sort", "merge",
+            // Stdlib: math (math.airl)
+            "abs", "min", "max", "clamp", "sign", "even?", "odd?",
+            "pow", "gcd", "lcm", "sum-list", "product-list",
+            // Stdlib: result (result.airl)
+            "is-ok?", "is-err?", "unwrap-or", "map-ok", "map-err",
+            "and-then", "or-else", "ok-or",
+            // Stdlib: string (string.airl)
+            "words", "unwords", "lines", "unlines", "repeat-str",
+            "pad-left", "pad-right", "is-empty-str", "reverse-str",
+            "count-occurrences",
+            // Stdlib: map (map.airl)
+            "map-entries", "map-from-entries", "map-merge", "map-map-values",
+            "map-filter", "map-update", "map-update-or", "map-count",
         ] {
             self.env.bind(name.to_string(), Ty::TypeVar("builtin".to_string()));
         }
