@@ -139,22 +139,417 @@
 ;; ── Whitespace tests ────────────────────────────────
 
 (do
-  ;; Simple whitespace
   (assert-eq (skip-ws "  hello" 0 1 0) (Ok [2 1 2]))
-  ;; Newline tracking
   (assert-eq (skip-ws "\n  x" 0 1 0) (Ok [3 2 2]))
-  ;; Line comment
   (assert-eq (skip-ws "; comment\nx" 0 1 0) (Ok [10 2 0]))
-  ;; Block comment
   (assert-eq (skip-ws "#| block |#x" 0 1 0) (Ok [11 1 11]))
-  ;; Nested block comment
   (assert-eq (skip-ws "#| outer #| inner |# still |#x" 0 1 0) (Ok [29 1 29]))
-  ;; Unterminated block comment
   (match (skip-ws "#| oops" 0 1 0)
     (Ok _) (print "FAIL: should have errored on unterminated block comment")
     (Err msg) (assert-eq (contains msg "unterminated") true))
-  ;; No whitespace
   (assert-eq (skip-ws "hello" 0 1 0) (Ok [0 1 0]))
-  ;; End of input
   (assert-eq (skip-ws "" 0 1 0) (Ok [0 1 0]))
   (print "whitespace tests passed"))
+
+;; ── Sub-lexers ──────────────────────────────────────
+
+(defn read-symbol-chars
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) -> List]
+  :intent "Read consecutive symbol characters, return [text pos line col]"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      [acc pos line col]
+      (let (ch : String (char-at source pos))
+        (if (is-symbol-char? ch)
+          (read-symbol-chars source (+ pos 1) line (+ col 1) (+ acc ch))
+          [acc pos line col]))))
+
+(defn lex-symbol
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
+  :intent "Lex a symbol, checking for true/false/nil"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (let (r : List (read-symbol-chars source pos line col acc))
+      (let (text : String (head r))
+        (let (new-pos : i64 (at r 1))
+          (let (new-line : i64 (at r 2))
+            (let (new-col : i64 (at r 3))
+              (if (= text "true")  (Ok [(Token "bool" true start-line start-col) new-pos new-line new-col])
+              (if (= text "false") (Ok [(Token "bool" false start-line start-col) new-pos new-line new-col])
+              (if (= text "nil")   (Ok [(Token "nil" nil start-line start-col) new-pos new-line new-col])
+                (Ok [(Token "symbol" text start-line start-col) new-pos new-line new-col]))))))))))
+
+(defn lex-keyword
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
+  :intent "Lex a keyword (colon already consumed)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (let (r : List (read-symbol-chars source pos line col acc))
+      (let (text : String (head r))
+        (let (new-pos : i64 (at r 1))
+          (let (new-line : i64 (at r 2))
+            (let (new-col : i64 (at r 3))
+              (Ok [(Token "keyword" text start-line start-col) new-pos new-line new-col])))))))
+
+;; ── Numeric helpers ──────────────────────────────────
+
+(defn digit-value-f
+  :sig [(ch : String) -> f64]
+  :intent "Return float value of a digit character"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body
+    (if (= ch "0") 0.0
+    (if (= ch "1") 1.0
+    (if (= ch "2") 2.0
+    (if (= ch "3") 3.0
+    (if (= ch "4") 4.0
+    (if (= ch "5") 5.0
+    (if (= ch "6") 6.0
+    (if (= ch "7") 7.0
+    (if (= ch "8") 8.0
+      9.0))))))))))
+
+(defn int-to-float
+  :sig [(n : i64) -> f64]
+  :intent "Convert integer to float"
+  :requires [(valid n)]
+  :ensures [(valid result)]
+  :body
+    (if (= n 0) 0.0
+    (if (< n 0)
+      (- 0.0 (int-to-float (- 0 n)))
+      (+ 1.0 (int-to-float (- n 1))))))
+
+;; ── Number sub-lexer ────────────────────────────────
+
+(defn read-digits
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : i64) -> List]
+  :intent "Read consecutive digits, accumulate integer value, return [value pos line col]"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      [acc pos line col]
+      (let (ch : String (char-at source pos))
+        (if (is-digit? ch)
+          (read-digits source (+ pos 1) line (+ col 1) (+ (* acc 10) (digit-value ch)))
+          [acc pos line col]))))
+
+(defn read-frac-digits
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : f64) (divisor : f64) -> List]
+  :intent "Read fractional digits after '.', return [frac-value pos line col]"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      [acc pos line col]
+      (let (ch : String (char-at source pos))
+        (if (is-digit? ch)
+          (read-frac-digits source (+ pos 1) line (+ col 1)
+            (+ acc (/ (digit-value-f ch) divisor))
+            (* divisor 10.0))
+          [acc pos line col]))))
+
+(defn lex-number
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : i64) (negative : Bool) (start-line : i64) (start-col : i64) -> List]
+  :intent "Lex an integer or float literal"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (let (int-result : List (read-digits source pos line col acc))
+      (let (int-val : i64 (head int-result))
+        (let (new-pos : i64 (at int-result 1))
+          (let (new-line : i64 (at int-result 2))
+            (let (new-col : i64 (at int-result 3))
+              (if (< new-pos (length source))
+                (if (= (char-at source new-pos) ".")
+                  (if (< (+ new-pos 1) (length source))
+                    (if (is-digit? (char-at source (+ new-pos 1)))
+                      ;; Float
+                      (let (frac-result : List (read-frac-digits source (+ new-pos 1) new-line (+ new-col 1) 0.0 10.0))
+                        (let (frac-val : f64 (head frac-result))
+                          (let (fp : i64 (at frac-result 1))
+                            (let (fl : i64 (at frac-result 2))
+                              (let (fc : i64 (at frac-result 3))
+                                (let (float-val : f64 (+ (int-to-float int-val) frac-val))
+                                  (Ok [(Token "float" (if negative (- 0.0 float-val) float-val) start-line start-col) fp fl fc])))))))
+                      (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
+                    (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
+                  (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
+                (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))))))))
+
+;; ── String sub-lexer ────────────────────────────────
+
+(defn lex-string
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
+  :intent "Lex a string literal (opening quote already consumed)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      (Err "unterminated string")
+      (let (ch : String (char-at source pos))
+        (if (= ch "\"")
+          (Ok [(Token "string" acc start-line start-col) (+ pos 1) line (+ col 1)])
+          (if (= ch "\\")
+            (if (>= (+ pos 1) (length source))
+              (Err "unterminated escape in string")
+              (let (esc : String (char-at source (+ pos 1)))
+                (if (= esc "n")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\n") start-line start-col)
+                (if (= esc "t")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\t") start-line start-col)
+                (if (= esc "\\") (lex-string source (+ pos 2) line (+ col 2) (+ acc "\\") start-line start-col)
+                (if (= esc "\"") (lex-string source (+ pos 2) line (+ col 2) (+ acc "\"") start-line start-col)
+                  (Err (+ "unknown escape \\" esc))))))))
+            (if (= ch "\n")
+              (lex-string source (+ pos 1) (+ line 1) 0 (+ acc ch) start-line start-col)
+              (lex-string source (+ pos 1) line (+ col 1) (+ acc ch) start-line start-col)))))))
+
+;; ── Core lexer ──────────────────────────────────────
+
+(defn next-token
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
+  :intent "Read next token from source at pos, return (Ok [token pos line col]) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (skip-ws source pos line col)
+      (Err msg) (Err msg)
+      (Ok ws-state)
+        (let (p : i64 (head ws-state))
+          (let (ln : i64 (at ws-state 1))
+            (let (c : i64 (at ws-state 2))
+              (if (>= p (length source))
+                (Ok [(Token "eof" nil ln c) p ln c])
+                (let (ch : String (char-at source p))
+                  (if (= ch "(") (Ok [(Token "lparen" "(" ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch ")") (Ok [(Token "rparen" ")" ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch "[") (Ok [(Token "lbracket" "[" ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch "]") (Ok [(Token "rbracket" "]" ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch ",") (Ok [(Token "comma" "," ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch "\"") (lex-string source (+ p 1) ln (+ c 1) "" ln c)
+                  (if (= ch ":")
+                    (if (< (+ p 1) (length source))
+                      (if (is-symbol-start? (char-at source (+ p 1)))
+                        (lex-keyword source (+ p 1) ln (+ c 1) "" ln c)
+                        (Ok [(Token "colon" ":" ln c) (+ p 1) ln (+ c 1)]))
+                      (Ok [(Token "colon" ":" ln c) (+ p 1) ln (+ c 1)]))
+                  (if (= ch "-")
+                    (if (peek-next-is? source p ">")
+                      (Ok [(Token "arrow" "->" ln c) (+ p 2) ln (+ c 2)])
+                      (if (< (+ p 1) (length source))
+                        (if (is-digit? (char-at source (+ p 1)))
+                          (lex-number source (+ p 1) ln (+ c 1) 0 true ln c)
+                          (lex-symbol source p ln c "" ln c))
+                        (lex-symbol source p ln c "" ln c)))
+                  (if (is-digit? ch)
+                    (lex-number source p ln c 0 false ln c)
+                  (if (is-symbol-start? ch)
+                    (lex-symbol source p ln c "" ln c)
+                    (Err (+ "unexpected character '" (+ ch "'")))))
+                  )))))))))))))))
+
+(defn lex-loop
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (tokens : List) -> List]
+  :intent "Accumulate tokens until EOF, return (Ok tokens) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (next-token source pos line col)
+      (Err msg) (Err msg)
+      (Ok tok-state)
+        (let (tok : Any (head tok-state))
+          (let (new-pos : i64 (at tok-state 1))
+            (let (new-line : i64 (at tok-state 2))
+              (let (new-col : i64 (at tok-state 3))
+                (let (new-tokens : List (cons tok tokens))
+                  (match tok
+                    (Token kind _ _ _)
+                      (if (= kind "eof")
+                        (Ok new-tokens)
+                        (lex-loop source new-pos new-line new-col new-tokens))))))))))
+
+(defn lex
+  :sig [(source : String) -> List]
+  :intent "Tokenize source string, return (Ok token-list) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex-loop source 0 1 0 [])
+      (Ok tokens) (Ok (reverse tokens))
+      (Err msg) (Err msg)))
+
+;; ── Symbol and keyword tests ────────────────────────
+
+(do
+  ;; Symbol
+  (match (lex "defn")
+    (Ok tokens) (assert-eq (at tokens 0) (Token "symbol" "defn" 1 0))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Operator symbols
+  (match (lex "+ - * /")
+    (Ok tokens) (do
+      (assert-eq (at tokens 0) (Token "symbol" "+" 1 0))
+      (assert-eq (at tokens 1) (Token "symbol" "-" 1 2))
+      (assert-eq (at tokens 2) (Token "symbol" "*" 1 4))
+      (assert-eq (at tokens 3) (Token "symbol" "/" 1 6)))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Keyword
+  (match (lex ":sig")
+    (Ok tokens) (assert-eq (at tokens 0) (Token "keyword" "sig" 1 0))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Booleans and nil
+  (match (lex "true false nil")
+    (Ok tokens) (do
+      (assert-eq (at tokens 0) (Token "bool" true 1 0))
+      (assert-eq (at tokens 1) (Token "bool" false 1 5))
+      (assert-eq (at tokens 2) (Token "nil" nil 1 11)))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Hyphenated symbol
+  (match (lex "my-func")
+    (Ok tokens) (assert-eq (at tokens 0) (Token "symbol" "my-func" 1 0))
+    (Err msg) (print "FAIL:" msg))
+
+  (print "symbol and keyword tests passed"))
+
+;; ── Number tests ────────────────────────────────────
+
+(do
+  ;; Integer
+  (match (lex "42")
+    (Ok tokens) (assert-eq (at tokens 0) (Token "integer" 42 1 0))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Zero
+  (match (lex "0")
+    (Ok tokens) (assert-eq (at tokens 0) (Token "integer" 0 1 0))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Negative integer
+  (match (lex "-7")
+    (Ok tokens) (assert-eq (at tokens 0) (Token "integer" -7 1 0))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Float
+  (match (lex "3.14")
+    (Ok tokens) (assert-eq (at tokens 0) (Token "float" 3.14 1 0))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Negative float
+  (match (lex "-0.5")
+    (Ok tokens) (assert-eq (at tokens 0) (Token "float" -0.5 1 0))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Integer followed by symbol
+  (match (lex "42 x")
+    (Ok tokens) (do
+      (assert-eq (at tokens 0) (Token "integer" 42 1 0))
+      (assert-eq (at tokens 1) (Token "symbol" "x" 1 3)))
+    (Err msg) (print "FAIL:" msg))
+
+  (print "number tests passed"))
+
+;; ── String tests ────────────────────────────────────
+
+(do
+  ;; Simple string
+  (match (lex "\"hello\"")
+    (Ok tokens) (assert-eq (at tokens 0) (Token "string" "hello" 1 0))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Empty string
+  (match (lex "\"\"")
+    (Ok tokens) (assert-eq (at tokens 0) (Token "string" "" 1 0))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; String with escape
+  (match (lex "\"a\\nb\"")
+    (Ok tokens) (assert-eq (at tokens 0) (Token "string" "a\nb" 1 0))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Unterminated string
+  (match (lex "\"oops")
+    (Ok _) (print "FAIL: should have errored")
+    (Err msg) (assert-eq (contains msg "unterminated") true))
+
+  (print "string tests passed"))
+
+;; ── Single token tests ──────────────────────────────
+
+(do
+  ;; Delimiters
+  (match (lex "()")
+    (Ok tokens) (do
+      (assert-eq (length tokens) 3)
+      (assert-eq (at tokens 0) (Token "lparen" "(" 1 0))
+      (assert-eq (at tokens 1) (Token "rparen" ")" 1 1))
+      (assert-eq (at tokens 2) (Token "eof" nil 1 2)))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Brackets and comma
+  (match (lex "[a, b]")
+    (Ok tokens) (assert-eq (length tokens) 6)
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Arrow
+  (match (lex "->")
+    (Ok tokens) (do
+      (assert-eq (at tokens 0) (Token "arrow" "->" 1 0))
+      (assert-eq (length tokens) 2))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Colon (bare)
+  (match (lex ":")
+    (Ok tokens) (assert-eq (at tokens 0) (Token "colon" ":" 1 0))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Empty input
+  (match (lex "")
+    (Ok tokens) (do
+      (assert-eq (length tokens) 1)
+      (assert-eq (at tokens 0) (Token "eof" nil 1 0)))
+    (Err msg) (print "FAIL:" msg))
+
+  (print "single token tests passed"))
+
+;; ── Integration tests ───────────────────────────────
+
+(do
+  ;; Complete expression
+  (match (lex "(+ 1 2)")
+    (Ok tokens) (do
+      (assert-eq (length tokens) 6)
+      (assert-eq (at tokens 0) (Token "lparen" "(" 1 0))
+      (assert-eq (at tokens 1) (Token "symbol" "+" 1 1))
+      (assert-eq (at tokens 2) (Token "integer" 1 1 3))
+      (assert-eq (at tokens 3) (Token "integer" 2 1 5))
+      (assert-eq (at tokens 4) (Token "rparen" ")" 1 6))
+      (assert-eq (at tokens 5) (Token "eof" nil 1 7)))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Function definition
+  (match (lex "(defn add :sig [(a : i32) -> i32] :body (+ a 1))")
+    (Ok tokens) (do
+      (assert-eq (at tokens 0) (Token "lparen" "(" 1 0))
+      (assert-eq (at tokens 1) (Token "symbol" "defn" 1 1))
+      (assert-eq (at tokens 2) (Token "symbol" "add" 1 6))
+      (assert-eq (at tokens 3) (Token "keyword" "sig" 1 10)))
+    (Err msg) (print "FAIL:" msg))
+
+  ;; Multi-line with comments
+  (match (lex ";; comment\n(+ 1 2)")
+    (Ok tokens) (do
+      (assert-eq (at tokens 0) (Token "lparen" "(" 2 0))
+      (assert-eq (at tokens 1) (Token "symbol" "+" 2 1)))
+    (Err msg) (print "FAIL:" msg))
+
+  (print "integration tests passed")
+  (print "ALL TESTS PASSED"))
