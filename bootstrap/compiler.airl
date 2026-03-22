@@ -197,3 +197,24 @@
         (Ok compiled) (match (compile-program (tail nodes))
           (Err e) (Err e)
           (Ok rest) (Ok (cons compiled rest))))))
+
+;; ── Full compiled pipeline ──────────────────────────
+
+(defn run-compiled
+  :sig [(source : String) -> List]
+  :intent "Full compiled pipeline: source -> lex -> parse -> compile -> run-ir"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err e) (Err e)
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err e)
+          (Ok sexprs)
+            (match (parse-program sexprs)
+              (Err e) (Err e)
+              (Ok ast-nodes)
+                (match (compile-program ast-nodes)
+                  (Err e) (Err e)
+                  (Ok ir-nodes) (Ok (run-ir ir-nodes)))))))

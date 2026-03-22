@@ -257,6 +257,32 @@ impl IrVm {
             self.recursion_depth -= 1;
             return result;
         }
+        // Check environment for closures / function refs bound via let
+        if let Ok(val) = self.env_lookup(name) {
+            match val {
+                Value::IRClosure(closure) => {
+                    self.push_frame();
+                    for (k, v) in &closure.captured_env {
+                        self.env_bind(k, v.clone());
+                    }
+                    for (param, arg) in closure.params.iter().zip(args) {
+                        self.env_bind(param, arg);
+                    }
+                    let result = self.exec(&closure.body);
+                    self.pop_frame();
+                    return result;
+                }
+                Value::IRFuncRef(ref_name) => {
+                    return self.call_function(&ref_name, args);
+                }
+                Value::BuiltinFn(ref bname) => {
+                    if let Some(func) = self.builtins.get(bname) {
+                        return func(&args);
+                    }
+                }
+                _ => {}
+            }
+        }
         Err(RuntimeError::UndefinedSymbol(name.to_string()))
     }
 
