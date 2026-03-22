@@ -189,9 +189,24 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 #### 1. Self-Hosting (Phase 3)
 
-**Status:** Not started. The spec's Phase 3 goal is to write the AIRL compiler in AIRL itself.
+**Status:** Lexer complete. The self-hosted lexer (`bootstrap/lexer.airl`, ~15 functions) tokenizes AIRL source strings using index-walking recursion. Handles all token types (symbols, keywords, integers, floats, strings with escapes, delimiters, arrows), nestable block comments, line/col tracking, and Result-based error propagation. Tested by `bootstrap/lexer_test.airl`.
 
-**Prerequisite:** The language needs file I/O builtins and sufficient expressiveness to implement a parser and evaluator. Currently AIRL has no file I/O builtins. String manipulation was added with the stdlib.
+**Next steps:** Parser and evaluator in AIRL. The language has file I/O builtins (`read-file`, `write-file`) and string manipulation via the stdlib.
+
+---
+
+## Bootstrap Compiler
+
+The self-hosted compiler lives in `bootstrap/`. Run tests with:
+```bash
+cargo run -- run bootstrap/lexer_test.airl    # Lexer tests
+```
+
+**Important AIRL constraints for bootstrap code:**
+- `and`/`or` are **eager** (not short-circuit) — use nested `if` for bounds-safe lookahead
+- No mixed int/float arithmetic — use `int-to-float` and `digit-value-f` helpers
+- No import system — test files must contain all function definitions
+- Recursion depth limit is 50K — self-lexing large files may hit this
 
 ---
 
