@@ -113,8 +113,32 @@ impl<'src> Lexer<'src> {
                     }
                 }
                 other => {
-                    value.push(other as char);
-                    self.advance();
+                    if other < 0x80 {
+                        value.push(other as char);
+                        self.advance();
+                    } else {
+                        // Multi-byte UTF-8: decode the full character
+                        let seq_len = if other & 0xE0 == 0xC0 { 2 }
+                            else if other & 0xF0 == 0xE0 { 3 }
+                            else if other & 0xF8 == 0xF0 { 4 }
+                            else { 1 };
+                        let end = (self.pos + seq_len).min(self.source.len());
+                        match std::str::from_utf8(&self.source[self.pos..end]) {
+                            Ok(s) => {
+                                let ch = s.chars().next().unwrap();
+                                value.push(ch);
+                                for _ in 0..ch.len_utf8() {
+                                    self.advance();
+                                }
+                            }
+                            Err(_) => {
+                                return Err(Diagnostic::error(
+                                    format!("invalid UTF-8 byte: 0x{:02X}", other),
+                                    Span::new(self.pos, self.pos + 1, self.line, self.col),
+                                ));
+                            }
+                        }
+                    }
                 }
             }
         }

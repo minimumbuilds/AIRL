@@ -175,9 +175,19 @@ impl Interpreter {
                     let val = self.eval(&binding.value)?;
                     self.env.bind(binding.name.clone(), val);
                 }
-                let result = self.eval(body);
+                // Trampoline the body to preserve tail context for TCO
+                let mut current = (**body).clone();
+                let result = loop {
+                    match self.eval_inner(&current)? {
+                        EvalResult::Done(val) => break Ok(EvalResult::Done(val)),
+                        r @ EvalResult::Continue(ContinueWith::TailCall(_)) => break Ok(r),
+                        EvalResult::Continue(ContinueWith::Expr(next)) => {
+                            current = next;
+                        }
+                    }
+                };
                 self.env.pop_frame();
-                Ok(EvalResult::Done(result?))
+                result
             }
 
             ExprKind::Do(exprs) => {
@@ -198,9 +208,19 @@ impl Interpreter {
                         for (name, v) in bindings {
                             self.env.bind(name, v);
                         }
-                        let result = self.eval(&arm.body);
+                        // Trampoline the arm body to preserve tail context for TCO
+                        let mut current = arm.body.clone();
+                        let result = loop {
+                            match self.eval_inner(&current)? {
+                                EvalResult::Done(val) => break Ok(EvalResult::Done(val)),
+                                r @ EvalResult::Continue(ContinueWith::TailCall(_)) => break Ok(r),
+                                EvalResult::Continue(ContinueWith::Expr(next)) => {
+                                    current = next;
+                                }
+                            }
+                        };
                         self.env.pop_frame();
-                        return Ok(EvalResult::Done(result?));
+                        return result;
                     }
                 }
                 Err(RuntimeError::NonExhaustiveMatch {

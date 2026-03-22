@@ -223,4 +223,3 @@ cargo run -- run bootstrap/pipeline_test.airl    # Full lex→parse→eval pipel
 
 1. **`airl-mlir` requires system libraries:** `melior-macro` needs `libzstd-dev` and LLVM 19+ installed. Use `cargo test --workspace --exclude airl-mlir` if not available. See comment in workspace `Cargo.toml`.
 
-2. ~~**`length` vs `char-at` indexing mismatch on non-ASCII strings**~~ — **Fixed.** `builtin_length` now returns `s.chars().count()` (character count) instead of `s.len()` (byte count), aligning with `char-at`'s character-based indexing. The bootstrap lexer works correctly on non-ASCII source files.
