@@ -135,9 +135,9 @@ impl Interpreter {
             ExprKind::If(cond, then_branch, else_branch) => {
                 let cond_val = self.eval(cond)?;
                 if is_truthy(&cond_val) {
-                    Ok(EvalResult::Done(self.eval(then_branch)?))
+                    Ok(EvalResult::Continue(ContinueWith::Expr((**then_branch).clone())))
                 } else {
-                    Ok(EvalResult::Done(self.eval(else_branch)?))
+                    Ok(EvalResult::Continue(ContinueWith::Expr((**else_branch).clone())))
                 }
             }
 
@@ -153,11 +153,13 @@ impl Interpreter {
             }
 
             ExprKind::Do(exprs) => {
-                let mut result = Value::Unit;
-                for e in exprs {
-                    result = self.eval(e)?;
+                if exprs.is_empty() {
+                    return Ok(EvalResult::Done(Value::Unit));
                 }
-                Ok(EvalResult::Done(result))
+                for e in &exprs[..exprs.len() - 1] {
+                    self.eval(e)?;
+                }
+                Ok(EvalResult::Continue(ContinueWith::Expr(exprs.last().unwrap().clone())))
             }
 
             ExprKind::Match(scrutinee, arms) => {
@@ -1832,5 +1834,21 @@ mod tests {
 
         assert_eq!(result, Value::Int(42));
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_deep_if_chain() {
+        // 200-deep nested if chain — exercises trampoline without overflowing
+        // parser stack (parser is still recursive, so extreme depth blows the
+        // default 8MB test-thread stack during parse, not eval)
+        let mut code = String::new();
+        for _ in 0..200 {
+            code.push_str("(if true ");
+        }
+        code.push_str("42");
+        for _ in 0..200 {
+            code.push_str(" 0)");
+        }
+        assert_eq!(eval_str(&code), Value::Int(42));
     }
 }
