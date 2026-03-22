@@ -1,0 +1,457 @@
+;; bootstrap/typecheck.airl -- Bootstrap type checker for AIRL
+;; Operates on AST nodes from bootstrap/parser.airl
+;; Uses types from bootstrap/types.airl
+
+;; ─── Builtin Type Environment ────────────────────────
+
+(defn bind-builtins
+  :sig [(env : List) (entries : List) -> List]
+  :intent "Bind a flat list of [name type name type ...] entries into env"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? entries) env
+      (if (< (length entries) 2) env
+        (bind-builtins
+          (type-env-bind env (head entries) (at entries 1))
+          (drop 2 entries)))))
+
+(defn make-builtin-env
+  :sig [(_u : i64) -> List]
+  :intent "Create a type environment pre-populated with all typed builtins"
+  :requires [(valid _u)]
+  :ensures [(valid result)]
+  :body
+    (let (tv : List (TyVar "a"))
+      (let (tvb : List (TyVar "b"))
+        (let (boolT : List (TyBool))
+          (let (intT : List (TyI64))
+            (let (strT : List (TyStr))
+              (let (unitT : List (TyUnit))
+                (let (listA : List (TyList tv))
+                  (let (mapT : List (TyVar "Map"))
+                    (let (fnT : List (TyVar "fn"))
+                      (bind-builtins (type-env-new 0)
+                        [;; Arithmetic
+                         "+" (TyFunc [tv tv] tv)
+                         "-" (TyFunc [tv tv] tv)
+                         "*" (TyFunc [tv tv] tv)
+                         "/" (TyFunc [tv tv] tv)
+                         "%" (TyFunc [tv tv] tv)
+                         ;; Comparison
+                         "=" (TyFunc [tv tv] boolT)
+                         "!=" (TyFunc [tv tv] boolT)
+                         "<" (TyFunc [tv tv] boolT)
+                         ">" (TyFunc [tv tv] boolT)
+                         "<=" (TyFunc [tv tv] boolT)
+                         ">=" (TyFunc [tv tv] boolT)
+                         ;; Logic
+                         "not" (TyFunc [boolT] boolT)
+                         "and" (TyFunc [boolT boolT] boolT)
+                         "or" (TyFunc [boolT boolT] boolT)
+                         "xor" (TyFunc [boolT boolT] boolT)
+                         ;; List
+                         "head" (TyFunc [listA] tv)
+                         "tail" (TyFunc [listA] listA)
+                         "cons" (TyFunc [tv listA] listA)
+                         "empty?" (TyFunc [listA] boolT)
+                         "length" (TyFunc [tv] intT)
+                         "at" (TyFunc [listA intT] tv)
+                         "append" (TyFunc [listA tv] listA)
+                         ;; String
+                         "char-at" (TyFunc [strT intT] strT)
+                         "substring" (TyFunc [strT intT intT] strT)
+                         "contains" (TyFunc [strT strT] boolT)
+                         "split" (TyFunc [strT strT] (TyList strT))
+                         "join" (TyFunc [(TyList strT) strT] strT)
+                         "chars" (TyFunc [strT] (TyList strT))
+                         "index-of" (TyFunc [strT strT] intT)
+                         "starts-with" (TyFunc [strT strT] boolT)
+                         "ends-with" (TyFunc [strT strT] boolT)
+                         "trim" (TyFunc [strT] strT)
+                         "to-upper" (TyFunc [strT] strT)
+                         "to-lower" (TyFunc [strT] strT)
+                         "replace" (TyFunc [strT strT strT] strT)
+                         ;; Map
+                         "map-new" (TyFunc [] mapT)
+                         "map-from" (TyFunc [listA] mapT)
+                         "map-get" (TyFunc [mapT strT] tv)
+                         "map-get-or" (TyFunc [mapT strT tv] tv)
+                         "map-set" (TyFunc [mapT strT tv] mapT)
+                         "map-has" (TyFunc [mapT strT] boolT)
+                         "map-remove" (TyFunc [mapT strT] mapT)
+                         "map-keys" (TyFunc [mapT] (TyList strT))
+                         "map-values" (TyFunc [mapT] listA)
+                         "map-size" (TyFunc [mapT] intT)
+                         ;; I/O
+                         "print" (TyFunc [tv] unitT)
+                         "read-file" (TyFunc [strT] strT)
+                         ;; Introspection
+                         "type-of" (TyFunc [tv] strT)
+                         "valid" (TyFunc [tv] boolT)
+                         ;; Stdlib
+                         "map" (TyFunc [fnT listA] (TyList tvb))
+                         "filter" (TyFunc [fnT listA] listA)
+                         "fold" (TyFunc [fnT tv listA] tv)
+                         "reverse" (TyFunc [listA] listA)
+                         "concat" (TyFunc [listA listA] listA)
+                         "range" (TyFunc [intT intT] (TyList intT))
+                         "sort" (TyFunc [fnT listA] listA)
+                         ;; Result
+                         "is-ok?" (TyFunc [tv] boolT)
+                         "is-err?" (TyFunc [tv] boolT)
+                         ])))))))))))
+
+;; ─── Core Expression Type Checking ──────────────────
+
+(defn check-expr
+  :sig [(node : List) (env : List) (reg : List) -> List]
+  :intent "Type-check an AST expression node, return (Ok type) or (Err msg)"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    ;; Literals
+    (ASTInt _ _ _) (Ok (TyI64))
+    (ASTFloat _ _ _) (Ok (TyF64))
+    (ASTStr _ _ _) (Ok (TyStr))
+    (ASTBool _ _ _) (Ok (TyBool))
+    (ASTNil _ _) (Ok (TyUnit))
+    (ASTKeyword _ _ _) (Ok (TyStr))
+
+    ;; Symbol lookup
+    (ASTSymbol name _ _)
+      (type-env-lookup env name)
+
+    ;; If expression: cond must be Bool, branches must agree
+    (ASTIf cond then-expr else-expr _ _)
+      (match (check-expr cond env reg)
+        (Err e) (Err e)
+        (Ok cond-ty)
+          (if (types-compatible cond-ty (TyBool))
+            (match (check-expr then-expr env reg)
+              (Err e) (Err e)
+              (Ok then-ty)
+                (match (check-expr else-expr env reg)
+                  (Err e) (Err e)
+                  (Ok else-ty)
+                    (if (types-compatible then-ty else-ty)
+                      (Ok then-ty)
+                      (Err "if branches have incompatible types"))))
+            (Err "if condition must be Bool")))
+
+    ;; Let expression: push scope, bind each, check body, pop
+    (ASTLet bindings body _ _)
+      (match (check-let-bindings bindings (type-env-push env) reg)
+        (Err e) (Err e)
+        (Ok bound-env)
+          (check-expr body bound-env reg))
+
+    ;; Do block: check all, return type of last
+    (ASTDo exprs _ _)
+      (check-do-exprs exprs env reg)
+
+    ;; Function call
+    (ASTCall callee args _ _)
+      (match (check-expr callee env reg)
+        (Err e) (Err e)
+        (Ok callee-ty)
+          (match callee-ty
+            (TyFunc param-tys ret-ty)
+              (match (check-args args env reg)
+                (Err e) (Err e)
+                (Ok arg-tys)
+                  ;; For variadic builtins like print, skip arity check when params is empty
+                  (if (empty? param-tys)
+                    (Ok ret-ty)
+                    (if (= (length arg-tys) (length param-tys))
+                      (if (check-arg-types arg-tys param-tys)
+                        (Ok ret-ty)
+                        (Err "argument type mismatch in function call"))
+                      (Ok ret-ty))))
+            ;; TyVar means polymorphic/unknown — allow the call
+            (TyVar _) (match (check-args args env reg)
+              (Err e) (Err e)
+              (Ok _) (Ok (TyVar "result")))
+            _ (Err "calling a non-function")))
+
+    ;; List literal
+    (ASTList items _ _)
+      (if (empty? items) (Ok (TyList (TyVar "_")))
+        (match (check-args items env reg)
+          (Err e) (Err e)
+          (Ok item-tys)
+            (Ok (TyList (head item-tys)))))
+
+    ;; Variant constructor
+    (ASTVariant name args _ _)
+      (match (check-args args env reg)
+        (Err e) (Err e)
+        (Ok arg-tys) (Ok (TyVar name)))
+
+    ;; Lambda
+    (ASTLambda params body _ _)
+      (let (lenv : List (type-env-push env))
+        (let (lenv : List (bind-lambda-params lenv params))
+          (match (check-expr body lenv reg)
+            (Err e) (Err e)
+            (Ok body-ty)
+              (Ok (TyFunc (map (fn [_p] (TyVar "_")) params) body-ty)))))
+
+    ;; Match expression
+    (ASTMatch scrutinee arms _ _)
+      (match (check-expr scrutinee env reg)
+        (Err e) (Err e)
+        (Ok scr-ty) (check-match-arms arms scr-ty env reg))
+
+    ;; Try
+    (ASTTry expr _ _)
+      (match (check-expr expr env reg)
+        (Err e) (Err e)
+        (Ok _) (Ok (TyVar "unwrapped")))
+
+    _ (Err "check-expr: unknown node type")))
+
+;; ─── Helper Functions ────────────────────────────────
+
+(defn check-let-bindings
+  :sig [(bindings : List) (env : List) (reg : List) -> List]
+  :intent "Type-check let bindings sequentially, threading the type env"
+  :requires [(valid bindings)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? bindings) (Ok env)
+      (match (head bindings)
+        (ASTBinding name type-name val-expr)
+          (match (check-expr val-expr env reg)
+            (Err e) (Err e)
+            (Ok val-ty)
+              (match (resolve-type-name type-name reg)
+                (Err e) (Err e)
+                (Ok declared-ty)
+                  (if (types-compatible val-ty declared-ty)
+                    (check-let-bindings (tail bindings) (type-env-bind env name declared-ty) reg)
+                    (Err (join ["let binding '" name "': value type incompatible with declared type " type-name] "")))))
+        _ (Err "invalid let binding"))))
+
+(defn check-do-exprs
+  :sig [(exprs : List) (env : List) (reg : List) -> List]
+  :intent "Type-check a sequence of do-block expressions, return type of last"
+  :requires [(valid exprs)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? exprs) (Ok (TyUnit))
+      (match (check-expr (head exprs) env reg)
+        (Err e) (Err e)
+        (Ok ty)
+          (if (empty? (tail exprs))
+            (Ok ty)
+            (check-do-exprs (tail exprs) env reg)))))
+
+(defn check-args
+  :sig [(args : List) (env : List) (reg : List) -> List]
+  :intent "Type-check argument list, return (Ok type-list) or (Err msg)"
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (check-args-acc args env reg []))
+
+(defn check-args-acc
+  :sig [(args : List) (env : List) (reg : List) (acc : List) -> List]
+  :intent "Accumulate checked argument types"
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? args) (Ok (reverse acc))
+      (match (check-expr (head args) env reg)
+        (Err e) (Err e)
+        (Ok ty) (check-args-acc (tail args) env reg (cons ty acc)))))
+
+(defn check-arg-types
+  :sig [(actual : List) (expected : List) -> Bool]
+  :intent "Check if actual argument types are compatible with expected parameter types"
+  :requires [(valid actual)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? actual) true
+      (if (empty? expected) true
+        (if (types-compatible (head actual) (head expected))
+          (check-arg-types (tail actual) (tail expected))
+          false))))
+
+(defn bind-lambda-params
+  :sig [(env : List) (params : List) -> List]
+  :intent "Bind lambda parameter names with TyVar types"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? params) env
+      (bind-lambda-params (type-env-bind env (head params) (TyVar (head params))) (tail params))))
+
+(defn check-match-arms
+  :sig [(arms : List) (scr-ty : List) (env : List) (reg : List) -> List]
+  :intent "Type-check match arms, verify all have compatible result types"
+  :requires [(valid arms)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? arms) (Err "non-exhaustive match")
+      (match (head arms)
+        (ASTArm pattern body)
+          (let (arm-env : List (type-env-push env))
+            (let (arm-env : List (bind-pattern-vars arm-env pattern scr-ty))
+              (match (check-expr body arm-env reg)
+                (Err e) (Err e)
+                (Ok arm-ty)
+                  (if (empty? (tail arms))
+                    (Ok arm-ty)
+                    (match (check-match-arms (tail arms) scr-ty env reg)
+                      (Err e) (Err e)
+                      (Ok rest-ty)
+                        (if (types-compatible arm-ty rest-ty)
+                          (Ok arm-ty)
+                          (Ok (TyVar "match-result"))))))))
+        _ (Err "invalid match arm"))))
+
+(defn bind-pattern-vars
+  :sig [(env : List) (pattern : List) (scr-ty : List) -> List]
+  :intent "Bind variables from a pattern into the type environment"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (match pattern
+    (PatWild _ _) env
+    (PatBind name _ _) (type-env-bind env name scr-ty)
+    (PatLit _ _ _) env
+    (PatVariant tag sub-pats _ _)
+      (bind-variant-pattern-vars env sub-pats)
+    _ env))
+
+(defn bind-variant-pattern-vars
+  :sig [(env : List) (sub-pats : List) -> List]
+  :intent "Bind sub-pattern variables from a variant pattern"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? sub-pats) env
+      (let (env : List (bind-pattern-vars env (head sub-pats) (TyVar "_")))
+        (bind-variant-pattern-vars env (tail sub-pats)))))
+
+;; ─── Top-Level and Program Checking ─────────────────
+
+(defn check-fn
+  :sig [(node : List) (env : List) (reg : List) -> List]
+  :intent "Type-check a function definition, return (Ok [fn-type env]) or (Err msg)"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTDefn name sig intent requires ensures body _ _)
+      (match sig
+        (ASTSig params ret-name)
+          (let (fn-env : List (type-env-push env))
+            (match (bind-fn-params fn-env params reg [])
+              (Err e) (Err e)
+              (Ok param-result)
+                (let (fn-env : List (at param-result 0))
+                  (let (param-tys : List (at param-result 1))
+                    (match (resolve-type-name ret-name reg)
+                      (Err e) (Err e)
+                      (Ok ret-ty)
+                        ;; Bind function name for recursion
+                        (let (fn-ty : List (TyFunc param-tys ret-ty))
+                          (let (fn-env : List (type-env-bind fn-env name fn-ty))
+                            ;; Also bind "result" for ensures
+                            (let (fn-env : List (type-env-bind fn-env "result" ret-ty))
+                              (match (check-expr body fn-env reg)
+                                (Err e) (Err e)
+                                (Ok body-ty)
+                                  (if (types-compatible body-ty ret-ty)
+                                    (Ok [fn-ty (type-env-bind env name fn-ty)])
+                                    (Err (join ["function '" name "': body type incompatible with declared return type"] ""))))))))))))
+        _ (Err "defn requires a sig"))
+    _ (Err "check-fn: not a defn")))
+
+(defn bind-fn-params
+  :sig [(env : List) (params : List) (reg : List) (acc : List) -> List]
+  :intent "Bind function parameters into env and collect their types"
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? params) (Ok [env (reverse acc)])
+      (match (head params)
+        (ASTParam name type-name)
+          (match (resolve-type-name type-name reg)
+            (Err e) (Err e)
+            (Ok ty)
+              (bind-fn-params (type-env-bind env name ty) (tail params) reg (cons ty acc)))
+        _ (Err "invalid parameter"))))
+
+(defn check-top-level
+  :sig [(node : List) (env : List) (reg : List) -> List]
+  :intent "Type-check a top-level node, return (Ok [type env reg]) or (Err msg)"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTDefn name _ _ _ _ _ _ _)
+      (match (check-fn node env reg)
+        (Err e) (Err e)
+        (Ok result)
+          (Ok [(at result 0) (at result 1) reg]))
+    (ASTDefType name params body _ _)
+      (let (reg : List (register-deftype name params body reg))
+        (Ok [(TyUnit) env reg]))
+    _ (match (check-expr node env reg)
+        (Err e) (Err e)
+        (Ok ty) (Ok [ty env reg]))))
+
+(defn register-deftype
+  :sig [(name : String) (params : List) (body : List) (reg : List) -> List]
+  :intent "Register a deftype declaration in the type registry"
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body
+    (let (reg : List (registry-add-type reg name body))
+      (match body
+        (ASTSumBody variants)
+          (register-sum-ctors variants name reg)
+        (ASTProductBody fields)
+          ;; Product type: register the type name as a constructor
+          (registry-add-ctor reg name (CtorInfo name (map (fn [f] (TyVar "_")) fields)))
+        _ reg)))
+
+(defn register-sum-ctors
+  :sig [(variants : List) (parent : String) (reg : List) -> List]
+  :intent "Register all constructors from a sum type"
+  :requires [(valid variants)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? variants) reg
+      (match (head variants)
+        (ASTVariantDef vname field-types)
+          (let (ftys : List (map (fn [_f] (TyVar "_")) field-types))
+            (register-sum-ctors (tail variants) parent
+              (registry-add-ctor reg vname (CtorInfo parent ftys))))
+        _ (register-sum-ctors (tail variants) parent reg))))
+
+(defn make-prelude-registry
+  :sig [(_u : i64) -> List]
+  :intent "Create a registry with standard prelude types (Result, Option)"
+  :requires [(valid _u)]
+  :ensures [(valid result)]
+  :body
+    (let (reg : List (registry-new 0))
+      (let (reg : List (registry-add-type reg "Result" true))
+        (let (reg : List (registry-add-ctor reg "Ok" (CtorInfo "Result" [(TyVar "T")])))
+          (let (reg : List (registry-add-ctor reg "Err" (CtorInfo "Result" [(TyVar "E")])))
+            (let (reg : List (registry-add-type reg "Option" true))
+              (let (reg : List (registry-add-ctor reg "Some" (CtorInfo "Option" [(TyVar "T")])))
+                (let (reg : List (registry-add-ctor reg "None" (CtorInfo "Option" [])))
+                  reg))))))))
+
+(defn type-check-program
+  :sig [(nodes : List) (env : List) (reg : List) -> List]
+  :intent "Type-check a list of top-level nodes, return (Ok env) or (Err msg)"
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? nodes) (Ok env)
+      (match (check-top-level (head nodes) env reg)
+        (Err e) (Err e)
+        (Ok result)
+          (type-check-program (tail nodes) (at result 1) (at result 2)))))
