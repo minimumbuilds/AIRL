@@ -497,7 +497,7 @@ fn builtin_length(args: &[Value]) -> Result<Value, RuntimeError> {
     expect_arity("length", args, 1)?;
     match &args[0] {
         Value::List(items) => Ok(Value::Int(items.len() as i64)),
-        Value::Str(s) => Ok(Value::Int(s.len() as i64)),
+        Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
         _ => Err(RuntimeError::TypeError(format!(
             "`length` expects List or Str, got {}",
             type_name(&args[0])
