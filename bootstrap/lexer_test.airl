@@ -1,0 +1,65 @@
+;; bootstrap/lexer_test.airl — Tests for the self-hosted lexer
+
+;; ── Helper predicates ───────────────────────────────
+
+(defn is-whitespace?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if single-char string is whitespace"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (or (= ch " ") (or (= ch "\t") (or (= ch "\n") (= ch "\r")))))
+
+(defn is-digit?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if single-char string is a decimal digit"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (contains "0123456789" ch))
+
+(defn digit-value
+  :sig [(ch : String) -> i64]
+  :intent "Return numeric value of a digit character"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (index-of "0123456789" ch))
+
+(defn is-symbol-start?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if char can start a symbol"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (contains "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!$%&*+-./<=>?@^_~" ch))
+
+(defn is-symbol-char?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if char can continue a symbol"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (or (is-symbol-start? ch) (is-digit? ch)))
+
+;; ── Test helper ─────────────────────────────────────
+
+(defn assert-eq
+  :sig [(a : Any) (b : Any) -> Bool]
+  :intent "Assert equality, print error if not"
+  :requires [(valid a) (valid b)]
+  :ensures [(valid result)]
+  :body (if (= a b) true
+          (do (print "FAIL: expected" b "got" a) false)))
+
+;; ── Helper predicate tests ──────────────────────────
+
+(do
+  (assert-eq (is-whitespace? " ") true)
+  (assert-eq (is-whitespace? "\n") true)
+  (assert-eq (is-whitespace? "a") false)
+  (assert-eq (is-digit? "5") true)
+  (assert-eq (is-digit? "a") false)
+  (assert-eq (digit-value "0") 0)
+  (assert-eq (digit-value "9") 9)
+  (assert-eq (is-symbol-start? "a") true)
+  (assert-eq (is-symbol-start? "+") true)
+  (assert-eq (is-symbol-start? "5") false)
+  (assert-eq (is-symbol-char? "a") true)
+  (assert-eq (is-symbol-char? "5") true)
+  (print "helper predicate tests passed"))

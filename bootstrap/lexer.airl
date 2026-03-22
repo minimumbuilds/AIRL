@@ -1,0 +1,38 @@
+;; bootstrap/lexer.airl — Self-hosted AIRL lexer
+
+;; ── Helper predicates ───────────────────────────────
+
+(defn is-whitespace?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if single-char string is whitespace"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (or (= ch " ") (or (= ch "\t") (or (= ch "\n") (= ch "\r")))))
+
+(defn is-digit?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if single-char string is a decimal digit"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (contains "0123456789" ch))
+
+(defn digit-value
+  :sig [(ch : String) -> i64]
+  :intent "Return numeric value of a digit character"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (index-of "0123456789" ch))
+
+(defn is-symbol-start?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if char can start a symbol"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (contains "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!$%&*+-./<=>?@^_~" ch))
+
+(defn is-symbol-char?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if char can continue a symbol"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (or (is-symbol-start? ch) (is-digit? ch)))
