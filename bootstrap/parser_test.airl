@@ -703,6 +703,165 @@
         (Ok exprs) (Ok (ASTDo exprs line col))
         (Err e) (Err e))))
 
+;; ── Pattern parsing ───────────────────────────────
+
+(defn parse-pattern
+  :sig [(sexpr : Any) -> List]
+  :intent "Parse an S-expression into a pattern node"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SAtom tok)
+        (match tok
+          (Token kind value line col)
+            (if (= kind "symbol")
+              (if (= value "_")
+                (Ok (PatWild line col))
+                ;; Capitalized = nullary variant pattern, lowercase = binding
+                (if (is-upper? (char-at value 0))
+                  (Ok (PatVariant value [] line col))
+                  (Ok (PatBind value line col))))
+              ;; Literal pattern
+              (if (= kind "integer") (Ok (PatLit value line col))
+              (if (= kind "float")   (Ok (PatLit value line col))
+              (if (= kind "string")  (Ok (PatLit value line col))
+              (if (= kind "bool")    (Ok (PatLit value line col))
+              (if (= kind "nil")     (Ok (PatLit nil line col))
+                (Err (ParseError (+ "unexpected token in pattern: " kind) line col)))))))))
+
+      (SList items line col)
+        (if (empty? items)
+          (Err (ParseError "empty list in pattern" line col))
+          (let (head-sexpr : Any (head items))
+            (match head-sexpr
+              (SAtom tok)
+                (match tok
+                  (Token kind value _ _)
+                    (if (= kind "symbol")
+                      (if (is-upper? (char-at value 0))
+                        ;; Variant pattern: (Ok v), (Token kind _ _ _)
+                        (match (parse-patterns items 1)
+                          (Ok sub-pats) (Ok (PatVariant value sub-pats line col))
+                          (Err e) (Err e))
+                        (Err (ParseError "pattern list must start with capitalized variant" line col)))
+                      (Err (ParseError "pattern list must start with symbol" line col))))
+              _ (Err (ParseError "pattern list must start with symbol" line col)))))
+
+      _ (Err (ParseError "unexpected S-expression in pattern" 0 0))))
+
+(defn parse-patterns
+  :sig [(items : List) (pos : i64) -> List]
+  :intent "Parse sub-patterns from items[pos..], return (Ok patterns)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [])
+      (match (parse-pattern (at items pos))
+        (Ok pat)
+          (match (parse-patterns items (+ pos 1))
+            (Ok rest) (Ok (cons pat rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+;; ── Match expression ──────────────────────────────
+
+(defn parse-match-arms
+  :sig [(items : List) (pos : i64) -> List]
+  :intent "Parse pattern/body pairs from items[pos..], return (Ok arms)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [])
+      ;; Need at least 2 more items (pattern + body)
+      (if (>= (+ pos 1) (length items))
+        (Err (ParseError "match arms must come in pairs (pattern body)" 0 0))
+        (match (parse-pattern (at items pos))
+          (Ok pat)
+            (match (parse-expr (at items (+ pos 1)))
+              (Ok body)
+                (match (parse-match-arms items (+ pos 2))
+                  (Ok rest) (Ok (cons (ASTArm pat body) rest))
+                  (Err e) (Err e))
+              (Err e) (Err e))
+          (Err e) (Err e)))))
+
+(defn parse-match
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (match scrutinee pattern body ...) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [match-sym scrutinee pat1 body1 pat2 body2 ...]
+    (if (< (length items) 4)
+      (Err (ParseError "match requires scrutinee and at least one arm" line col))
+      ;; Check even number of remaining items after scrutinee
+      (let (arm-count : i64 (- (length items) 2))
+        (if (= (% arm-count 2) 1)
+          (Err (ParseError "match arms must come in pairs (pattern body)" line col))
+          (match (parse-expr (at items 1))
+            (Ok scrutinee)
+              (match (parse-match-arms items 2)
+                (Ok arms) (Ok (ASTMatch scrutinee arms line col))
+                (Err e) (Err e))
+            (Err e) (Err e))))))
+
+;; ── Lambda ────────────────────────────────────────
+
+(defn parse-lambda-params
+  :sig [(items : List) (pos : i64) -> List]
+  :intent "Parse lambda parameter names from bracket items"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [])
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind value _ _)
+              (if (= kind "symbol")
+                (match (parse-lambda-params items (+ pos 1))
+                  (Ok rest) (Ok (cons value rest))
+                  (Err e) (Err e))
+                (Err (ParseError "lambda parameter must be a symbol" 0 0))))
+        _ (Err (ParseError "lambda parameter must be a symbol" 0 0)))))
+
+(defn parse-lambda
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (fn [params] body) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [fn-sym params-bracket body]
+    (if (= (length items) 3)
+      (match (at items 1)
+        (SBracket param-items _ _)
+          (match (parse-lambda-params param-items 0)
+            (Ok params)
+              (match (parse-expr (at items 2))
+                (Ok body) (Ok (ASTLambda params body line col))
+                (Err e) (Err e))
+            (Err e) (Err e))
+        _ (Err (ParseError "fn expects [params] as second argument" line col)))
+      (Err (ParseError "fn requires [params] and body" line col))))
+
+;; ── Try ───────────────────────────────────────────
+
+(defn parse-try
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (try expr) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (= (length items) 2)
+      (match (parse-expr (at items 1))
+        (Ok expr) (Ok (ASTTry expr line col))
+        (Err e) (Err e))
+      (Err (ParseError "try requires exactly one argument" line col))))
+
 ;; ── Test helper ───────────────────────────────────
 
 (defn assert-eq
@@ -957,3 +1116,94 @@
   (Err e) (print "FAIL: error"))
 
 (print "=== Task 4 tests complete ===")
+
+;; ── Match, lambda, try tests ────────────────────
+
+;; match with two arms
+(match (parse-one-expr "(match x (Ok v) v (Err e) nil)")
+  (Ok node) (match node
+    (ASTMatch scrutinee arms _ _)
+      (do
+        (match scrutinee (ASTSymbol n _ _) (assert-eq n "x") _ (print "FAIL"))
+        (assert-eq (length arms) 2)
+        ;; First arm: (Ok v) → v
+        (match (head arms)
+          (ASTArm pat body)
+            (match pat
+              (PatVariant name sub-pats _ _)
+                (do (assert-eq name "Ok")
+                    (assert-eq (length sub-pats) 1))
+              _ (print "FAIL: expected PatVariant"))
+          _ (print "FAIL: expected ASTArm")))
+    _ (print "FAIL: expected ASTMatch"))
+  (Err e) (print "FAIL: error"))
+
+;; Pattern: wildcard
+(match (parse-one-expr "(match x _ 1)")
+  (Ok node) (match node
+    (ASTMatch _ arms _ _)
+      (match (head arms)
+        (ASTArm pat _)
+          (match pat
+            (PatWild _ _) (assert-eq true true)
+            _ (print "FAIL: expected PatWild"))
+        _ (print "FAIL"))
+    _ (print "FAIL"))
+  (Err e) (print "FAIL: error"))
+
+;; Pattern: literal
+(match (parse-one-expr "(match x 42 1)")
+  (Ok node) (match node
+    (ASTMatch _ arms _ _)
+      (match (head arms)
+        (ASTArm pat _)
+          (match pat
+            (PatLit v _ _) (assert-eq v 42)
+            _ (print "FAIL: expected PatLit"))
+        _ (print "FAIL"))
+    _ (print "FAIL"))
+  (Err e) (print "FAIL: error"))
+
+;; Nested pattern: (Token kind _ _ _)
+(match (parse-one-expr "(match x (Token kind _ _ _) kind)")
+  (Ok node) (match node
+    (ASTMatch _ arms _ _)
+      (match (head arms)
+        (ASTArm pat _)
+          (match pat
+            (PatVariant name subs _ _)
+              (do (assert-eq name "Token")
+                  (assert-eq (length subs) 4))
+            _ (print "FAIL: expected PatVariant"))
+        _ (print "FAIL"))
+    _ (print "FAIL"))
+  (Err e) (print "FAIL: error"))
+
+;; Odd match arms → error
+(match (parse-one-expr "(match x (Ok v))")
+  (Ok _) (print "FAIL: odd match arms should error")
+  (Err _) (assert-eq true true))
+
+;; Lambda
+(match (parse-one-expr "(fn [x y] (+ x y))")
+  (Ok node) (match node
+    (ASTLambda params body _ _)
+      (do
+        (assert-eq (length params) 2)
+        (match body
+          (ASTCall _ _ _ _) (assert-eq true true)
+          _ (print "FAIL: expected ASTCall body")))
+    _ (print "FAIL: expected ASTLambda"))
+  (Err e) (print "FAIL: error"))
+
+;; Try
+(match (parse-one-expr "(try (f x))")
+  (Ok node) (match node
+    (ASTTry expr _ _)
+      (match expr
+        (ASTCall _ _ _ _) (assert-eq true true)
+        _ (print "FAIL: expected ASTCall in try"))
+    _ (print "FAIL: expected ASTTry"))
+  (Err e) (print "FAIL: error"))
+
+(print "=== Task 5 tests complete ===")
