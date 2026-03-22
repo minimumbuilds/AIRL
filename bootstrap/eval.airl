@@ -105,6 +105,20 @@
 
 ;; ─── Builtin Dispatch ────────────────────────────────────
 
+(defn print-val-args
+  :sig [(args : List) -> Any]
+  :intent "Print all Val-wrapped arguments via the real print builtin"
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args) nil
+    (if (= (length args) 1)
+      (print (unwrap-raw (head args)))
+      (if (= (length args) 2)
+        (print (unwrap-raw (at args 0)) (unwrap-raw (at args 1)))
+        (if (= (length args) 3)
+          (print (unwrap-raw (at args 0)) (unwrap-raw (at args 1)) (unwrap-raw (at args 2)))
+          (print (unwrap-raw (at args 0)) (unwrap-raw (at args 1)) (unwrap-raw (at args 2)) (unwrap-raw (at args 3))))))))
+
 (defn call-builtin
   :sig [(name : Str) (args : List) -> Any]
   :intent "Dispatch a builtin call by name, returning (Ok val) or (Err msg)"
@@ -189,8 +203,8 @@
     (if (= name "write-file")   (do (write-file (unwrap-str (at args 0)) (unwrap-str (at args 1))) (Ok (ValBool true)))
     (if (= name "file-exists?") (Ok (ValBool (file-exists? (unwrap-str (at args 0)))))
 
-    ;; I/O
-    (if (= name "print") (do (print (unwrap-raw (at args 0))) (Ok (ValNil)))
+    ;; I/O — print is variadic, print all args
+    (if (= name "print") (do (print-val-args args) (Ok (ValNil)))
 
     ;; Utility
     (if (= name "valid") (Ok (ValBool true))
@@ -589,3 +603,14 @@
               (Err e) (Err e)
               (Ok ast-nodes)
                 (eval-program ast-nodes (make-initial-env 0))))))
+
+(defn run-file
+  :sig [(path : Str) -> Any]
+  :intent "Read an AIRL source file and evaluate it through the full pipeline"
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body
+    (let (source : Any (read-file path))
+      (match (run-source source)
+        (Ok pair) (Ok (at pair 0))
+        (Err e) (do (print "Error:" e) (Err e)))))
