@@ -118,6 +118,22 @@ impl Interpreter {
         }
     }
 
+    /// Like eval(), but returns BodyResult to surface self-tail-calls to call_fn_inner
+    fn eval_body(&mut self, expr: &Expr) -> Result<BodyResult, RuntimeError> {
+        let mut current = expr.clone();
+        loop {
+            match self.eval_inner(&current)? {
+                EvalResult::Done(val) => return Ok(BodyResult::Value(val)),
+                EvalResult::Continue(ContinueWith::Expr(next)) => {
+                    current = next;
+                }
+                EvalResult::Continue(ContinueWith::TailCall(args)) => {
+                    return Ok(BodyResult::SelfTailCall(args));
+                }
+            }
+        }
+    }
+
     fn eval_inner(&mut self, expr: &Expr) -> Result<EvalResult, RuntimeError> {
         match &expr.kind {
             ExprKind::IntLit(v) => Ok(EvalResult::Done(Value::Int(*v))),
