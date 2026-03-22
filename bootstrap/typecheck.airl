@@ -444,9 +444,61 @@
                 (let (reg : List (registry-add-ctor reg "None" (CtorInfo "Option" [])))
                   reg))))))))
 
-(defn type-check-program
+;; ─── Two-Pass Program Checking ───────────────────────
+;; Pass 1: Register all function signatures and deftypes
+;; Pass 2: Check all function bodies and expressions
+
+(defn register-fn-sig
+  :sig [(node : List) (env : List) (reg : List) -> List]
+  :intent "Pre-register a function's type signature without checking the body"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTDefn name sig _ _ _ _ _ _)
+      (match sig
+        (ASTSig params ret-name)
+          (match (bind-fn-param-types params reg [])
+            (Err e) (Ok [env reg])
+            (Ok param-tys)
+              (match (resolve-type-name ret-name reg)
+                (Err e) (Ok [env reg])
+                (Ok ret-ty)
+                  (let (fn-ty : List (TyFunc param-tys ret-ty))
+                    (Ok [(type-env-bind env name fn-ty) reg]))))
+        _ (Ok [env reg]))
+    (ASTDefType name params body _ _)
+      (Ok [env (register-deftype name params body reg)])
+    _ (Ok [env reg])))
+
+(defn bind-fn-param-types
+  :sig [(params : List) (reg : List) (acc : List) -> List]
+  :intent "Resolve parameter types without binding into env"
+  :requires [(valid params)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? params) (Ok (reverse acc))
+      (match (head params)
+        (ASTParam name type-name)
+          (match (resolve-type-name type-name reg)
+            (Err e) (Err e)
+            (Ok ty) (bind-fn-param-types (tail params) reg (cons ty acc)))
+        _ (Err "invalid parameter"))))
+
+(defn register-all-top-levels
   :sig [(nodes : List) (env : List) (reg : List) -> List]
-  :intent "Type-check a list of top-level nodes, return (Ok env) or (Err msg)"
+  :intent "Pass 1: register all function sigs and deftypes"
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? nodes) (Ok [env reg])
+      (match (register-fn-sig (head nodes) env reg)
+        (Err e) (Err e)
+        (Ok result)
+          (register-all-top-levels (tail nodes) (at result 0) (at result 1)))))
+
+(defn check-all-top-levels
+  :sig [(nodes : List) (env : List) (reg : List) -> List]
+  :intent "Pass 2: type-check all top-level nodes with all sigs in scope"
   :requires [(valid nodes)]
   :ensures [(valid result)]
   :body
@@ -454,4 +506,17 @@
       (match (check-top-level (head nodes) env reg)
         (Err e) (Err e)
         (Ok result)
-          (type-check-program (tail nodes) (at result 1) (at result 2)))))
+          (check-all-top-levels (tail nodes) (at result 1) (at result 2)))))
+
+(defn type-check-program
+  :sig [(nodes : List) (env : List) (reg : List) -> List]
+  :intent "Two-pass type-check: register all sigs, then check all bodies"
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body
+    ;; Pass 1: register all function signatures and deftypes
+    (match (register-all-top-levels nodes env reg)
+      (Err e) (Err e)
+      (Ok pass1-result)
+        ;; Pass 2: check all bodies with everything in scope
+        (check-all-top-levels nodes (at pass1-result 0) (at pass1-result 1))))
