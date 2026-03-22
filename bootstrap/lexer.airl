@@ -1,5 +1,8 @@
 ;; bootstrap/lexer.airl — Self-hosted AIRL lexer
 
+(deftype Token
+  (& (kind : String) (value : String) (line : i64) (col : i64)))
+
 ;; ── Helper predicates ───────────────────────────────
 
 (defn is-whitespace?
@@ -339,7 +342,7 @@
     (match (next-token source pos line col)
       (Err msg) (Err msg)
       (Ok tok-state)
-        (let (tok : Any (head tok-state))
+        (let (tok : List (head tok-state))
           (let (new-pos : i64 (at tok-state 1))
             (let (new-line : i64 (at tok-state 2))
               (let (new-col : i64 (at tok-state 3))
