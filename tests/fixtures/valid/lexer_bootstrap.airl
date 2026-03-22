@@ -1,0 +1,18 @@
+;; EXPECT: true
+;; Smoke test for the builtins the self-hosted lexer depends on.
+;; The full lexer tests are in bootstrap/lexer_test.airl (run via cargo run -- run).
+;; Fixtures can't load external files, so we test the underlying primitives here.
+(do
+  (let (src : String "(+ 1 2)")
+    (let (ch : String (char-at src 0))
+      (let (is-paren : Bool (= ch "("))
+        (let (is-digit : Bool (contains "0123456789" (char-at src 3)))
+          (let (digit-val : i64 (index-of "0123456789" (char-at src 3)))
+            (let (sub : String (substring src 1 2))
+              (if is-paren
+                (if is-digit
+                  (if (= digit-val 1)
+                    (= sub "+")
+                    false)
+                  false)
+                false))))))))
