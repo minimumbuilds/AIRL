@@ -179,31 +179,15 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **MLIR Runtime Integration** — `exec_target: Option<ExecTarget>` on Interpreter, `call_fn`/`call_fn_inner` split for scoped `:execute-on` annotations, GPU → MLIR CPU → Cranelift → interpreted dispatch chain, `try_mlir_tensor_jit` behind `#[cfg(feature = "mlir")]`.
 - **Better Error Messages** — Contract violations use `contract.to_airl()` for readable S-expression clause display and `capture_bindings()` to show relevant variable values.
 - **REPL Enhancements** — `:help` (list commands), `:load <file>` (evaluate a file in session), `:type <expr>` (show inferred type without evaluating). `drain_diagnostics()` on `TypeChecker` for REPL persistence.
+- **Static Linearity Analysis** — `LinearityChecker` wired into `pipeline.rs` after type checking. Detects use-after-move, borrow conflicts, and branch divergence at compile time for `Own`/`Ref`/`Mut` annotated params. Default ownership is not tracked, avoiding false positives. Runs in both `run` and `check` modes.
 
 ---
 
 ## Remaining Tasks
 
-### Tier 1 — Important for Completeness
+### Tier 1 — Long-term
 
-#### 1. Static Linearity Analysis
-
-**Status:** The `LinearityChecker` in `crates/airl-types/src/linearity.rs` (~566 lines) tracks ownership state at the API level but is not wired into the AST walk. Runtime enforcement (in `eval.rs`) catches use-after-move for explicit `Ownership::Own` params, but doesn't detect branch divergence or scope issues.
-
-**What to build:** A control-flow-sensitive pass that walks function bodies and tracks ownership state through branches. For `if`/`match`, both arms must leave bindings in compatible states. This is essentially a simplified version of Rust's borrow checker.
-
-**Files to modify:**
-- `crates/airl-types/src/linearity.rs` — Add `check_fn_body(&mut self, body: &Expr)` that walks the AST.
-- `crates/airl-types/src/checker.rs` — Call linearity check after type checking.
-- `crates/airl-driver/src/pipeline.rs` — Report linearity errors.
-
-**Estimated effort:** 500-800 lines. This is the hardest remaining task.
-
----
-
-### Tier 2 — Long-term
-
-#### 2. Self-Hosting (Phase 3)
+#### 1. Self-Hosting (Phase 3)
 
 **Status:** Not started. The spec's Phase 3 goal is to write the AIRL compiler in AIRL itself.
 
