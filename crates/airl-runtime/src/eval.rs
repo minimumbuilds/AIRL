@@ -386,8 +386,26 @@ impl Interpreter {
                 match jit.try_call(def, &raw_args) {
                     Ok(Some(raw_result)) => {
                         let result_val = raw_to_value(raw_result, &def.return_type);
-                        // Check :ensures contracts
                         self.env.bind("result".to_string(), result_val.clone());
+                        // Check :invariant contracts
+                        for contract in &def.invariants {
+                            let contract_result = self.eval(contract)?;
+                            if contract_result != Value::Bool(true) {
+                                self.recursion_depth -= 1;
+                                self.env.pop_frame();
+                                return Err(RuntimeError::ContractViolation(
+                                    airl_contracts::violation::ContractViolation {
+                                        function: fn_val.name.clone(),
+                                        contract_kind: airl_contracts::violation::ContractKind::Invariant,
+                                        clause_source: format!("{:?}", contract.kind),
+                                        bindings: vec![],
+                                        evaluated: format!("{}", contract_result),
+                                        span: contract.span,
+                                    },
+                                ));
+                            }
+                        }
+                        // Check :ensures contracts
                         for contract in &def.ensures {
                             let contract_result = self.eval(contract)?;
                             if contract_result != Value::Bool(true) {
@@ -422,10 +440,29 @@ impl Interpreter {
 
         match result {
             Ok(result_val) => {
-                // 5. Bind `result` for :ensures checking
+                // 5. Bind `result` for contract checking
                 self.env.bind("result".to_string(), result_val.clone());
 
-                // 6. Check :ensures contracts
+                // 6. Check :invariant contracts
+                for contract in &def.invariants {
+                    let contract_result = self.eval(contract)?;
+                    if contract_result != Value::Bool(true) {
+                        self.recursion_depth -= 1;
+                        self.env.pop_frame();
+                        return Err(RuntimeError::ContractViolation(
+                            airl_contracts::violation::ContractViolation {
+                                function: fn_val.name.clone(),
+                                contract_kind: airl_contracts::violation::ContractKind::Invariant,
+                                clause_source: format!("{:?}", contract.kind),
+                                bindings: vec![],
+                                evaluated: format!("{}", contract_result),
+                                span: contract.span,
+                            },
+                        ));
+                    }
+                }
+
+                // 7. Check :ensures contracts
                 for contract in &def.ensures {
                     let contract_result = self.eval(contract)?;
                     if contract_result != Value::Bool(true) {
