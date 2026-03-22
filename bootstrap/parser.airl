@@ -344,3 +344,162 @@
       (match (parse-list-items items 1)
         (Ok exprs) (Ok (ASTDo exprs line col))
         (Err e) (Err e))))
+
+;; ── Pattern parsing ───────────────────────────────
+
+(defn parse-pattern
+  :sig [(sexpr : Any) -> List]
+  :intent "Parse an S-expression into a pattern node"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SAtom tok)
+        (match tok
+          (Token kind value line col)
+            (if (= kind "symbol")
+              (if (= value "_")
+                (Ok (PatWild line col))
+                ;; Capitalized = nullary variant pattern, lowercase = binding
+                (if (is-upper? (char-at value 0))
+                  (Ok (PatVariant value [] line col))
+                  (Ok (PatBind value line col))))
+              ;; Literal pattern
+              (if (= kind "integer") (Ok (PatLit value line col))
+              (if (= kind "float")   (Ok (PatLit value line col))
+              (if (= kind "string")  (Ok (PatLit value line col))
+              (if (= kind "bool")    (Ok (PatLit value line col))
+              (if (= kind "nil")     (Ok (PatLit nil line col))
+                (Err (ParseError (+ "unexpected token in pattern: " kind) line col)))))))))
+
+      (SList items line col)
+        (if (empty? items)
+          (Err (ParseError "empty list in pattern" line col))
+          (let (head-sexpr : Any (head items))
+            (match head-sexpr
+              (SAtom tok)
+                (match tok
+                  (Token kind value _ _)
+                    (if (= kind "symbol")
+                      (if (is-upper? (char-at value 0))
+                        ;; Variant pattern: (Ok v), (Token kind _ _ _)
+                        (match (parse-patterns items 1)
+                          (Ok sub-pats) (Ok (PatVariant value sub-pats line col))
+                          (Err e) (Err e))
+                        (Err (ParseError "pattern list must start with capitalized variant" line col)))
+                      (Err (ParseError "pattern list must start with symbol" line col))))
+              _ (Err (ParseError "pattern list must start with symbol" line col)))))
+
+      _ (Err (ParseError "unexpected S-expression in pattern" 0 0))))
+
+(defn parse-patterns
+  :sig [(items : List) (pos : i64) -> List]
+  :intent "Parse sub-patterns from items[pos..], return (Ok patterns)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [])
+      (match (parse-pattern (at items pos))
+        (Ok pat)
+          (match (parse-patterns items (+ pos 1))
+            (Ok rest) (Ok (cons pat rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+;; ── Match expression ──────────────────────────────
+
+(defn parse-match-arms
+  :sig [(items : List) (pos : i64) -> List]
+  :intent "Parse pattern/body pairs from items[pos..], return (Ok arms)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [])
+      ;; Need at least 2 more items (pattern + body)
+      (if (>= (+ pos 1) (length items))
+        (Err (ParseError "match arms must come in pairs (pattern body)" 0 0))
+        (match (parse-pattern (at items pos))
+          (Ok pat)
+            (match (parse-expr (at items (+ pos 1)))
+              (Ok body)
+                (match (parse-match-arms items (+ pos 2))
+                  (Ok rest) (Ok (cons (ASTArm pat body) rest))
+                  (Err e) (Err e))
+              (Err e) (Err e))
+          (Err e) (Err e)))))
+
+(defn parse-match
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (match scrutinee pattern body ...) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [match-sym scrutinee pat1 body1 pat2 body2 ...]
+    (if (< (length items) 4)
+      (Err (ParseError "match requires scrutinee and at least one arm" line col))
+      ;; Check even number of remaining items after scrutinee
+      (let (arm-count : i64 (- (length items) 2))
+        (if (= (% arm-count 2) 1)
+          (Err (ParseError "match arms must come in pairs (pattern body)" line col))
+          (match (parse-expr (at items 1))
+            (Ok scrutinee)
+              (match (parse-match-arms items 2)
+                (Ok arms) (Ok (ASTMatch scrutinee arms line col))
+                (Err e) (Err e))
+            (Err e) (Err e))))))
+
+;; ── Lambda ────────────────────────────────────────
+
+(defn parse-lambda-params
+  :sig [(items : List) (pos : i64) -> List]
+  :intent "Parse lambda parameter names from bracket items"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [])
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind value _ _)
+              (if (= kind "symbol")
+                (match (parse-lambda-params items (+ pos 1))
+                  (Ok rest) (Ok (cons value rest))
+                  (Err e) (Err e))
+                (Err (ParseError "lambda parameter must be a symbol" 0 0))))
+        _ (Err (ParseError "lambda parameter must be a symbol" 0 0)))))
+
+(defn parse-lambda
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (fn [params] body) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [fn-sym params-bracket body]
+    (if (= (length items) 3)
+      (match (at items 1)
+        (SBracket param-items _ _)
+          (match (parse-lambda-params param-items 0)
+            (Ok params)
+              (match (parse-expr (at items 2))
+                (Ok body) (Ok (ASTLambda params body line col))
+                (Err e) (Err e))
+            (Err e) (Err e))
+        _ (Err (ParseError "fn expects [params] as second argument" line col)))
+      (Err (ParseError "fn requires [params] and body" line col))))
+
+;; ── Try ───────────────────────────────────────────
+
+(defn parse-try
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (try expr) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (= (length items) 2)
+      (match (parse-expr (at items 1))
+        (Ok expr) (Ok (ASTTry expr line col))
+        (Err e) (Err e))
+      (Err (ParseError "try requires exactly one argument" line col))))
