@@ -1,0 +1,50 @@
+;; bootstrap/parser.airl — Self-hosted AIRL parser
+;; Requires: bootstrap/lexer.airl (loaded first)
+
+;; ── Helpers ───────────────────────────────────────
+
+(defn is-upper?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if single-char string is uppercase letter"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (contains "ABCDEFGHIJKLMNOPQRSTUVWXYZ" ch))
+
+(defn parse-error
+  :sig [(msg : String) (line : i64) (col : i64) -> List]
+  :intent "Create a structured parse error"
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (Err (ParseError msg line col)))
+
+(defn token-line
+  :sig [(tok : Any) -> i64]
+  :intent "Extract line number from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token _ _ line _) line))
+
+(defn token-col
+  :sig [(tok : Any) -> i64]
+  :intent "Extract column number from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token _ _ _ col) col))
+
+(defn token-kind
+  :sig [(tok : Any) -> String]
+  :intent "Extract kind string from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token kind _ _ _) kind))
+
+(defn token-value
+  :sig [(tok : Any) -> Any]
+  :intent "Extract value from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token _ value _ _) value))

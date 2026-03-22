@@ -1,0 +1,71 @@
+;; bootstrap/parser_test.airl — Parser tests
+;; This file must be self-contained: includes lexer + parser functions.
+
+;; ── Test helper ───────────────────────────────────
+
+(defn assert-eq
+  :sig [(a : Any) (b : Any) -> Bool]
+  :intent "Assert equality, print error if not"
+  :requires [(valid a) (valid b)]
+  :ensures [(valid result)]
+  :body (if (= a b) true
+          (do (print "FAIL: expected" b "got" a) false)))
+
+;; ── Parser helpers ────────────────────────────────
+
+(defn is-upper?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if single-char string is uppercase letter"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (contains "ABCDEFGHIJKLMNOPQRSTUVWXYZ" ch))
+
+(defn parse-error
+  :sig [(msg : String) (line : i64) (col : i64) -> List]
+  :intent "Create a structured parse error"
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (Err (ParseError msg line col)))
+
+(defn token-line
+  :sig [(tok : Any) -> i64]
+  :intent "Extract line number from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token _ _ line _) line))
+
+(defn token-col
+  :sig [(tok : Any) -> i64]
+  :intent "Extract column number from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token _ _ _ col) col))
+
+(defn token-kind
+  :sig [(tok : Any) -> String]
+  :intent "Extract kind string from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token kind _ _ _) kind))
+
+(defn token-value
+  :sig [(tok : Any) -> Any]
+  :intent "Extract value from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token _ value _ _) value))
+
+;; ── Helpers smoke test ─────────────────────────────
+
+(assert-eq (is-upper? "A") true)
+(assert-eq (is-upper? "z") false)
+(assert-eq (is-upper? "1") false)
+(assert-eq (token-kind (Token "symbol" "foo" 1 0)) "symbol")
+(assert-eq (token-value (Token "integer" 42 1 0)) 42)
+(assert-eq (token-line (Token "symbol" "x" 5 3)) 5)
+
+(print "=== Task 1 tests complete ===")
