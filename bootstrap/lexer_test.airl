@@ -63,3 +63,98 @@
   (assert-eq (is-symbol-char? "a") true)
   (assert-eq (is-symbol-char? "5") true)
   (print "helper predicate tests passed"))
+
+;; ── Helper: safe peek at next char ──────────────────
+
+(defn peek-next-is?
+  :sig [(source : String) (pos : i64) (expected : String) -> Bool]
+  :intent "Check if char at pos+1 equals expected, bounds-safe"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (< (+ pos 1) (length source))
+      (= (char-at source (+ pos 1)) expected)
+      false))
+
+;; ── Whitespace and comment skipping ─────────────────
+
+(defn skip-block-comment
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (depth : i64) -> List]
+  :intent "Skip nestable block comment, return (Ok [pos line col]) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      (Err "unterminated block comment")
+      (let (ch : String (char-at source pos))
+        (if (= ch "#")
+          (if (peek-next-is? source pos "|")
+            (skip-block-comment source (+ pos 2) line (+ col 2) (+ depth 1))
+            (skip-block-comment source (+ pos 1) line (+ col 1) depth))
+          (if (= ch "|")
+            (if (peek-next-is? source pos "#")
+              (if (= depth 1)
+                (Ok [(+ pos 2) line (+ col 2)])
+                (skip-block-comment source (+ pos 2) line (+ col 2) (- depth 1)))
+              (skip-block-comment source (+ pos 1) line (+ col 1) depth))
+            (if (= ch "\n")
+              (skip-block-comment source (+ pos 1) (+ line 1) 0 depth)
+              (skip-block-comment source (+ pos 1) line (+ col 1) depth)))))))
+
+(defn skip-line-comment
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
+  :intent "Skip to end of line, then continue skipping whitespace"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      (Ok [pos line col])
+      (if (= (char-at source pos) "\n")
+        (skip-ws source (+ pos 1) (+ line 1) 0)
+        (skip-line-comment source (+ pos 1) line (+ col 1)))))
+
+(defn skip-ws
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
+  :intent "Skip whitespace and comments, return (Ok [pos line col]) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      (Ok [pos line col])
+      (let (ch : String (char-at source pos))
+        (if (= ch "\n")
+          (skip-ws source (+ pos 1) (+ line 1) 0)
+          (if (or (= ch " ") (or (= ch "\t") (= ch "\r")))
+            (skip-ws source (+ pos 1) line (+ col 1))
+            (if (= ch ";")
+              (skip-line-comment source (+ pos 1) line col)
+              (if (= ch "#")
+                (if (peek-next-is? source pos "|")
+                  (match (skip-block-comment source (+ pos 2) line (+ col 2) 1)
+                    (Ok state) (skip-ws source (head state) (at state 1) (at state 2))
+                    (Err msg) (Err msg))
+                  (Ok [pos line col]))
+                (Ok [pos line col]))))))))
+
+;; ── Whitespace tests ────────────────────────────────
+
+(do
+  ;; Simple whitespace
+  (assert-eq (skip-ws "  hello" 0 1 0) (Ok [2 1 2]))
+  ;; Newline tracking
+  (assert-eq (skip-ws "\n  x" 0 1 0) (Ok [3 2 2]))
+  ;; Line comment
+  (assert-eq (skip-ws "; comment\nx" 0 1 0) (Ok [10 2 0]))
+  ;; Block comment
+  (assert-eq (skip-ws "#| block |#x" 0 1 0) (Ok [11 1 11]))
+  ;; Nested block comment
+  (assert-eq (skip-ws "#| outer #| inner |# still |#x" 0 1 0) (Ok [29 1 29]))
+  ;; Unterminated block comment
+  (match (skip-ws "#| oops" 0 1 0)
+    (Ok _) (print "FAIL: should have errored on unterminated block comment")
+    (Err msg) (assert-eq (contains msg "unterminated") true))
+  ;; No whitespace
+  (assert-eq (skip-ws "hello" 0 1 0) (Ok [0 1 0]))
+  ;; End of input
+  (assert-eq (skip-ws "" 0 1 0) (Ok [0 1 0]))
+  (print "whitespace tests passed"))
