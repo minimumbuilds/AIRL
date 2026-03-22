@@ -227,6 +227,37 @@
   :ensures [(valid result)]
   :body (eval-args-acc args env []))
 
+;; ─── Control Flow Helpers ────────────────────────────────
+
+(defn eval-let-bindings
+  :sig [(bindings : List) (env : List) -> Any]
+  :intent "Evaluate let bindings sequentially, threading env"
+  :requires [(valid bindings)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? bindings) (Ok env)
+      (match (head bindings)
+        (ASTBinding name _ val-expr)
+          (match (eval-node val-expr env)
+            (Err e) (Err e)
+            (Ok pair)
+              (eval-let-bindings (tail bindings) (env-bind (at pair 1) name (at pair 0))))
+        _ (Err "eval: invalid let binding"))))
+
+(defn eval-do
+  :sig [(exprs : List) (env : List) -> Any]
+  :intent "Evaluate a sequence of expressions, threading env, return last value"
+  :requires [(valid exprs)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? exprs) (Ok [(ValNil) env])
+      (match (eval-node (head exprs) env)
+        (Err e) (Err e)
+        (Ok pair)
+          (if (empty? (tail exprs))
+            (Ok pair)
+            (eval-do (tail exprs) (at pair 1))))))
+
 ;; ─── Evaluator Core ──────────────────────────────────────
 
 (defn eval-list-items
@@ -281,5 +312,27 @@
                             (Ok val) (Ok [val env3])
                             (Err e) (Err e))
                         _ (Err "eval: not callable"))))))))
+
+    (ASTIf cond then-expr else-expr _ _)
+      (match (eval-node cond env)
+        (Err e) (Err e)
+        (Ok cond-pair)
+          (let (cond-val : Any (at cond-pair 0))
+            (let (env2 : Any (at cond-pair 1))
+              (if (unwrap-bool cond-val)
+                (eval-node then-expr env2)
+                (eval-node else-expr env2)))))
+
+    (ASTLet bindings body _ _)
+      (let (env2 : Any (env-push env))
+        (match (eval-let-bindings bindings env2)
+          (Err e) (Err e)
+          (Ok bound-env)
+            (match (eval-node body bound-env)
+              (Err e) (Err e)
+              (Ok pair) (Ok [(at pair 0) (env-pop (at pair 1))]))))
+
+    (ASTDo exprs _ _)
+      (eval-do exprs env)
 
     _ (Err "eval-node: unknown node type")))
