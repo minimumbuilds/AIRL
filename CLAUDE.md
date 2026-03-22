@@ -182,7 +182,11 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **Better Error Messages** — Contract violations use `contract.to_airl()` for readable S-expression clause display and `capture_bindings()` to show relevant variable values.
 - **REPL Enhancements** — `:help` (list commands), `:load <file>` (evaluate a file in session), `:type <expr>` (show inferred type without evaluating). `drain_diagnostics()` on `TypeChecker` for REPL persistence.
 - **Static Linearity Analysis** — `LinearityChecker` wired into `pipeline.rs` after type checking. Detects use-after-move, borrow conflicts, and branch divergence at compile time for `Own`/`Ref`/`Mut` annotated params. Default ownership is not tracked, avoiding false positives. Runs in both `run` and `check` modes.
-- **Trampoline Eval + Self-TCO** — `eval()` split into trampoline driver loop + `eval_inner()` single-step evaluator. Tail-position expressions (`if` branches, `do` last expr) return `Continue(Expr)` instead of recursing on Rust stack. Self-recursive function calls detected by `current_fn_name` and looped in `call_fn_inner` via `eval_body()`. `in_tail_context` flag prevents TailCall from leaking into nested sub-expression evaluation. Eliminates stack overflow for tail-recursive AIRL functions (bootstrap lexer/parser loops, fold, map). Thread stack reduced from 1GB to 64MB.
+- **Trampoline Eval + Self-TCO** — `eval()` split into trampoline driver loop + `eval_inner()` single-step evaluator. Tail-position expressions (`if` branches, `do` last expr, `match` arms, `let` bodies) return `Continue(Expr)` instead of recursing on Rust stack. Self-recursive function calls detected by `current_fn_name` and looped in `call_fn_inner` via `eval_body()`. `in_tail_context` flag prevents TailCall from leaking into nested sub-expression evaluation. Eliminates stack overflow for tail-recursive AIRL functions (bootstrap lexer/parser loops, fold, map). Thread stack is 64MB.
+- **String `length` Fix** — `builtin_length` for strings changed from `s.len()` (byte count) to `s.chars().count()` (character count), aligning with `char-at`'s character-based indexing. Fixes out-of-bounds crashes on non-ASCII strings.
+- **Lexer UTF-8 String Support** — `lex_string` in `crates/airl-syntax/src/lexer.rs` now properly decodes multi-byte UTF-8 characters in string literals, instead of treating each byte as a separate `char`. Detects UTF-8 sequence length from leading byte and uses `std::str::from_utf8` to decode.
+- **TCO Through Match/Let Arms** — `match` and `let` body evaluation in `eval.rs` now uses inline trampolines that preserve `in_tail_context`, enabling tail-call optimization for recursive functions that recurse inside `match` arms (e.g., `lex-loop`). Previously, these called `eval()` which cleared the tail context flag.
+- **Bootstrap Self-Parse Milestone** — The self-hosted lexer can lex its own source (`bootstrap/lexer.airl`, 15,691 chars → 3,400 tokens). Timing: ~56s release, ~100s debug.
 
 ---
 
@@ -194,7 +198,7 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 **Status:** Lexer, parser, and evaluator complete. The self-hosted lexer (`bootstrap/lexer.airl`, ~360 lines) tokenizes AIRL source strings. The self-hosted parser (`bootstrap/parser.airl`, ~750 lines) converts token streams to typed AST nodes. The self-hosted evaluator (`bootstrap/eval.airl`, ~520 lines) interprets AST nodes using tagged value variants (`ValInt`, `ValStr`, etc.), a map-based environment frame stack, and builtin delegation to the Rust runtime. The full lex→parse→eval pipeline is tested by `bootstrap/pipeline_test.airl`.
 
-**Known limitation:** Parsing deeply nested files is computationally intensive in the tree-walking interpreter but no longer causes stack overflow thanks to the trampoline. Full lexer self-parse may be slow but terminates correctly.
+**Self-parse verified:** The bootstrap lexer successfully lexes its own source (15,691 chars → 3,400 tokens, ~56s release). TCO through `match`/`let` arms is required for this to work — without it, `lex-loop`'s recursion overflows the stack.
 
 **Next steps:** The bootstrap compiler can now lex, parse, and evaluate AIRL programs entirely in AIRL. Potential future work includes self-hosting the type checker or adding optimization passes.
 
@@ -215,7 +219,7 @@ cargo run -- run bootstrap/pipeline_test.airl    # Full lex→parse→eval pipel
 - `and`/`or` are **eager** (not short-circuit) — use nested `if` for bounds-safe lookahead
 - No mixed int/float arithmetic — use `int-to-float` and `digit-value-f` helpers
 - No import system — test files must contain all function definitions
-- Recursion depth limit is 50K — self-lexing large files may hit this
+- Self-TCO works through `match`/`let` arms — tail-recursive loops like `lex-loop` and `parse-loop` won't overflow the stack
 
 ---
 
