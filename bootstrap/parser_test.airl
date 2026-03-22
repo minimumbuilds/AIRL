@@ -500,6 +500,107 @@
       (Ok result) (Ok (at result 0))
       (Err e) (Err e)))
 
+;; ── Phase 2: S-Expression → AST ──────────────────
+
+(defn parse-atom
+  :sig [(tok : Any) -> List]
+  :intent "Convert a token to an AST atom node"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body
+    (match tok
+      (Token kind value line col)
+        (if (= kind "integer") (Ok (ASTInt value line col))
+        (if (= kind "float")   (Ok (ASTFloat value line col))
+        (if (= kind "string")  (Ok (ASTStr value line col))
+        (if (= kind "bool")    (Ok (ASTBool value line col))
+        (if (= kind "nil")     (Ok (ASTNil line col))
+        (if (= kind "keyword") (Ok (ASTKeyword value line col))
+        (if (= kind "symbol")
+          ;; Check if it's a capitalized symbol (nullary variant)
+          (if (is-upper? (char-at value 0))
+            (Ok (ASTVariant value [] line col))
+            (Ok (ASTSymbol value line col)))
+          (Err (ParseError (+ "unexpected token kind: " kind) line col)))))))))))
+
+(defn parse-list-items
+  :sig [(sexprs : List) (pos : i64) -> List]
+  :intent "Parse a list of S-expressions into AST exprs, return (Ok exprs) or (Err ...)"
+  :requires [(valid sexprs)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length sexprs))
+      (Ok [])
+      (match (parse-expr (at sexprs pos))
+        (Ok node)
+          (match (parse-list-items sexprs (+ pos 1))
+            (Ok rest) (Ok (cons node rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn parse-expr
+  :sig [(sexpr : Any) -> List]
+  :intent "Parse an S-expression into an AST expression node"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      ;; Atom — delegate to parse-atom
+      (SAtom tok) (parse-atom tok)
+
+      ;; Bracket list — list literal [1 2 3]
+      (SBracket items line col)
+        (match (parse-list-items items 0)
+          (Ok exprs) (Ok (ASTList exprs line col))
+          (Err e) (Err e))
+
+      ;; Parenthesized list — dispatch on head
+      (SList items line col)
+        (if (empty? items)
+          (Ok (ASTNil line col))
+          (let (first : Any (head items))
+            (match first
+              ;; Head is an atom token — check if it's a special form
+              (SAtom tok)
+                (match tok
+                  (Token kind value _ _)
+                    (if (= kind "symbol")
+                      ;; Dispatch on symbol name
+                      (if (= value "if")      (parse-if items line col)
+                      (if (= value "let")     (parse-let items line col)
+                      (if (= value "do")      (parse-do items line col)
+                      (if (= value "match")   (parse-match items line col)
+                      (if (= value "fn")      (parse-lambda items line col)
+                      (if (= value "try")     (parse-try items line col)
+                      ;; Check for variant constructor (capitalized)
+                      (if (is-upper? (char-at value 0))
+                        (match (parse-list-items items 1)
+                          (Ok args) (Ok (ASTVariant value args line col))
+                          (Err e) (Err e))
+                        ;; Regular function call
+                        (match (parse-expr first)
+                          (Ok callee)
+                            (match (parse-list-items items 1)
+                              (Ok args) (Ok (ASTCall callee args line col))
+                              (Err e) (Err e))
+                          (Err e) (Err e)))))))))
+                      ;; Non-symbol atom as head — function call with computed callee
+                      (match (parse-expr first)
+                        (Ok callee)
+                          (match (parse-list-items items 1)
+                            (Ok args) (Ok (ASTCall callee args line col))
+                            (Err e) (Err e))
+                        (Err e) (Err e))))
+
+              ;; Head is a list or bracket — computed callee: ((fn [x] x) 42)
+              _
+                (match (parse-expr first)
+                  (Ok callee)
+                    (match (parse-list-items items 1)
+                      (Ok args) (Ok (ASTCall callee args line col))
+                      (Err e) (Err e))
+                  (Err e) (Err e)))))))
+
 ;; ── Test helper ───────────────────────────────────
 
 (defn assert-eq
@@ -599,3 +700,106 @@
     (Err e) (print "FAIL: error")))
 
 (print "=== Task 2 tests complete ===")
+
+;; ── Phase 2: Atom tests ─────────────────────────
+
+;; Helper: source → parse one expression
+(defn parse-one-expr
+  :sig [(source : String) -> List]
+  :intent "Lex, group, and parse one expression from source"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err msg) (Err msg)
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err e)
+          (Ok sexprs)
+            (if (empty? sexprs)
+              (Err (ParseError "no expression" 0 0))
+              (parse-expr (head sexprs))))))
+
+;; Atoms
+(match (parse-one-expr "42")
+  (Ok node) (match node
+    (ASTInt v _ _) (assert-eq v 42)
+    _ (print "FAIL: expected ASTInt"))
+  (Err e) (print "FAIL: error"))
+
+(match (parse-one-expr "3.14")
+  (Ok node) (match node
+    (ASTFloat v _ _) (assert-eq v 3.14)
+    _ (print "FAIL: expected ASTFloat"))
+  (Err e) (print "FAIL: error"))
+
+(match (parse-one-expr "\"hello\"")
+  (Ok node) (match node
+    (ASTStr v _ _) (assert-eq v "hello")
+    _ (print "FAIL: expected ASTStr"))
+  (Err e) (print "FAIL: error"))
+
+(match (parse-one-expr "true")
+  (Ok node) (match node
+    (ASTBool v _ _) (assert-eq v true)
+    _ (print "FAIL: expected ASTBool"))
+  (Err e) (print "FAIL: error"))
+
+(match (parse-one-expr "nil")
+  (Ok node) (match node
+    (ASTNil _ _) (assert-eq true true)
+    _ (print "FAIL: expected ASTNil"))
+  (Err e) (print "FAIL: error"))
+
+(match (parse-one-expr "foo")
+  (Ok node) (match node
+    (ASTSymbol name _ _) (assert-eq name "foo")
+    _ (print "FAIL: expected ASTSymbol"))
+  (Err e) (print "FAIL: error"))
+
+(match (parse-one-expr ":keyword")
+  (Ok node) (match node
+    (ASTKeyword name _ _) (assert-eq name "keyword")
+    _ (print "FAIL: expected ASTKeyword"))
+  (Err e) (print "FAIL: error"))
+
+;; List literal
+(match (parse-one-expr "[1 2 3]")
+  (Ok node) (match node
+    (ASTList items _ _) (assert-eq (length items) 3)
+    _ (print "FAIL: expected ASTList"))
+  (Err e) (print "FAIL: error"))
+
+;; Function call
+(match (parse-one-expr "(+ 1 2)")
+  (Ok node) (match node
+    (ASTCall callee args _ _)
+      (do
+        (match callee
+          (ASTSymbol name _ _) (assert-eq name "+")
+          _ (print "FAIL: expected ASTSymbol callee"))
+        (assert-eq (length args) 2))
+    _ (print "FAIL: expected ASTCall"))
+  (Err e) (print "FAIL: error"))
+
+;; Variant constructor
+(match (parse-one-expr "(Ok 42)")
+  (Ok node) (match node
+    (ASTVariant name args _ _)
+      (do
+        (assert-eq name "Ok")
+        (assert-eq (length args) 1))
+    _ (print "FAIL: expected ASTVariant"))
+  (Err e) (print "FAIL: error"))
+
+;; Nullary variant
+(match (parse-one-expr "Ok")
+  (Ok node) (match node
+    (ASTVariant name args _ _)
+      (do
+        (assert-eq name "Ok")
+        (assert-eq (length args) 0))
+    _ (print "FAIL: expected ASTVariant for bare Ok"))
+  (Err e) (print "FAIL: error"))
+
+(print "=== Task 3 tests complete ===")
