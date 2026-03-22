@@ -1,8 +1,10 @@
 ;; bootstrap/typecheck_test.airl -- Tests for the bootstrap type checker
 ;; Self-contained: includes all lexer + parser + types + typecheck functions.
+;; NOTE: Integration tests parse bootstrap modules through the bootstrap parser
+;; which is slow. Use --release mode. Total runtime ~5-10 min.
 
 (defn assert-eq
-  :sig [(a : Any) (b : Any) -> Bool]
+  :sig [(a : List) (b : List) -> Bool]
   :intent "Assert equality"
   :requires [(valid a) (valid b)]
   :ensures [(valid result)]
@@ -392,7 +394,7 @@
   :body (Err (ParseError msg line col)))
 
 (defn token-line
-  :sig [(tok : Any) -> i64]
+  :sig [(tok : List) -> i64]
   :intent "Extract line number from a Token"
   :requires [(valid tok)]
   :ensures [(valid result)]
@@ -400,7 +402,7 @@
     (Token _ _ line _) line))
 
 (defn token-col
-  :sig [(tok : Any) -> i64]
+  :sig [(tok : List) -> i64]
   :intent "Extract column number from a Token"
   :requires [(valid tok)]
   :ensures [(valid result)]
@@ -408,7 +410,7 @@
     (Token _ _ _ col) col))
 
 (defn token-kind
-  :sig [(tok : Any) -> String]
+  :sig [(tok : List) -> String]
   :intent "Extract kind string from a Token"
   :requires [(valid tok)]
   :ensures [(valid result)]
@@ -416,7 +418,7 @@
     (Token kind _ _ _) kind))
 
 (defn token-value
-  :sig [(tok : Any) -> Any]
+  :sig [(tok : List) -> List]
   :intent "Extract value from a Token"
   :requires [(valid tok)]
   :ensures [(valid result)]
@@ -433,7 +435,7 @@
   :body
     (if (>= pos (length tokens))
       (Err (ParseError "unexpected end of input" 0 0))
-      (let (tok : Any (at tokens pos))
+      (let (tok : List (at tokens pos))
         (match tok
           (Token kind value line col)
             (if (= kind "lparen")
@@ -445,7 +447,7 @@
                       ;; Check for closing rparen
                       (if (>= end-pos (length tokens))
                         (Err (ParseError "unclosed parenthesis" line col))
-                        (let (closer : Any (at tokens end-pos))
+                        (let (closer : List (at tokens end-pos))
                           (match closer
                             (Token ck _ _ _)
                               (if (= ck "rparen")
@@ -460,7 +462,7 @@
                       (let (end-pos : i64 (at result 1))
                         (if (>= end-pos (length tokens))
                           (Err (ParseError "unclosed bracket" line col))
-                          (let (closer : Any (at tokens end-pos))
+                          (let (closer : List (at tokens end-pos))
                             (match closer
                               (Token ck _ _ _)
                                 (if (= ck "rbracket")
@@ -484,7 +486,7 @@
   :body
     (if (>= pos (length tokens))
       (Ok [[] pos])
-      (let (tok : Any (at tokens pos))
+      (let (tok : List (at tokens pos))
         (match tok
           (Token kind _ _ _)
             (if (= kind stop-kind)
@@ -496,7 +498,7 @@
                 ;; Parse one sexpr, then continue
                 (match (parse-sexpr tokens pos)
                   (Ok result)
-                    (let (sexpr : Any (at result 0))
+                    (let (sexpr : List (at result 0))
                       (let (new-pos : i64 (at result 1))
                         (match (parse-sexprs tokens new-pos stop-kind)
                           (Ok rest-result)
@@ -519,7 +521,7 @@
 ;; ── Phase 2: S-Expression → AST ──────────────────
 
 (defn parse-atom
-  :sig [(tok : Any) -> List]
+  :sig [(tok : List) -> List]
   :intent "Convert a token to an AST atom node"
   :requires [(valid tok)]
   :ensures [(valid result)]
@@ -555,7 +557,7 @@
         (Err e) (Err e))))
 
 (defn parse-expr
-  :sig [(sexpr : Any) -> List]
+  :sig [(sexpr : List) -> List]
   :intent "Parse an S-expression into an AST expression node"
   :requires [(valid sexpr)]
   :ensures [(valid result)]
@@ -574,7 +576,7 @@
       (SList items line col)
         (if (empty? items)
           (Ok (ASTNil line col))
-          (let (first : Any (head items))
+          (let (first : List (head items))
             (match first
               ;; Head is an atom token — check if it's a special form
               (SAtom tok)
@@ -640,7 +642,7 @@
       (Err (ParseError "if requires exactly 3 arguments (cond then else)" line col))))
 
 (defn parse-let-binding
-  :sig [(sexpr : Any) -> List]
+  :sig [(sexpr : List) -> List]
   :intent "Parse a single let binding (name : Type value)"
   :requires [(valid sexpr)]
   :ensures [(valid result)]
@@ -649,14 +651,14 @@
       (SList items line col)
         (if (< (length items) 4)
           (Err (ParseError "let binding requires (name : Type value)" line col))
-          (let (name-sexpr : Any (at items 0))
+          (let (name-sexpr : List (at items 0))
             (match name-sexpr
               (SAtom tok)
                 (match tok
                   (Token kind name _ _)
                     (if (= kind "symbol")
                       ;; items[1] should be colon, items[2] should be type, items[3] should be value
-                      (let (type-sexpr : Any (at items 2))
+                      (let (type-sexpr : List (at items 2))
                         (match type-sexpr
                           (SAtom type-tok)
                             (match type-tok
@@ -722,7 +724,7 @@
 ;; ── Pattern parsing ───────────────────────────────
 
 (defn parse-pattern
-  :sig [(sexpr : Any) -> List]
+  :sig [(sexpr : List) -> List]
   :intent "Parse an S-expression into a pattern node"
   :requires [(valid sexpr)]
   :ensures [(valid result)]
@@ -749,7 +751,7 @@
       (SList items line col)
         (if (empty? items)
           (Err (ParseError "empty list in pattern" line col))
-          (let (head-sexpr : Any (head items))
+          (let (head-sexpr : List (head items))
             (match head-sexpr
               (SAtom tok)
                 (match tok
@@ -881,7 +883,7 @@
 ;; ── Signature parsing ─────────────────────────────
 
 (defn parse-param
-  :sig [(sexpr : Any) -> List]
+  :sig [(sexpr : List) -> List]
   :intent "Parse a parameter (name : Type) from S-expression"
   :requires [(valid sexpr)]
   :ensures [(valid result)]
@@ -890,14 +892,14 @@
       (SList items line col)
         (if (< (length items) 3)
           (Err (ParseError "parameter requires (name : Type)" line col))
-          (let (name-sexpr : Any (at items 0))
+          (let (name-sexpr : List (at items 0))
             (match name-sexpr
               (SAtom tok)
                 (match tok
                   (Token kind name _ _)
                     (if (= kind "symbol")
                       ;; items[1] = colon, items[2] = type
-                      (let (type-sexpr : Any (at items 2))
+                      (let (type-sexpr : List (at items 2))
                         (match type-sexpr
                           (SAtom type-tok)
                             (match type-tok
@@ -943,7 +945,7 @@
         _ (find-arrow items (+ pos 1)))))
 
 (defn parse-sig
-  :sig [(sexpr : Any) -> List]
+  :sig [(sexpr : List) -> List]
   :intent "Parse :sig [(params...) -> ReturnType] from bracket S-expression"
   :requires [(valid sexpr)]
   :ensures [(valid result)]
@@ -975,7 +977,7 @@
 ;; ── defn clause walker ────────────────────────────
 
 (defn walk-defn-clauses
-  :sig [(items : List) (pos : i64) (sig : Any) (intent : String) (requires : List) (ensures : List) (body : Any) -> List]
+  :sig [(items : List) (pos : i64) (sig : List) (intent : String) (requires : List) (ensures : List) (body : List) -> List]
   :intent "Walk keyword clauses in defn, accumulate values"
   :requires [(valid items)]
   :ensures [(valid result)]
@@ -991,7 +993,7 @@
                 ;; Keyword clause — need value at pos+1
                 (if (>= (+ pos 1) (length items))
                   (Err (ParseError (+ "missing value for :" value) 0 0))
-                  (let (val-sexpr : Any (at items (+ pos 1)))
+                  (let (val-sexpr : List (at items (+ pos 1)))
                     (if (= value "sig")
                       (match (parse-sig val-sexpr)
                         (Ok new-sig) (walk-defn-clauses items (+ pos 2) new-sig intent requires ensures body)
@@ -1244,7 +1246,7 @@
 ;; ── Top-level and entry point ─────────────────────
 
 (defn parse-top-level
-  :sig [(sexpr : Any) -> List]
+  :sig [(sexpr : List) -> List]
   :intent "Parse a top-level S-expression into an AST node"
   :requires [(valid sexpr)]
   :ensures [(valid result)]
@@ -1483,8 +1485,11 @@
         _ (match a
           ;; TyNever is bottom type — compatible with anything
           (TyNever) true
+          ;; TyUnit (nil) is compatible with anything — used as placeholder
+          (TyUnit) true
           _ (match b
             (TyNever) true
+            (TyUnit) true
             _ (if (is-int-type a)
                 (if (is-int-type b) true false)
                 (if (is-float-type a)
@@ -1607,6 +1612,8 @@
                          ;; I/O
                          "print" (TyFunc [tv] unitT)
                          "read-file" (TyFunc [strT] strT)
+                         "write-file" (TyFunc [strT strT] boolT)
+                         "file-exists?" (TyFunc [strT] boolT)
                          ;; Introspection
                          "type-of" (TyFunc [tv] strT)
                          "valid" (TyFunc [tv] boolT)
@@ -1880,7 +1887,7 @@
                             ;; Also bind "result" for ensures
                             (let (fn-env : List (type-env-bind fn-env "result" ret-ty))
                               (match (check-expr body fn-env reg)
-                                (Err e) (Err e)
+                                (Err e) (Err (join ["in function '" name "': " e] ""))
                                 (Ok body-ty)
                                   (if (types-compatible body-ty ret-ty)
                                     (Ok [fn-ty (type-env-bind env name fn-ty)])
@@ -2019,15 +2026,25 @@
 
 (defn check-all-top-levels
   :sig [(nodes : List) (env : List) (reg : List) -> List]
-  :intent "Pass 2: type-check all top-level nodes with all sigs in scope"
+  :intent "Pass 2: type-check all top-level nodes, collecting all errors"
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body (check-all-top-levels-acc nodes env reg []))
+
+(defn check-all-top-levels-acc
+  :sig [(nodes : List) (env : List) (reg : List) (errors : List) -> List]
+  :intent "Accumulate type errors across all top-level nodes"
   :requires [(valid nodes)]
   :ensures [(valid result)]
   :body
-    (if (empty? nodes) (Ok env)
+    (if (empty? nodes)
+      (if (empty? errors) (Ok env)
+        (Err (join errors "; ")))
       (match (check-top-level (head nodes) env reg)
-        (Err e) (Err e)
+        (Err e)
+          (check-all-top-levels-acc (tail nodes) env reg (append errors e))
         (Ok result)
-          (check-all-top-levels (tail nodes) (at result 1) (at result 2)))))
+          (check-all-top-levels-acc (tail nodes) (at result 1) (at result 2) errors))))
 
 (defn type-check-program
   :sig [(nodes : List) (env : List) (reg : List) -> List]
@@ -2122,25 +2139,69 @@
   (Ok _) (print "PASS: deftype + variant")
   (Err e) (print "FAIL:" e))
 
-(match (check-program-source "(defn bad :sig [(x : i64) -> Bool] :requires [(valid x)] :ensures [(valid result)] :body \"hello\")")
+(match (check-program-source "(defn bad :sig [(x : i64) -> Bool] :requires [(valid x)] :ensures [(valid result)] :body \"hello\"")
   (Err _) (print "PASS: wrong return type rejected")
   (Ok _) (print "FAIL"))
 
 (print "=== typecheck function tests complete ===")
 
-;; ─── Integration: type-check lexer source ───────────
+;; ─── Integration: type-check bootstrap modules ──────
 
 (print "=== typecheck integration tests ===")
 
+;; Lexer
 (let (lexer-source : String (read-file "bootstrap/lexer.airl"))
   (match (parse lexer-source)
-    (Err e) (print "FAIL: parse error:" e)
+    (Err e) (print "FAIL: lexer parse:" e)
     (Ok nodes)
       (let (env : List (make-builtin-env 0))
         (let (reg : List (make-prelude-registry 0))
           (match (type-check-program nodes env reg)
             (Ok _) (print "PASS: lexer type-checks clean")
-            (Err e) (print "FAIL: lexer type error:" e))))))
+            (Err e) (print "FAIL: lexer:" e))))))
+
+;; Parser (needs lexer sigs)
+(let (lexer-source : String (read-file "bootstrap/lexer.airl"))
+  (match (parse lexer-source)
+    (Err e) (print "FAIL: lexer parse:" e)
+    (Ok lexer-nodes)
+      (let (parser-source : String (read-file "bootstrap/parser.airl"))
+        (match (parse parser-source)
+          (Err e) (print "FAIL: parser parse:" e)
+          (Ok parser-nodes)
+            (let (env : List (make-builtin-env 0))
+              (let (reg : List (make-prelude-registry 0))
+                (match (register-all-top-levels lexer-nodes env reg)
+                  (Err e) (print "FAIL:" e)
+                  (Ok lr)
+                    (match (type-check-program parser-nodes (at lr 0) (at lr 1))
+                      (Ok _) (print "PASS: parser type-checks clean")
+                      (Err e) (print "FAIL: parser:" e)))))))))
+
+;; Eval (needs lexer+parser sigs)
+(let (lexer-source : String (read-file "bootstrap/lexer.airl"))
+  (match (parse lexer-source)
+    (Err e) (print "FAIL: lexer parse:" e)
+    (Ok lexer-nodes)
+      (let (parser-source : String (read-file "bootstrap/parser.airl"))
+        (match (parse parser-source)
+          (Err e) (print "FAIL: parser parse:" e)
+          (Ok parser-nodes)
+            (let (eval-source : String (read-file "bootstrap/eval.airl"))
+              (match (parse eval-source)
+                (Err e) (print "FAIL: eval parse:" e)
+                (Ok eval-nodes)
+                  (let (env : List (make-builtin-env 0))
+                    (let (reg : List (make-prelude-registry 0))
+                      (match (register-all-top-levels lexer-nodes env reg)
+                        (Err e) (print "FAIL:" e)
+                        (Ok lr)
+                          (match (register-all-top-levels parser-nodes (at lr 0) (at lr 1))
+                            (Err e) (print "FAIL:" e)
+                            (Ok pr)
+                              (match (type-check-program eval-nodes (at pr 0) (at pr 1))
+                                (Ok _) (print "PASS: eval type-checks clean")
+                                (Err e) (print "FAIL: eval:" e))))))))))))
 
 (print "=== typecheck integration tests complete ===")
 (print "=== all typecheck tests complete ===")

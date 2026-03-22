@@ -86,6 +86,8 @@
                          ;; I/O
                          "print" (TyFunc [tv] unitT)
                          "read-file" (TyFunc [strT] strT)
+                         "write-file" (TyFunc [strT strT] boolT)
+                         "file-exists?" (TyFunc [strT] boolT)
                          ;; Introspection
                          "type-of" (TyFunc [tv] strT)
                          "valid" (TyFunc [tv] boolT)
@@ -359,7 +361,7 @@
                             ;; Also bind "result" for ensures
                             (let (fn-env : List (type-env-bind fn-env "result" ret-ty))
                               (match (check-expr body fn-env reg)
-                                (Err e) (Err e)
+                                (Err e) (Err (join ["in function '" name "': " e] ""))
                                 (Ok body-ty)
                                   (if (types-compatible body-ty ret-ty)
                                     (Ok [fn-ty (type-env-bind env name fn-ty)])
@@ -498,15 +500,25 @@
 
 (defn check-all-top-levels
   :sig [(nodes : List) (env : List) (reg : List) -> List]
-  :intent "Pass 2: type-check all top-level nodes with all sigs in scope"
+  :intent "Pass 2: type-check all top-level nodes, collecting all errors"
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body (check-all-top-levels-acc nodes env reg []))
+
+(defn check-all-top-levels-acc
+  :sig [(nodes : List) (env : List) (reg : List) (errors : List) -> List]
+  :intent "Accumulate type errors across all top-level nodes"
   :requires [(valid nodes)]
   :ensures [(valid result)]
   :body
-    (if (empty? nodes) (Ok env)
+    (if (empty? nodes)
+      (if (empty? errors) (Ok env)
+        (Err (join errors "; ")))
       (match (check-top-level (head nodes) env reg)
-        (Err e) (Err e)
+        (Err e)
+          (check-all-top-levels-acc (tail nodes) env reg (append errors e))
         (Ok result)
-          (check-all-top-levels (tail nodes) (at result 1) (at result 2)))))
+          (check-all-top-levels-acc (tail nodes) (at result 1) (at result 2) errors))))
 
 (defn type-check-program
   :sig [(nodes : List) (env : List) (reg : List) -> List]
