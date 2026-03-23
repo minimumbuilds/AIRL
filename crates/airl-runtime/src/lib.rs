@@ -17,6 +17,8 @@ pub mod bytecode_marshal;
 pub mod bytecode_jit;
 #[cfg(feature = "jit")]
 pub mod bytecode_jit_full;
+#[cfg(feature = "aot")]
+pub mod bytecode_aot;
 
 // Convenience re-exports
 pub use error::RuntimeError;
