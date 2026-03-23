@@ -203,6 +203,7 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **Bootstrap Type Checker** — Self-hosted type checker in AIRL (`bootstrap/types.airl` ~215 lines, `bootstrap/typecheck.airl` ~500 lines). Two-pass architecture: registration (deftype → constructor registry, defn → function signatures) then checking (expressions, functions, patterns). Eliminates all `Any` usage from bootstrap code (95 in eval, 24 in parser, 1 in lexer). Lexer type-checks cleanly via the bootstrap type checker.
 - **`deftype` Parsing** — Bootstrap parser handles `(deftype Name [Params] (| ...))` sum types and `(deftype Name (& ...))` product types. Includes `parse-variant`, `parse-field`, `parse-sum-body`, `parse-product-body`, `parse-type-params`, `parse-deftype`. Bootstrap lexer updated to include `|` in symbol characters.
 - **IR VM** — Tree-flattened IR format (`crates/airl-runtime/src/ir.rs`), Rust VM (`ir_vm.rs`) with self-TCO, value-to-IR marshalling (`ir_marshal.rs`), `run-ir` builtin. Self-hosted AIRL compiler (`bootstrap/compiler.airl`) transforms AST to IR. Rust-side compiler in `pipeline.rs` for native-speed compilation. `--compiled` flag on `cargo run -- run` for compiled execution mode. `IRClosure`/`IRFuncRef` value variants for first-class functions in compiled code.
+- **Bootstrap Fixpoint Verification** — Functional equivalence test (`bootstrap/equivalence_test.airl`, 32 tests) proves interpreted eval and compiled run-ir produce identical results across literals, arithmetic, control flow, functions, recursion, pattern matching, closures, higher-order functions, and lists. Compiler fixpoint test (`bootstrap/fixpoint_test.airl`) proves the compiled compiler produces identical IR to the interpreted compiler — Tier 1 (small program) and Tier 2 (compiler self-compilation). IR serializer (`ir-to-string`) for deterministic comparison. The compiler has reached fixpoint: compiler₁ compiling compiler.airl = compiler₂ compiling compiler.airl.
 
 ---
 
@@ -236,6 +237,8 @@ cargo run -- run bootstrap/types_test.airl       # Type representation tests
 cargo run --release -- run bootstrap/typecheck_test.airl  # Type checker tests (use --release, slow in debug)
 cargo run -- run bootstrap/compiler_test.airl              # IR compiler unit tests
 cargo run -- run bootstrap/compiler_integration_test.airl  # IR compiler integration tests
+cargo run -- run bootstrap/equivalence_test.airl           # Interpreted vs compiled equivalence (32 tests)
+cargo run --release -- run bootstrap/fixpoint_test.airl    # Compiler fixpoint test (slow, ~60min release)
 ```
 
 **Important AIRL constraints for bootstrap code:**
