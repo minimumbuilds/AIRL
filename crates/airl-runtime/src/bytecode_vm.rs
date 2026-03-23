@@ -22,6 +22,8 @@ pub struct BytecodeVm {
     recursion_depth: usize,
     #[cfg(feature = "jit")]
     jit: Option<crate::bytecode_jit::BytecodeJit>,
+    #[cfg(feature = "jit")]
+    jit_full: Option<crate::bytecode_jit_full::BytecodeJitFull>,
 }
 
 impl BytecodeVm {
@@ -33,6 +35,8 @@ impl BytecodeVm {
             recursion_depth: 0,
             #[cfg(feature = "jit")]
             jit: None,
+            #[cfg(feature = "jit")]
+            jit_full: None,
         }
     }
 
@@ -44,6 +48,19 @@ impl BytecodeVm {
             call_stack: Vec::new(),
             recursion_depth: 0,
             jit: crate::bytecode_jit::BytecodeJit::new().ok(),
+            jit_full: None,
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn new_with_full_jit() -> Self {
+        BytecodeVm {
+            functions: HashMap::new(),
+            builtins: Builtins::new(),
+            call_stack: Vec::new(),
+            recursion_depth: 0,
+            jit: None,
+            jit_full: crate::bytecode_jit_full::BytecodeJitFull::new().ok(),
         }
     }
 
@@ -54,6 +71,18 @@ impl BytecodeVm {
             for name in &names {
                 if let Some(func) = self.functions.get(name) {
                     jit.try_compile(func, &self.functions);
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn jit_full_compile_all(&mut self) {
+        if let Some(ref mut jit) = self.jit_full {
+            let names: Vec<String> = self.functions.keys().cloned().collect();
+            for name in &names {
+                if let Some(func) = self.functions.get(name) {
+                    jit.try_compile_full(func, &self.functions);
                 }
             }
         }
@@ -407,7 +436,16 @@ impl BytecodeVm {
                         (0..argc).map(|i| frame.registers[instr.dst as usize + 1 + i].clone()).collect()
                     };
 
-                    // Try JIT first
+                    // Try JIT-full first
+                    #[cfg(feature = "jit")]
+                    if let Some(ref jit_full) = self.jit_full {
+                        if let Some(val) = jit_full.try_call_native(&name, &args) {
+                            self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = val;
+                            continue;
+                        }
+                    }
+
+                    // Try JIT (primitive) next
                     #[cfg(feature = "jit")]
                     if let Some(ref jit) = self.jit {
                         if let Some(result) = jit.try_call_native(&name, &args) {

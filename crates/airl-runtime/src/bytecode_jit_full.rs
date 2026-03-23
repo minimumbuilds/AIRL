@@ -837,21 +837,28 @@ impl BytecodeJitFull {
         let mut builder_ctx = FunctionBuilderContext::new();
 
         // Pre-declare call targets for Op::Call (before builder scope).
+        // If the callee is a known runtime builtin, reuse its already-imported FuncId.
+        // If the callee is a user/stdlib function, declare it as Local.
         let mut call_targets: HashMap<String, cranelift_module::FuncId> = HashMap::new();
         for instr in &func.instructions {
             if instr.op == Op::Call || instr.op == Op::TailCall {
                 if let Value::Str(callee_name) = &func.constants[instr.a as usize] {
                     if callee_name != &func.name && !call_targets.contains_key(callee_name) {
-                        let argc = instr.b as usize;
-                        let mut call_sig = self.module.make_signature();
-                        for _ in 0..argc {
-                            call_sig.params.push(AbiParam::new(PTR));
+                        // Check if this callee is a runtime builtin (already imported).
+                        if let Some(&builtin_id) = self.builtin_map.get(callee_name.as_str()) {
+                            call_targets.insert(callee_name.clone(), builtin_id);
+                        } else {
+                            let argc = instr.b as usize;
+                            let mut call_sig = self.module.make_signature();
+                            for _ in 0..argc {
+                                call_sig.params.push(AbiParam::new(PTR));
+                            }
+                            call_sig.returns.push(AbiParam::new(PTR));
+                            let callee_id = self.module
+                                .declare_function(callee_name, Linkage::Local, &call_sig)
+                                .map_err(|e| format!("call declare: {}", e))?;
+                            call_targets.insert(callee_name.clone(), callee_id);
                         }
-                        call_sig.returns.push(AbiParam::new(PTR));
-                        let callee_id = self.module
-                            .declare_function(callee_name, Linkage::Local, &call_sig)
-                            .map_err(|e| format!("call declare: {}", e))?;
-                        call_targets.insert(callee_name.clone(), callee_id);
                     }
                 }
             }
@@ -889,6 +896,12 @@ impl BytecodeJitFull {
                     let target = (i as isize + 1 + offset) as usize;
                     block_starts.insert(target);
                     block_starts.insert(i + 1);
+                }
+                Op::Return | Op::TailCall => {
+                    // Terminators: code after them (if any) must start a new block.
+                    if i + 1 < instrs.len() {
+                        block_starts.insert(i + 1);
+                    }
                 }
                 _ => {}
             }
