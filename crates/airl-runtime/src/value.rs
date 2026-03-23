@@ -39,6 +39,7 @@ pub enum Value {
     BuiltinFn(String),
     IRClosure(crate::ir::IRClosureValue),
     IRFuncRef(String),
+    BytecodeClosure(crate::bytecode::BytecodeClosureValue),
 }
 
 impl fmt::Display for Value {
@@ -103,6 +104,7 @@ impl fmt::Display for Value {
             Value::BuiltinFn(name) => write!(f, "<builtin {}>", name),
             Value::IRClosure(_) => write!(f, "<ir-closure>"),
             Value::IRFuncRef(name) => write!(f, "<ir-fn:{}>", name),
+            Value::BytecodeClosure(_) => write!(f, "<bytecode-closure>"),
         }
     }
 }
@@ -137,6 +139,7 @@ impl PartialEq for Value {
             (Value::IRClosure(_), _) => false,
             (Value::IRFuncRef(a), Value::IRFuncRef(b)) => a == b,
             (Value::IRFuncRef(_), _) => false,
+            (Value::BytecodeClosure(_), _) => false,
             _ => false,
         }
     }

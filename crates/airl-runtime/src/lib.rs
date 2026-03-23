@@ -9,6 +9,7 @@ pub mod agent_client;
 pub mod ir;
 pub mod ir_vm;
 pub mod ir_marshal;
+pub mod bytecode;
 
 // Convenience re-exports
 pub use error::RuntimeError;
