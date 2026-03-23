@@ -14,6 +14,8 @@ pub mod bytecode_compiler;
 pub mod bytecode_vm;
 #[cfg(feature = "jit")]
 pub mod bytecode_jit;
+#[cfg(feature = "jit")]
+pub mod bytecode_jit_full;
 
 // Convenience re-exports
 pub use error::RuntimeError;
