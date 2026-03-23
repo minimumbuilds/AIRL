@@ -1,4 +1,4 @@
-use airl_driver::pipeline::{run_file, run_file_compiled, check_file, format_diagnostic_with_source, PipelineError};
+use airl_driver::pipeline::{run_file, run_file_compiled, run_file_bytecode, check_file, format_diagnostic_with_source, PipelineError};
 use airl_driver::fmt::format_source;
 use airl_agent::transport::Transport;
 
@@ -24,24 +24,26 @@ fn main() {
 
 fn cmd_run(args: &[String]) {
     if args.is_empty() {
-        eprintln!("Usage: airl run [--compiled] <file.airl>");
+        eprintln!("Usage: airl run [--compiled|--bytecode] <file.airl>");
         std::process::exit(1);
     }
 
-    let (compiled, path) = if args[0] == "--compiled" {
-        if args.len() < 2 {
-            eprintln!("Usage: airl run --compiled <file.airl>");
-            std::process::exit(1);
+    let (mode, path) = match args[0].as_str() {
+        "--compiled" => {
+            if args.len() < 2 { eprintln!("Usage: airl run --compiled <file.airl>"); std::process::exit(1); }
+            ("compiled", &args[1])
         }
-        (true, &args[1])
-    } else {
-        (false, &args[0])
+        "--bytecode" => {
+            if args.len() < 2 { eprintln!("Usage: airl run --bytecode <file.airl>"); std::process::exit(1); }
+            ("bytecode", &args[1])
+        }
+        _ => ("interpreted", &args[0]),
     };
 
-    let result = if compiled {
-        run_file_compiled(path)
-    } else {
-        run_file(path)
+    let result = match mode {
+        "compiled" => run_file_compiled(path),
+        "bytecode" => run_file_bytecode(path),
+        _ => run_file(path),
     };
 
     match result {
@@ -274,7 +276,7 @@ fn print_usage() {
 Usage: airl <command> [args]
 
 Commands:
-  run <file>       Run an AIRL source file (--compiled for IR VM)
+  run <file>       Run an AIRL source file (--compiled for IR VM, --bytecode for register VM)
   check <file>     Parse and check a file without running
   repl             Start the interactive REPL
   agent <file>     Run an agent worker (--listen <endpoint>)
