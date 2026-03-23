@@ -10,6 +10,27 @@ pub extern "C" fn airl_print(v: *mut RtValue) -> *mut RtValue {
     rt_nil()
 }
 
+/// Variadic print: takes a pointer to an array of `*mut RtValue` and a count.
+/// Prints all values space-separated with a trailing newline (matching
+/// the interpreter's `builtin_print` semantics).
+#[no_mangle]
+pub extern "C" fn airl_print_values(args: *const *mut RtValue, count: i64) -> *mut RtValue {
+    let count = count as usize;
+    for i in 0..count {
+        if i > 0 {
+            print!(" ");
+        }
+        let v = unsafe { *args.add(i) };
+        let val = unsafe { &*v };
+        match &val.data {
+            RtData::Str(s) => print!("{}", s),
+            _ => print!("{}", val),
+        }
+    }
+    println!();
+    rt_nil()
+}
+
 #[no_mangle]
 pub extern "C" fn airl_type_of(v: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*v };
