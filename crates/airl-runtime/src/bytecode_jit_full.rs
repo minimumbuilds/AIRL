@@ -13,12 +13,14 @@
 //!   4. Providing `value_to_rt` / `rt_to_value` marshaling helpers.
 //!   5. Providing `try_call_native` for invoking already-compiled functions.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
-use cranelift_codegen::ir::{types, AbiParam};
+use cranelift_codegen::ir::{self, types, AbiParam, InstBuilder, MemFlags, StackSlotData};
+use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module};
 
+use crate::bytecode::*;
 use crate::value::Value;
 
 // Re-export airl_rt types used by later compiler stages.
@@ -209,6 +211,14 @@ fn sig_ptr_ptr_i64_ret_ptr(m: &JITModule) -> cranelift_codegen::ir::Signature {
     sig
 }
 
+/// `(f64) -> ptr` — used for `airl_float` which takes an actual f64.
+fn sig_f64_ret_ptr(m: &JITModule) -> cranelift_codegen::ir::Signature {
+    let mut sig = m.make_signature();
+    sig.params.push(AbiParam::new(types::F64));
+    sig.returns.push(AbiParam::new(PTR));
+    sig
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Declare helper
 // ─────────────────────────────────────────────────────────────────────────────
@@ -375,8 +385,8 @@ impl BytecodeJitFull {
 
         // Constructors
         let int_ctor   = declare_import(m, "airl_int",   sig_i64_ret_ptr(m));
-        // airl_float takes an f64 — we transmit it as I64 bits at call sites
-        let float_ctor = declare_import(m, "airl_float", sig_i64_ret_ptr(m));
+        // airl_float takes a real f64 (passed in XMM register on x86-64)
+        let float_ctor = declare_import(m, "airl_float", sig_f64_ret_ptr(m));
         // airl_bool takes a bool (C _Bool / i8), but we use i64 for uniformity
         let bool_ctor  = declare_import(m, "airl_bool",  sig_i64_ret_ptr(m));
         let nil_ctor   = declare_import(m, "airl_nil",   sig_0_ptr(m));
@@ -670,12 +680,19 @@ impl BytecodeJitFull {
         // Call through the function pointer, dispatch by arity
         let result_ptr = unsafe { Self::dispatch_call(fn_ptr, &mut rt_args) };
 
+        // Retain the result before releasing args, because the result may alias
+        // one of the input arg pointers (e.g., `max2` returns one of its args).
+        if !result_ptr.is_null() {
+            airl_rt::memory::airl_value_retain(result_ptr);
+        }
+
         // Release the argument RtValues we allocated for the call.
         // SAFETY: each ptr was freshly allocated by value_to_rt; rc=1.
         for &ptr in &rt_args {
             airl_rt::memory::airl_value_release(ptr);
         }
 
+        // rt_to_value will release the retained reference.
         Some(Self::rt_to_value(result_ptr))
     }
 
@@ -743,6 +760,837 @@ impl BytecodeJitFull {
                 airl_rt::value::rt_nil()
             }
         }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Compile orchestration
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// Try to compile a function (and its call dependencies) to native code.
+    /// Unlike `bytecode_jit.rs`, there is no eligibility check — every function
+    /// is compilable because all value operations go through runtime calls.
+    pub fn try_compile_full(
+        &mut self,
+        func: &BytecodeFunc,
+        all_functions: &HashMap<String, BytecodeFunc>,
+    ) {
+        let name = func.name.clone();
+
+        // Already compiled — skip.
+        if self.compiled.contains_key(&name) {
+            return;
+        }
+
+        // Compile call dependencies first (ensures callees are defined before callers).
+        for instr in &func.instructions {
+            if instr.op == Op::Call {
+                if let Value::Str(callee_name) = &func.constants[instr.a as usize] {
+                    if callee_name != &func.name
+                        && !self.compiled.contains_key(callee_name)
+                    {
+                        if let Some(callee) = all_functions.get(callee_name).cloned() {
+                            self.try_compile_full(&callee, all_functions);
+                        }
+                    }
+                }
+            }
+        }
+
+        match self.compile_func(func) {
+            Ok(ptr) => {
+                if std::env::var("AIRL_JIT_DEBUG").as_deref() == Ok("1") {
+                    eprintln!("[JIT-full] compiled {}", name);
+                }
+                self.compiled.insert(name, ptr);
+            }
+            Err(e) => {
+                eprintln!("[JIT-full] {} compile error: {}", name, e);
+            }
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Core Cranelift IR emitter
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// Compile a single `BytecodeFunc` to native code.  Every value is an
+    /// `i64`-sized `*mut RtValue` pointer; all operations go through `airl_*`
+    /// runtime helper calls.
+    pub fn compile_func(&mut self, func: &BytecodeFunc) -> Result<*const u8, String> {
+        // ── 1. Build Cranelift signature (all params & return are I64 ptrs) ─
+        let mut sig = self.module.make_signature();
+        for _ in 0..func.arity {
+            sig.params.push(AbiParam::new(PTR));
+        }
+        sig.returns.push(AbiParam::new(PTR));
+
+        // ── 2. Declare function in JIT module ──────────────────────────────
+        let func_id = self
+            .module
+            .declare_function(&func.name, Linkage::Local, &sig)
+            .map_err(|e| format!("declare: {}", e))?;
+
+        // ── 3. Build function body ─────────────────────────────────────────
+        let mut ctx = self.module.make_context();
+        ctx.func.signature = sig;
+
+        let mut builder_ctx = FunctionBuilderContext::new();
+
+        // Pre-declare call targets for Op::Call (before builder scope).
+        let mut call_targets: HashMap<String, cranelift_module::FuncId> = HashMap::new();
+        for instr in &func.instructions {
+            if instr.op == Op::Call || instr.op == Op::TailCall {
+                if let Value::Str(callee_name) = &func.constants[instr.a as usize] {
+                    if callee_name != &func.name && !call_targets.contains_key(callee_name) {
+                        let argc = instr.b as usize;
+                        let mut call_sig = self.module.make_signature();
+                        for _ in 0..argc {
+                            call_sig.params.push(AbiParam::new(PTR));
+                        }
+                        call_sig.returns.push(AbiParam::new(PTR));
+                        let callee_id = self.module
+                            .declare_function(callee_name, Linkage::Local, &call_sig)
+                            .map_err(|e| format!("call declare: {}", e))?;
+                        call_targets.insert(callee_name.clone(), callee_id);
+                    }
+                }
+            }
+        }
+
+        let instrs = &func.instructions;
+        let reg_count = func.register_count as usize;
+
+        // ── Pass 1: Find basic block boundaries ────────────────────────────
+        let mut block_starts: BTreeSet<usize> = BTreeSet::new();
+        block_starts.insert(0);
+
+        for (i, instr) in instrs.iter().enumerate() {
+            match instr.op {
+                Op::Jump => {
+                    let offset = instr.a as i16 as isize;
+                    let target = (i as isize + 1 + offset) as usize;
+                    block_starts.insert(target);
+                }
+                Op::JumpIfFalse | Op::JumpIfTrue => {
+                    let offset = instr.b as i16 as isize;
+                    let target = (i as isize + 1 + offset) as usize;
+                    block_starts.insert(target);
+                    block_starts.insert(i + 1);
+                }
+                Op::JumpIfNoMatch => {
+                    let offset = instr.a as i16 as isize;
+                    let target = (i as isize + 1 + offset) as usize;
+                    block_starts.insert(target);
+                    block_starts.insert(i + 1);
+                }
+                Op::TryUnwrap => {
+                    // err_offset creates a branch target
+                    let offset = instr.b as i16 as isize;
+                    let target = (i as isize + 1 + offset) as usize;
+                    block_starts.insert(target);
+                    block_starts.insert(i + 1);
+                }
+                _ => {}
+            }
+        }
+
+        // Map instruction-index → Cranelift Block
+        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+        let mut index_to_block: HashMap<usize, ir::Block> = HashMap::new();
+        for &start in &block_starts {
+            let blk = builder.create_block();
+            index_to_block.insert(start, blk);
+        }
+
+        // Entry block receives function parameters.
+        let entry_block = index_to_block[&0];
+        builder.append_block_params_for_function_params(entry_block);
+        builder.switch_to_block(entry_block);
+
+        // ── Declare Cranelift Variables for every bytecode register ─────────
+        let mut vars: Vec<Variable> = Vec::with_capacity(reg_count + 1);
+        for _ in 0..reg_count {
+            let var = builder.declare_var(PTR);
+            vars.push(var);
+        }
+        // Extra variable for match_flag (used by MatchTag / JumpIfNoMatch)
+        let match_flag_var = builder.declare_var(types::I64);
+
+        // Bind function params to the first `arity` variables.
+        {
+            let params: Vec<ir::Value> = builder.block_params(entry_block).to_vec();
+            for (i, &param_val) in params.iter().enumerate() {
+                if i < func.arity as usize {
+                    builder.def_var(vars[i], param_val);
+                }
+            }
+        }
+        // Initialize remaining registers to null (0).
+        for r in func.arity as usize..reg_count {
+            let zero = builder.ins().iconst(PTR, 0);
+            builder.def_var(vars[r], zero);
+        }
+        // Initialize match_flag to 0.
+        {
+            let zero = builder.ins().iconst(types::I64, 0);
+            builder.def_var(match_flag_var, zero);
+        }
+
+        // ── Create loop_block for TailCall back-edges ──────────────────────
+        let loop_block = builder.create_block();
+        index_to_block.insert(0, loop_block);
+        builder.ins().jump(loop_block, &[]);
+        builder.switch_to_block(loop_block);
+        let mut last_was_terminator = true;
+
+        // ── Pass 2: Emit IR for each instruction ───────────────────────────
+        for (i, instr) in instrs.iter().enumerate() {
+            // Block boundary — emit fallthrough if needed.
+            if let Some(&blk) = index_to_block.get(&i) {
+                if !last_was_terminator {
+                    builder.ins().jump(blk, &[]);
+                }
+                builder.switch_to_block(blk);
+                last_was_terminator = false;
+            }
+
+            match instr.op {
+                // ── Literals ────────────────────────────────────────────
+                Op::LoadConst => {
+                    let dst = instr.dst as usize;
+                    let cidx = instr.a as usize;
+                    match &func.constants[cidx] {
+                        Value::Int(n) => {
+                            let int_ref = self.module.declare_func_in_func(self.rt.int_ctor, builder.func);
+                            let n_val = builder.ins().iconst(types::I64, *n);
+                            let call = builder.ins().call(int_ref, &[n_val]);
+                            let result = builder.inst_results(call)[0];
+                            builder.def_var(vars[dst], result);
+                        }
+                        Value::Float(f) => {
+                            let float_ref = self.module.declare_func_in_func(self.rt.float_ctor, builder.func);
+                            let f_val = builder.ins().f64const(*f);
+                            let call = builder.ins().call(float_ref, &[f_val]);
+                            let result = builder.inst_results(call)[0];
+                            builder.def_var(vars[dst], result);
+                        }
+                        Value::Bool(b) => {
+                            let bool_ref = self.module.declare_func_in_func(self.rt.bool_ctor, builder.func);
+                            let b_val = builder.ins().iconst(types::I64, *b as i64);
+                            let call = builder.ins().call(bool_ref, &[b_val]);
+                            let result = builder.inst_results(call)[0];
+                            builder.def_var(vars[dst], result);
+                        }
+                        Value::Str(s) => {
+                            let str_ref = self.module.declare_func_in_func(self.rt.str_ctor, builder.func);
+                            let ptr_val = builder.ins().iconst(types::I64, s.as_ptr() as i64);
+                            let len_val = builder.ins().iconst(types::I64, s.len() as i64);
+                            let call = builder.ins().call(str_ref, &[ptr_val, len_val]);
+                            let result = builder.inst_results(call)[0];
+                            builder.def_var(vars[dst], result);
+                        }
+                        _ => {
+                            // Unsupported constant type — load nil
+                            let nil_ref = self.module.declare_func_in_func(self.rt.nil_ctor, builder.func);
+                            let call = builder.ins().call(nil_ref, &[]);
+                            let result = builder.inst_results(call)[0];
+                            builder.def_var(vars[dst], result);
+                        }
+                    }
+                    last_was_terminator = false;
+                }
+
+                Op::LoadNil => {
+                    let dst = instr.dst as usize;
+                    let nil_ref = self.module.declare_func_in_func(self.rt.nil_ctor, builder.func);
+                    let call = builder.ins().call(nil_ref, &[]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+
+                Op::LoadTrue => {
+                    let dst = instr.dst as usize;
+                    let bool_ref = self.module.declare_func_in_func(self.rt.bool_ctor, builder.func);
+                    let one = builder.ins().iconst(types::I64, 1);
+                    let call = builder.ins().call(bool_ref, &[one]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+
+                Op::LoadFalse => {
+                    let dst = instr.dst as usize;
+                    let bool_ref = self.module.declare_func_in_func(self.rt.bool_ctor, builder.func);
+                    let zero = builder.ins().iconst(types::I64, 0);
+                    let call = builder.ins().call(bool_ref, &[zero]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+
+                Op::Move => {
+                    let dst = instr.dst as usize;
+                    let src = instr.a as usize;
+                    let v = builder.use_var(vars[src]);
+                    builder.def_var(vars[dst], v);
+                    last_was_terminator = false;
+                }
+
+                // ── Arithmetic ──────────────────────────────────────────
+                Op::Add => {
+                    let dst = instr.dst as usize;
+                    let add_ref = self.module.declare_func_in_func(self.rt.add, builder.func);
+                    let va = builder.use_var(vars[instr.a as usize]);
+                    let vb = builder.use_var(vars[instr.b as usize]);
+                    let call = builder.ins().call(add_ref, &[va, vb]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+                Op::Sub => {
+                    let dst = instr.dst as usize;
+                    let sub_ref = self.module.declare_func_in_func(self.rt.sub, builder.func);
+                    let va = builder.use_var(vars[instr.a as usize]);
+                    let vb = builder.use_var(vars[instr.b as usize]);
+                    let call = builder.ins().call(sub_ref, &[va, vb]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+                Op::Mul => {
+                    let dst = instr.dst as usize;
+                    let mul_ref = self.module.declare_func_in_func(self.rt.mul, builder.func);
+                    let va = builder.use_var(vars[instr.a as usize]);
+                    let vb = builder.use_var(vars[instr.b as usize]);
+                    let call = builder.ins().call(mul_ref, &[va, vb]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+                Op::Div => {
+                    let dst = instr.dst as usize;
+                    let div_ref = self.module.declare_func_in_func(self.rt.div, builder.func);
+                    let va = builder.use_var(vars[instr.a as usize]);
+                    let vb = builder.use_var(vars[instr.b as usize]);
+                    let call = builder.ins().call(div_ref, &[va, vb]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+                Op::Mod => {
+                    let dst = instr.dst as usize;
+                    let mod_ref = self.module.declare_func_in_func(self.rt.modulo, builder.func);
+                    let va = builder.use_var(vars[instr.a as usize]);
+                    let vb = builder.use_var(vars[instr.b as usize]);
+                    let call = builder.ins().call(mod_ref, &[va, vb]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+                Op::Neg => {
+                    let dst = instr.dst as usize;
+                    // Negate by computing 0 - a
+                    let int_ref = self.module.declare_func_in_func(self.rt.int_ctor, builder.func);
+                    let zero_raw = builder.ins().iconst(types::I64, 0);
+                    let call_zero = builder.ins().call(int_ref, &[zero_raw]);
+                    let zero_ptr = builder.inst_results(call_zero)[0];
+                    let sub_ref = self.module.declare_func_in_func(self.rt.sub, builder.func);
+                    let va = builder.use_var(vars[instr.a as usize]);
+                    let call = builder.ins().call(sub_ref, &[zero_ptr, va]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+
+                // ── Comparison ──────────────────────────────────────────
+                Op::Eq => {
+                    let dst = instr.dst as usize;
+                    let eq_ref = self.module.declare_func_in_func(self.rt.eq, builder.func);
+                    let va = builder.use_var(vars[instr.a as usize]);
+                    let vb = builder.use_var(vars[instr.b as usize]);
+                    let call = builder.ins().call(eq_ref, &[va, vb]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+                Op::Ne => {
+                    let dst = instr.dst as usize;
+                    let ne_ref = self.module.declare_func_in_func(self.rt.ne, builder.func);
+                    let va = builder.use_var(vars[instr.a as usize]);
+                    let vb = builder.use_var(vars[instr.b as usize]);
+                    let call = builder.ins().call(ne_ref, &[va, vb]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+                Op::Lt => {
+                    let dst = instr.dst as usize;
+                    let lt_ref = self.module.declare_func_in_func(self.rt.lt, builder.func);
+                    let va = builder.use_var(vars[instr.a as usize]);
+                    let vb = builder.use_var(vars[instr.b as usize]);
+                    let call = builder.ins().call(lt_ref, &[va, vb]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+                Op::Le => {
+                    let dst = instr.dst as usize;
+                    let le_ref = self.module.declare_func_in_func(self.rt.le, builder.func);
+                    let va = builder.use_var(vars[instr.a as usize]);
+                    let vb = builder.use_var(vars[instr.b as usize]);
+                    let call = builder.ins().call(le_ref, &[va, vb]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+                Op::Gt => {
+                    let dst = instr.dst as usize;
+                    let gt_ref = self.module.declare_func_in_func(self.rt.gt, builder.func);
+                    let va = builder.use_var(vars[instr.a as usize]);
+                    let vb = builder.use_var(vars[instr.b as usize]);
+                    let call = builder.ins().call(gt_ref, &[va, vb]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+                Op::Ge => {
+                    let dst = instr.dst as usize;
+                    let ge_ref = self.module.declare_func_in_func(self.rt.ge, builder.func);
+                    let va = builder.use_var(vars[instr.a as usize]);
+                    let vb = builder.use_var(vars[instr.b as usize]);
+                    let call = builder.ins().call(ge_ref, &[va, vb]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+
+                // ── Logic ───────────────────────────────────────────────
+                Op::Not => {
+                    let dst = instr.dst as usize;
+                    let not_ref = self.module.declare_func_in_func(self.rt.not, builder.func);
+                    let va = builder.use_var(vars[instr.a as usize]);
+                    let call = builder.ins().call(not_ref, &[va]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+
+                // ── Control flow ────────────────────────────────────────
+                Op::Jump => {
+                    let offset = instr.a as i16 as isize;
+                    let target_idx = (i as isize + 1 + offset) as usize;
+                    let target_blk = index_to_block[&target_idx];
+                    builder.ins().jump(target_blk, &[]);
+                    last_was_terminator = true;
+                }
+
+                Op::JumpIfFalse => {
+                    let cond_reg = instr.a as usize;
+                    let offset = instr.b as i16 as isize;
+                    let target_idx = (i as isize + 1 + offset) as usize;
+                    let fallthrough_idx = i + 1;
+                    let target_blk = index_to_block[&target_idx];
+                    let fallthrough_blk = index_to_block[&fallthrough_idx];
+                    // Extract raw bool from boxed value
+                    let as_bool_ref = self.module.declare_func_in_func(self.rt.as_bool_raw, builder.func);
+                    let cond_ptr = builder.use_var(vars[cond_reg]);
+                    let call = builder.ins().call(as_bool_ref, &[cond_ptr]);
+                    let raw = builder.inst_results(call)[0];
+                    // brif: first block if nonzero; JumpIfFalse = jump when zero → target is second.
+                    builder.ins().brif(raw, fallthrough_blk, &[], target_blk, &[]);
+                    last_was_terminator = true;
+                }
+
+                Op::JumpIfTrue => {
+                    let cond_reg = instr.a as usize;
+                    let offset = instr.b as i16 as isize;
+                    let target_idx = (i as isize + 1 + offset) as usize;
+                    let fallthrough_idx = i + 1;
+                    let target_blk = index_to_block[&target_idx];
+                    let fallthrough_blk = index_to_block[&fallthrough_idx];
+                    let as_bool_ref = self.module.declare_func_in_func(self.rt.as_bool_raw, builder.func);
+                    let cond_ptr = builder.use_var(vars[cond_reg]);
+                    let call = builder.ins().call(as_bool_ref, &[cond_ptr]);
+                    let raw = builder.inst_results(call)[0];
+                    // brif: first block if nonzero → target is first.
+                    builder.ins().brif(raw, target_blk, &[], fallthrough_blk, &[]);
+                    last_was_terminator = true;
+                }
+
+                Op::Return => {
+                    let src = instr.a as usize;
+                    let v = builder.use_var(vars[src]);
+                    builder.ins().return_(&[v]);
+                    last_was_terminator = true;
+                }
+
+                // ── Function calls ──────────────────────────────────────
+                Op::Call => {
+                    let callee_name = match &func.constants[instr.a as usize] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err("call: func name must be string".into()),
+                    };
+                    let argc = instr.b as usize;
+                    let dst = instr.dst as usize;
+
+                    let callee_func_id = if callee_name == func.name {
+                        func_id
+                    } else if let Some(&id) = call_targets.get(&callee_name) {
+                        id
+                    } else {
+                        return Err(format!("call target '{}' not declared", callee_name));
+                    };
+                    let func_ref = self.module.declare_func_in_func(callee_func_id, builder.func);
+
+                    let mut call_args = Vec::new();
+                    for j in 0..argc {
+                        let arg = builder.use_var(vars[dst + 1 + j]);
+                        call_args.push(arg);
+                    }
+                    let call = builder.ins().call(func_ref, &call_args);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+
+                Op::TailCall => {
+                    let callee_name = match &func.constants[instr.a as usize] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err("tailcall: func name must be string".into()),
+                    };
+                    if callee_name != func.name {
+                        return Err(format!("cross-function TailCall to '{}' not supported", callee_name));
+                    }
+                    builder.ins().jump(loop_block, &[]);
+                    last_was_terminator = true;
+                }
+
+                // ── CallBuiltin ─────────────────────────────────────────
+                Op::CallBuiltin => {
+                    let name_idx = instr.a as usize;
+                    let argc = instr.b as usize;
+                    let dst = instr.dst as usize;
+                    let builtin_name = match &func.constants[name_idx] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err("callbuiltin: name must be string".into()),
+                    };
+                    if let Some(&builtin_func_id) = self.builtin_map.get(&builtin_name) {
+                        let builtin_ref = self.module.declare_func_in_func(builtin_func_id, builder.func);
+                        let mut call_args = Vec::new();
+                        for j in 0..argc {
+                            let arg = builder.use_var(vars[dst + 1 + j]);
+                            call_args.push(arg);
+                        }
+                        let call = builder.ins().call(builtin_ref, &call_args);
+                        let result = builder.inst_results(call)[0];
+                        builder.def_var(vars[dst], result);
+                    } else {
+                        // Unknown builtin — store nil
+                        let nil_ref = self.module.declare_func_in_func(self.rt.nil_ctor, builder.func);
+                        let call = builder.ins().call(nil_ref, &[]);
+                        let result = builder.inst_results(call)[0];
+                        builder.def_var(vars[dst], result);
+                    }
+                    last_was_terminator = false;
+                }
+
+                // ── CallReg (closure call) ──────────────────────────────
+                Op::CallReg => {
+                    let dst = instr.dst as usize;
+                    let callee_reg = instr.a as usize;
+                    let argc = instr.b as usize;
+
+                    let call_closure_ref = self.module.declare_func_in_func(self.rt.call_closure, builder.func);
+
+                    if argc > 0 {
+                        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                            (argc * 8) as u32,
+                            0,
+                        ));
+                        let base = builder.ins().stack_addr(PTR, slot, 0);
+                        for j in 0..argc {
+                            let val = builder.use_var(vars[dst + 1 + j]);
+                            let offset = (j * 8) as i32;
+                            builder.ins().store(MemFlags::new(), val, base, offset);
+                        }
+                        let argc_val = builder.ins().iconst(types::I64, argc as i64);
+                        let closure_val = builder.use_var(vars[callee_reg]);
+                        let call = builder.ins().call(call_closure_ref, &[closure_val, base, argc_val]);
+                        let result = builder.inst_results(call)[0];
+                        builder.def_var(vars[dst], result);
+                    } else {
+                        // Zero args — pass null ptr and 0
+                        let null = builder.ins().iconst(PTR, 0);
+                        let zero = builder.ins().iconst(types::I64, 0);
+                        let closure_val = builder.use_var(vars[callee_reg]);
+                        let call = builder.ins().call(call_closure_ref, &[closure_val, null, zero]);
+                        let result = builder.inst_results(call)[0];
+                        builder.def_var(vars[dst], result);
+                    }
+                    last_was_terminator = false;
+                }
+
+                // ── Data operations ─────────────────────────────────────
+                Op::MakeList => {
+                    let dst = instr.dst as usize;
+                    let start = instr.a as usize;
+                    let count = instr.b as usize;
+                    let list_new_ref = self.module.declare_func_in_func(self.rt.list_new, builder.func);
+
+                    if count > 0 {
+                        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                            (count * 8) as u32,
+                            0,
+                        ));
+                        let base = builder.ins().stack_addr(PTR, slot, 0);
+                        for j in 0..count {
+                            let val = builder.use_var(vars[start + j]);
+                            let offset = (j * 8) as i32;
+                            builder.ins().store(MemFlags::new(), val, base, offset);
+                        }
+                        let count_val = builder.ins().iconst(types::I64, count as i64);
+                        let call = builder.ins().call(list_new_ref, &[base, count_val]);
+                        let result = builder.inst_results(call)[0];
+                        builder.def_var(vars[dst], result);
+                    } else {
+                        let null = builder.ins().iconst(PTR, 0);
+                        let zero = builder.ins().iconst(types::I64, 0);
+                        let call = builder.ins().call(list_new_ref, &[null, zero]);
+                        let result = builder.inst_results(call)[0];
+                        builder.def_var(vars[dst], result);
+                    }
+                    last_was_terminator = false;
+                }
+
+                Op::MakeVariant => {
+                    let dst = instr.dst as usize;
+                    let tag_idx = instr.a as usize;
+                    let inner_reg = instr.b as usize;
+                    // Load tag string from constants
+                    let tag_str = match &func.constants[tag_idx] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err("MakeVariant: tag must be string".into()),
+                    };
+                    let str_ref = self.module.declare_func_in_func(self.rt.str_ctor, builder.func);
+                    let ptr_val = builder.ins().iconst(types::I64, tag_str.as_ptr() as i64);
+                    let len_val = builder.ins().iconst(types::I64, tag_str.len() as i64);
+                    let tag_call = builder.ins().call(str_ref, &[ptr_val, len_val]);
+                    let tag_rt = builder.inst_results(tag_call)[0];
+
+                    let mv_ref = self.module.declare_func_in_func(self.rt.make_variant, builder.func);
+                    let inner_val = builder.use_var(vars[inner_reg]);
+                    let call = builder.ins().call(mv_ref, &[tag_rt, inner_val]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+
+                Op::MakeVariant0 => {
+                    let dst = instr.dst as usize;
+                    let tag_idx = instr.a as usize;
+                    let tag_str = match &func.constants[tag_idx] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err("MakeVariant0: tag must be string".into()),
+                    };
+                    let str_ref = self.module.declare_func_in_func(self.rt.str_ctor, builder.func);
+                    let ptr_val = builder.ins().iconst(types::I64, tag_str.as_ptr() as i64);
+                    let len_val = builder.ins().iconst(types::I64, tag_str.len() as i64);
+                    let tag_call = builder.ins().call(str_ref, &[ptr_val, len_val]);
+                    let tag_rt = builder.inst_results(tag_call)[0];
+
+                    let unit_ref = self.module.declare_func_in_func(self.rt.unit_ctor, builder.func);
+                    let unit_call = builder.ins().call(unit_ref, &[]);
+                    let unit_val = builder.inst_results(unit_call)[0];
+
+                    let mv_ref = self.module.declare_func_in_func(self.rt.make_variant, builder.func);
+                    let call = builder.ins().call(mv_ref, &[tag_rt, unit_val]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+
+                Op::MakeClosure => {
+                    let dst = instr.dst as usize;
+                    let func_idx = instr.a as usize;
+                    let _capture_start = instr.b as usize;
+
+                    // Look up function name from constants
+                    let closure_func_name = match &func.constants[func_idx] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err("MakeClosure: func name must be string".into()),
+                    };
+
+                    // Get the compiled function pointer (it should already be compiled)
+                    let fn_ptr = self.compiled.get(&closure_func_name)
+                        .copied()
+                        .unwrap_or(std::ptr::null());
+
+                    let make_closure_ref = self.module.declare_func_in_func(self.rt.make_closure, builder.func);
+                    let fn_ptr_val = builder.ins().iconst(PTR, fn_ptr as i64);
+
+                    // Determine capture count from the target function's capture_count
+                    // We infer it from the MakeClosure instruction context: registers
+                    // capture_start..capture_start+N hold the captured values.
+                    // The capture count is not directly in the instruction, so we need
+                    // to figure it out. Look at surrounding context or use 0 if unknown.
+                    // Actually, looking at bytecode_vm.rs, capture_count comes from the
+                    // target func's capture_count field. For now, use 0 captures and
+                    // pass null — closures with captures need the full pipeline.
+                    let null = builder.ins().iconst(PTR, 0);
+                    let zero = builder.ins().iconst(types::I64, 0);
+                    let call = builder.ins().call(make_closure_ref, &[fn_ptr_val, null, zero]);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+
+                // ── Pattern matching ────────────────────────────────────
+                Op::MatchTag => {
+                    let dst = instr.dst as usize;
+                    let scrutinee_reg = instr.a as usize;
+                    let tag_idx = instr.b as usize;
+
+                    let tag_str = match &func.constants[tag_idx] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err("MatchTag: tag must be string".into()),
+                    };
+
+                    // Build tag string RtValue
+                    let str_ref = self.module.declare_func_in_func(self.rt.str_ctor, builder.func);
+                    let ptr_val = builder.ins().iconst(types::I64, tag_str.as_ptr() as i64);
+                    let len_val = builder.ins().iconst(types::I64, tag_str.len() as i64);
+                    let tag_call = builder.ins().call(str_ref, &[ptr_val, len_val]);
+                    let tag_rt = builder.inst_results(tag_call)[0];
+
+                    // Call airl_match_tag — returns inner ptr on match, null on no-match
+                    let mt_ref = self.module.declare_func_in_func(self.rt.match_tag, builder.func);
+                    let scrutinee = builder.use_var(vars[scrutinee_reg]);
+                    let call = builder.ins().call(mt_ref, &[scrutinee, tag_rt]);
+                    let match_result = builder.inst_results(call)[0];
+
+                    // Check if result is null
+                    let zero = builder.ins().iconst(PTR, 0);
+                    let is_null = builder.ins().icmp(ir::condcodes::IntCC::Equal, match_result, zero);
+                    let is_null_i64 = builder.ins().uextend(types::I64, is_null);
+
+                    // Create match/no-match/continue blocks
+                    let match_blk = builder.create_block();
+                    let nomatch_blk = builder.create_block();
+                    let cont_blk = builder.create_block();
+
+                    // brif is_null: nomatch if nonzero (null), match if zero (not null)
+                    builder.ins().brif(is_null_i64, nomatch_blk, &[], match_blk, &[]);
+
+                    // Match block: store result, set flag=1
+                    builder.switch_to_block(match_blk);
+                    builder.def_var(vars[dst], match_result);
+                    let one = builder.ins().iconst(types::I64, 1);
+                    builder.def_var(match_flag_var, one);
+                    builder.ins().jump(cont_blk, &[]);
+
+                    // No-match block: set flag=0
+                    builder.switch_to_block(nomatch_blk);
+                    let zero_flag = builder.ins().iconst(types::I64, 0);
+                    builder.def_var(match_flag_var, zero_flag);
+                    builder.ins().jump(cont_blk, &[]);
+
+                    // Continue block
+                    builder.switch_to_block(cont_blk);
+                    last_was_terminator = false;
+                }
+
+                Op::JumpIfNoMatch => {
+                    let offset = instr.a as i16 as isize;
+                    let target_idx = (i as isize + 1 + offset) as usize;
+                    let fallthrough_idx = i + 1;
+                    let target_blk = index_to_block[&target_idx];
+                    let fallthrough_blk = index_to_block[&fallthrough_idx];
+
+                    let flag = builder.use_var(match_flag_var);
+                    // If flag is nonzero (matched), fallthrough; if zero (no match), jump to target.
+                    builder.ins().brif(flag, fallthrough_blk, &[], target_blk, &[]);
+                    last_was_terminator = true;
+                }
+
+                Op::MatchWild => {
+                    let dst = instr.dst as usize;
+                    let scrutinee_reg = instr.a as usize;
+                    let v = builder.use_var(vars[scrutinee_reg]);
+                    builder.def_var(vars[dst], v);
+                    let one = builder.ins().iconst(types::I64, 1);
+                    builder.def_var(match_flag_var, one);
+                    last_was_terminator = false;
+                }
+
+                Op::TryUnwrap => {
+                    let dst = instr.dst as usize;
+                    let src_reg = instr.a as usize;
+                    let err_offset = instr.b as i16 as isize;
+                    let target_idx = (i as isize + 1 + err_offset) as usize;
+                    let fallthrough_idx = i + 1;
+                    let target_blk = index_to_block[&target_idx];
+                    let fallthrough_blk = index_to_block[&fallthrough_idx];
+
+                    // Create "Ok" tag string
+                    let ok_str = "Ok";
+                    let str_ref = self.module.declare_func_in_func(self.rt.str_ctor, builder.func);
+                    let ptr_val = builder.ins().iconst(types::I64, ok_str.as_ptr() as i64);
+                    let len_val = builder.ins().iconst(types::I64, ok_str.len() as i64);
+                    let tag_call = builder.ins().call(str_ref, &[ptr_val, len_val]);
+                    let tag_rt = builder.inst_results(tag_call)[0];
+
+                    let mt_ref = self.module.declare_func_in_func(self.rt.match_tag, builder.func);
+                    let src_val = builder.use_var(vars[src_reg]);
+                    let call = builder.ins().call(mt_ref, &[src_val, tag_rt]);
+                    let match_result = builder.inst_results(call)[0];
+
+                    let zero = builder.ins().iconst(PTR, 0);
+                    let is_null = builder.ins().icmp(ir::condcodes::IntCC::Equal, match_result, zero);
+                    let is_null_i64 = builder.ins().uextend(types::I64, is_null);
+
+                    let ok_blk = builder.create_block();
+
+                    // If null → error path; if non-null → ok path
+                    builder.ins().brif(is_null_i64, target_blk, &[], ok_blk, &[]);
+
+                    builder.switch_to_block(ok_blk);
+                    builder.def_var(vars[dst], match_result);
+                    builder.ins().jump(fallthrough_blk, &[]);
+                    last_was_terminator = true;
+                }
+            }
+        }
+
+        // If the last instruction didn't terminate, add implicit return nil.
+        if !last_was_terminator {
+            let nil_ref = self.module.declare_func_in_func(self.rt.nil_ctor, builder.func);
+            let call = builder.ins().call(nil_ref, &[]);
+            let result = builder.inst_results(call)[0];
+            builder.ins().return_(&[result]);
+        }
+
+        // ── Seal all blocks ────────────────────────────────────────────────
+        builder.seal_all_blocks();
+        builder.finalize();
+
+        // Debug: print Cranelift IR if AIRL_JIT_DEBUG is set
+        if std::env::var("AIRL_JIT_DEBUG").as_deref() == Ok("1") {
+            eprintln!("[JIT-full] Cranelift IR for {}:\n{}", func.name, ctx.func.display());
+        }
+
+        // ── Define function, finalize, extract pointer ──────────────────────
+        self.module
+            .define_function(func_id, &mut ctx)
+            .map_err(|e| format!("define: {}", e))?;
+        self.module
+            .finalize_definitions()
+            .map_err(|e| format!("finalize: {}", e))?;
+
+        let ptr = self.module.get_finalized_function(func_id);
+        Ok(ptr)
     }
 }
 
@@ -825,5 +1673,122 @@ mod tests {
         let ptr = BytecodeJitFull::value_to_rt(&v);
         let back = BytecodeJitFull::rt_to_value(ptr);
         assert_eq!(back, v);
+    }
+
+    #[test]
+    fn test_full_jit_add() {
+        use crate::bytecode_compiler::BytecodeCompiler;
+        use crate::ir::*;
+        let mut compiler = BytecodeCompiler::new();
+        let func = compiler.compile_function("add", &["a".into(), "b".into()],
+            &IRNode::Call("+".into(), vec![IRNode::Load("a".into()), IRNode::Load("b".into())]));
+        let all = HashMap::new();
+        let mut jit = BytecodeJitFull::new().unwrap();
+        jit.try_compile_full(&func, &all);
+        assert!(jit.compiled.contains_key("add"));
+        let result = jit.try_call_native("add", &[Value::Int(3), Value::Int(4)]);
+        assert_eq!(result, Some(Value::Int(7)));
+    }
+
+    #[test]
+    fn test_full_jit_string_concat() {
+        use crate::bytecode_compiler::BytecodeCompiler;
+        use crate::ir::*;
+        let mut compiler = BytecodeCompiler::new();
+        let func = compiler.compile_function("greet", &["a".into(), "b".into()],
+            &IRNode::Call("+".into(), vec![IRNode::Load("a".into()), IRNode::Load("b".into())]));
+        let all = HashMap::new();
+        let mut jit = BytecodeJitFull::new().unwrap();
+        jit.try_compile_full(&func, &all);
+        let result = jit.try_call_native("greet", &[Value::Str("hello ".into()), Value::Str("world".into())]);
+        assert_eq!(result, Some(Value::Str("hello world".into())));
+    }
+
+    #[test]
+    fn test_full_jit_gt_only() {
+        use crate::bytecode_compiler::BytecodeCompiler;
+        use crate::ir::*;
+        let mut compiler = BytecodeCompiler::new();
+        // Just return the result of (> a b) — no branching
+        let func = compiler.compile_function("gt2", &["a".into(), "b".into()],
+            &IRNode::Call(">".into(), vec![IRNode::Load("a".into()), IRNode::Load("b".into())]));
+        let all = HashMap::new();
+        let mut jit = BytecodeJitFull::new().unwrap();
+        jit.try_compile_full(&func, &all);
+        assert!(jit.compiled.contains_key("gt2"));
+        let result = jit.try_call_native("gt2", &[Value::Int(10), Value::Int(3)]);
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_full_jit_if_simple_true() {
+        use crate::bytecode_compiler::BytecodeCompiler;
+        use crate::ir::*;
+        let mut compiler = BytecodeCompiler::new();
+        let func = compiler.compile_function("ift", &[],
+            &IRNode::If(
+                Box::new(IRNode::Bool(true)),
+                Box::new(IRNode::Int(1)),
+                Box::new(IRNode::Int(2)),
+            ));
+        let all = HashMap::new();
+        let mut jit = BytecodeJitFull::new().unwrap();
+        jit.try_compile_full(&func, &all);
+        assert!(jit.compiled.contains_key("ift"));
+        assert_eq!(jit.try_call_native("ift", &[]), Some(Value::Int(1)));
+    }
+
+    #[test]
+    fn test_full_jit_if_branch() {
+        use crate::bytecode_compiler::BytecodeCompiler;
+        use crate::ir::*;
+        let mut compiler = BytecodeCompiler::new();
+        let func = compiler.compile_function("max2", &["a".into(), "b".into()],
+            &IRNode::If(
+                Box::new(IRNode::Call(">".into(), vec![IRNode::Load("a".into()), IRNode::Load("b".into())])),
+                Box::new(IRNode::Load("a".into())),
+                Box::new(IRNode::Load("b".into())),
+            ));
+        let all = HashMap::new();
+        let mut jit = BytecodeJitFull::new().unwrap();
+        jit.try_compile_full(&func, &all);
+        assert_eq!(jit.try_call_native("max2", &[Value::Int(10), Value::Int(3)]), Some(Value::Int(10)));
+        assert_eq!(jit.try_call_native("max2", &[Value::Int(2), Value::Int(8)]), Some(Value::Int(8)));
+    }
+
+    #[test]
+    fn test_full_jit_list_creation() {
+        use crate::bytecode_compiler::BytecodeCompiler;
+        use crate::ir::*;
+        let mut compiler = BytecodeCompiler::new();
+        let func = compiler.compile_function("make", &[],
+            &IRNode::List(vec![IRNode::Int(1), IRNode::Int(2), IRNode::Int(3)]));
+        let all = HashMap::new();
+        let mut jit = BytecodeJitFull::new().unwrap();
+        jit.try_compile_full(&func, &all);
+        let result = jit.try_call_native("make", &[]);
+        assert_eq!(result, Some(Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])));
+    }
+
+    #[test]
+    fn test_full_jit_factorial() {
+        use crate::bytecode_compiler::BytecodeCompiler;
+        use crate::ir::*;
+        let body = IRNode::If(
+            Box::new(IRNode::Call("<=".into(), vec![IRNode::Load("n".into()), IRNode::Int(1)])),
+            Box::new(IRNode::Int(1)),
+            Box::new(IRNode::Call("*".into(), vec![
+                IRNode::Load("n".into()),
+                IRNode::Call("fact".into(), vec![
+                    IRNode::Call("-".into(), vec![IRNode::Load("n".into()), IRNode::Int(1)]),
+                ]),
+            ])),
+        );
+        let mut compiler = BytecodeCompiler::new();
+        let func = compiler.compile_function("fact", &["n".into()], &body);
+        let all = HashMap::new();
+        let mut jit = BytecodeJitFull::new().unwrap();
+        jit.try_compile_full(&func, &all);
+        assert_eq!(jit.try_call_native("fact", &[Value::Int(5)]), Some(Value::Int(120)));
     }
 }
