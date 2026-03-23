@@ -60,6 +60,83 @@ block2:
 
 **4. AIRL already compiles to native code — the AI doesn't need to.** The runtime transparently JIT-compiles eligible functions via Cranelift, compiles to a bytecode VM (`--bytecode`), or lowers to a tree-flattened IR VM (`--compiled`). AI generates high-level, verified AIRL once; the toolchain picks the fastest execution strategy automatically.
 
+## How Does AIRL's Safety Compare to Rust?
+
+AIRL's ownership model and type system were inspired by Rust, but redesigned for AI producers instead of human experts. The two languages occupy different points on the safety-complexity Pareto frontier.
+
+### What They Share
+
+Both eliminate the same core bug classes at compile time:
+
+| Bug Class | Rust | AIRL |
+|-----------|------|------|
+| Type errors | Static type system | Static type system |
+| Use-after-free/move | Borrow checker | Linearity checker |
+| Null pointer derefs | `Option<T>`, no null | `Option`/`Result`, nil-safe |
+| Unchecked errors | `Result<T,E>`, must handle | Mandatory `:ensures` contracts |
+| Data races | `Send`/`Sync` + ownership | Single-threaded + agent message-passing |
+
+### Where AIRL Goes Further
+
+**Mandatory contracts.** Rust has no built-in contract system — `debug_assert!` and third-party crates are optional, and AI skips optional things. AIRL's parser rejects any `defn` without `:requires`/`:ensures`. Z3 then attempts to *prove* them statically.
+
+```rust
+// Rust: nothing prevents this — panics on b=0
+fn divide(a: i32, b: i32) -> i32 { a / b }
+```
+
+```clojure
+;; AIRL: compiler rejects this without contracts
+(defn divide
+  :sig [(a : i32) (b : i32) -> Result[i32, DivError]]
+  :requires [(!= b 0)]
+  :ensures [(match result (Ok v) (= (* v b) a) (Err _) true)]
+  :body (if (= b 0) (Err :division-by-zero) (Ok (/ a b))))
+```
+
+**Formal verification.** Z3 can prove semantic properties like `result >= lo && result <= hi` for a clamp function. Rust's type system cannot express this without dependent types.
+
+**Intent tracking.** Every AIRL function carries a mandatory `:intent` string — a natural-language anchor for what the code *should* do. This gives both AI verifiers and human auditors a machine-checkable statement of purpose.
+
+### Where Rust Goes Further
+
+**Lifetime precision.** Rust tracks exact borrow lifetimes (NLL, Polonius); AIRL's linearity checker is coarser — it catches use-after-move but not complex reborrowing scenarios.
+
+**Thread safety.** Rust's `Send`/`Sync` trait system deeply integrates with the type system. AIRL is single-threaded by design, using async agent message-passing for concurrency instead.
+
+**Unsafe escape hatch.** Rust has `unsafe {}` for bypassing the borrow checker when necessary. AIRL has no equivalent — the Rust runtime *is* the unsafe layer.
+
+### Why the Producer Being an LLM Changes Everything
+
+The design differences above aren't arbitrary — they follow from the fact that humans and LLMs have fundamentally different error distributions.
+
+**LLMs and humans make different mistakes.**
+
+| Mistake type | Humans | LLMs |
+|---|---|---|
+| Null/bounds checks | Occasional | Rare (pattern-matched from training data) |
+| Lifetime/borrow errors | Frequent (Rust's #1 complaint) | Very frequent (requires cross-scope control flow reasoning) |
+| Semantic logic errors | Rare (humans understand intent) | Common (LLMs pattern-match, don't truly verify constraints) |
+| Skipping optional best practices | Common | Near-certain (if it compiles without it, LLMs omit it) |
+
+Rust's borrow checker protects against what *humans* get wrong most. But LLMs rarely make simple use-after-free errors — they've seen millions of correct examples. Where LLMs fail is complex lifetime reasoning (multi-scope borrows, self-referential structs) and semantic correctness (code compiles and runs but does the wrong thing). AIRL simplified the first and added verification for the second.
+
+**You cannot rely on optional safety with AI producers.** A human developer can be told "always write tests" or "use `clippy`." Culture, code review, and CI enforce compliance. LLMs have no culture. They optimize for the shortest path to syntactically valid output. If contracts are optional, they'll be omitted. If error handling is optional, you'll get `unwrap()` everywhere.
+
+This is why AIRL makes contracts **grammar-level mandatory** — the parser literally won't accept a function without `:requires`/`:ensures`. It's not a lint, not a CI check — it's the same as requiring a function to have a body. The LLM can't skip it because the code doesn't parse without it. That single design choice — mandatory vs optional safety — is arguably more impactful than any specific type system feature.
+
+### Summary
+
+| | Rust | AIRL |
+|--|------|------|
+| **Target author** | Human expert | LLM |
+| **Ownership model** | Lifetimes, NLL, reborrowing | 4 annotations (`own`, `&ref`, `&mut`, `copy`), no lifetimes |
+| **Contracts** | Optional (third-party crates) | Mandatory (grammar-level) |
+| **Formal verification** | Not built in | Z3 SMT solver integrated |
+| **Borrow checker power** | Turing-complete analysis | Simplified linearity (higher AI success rate) |
+| **Concurrency safety** | `Send`/`Sync` + ownership | Single-threaded + message-passing agents |
+| **Key insight** | Maximum safety, high complexity | Sufficient safety, high AI generation success rate |
+
 ## Features
 
 ### Language
