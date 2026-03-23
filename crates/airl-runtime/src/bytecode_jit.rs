@@ -121,6 +121,22 @@ impl BytecodeJit {
             return;
         }
 
+        // Compile call dependencies first (ensures callees are defined before callers)
+        for instr in &func.instructions {
+            if instr.op == Op::Call {
+                if let Value::Str(callee_name) = &func.constants[instr.a as usize] {
+                    if callee_name != &func.name
+                        && !self.compiled.contains_key(callee_name)
+                        && !self.ineligible.contains(callee_name)
+                    {
+                        if let Some(callee) = all_functions.get(callee_name).cloned() {
+                            self.try_compile(&callee, all_functions);
+                        }
+                    }
+                }
+            }
+        }
+
         match self.compile_func(func) {
             Ok((ptr, hint)) => {
                 if std::env::var("AIRL_JIT_DEBUG").as_deref() == Ok("1") {
@@ -171,8 +187,9 @@ impl BytecodeJit {
                             call_sig.params.push(AbiParam::new(types::I64));
                         }
                         call_sig.returns.push(AbiParam::new(types::I64));
+                        // Use Linkage::Local (not Import) — the callee is defined in our JIT module
                         let callee_id = self.module
-                            .declare_function(callee_name, Linkage::Import, &call_sig)
+                            .declare_function(callee_name, Linkage::Local, &call_sig)
                             .map_err(|e| format!("call declare: {}", e))?;
                         call_targets.insert(callee_name.clone(), callee_id);
                     }
