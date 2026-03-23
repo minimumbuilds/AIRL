@@ -154,9 +154,10 @@ impl BytecodeCompiler {
                 let tag_idx = self.add_constant(Value::Str(tag.clone()));
                 let inner_reg = self.alloc_reg();
                 self.emit(Op::MatchTag, inner_reg, value_reg, tag_idx);
-                // Note: we assume this matches (it was already checked at outer level)
                 if sub_pats.len() == 1 {
                     self.bind_pattern(&sub_pats[0], inner_reg);
+                } else if sub_pats.len() > 1 {
+                    self.bind_multi_field_pattern(sub_pats, inner_reg);
                 }
             }
         }
@@ -169,6 +170,59 @@ impl BytecodeCompiler {
             IRPattern::Wild | IRPattern::Lit(_) => {}
             IRPattern::Variant(_, sub_pats) => {
                 for p in sub_pats { self.unbind_pattern(p); }
+            }
+        }
+    }
+
+    /// Bind multi-field variant sub-patterns.  The inner value is a list;
+    /// emit `at(inner, i)` for each field that needs binding.
+    fn bind_multi_field_pattern(&mut self, sub_pats: &[IRPattern], inner_reg: u16) {
+        let at_idx = self.add_constant(Value::Str("at".into()));
+        for (i, pat) in sub_pats.iter().enumerate() {
+            match pat {
+                IRPattern::Bind(name) => {
+                    // Allocate 3 consecutive regs: result, arg0 (list), arg1 (index)
+                    let call_dst = self.alloc_reg();
+                    let _arg0 = self.alloc_reg(); // call_dst + 1
+                    let _arg1 = self.alloc_reg(); // call_dst + 2
+                    let idx_const = self.add_constant(Value::Int(i as i64));
+                    self.emit(Op::Move, call_dst + 1, inner_reg, 0);
+                    self.emit(Op::LoadConst, call_dst + 2, idx_const, 0);
+                    self.emit(Op::CallBuiltin, call_dst, at_idx, 2);
+                    self.locals.insert(name.clone(), call_dst);
+                }
+                IRPattern::Wild => {}
+                IRPattern::Variant(tag, nested) => {
+                    let call_dst = self.alloc_reg();
+                    let _arg0 = self.alloc_reg();
+                    let _arg1 = self.alloc_reg();
+                    let idx_const = self.add_constant(Value::Int(i as i64));
+                    self.emit(Op::Move, call_dst + 1, inner_reg, 0);
+                    self.emit(Op::LoadConst, call_dst + 2, idx_const, 0);
+                    self.emit(Op::CallBuiltin, call_dst, at_idx, 2);
+                    let tag_idx = self.add_constant(Value::Str(tag.clone()));
+                    let nested_inner = self.alloc_reg();
+                    self.emit(Op::MatchTag, nested_inner, call_dst, tag_idx);
+                    if nested.len() == 1 {
+                        self.bind_pattern(&nested[0], nested_inner);
+                    } else if nested.len() > 1 {
+                        self.bind_multi_field_pattern(nested, nested_inner);
+                    }
+                }
+                IRPattern::Lit(_) => {}
+            }
+        }
+    }
+
+    /// Remove multi-field pattern bindings from locals.
+    fn unbind_multi_field_pattern(&mut self, sub_pats: &[IRPattern]) {
+        for pat in sub_pats {
+            match pat {
+                IRPattern::Bind(name) => { self.locals.remove(name); }
+                IRPattern::Wild | IRPattern::Lit(_) => {}
+                IRPattern::Variant(_, nested) => {
+                    self.unbind_multi_field_pattern(nested);
+                }
             }
         }
     }
@@ -484,7 +538,11 @@ impl BytecodeCompiler {
                             } else if sub_pats.is_empty() {
                                 self.compile_expr(&arm.body, dst);
                             } else {
+                                // Multi-field variant: inner value is a list.
+                                // Extract each field with `at(inner, i)` and bind.
+                                self.bind_multi_field_pattern(sub_pats, inner_reg);
                                 self.compile_expr(&arm.body, dst);
+                                self.unbind_multi_field_pattern(sub_pats);
                             }
                             self.free_reg_to(inner_reg.max(dst + 1));
                             end_jumps.push(self.instructions.len());
@@ -626,7 +684,9 @@ impl BytecodeCompiler {
                             } else if sub_pats.is_empty() {
                                 self.compile_expr_tail(&arm.body, dst, fn_name);
                             } else {
+                                self.bind_multi_field_pattern(sub_pats, inner_reg);
                                 self.compile_expr_tail(&arm.body, dst, fn_name);
+                                self.unbind_multi_field_pattern(sub_pats);
                             }
                             self.free_reg_to(inner_reg.max(dst + 1));
                             end_jumps.push(self.instructions.len());
