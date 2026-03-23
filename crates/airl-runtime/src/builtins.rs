@@ -25,6 +25,7 @@ impl Builtins {
         b.register_map();
         b.register_file_io();
         b.register_ir();
+        b.register_bytecode();
         b
     }
 
@@ -154,6 +155,12 @@ impl Builtins {
 
     fn register_ir(&mut self) {
         self.register("run-ir", builtin_run_ir);
+    }
+
+    // ── Bytecode VM ──────────────────────────────────────
+
+    fn register_bytecode(&mut self) {
+        self.register("run-bytecode", builtin_run_bytecode);
     }
 }
 
@@ -1096,6 +1103,17 @@ fn builtin_run_ir(args: &[Value]) -> Result<Value, RuntimeError> {
         .collect::<Result<_, _>>()?;
     let mut vm = crate::ir_vm::IrVm::new();
     vm.exec_program(&ir_nodes)
+}
+
+// ── Bytecode VM implementation ───────────────────────────
+
+fn builtin_run_bytecode(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("run-bytecode", args, 1)?;
+    let func_list = match &args[0] {
+        Value::List(items) => items.clone(),
+        _ => return Err(RuntimeError::TypeError("run-bytecode: expected list of BCFunc".into())),
+    };
+    crate::bytecode_marshal::run_bytecode_program(&func_list)
 }
 
 #[cfg(test)]

@@ -102,6 +102,7 @@ impl Interpreter {
             "map-has", "map-remove", "map-keys", "map-values", "map-size",
             "read-file", "write-file", "file-exists?",
             "run-ir",
+            "run-bytecode",
         ];
         for name in &names {
             self.env.bind(name.to_string(), Value::BuiltinFn(name.to_string()));
