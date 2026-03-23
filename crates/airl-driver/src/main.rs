@@ -152,17 +152,24 @@ fn cmd_compile(args: &[String]) {
         });
 
         // Find airl-rt static library
-        let rt_lib = find_airl_rt_lib();
+        let (rt_lib, runtime_lib) = find_airl_libs();
 
         // Link with system cc
-        let status = std::process::Command::new("cc")
-            .arg(&obj_path)
+        let mut cmd = std::process::Command::new("cc");
+        cmd.arg(&obj_path)
             .arg("-o")
             .arg(&output)
-            .arg(&rt_lib)
-            .arg("-lm")    // math library
-            .arg("-lpthread") // threads
-            .arg("-ldl")   // dynamic loading
+            .arg(&rt_lib);
+        // Also link airl-runtime if available (provides run-bytecode for self-hosting)
+        if !runtime_lib.is_empty() {
+            cmd.arg(&runtime_lib);
+            // airl-runtime depends on airl-rt, so re-add it for symbol resolution order
+            cmd.arg(&rt_lib);
+        }
+        let status = cmd
+            .arg("-lm")
+            .arg("-lpthread")
+            .arg("-ldl")
             .status();
 
         // Clean up object file
@@ -185,38 +192,39 @@ fn cmd_compile(args: &[String]) {
 }
 
 #[cfg(feature = "aot")]
-fn find_airl_rt_lib() -> String {
-    // Look for libairl_rt.a in common locations
-    let candidates = [
-        "target/release/libairl_rt.a",
-        "target/debug/libairl_rt.a",
-        "../target/release/libairl_rt.a",
-        "../target/debug/libairl_rt.a",
-    ];
-    for c in &candidates {
-        if std::path::Path::new(c).exists() {
-            return c.to_string();
-        }
-    }
-    // Fall back to cargo-built location relative to exe
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let lib = dir.join("libairl_rt.a");
-            if lib.exists() {
-                return lib.to_string_lossy().to_string();
+fn find_airl_libs() -> (String, String) {
+    fn find_lib(name: &str) -> String {
+        let candidates = [
+            format!("target/release/lib{}.a", name),
+            format!("target/debug/lib{}.a", name),
+            format!("../target/release/lib{}.a", name),
+            format!("../target/debug/lib{}.a", name),
+        ];
+        for c in &candidates {
+            if std::path::Path::new(c).exists() {
+                return c.to_string();
             }
-            // Try ../../libairl_rt.a (common for target/release/airl-driver)
-            if let Some(parent) = dir.parent() {
-                let lib = parent.join("libairl_rt.a");
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let lib = dir.join(format!("lib{}.a", name));
                 if lib.exists() {
                     return lib.to_string_lossy().to_string();
                 }
             }
         }
+        String::new()
     }
-    // Last resort: assume it's findable by the linker
-    eprintln!("Warning: could not find libairl_rt.a, trying -lairl_rt");
-    "-lairl_rt".to_string()
+
+    let rt = find_lib("airl_rt");
+    if rt.is_empty() {
+        eprintln!("Warning: could not find libairl_rt.a");
+    }
+    let runtime = find_lib("airl_runtime");
+    (
+        if rt.is_empty() { "-lairl_rt".to_string() } else { rt },
+        runtime,
+    )
 }
 
 fn cmd_check(args: &[String]) {

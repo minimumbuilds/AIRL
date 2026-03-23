@@ -111,6 +111,11 @@ pub struct RuntimeImports {
     pub map_keys:   FuncId,
     pub map_values: FuncId,
     pub map_size:   FuncId,
+
+    // File I/O
+    pub read_file: FuncId,
+    pub get_args:  FuncId,
+    pub run_bytecode: FuncId,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -352,6 +357,11 @@ impl BytecodeAot {
         let map_values = declare_import(m, "airl_map_values", s1.clone());
         let map_size   = declare_import(m, "airl_map_size",   s1.clone());
 
+        // File I/O
+        let read_file = declare_import(m, "airl_read_file", s1.clone());
+        let get_args  = declare_import(m, "airl_get_args",  sig_0_ptr(m));
+        let run_bytecode = declare_import(m, "airl_run_bytecode", s1.clone());
+
         RuntimeImports {
             value_retain, value_release, value_clone,
             int_ctor, float_ctor, bool_ctor, nil_ctor, unit_ctor, str_ctor,
@@ -367,6 +377,7 @@ impl BytecodeAot {
             ends_with, index_of, trim, to_upper, to_lower, replace,
             map_new, map_from, map_get, map_get_or, map_set, map_has,
             map_remove, map_keys, map_values, map_size,
+            read_file, get_args, run_bytecode,
         }
     }
 
@@ -431,6 +442,11 @@ impl BytecodeAot {
         m.insert("map-keys".into(),   rt.map_keys);
         m.insert("map-values".into(), rt.map_values);
         m.insert("map-size".into(),   rt.map_size);
+
+        // File I/O
+        m.insert("read-file".into(),    rt.read_file);
+        m.insert("get-args".into(),     rt.get_args);
+        m.insert("run-bytecode".into(), rt.run_bytecode);
 
         m
     }

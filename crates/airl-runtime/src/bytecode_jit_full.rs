@@ -121,6 +121,11 @@ pub struct RuntimeImports {
     pub map_keys:   FuncId,   // (map) -> list
     pub map_values: FuncId,   // (map) -> list
     pub map_size:   FuncId,   // (map) -> int
+
+    // File I/O
+    pub read_file: FuncId,      // (path_str) -> str
+    pub get_args:  FuncId,      // () -> list
+    pub run_bytecode: FuncId,   // (list_of_bcfuncs) -> result
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -357,6 +362,9 @@ impl BytecodeJitFull {
         builder.symbol("airl_print_values", io::airl_print_values as *const u8);
         builder.symbol("airl_type_of",      io::airl_type_of      as *const u8);
         builder.symbol("airl_valid",        io::airl_valid        as *const u8);
+        builder.symbol("airl_read_file",    io::airl_read_file    as *const u8);
+        builder.symbol("airl_get_args",     io::airl_get_args     as *const u8);
+        builder.symbol("airl_run_bytecode", crate::bytecode_marshal::airl_run_bytecode as *const u8);
 
         // String
         builder.symbol("airl_char_at",     string::airl_char_at     as *const u8);
@@ -487,6 +495,11 @@ impl BytecodeJitFull {
         let map_values = declare_import(m, "airl_map_values", s1.clone());
         let map_size   = declare_import(m, "airl_map_size",   s1.clone());
 
+        // File I/O
+        let read_file = declare_import(m, "airl_read_file", s1.clone());
+        let get_args  = declare_import(m, "airl_get_args",  sig_0_ptr(m));
+        let run_bytecode = declare_import(m, "airl_run_bytecode", s1.clone());
+
         RuntimeImports {
             value_retain, value_release, value_clone,
             int_ctor, float_ctor, bool_ctor, nil_ctor, unit_ctor, str_ctor,
@@ -502,6 +515,7 @@ impl BytecodeJitFull {
             ends_with, index_of, trim, to_upper, to_lower, replace,
             map_new, map_from, map_get, map_get_or, map_set, map_has,
             map_remove, map_keys, map_values, map_size,
+            read_file, get_args, run_bytecode,
         }
     }
 
@@ -573,6 +587,11 @@ impl BytecodeJitFull {
         m.insert("map-keys".into(),   rt.map_keys);
         m.insert("map-values".into(), rt.map_values);
         m.insert("map-size".into(),   rt.map_size);
+
+        // File I/O
+        m.insert("read-file".into(),    rt.read_file);
+        m.insert("get-args".into(),     rt.get_args);
+        m.insert("run-bytecode".into(), rt.run_bytecode);
 
         m
     }

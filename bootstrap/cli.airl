@@ -1,0 +1,19 @@
+;; bootstrap/cli.airl — CLI entry point for the native AIRL compiler
+;; Requires: bootstrap/lexer.airl, bootstrap/parser.airl, bootstrap/bc_compiler.airl
+;;
+;; Usage: ./airl-compiler <file.airl>
+;; Reads the file, compiles to bytecode, executes, prints result.
+
+(let (args : List (get-args))
+  (if (< (length args) 2)
+    (do
+      (print "Usage: airl-compiler <file.airl>\n")
+      nil)
+    (let (filename : String (at args 1))
+      (let (source : String (read-file filename))
+        (match (run-compiled-bc source)
+          (Ok result) result
+          (Err e) (do (print "Error: ")
+                      (print e)
+                      (print "\n")
+                      nil))))))

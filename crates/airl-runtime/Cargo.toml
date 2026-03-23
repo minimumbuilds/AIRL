@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+crate-type = ["rlib", "staticlib"]
+
 [dependencies]
 airl-syntax = { path = "../airl-syntax" }
 airl-types = { path = "../airl-types" }
