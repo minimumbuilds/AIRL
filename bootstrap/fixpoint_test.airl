@@ -1710,4 +1710,57 @@
                                 (Err e) (do (print "FAIL: compiled compile returned Err:" e) false)
                                 _ (do (print "FAIL: unexpected result") false))))))))))))))
 
+;; ── Tier 2: Compiler self-compilation fixpoint ──────────
+
+(print "── Tier 2: Compiler self-compilation fixpoint ──")
+
+(let (compiler-src : String (read-file "bootstrap/compiler.airl"))
+  (match (parse-source compiler-src)
+    (Err e) (do (print "FAIL: could not parse compiler source:" e) false)
+    (Ok ast-nodes)
+      (match (compile-program ast-nodes)
+        (Err e) (do (print "FAIL: interpreted compile of compiler failed:" e) false)
+        (Ok ir1)
+          (let (ir1-str : String (ir-nodes-to-string ir1))
+            (do
+              (print "IR1 serialized, length:" (length ir1-str))
+              (let (stdlib-mini : String (join [
+                    ";; Minimal stdlib needed by bootstrap lexer/parser/compiler\n"
+                    "(defn map :sig [(f : fn) (xs : List) -> List] :requires [(valid f)] :ensures [(valid result)] :body (if (empty? xs) [] (cons (f (head xs)) (map f (tail xs)))))\n"
+                    "(defn reverse-acc :sig [(xs : List) (acc : List) -> List] :requires [(valid xs)] :ensures [(valid result)] :body (if (empty? xs) acc (reverse-acc (tail xs) (cons (head xs) acc))))\n"
+                    "(defn reverse :sig [(xs : List) -> List] :requires [(valid xs)] :ensures [(valid result)] :body (reverse-acc xs []))\n"
+                    "(defn all :sig [(pred : fn) (xs : List) -> Bool] :requires [(valid pred)] :ensures [(valid result)] :body (if (empty? xs) true (if (pred (head xs)) (all pred (tail xs)) false)))\n"
+                    "(defn find :sig [(pred : fn) (xs : List) -> List] :requires [(valid pred)] :ensures [(valid result)] :body (if (empty? xs) nil (if (pred (head xs)) (head xs) (find pred (tail xs)))))\n"
+                    ] ""))
+                (let (lexer-source : String (read-file "bootstrap/lexer.airl"))
+                  (let (parser-source : String (read-file "bootstrap/parser.airl"))
+                    (let (compiler-source : String (read-file "bootstrap/compiler.airl"))
+                      (let (full-source : String (join [
+                            stdlib-mini "\n"
+                            lexer-source "\n"
+                            parser-source "\n"
+                            compiler-source "\n"
+                            "(let (src : String (read-file \"bootstrap/compiler.airl\"))\n"
+                            "  (match (lex src)\n"
+                            "    (Err e) (Err e)\n"
+                            "    (Ok tokens)\n"
+                            "      (match (parse-sexpr-all tokens)\n"
+                            "        (Err e) (Err e)\n"
+                            "        (Ok sexprs)\n"
+                            "          (match (parse-program sexprs)\n"
+                            "            (Err e) (Err e)\n"
+                            "            (Ok ast) (compile-program ast)))))\n"
+                            ] ""))
+                        (do
+                          (print "Full source assembled, compiling compiler through VM...")
+                          (match (run-compiled full-source)
+                            (Err e) (do (print "FAIL: compiled compile of compiler failed:" e) false)
+                            (Ok ir2-result)
+                              (match ir2-result
+                                (Ok ir2)
+                                  (let (ir2-str : String (ir-nodes-to-string ir2))
+                                    (assert-eq ir1-str ir2-str "tier 2 fixpoint: compiler self-compilation"))
+                                (Err e) (do (print "FAIL: compiled compile of compiler returned Err:" e) false)
+                                _ (do (print "FAIL: unexpected result from tier 2") false))))))))))))))
+
 (print "fixpoint tests complete")
