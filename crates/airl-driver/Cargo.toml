@@ -24,3 +24,4 @@ airl-solver = { path = "../airl-solver" }
 mlir = ["airl-runtime/mlir"]
 cuda = ["airl-runtime/cuda"]
 jit = ["airl-runtime/jit"]
+aot = ["airl-runtime/aot"]

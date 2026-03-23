@@ -1366,6 +1366,14 @@ impl BytecodeAot {
         let main_ref = self.module.declare_func_in_func(*main_func_id, builder.func);
         builder.ins().call(main_ref, &[]);
 
+        // Flush stdout before exit
+        let flush_sig = self.module.make_signature(); // () -> void
+        let flush_id = self.module
+            .declare_function("airl_flush_stdout", Linkage::Import, &flush_sig)
+            .map_err(|e| format!("declare flush: {}", e))?;
+        let flush_ref = self.module.declare_func_in_func(flush_id, builder.func);
+        builder.ins().call(flush_ref, &[]);
+
         // Return 0
         let zero = builder.ins().iconst(types::I32, 0);
         builder.ins().return_(&[zero]);

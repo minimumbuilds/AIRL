@@ -1,4 +1,5 @@
 use crate::value::{rt_bool, rt_nil, rt_str, RtData, RtValue};
+use std::io::Write;
 
 #[no_mangle]
 pub extern "C" fn airl_print(v: *mut RtValue) -> *mut RtValue {
@@ -29,6 +30,12 @@ pub extern "C" fn airl_print_values(args: *const *mut RtValue, count: i64) -> *m
     }
     println!();
     rt_nil()
+}
+
+/// Flush stdout — called at program exit to ensure all print output is visible.
+#[no_mangle]
+pub extern "C" fn airl_flush_stdout() {
+    let _ = std::io::stdout().flush();
 }
 
 #[no_mangle]

@@ -14,6 +14,7 @@ fn main() {
         let args: Vec<String> = std::env::args().collect();
         match args.get(1).map(|s| s.as_str()) {
             Some("run") => cmd_run(&args[2..]),
+            Some("compile") => cmd_compile(&args[2..]),
             Some("check") => cmd_check(&args[2..]),
             Some("repl") => cmd_repl(),
             Some("agent") => cmd_agent(&args[2..]),
@@ -88,6 +89,130 @@ fn cmd_run(args: &[String]) {
             std::process::exit(1);
         }
     }
+}
+
+fn cmd_compile(args: &[String]) {
+    #[cfg(not(feature = "aot"))]
+    {
+        let _ = args;
+        eprintln!("AOT compilation not available: rebuild with --features aot");
+        std::process::exit(1);
+    }
+    #[cfg(feature = "aot")]
+    {
+        use airl_driver::pipeline::compile_to_object;
+
+        if args.is_empty() {
+            eprintln!("Usage: airl compile <file.airl ...> [-o output]");
+            std::process::exit(1);
+        }
+
+        // Parse args: files and -o flag
+        let mut files: Vec<String> = Vec::new();
+        let mut output = String::from("a.out");
+        let mut i = 0;
+        while i < args.len() {
+            if args[i] == "-o" {
+                if i + 1 < args.len() {
+                    output = args[i + 1].clone();
+                    i += 2;
+                } else {
+                    eprintln!("-o requires an argument");
+                    std::process::exit(1);
+                }
+            } else {
+                files.push(args[i].clone());
+                i += 1;
+            }
+        }
+
+        if files.is_empty() {
+            eprintln!("No input files");
+            std::process::exit(1);
+        }
+
+        // Compile to object file
+        let obj_bytes = match compile_to_object(&files) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!("Compilation error: {}", e);
+                std::process::exit(1);
+            }
+        };
+
+        // Write object file
+        let obj_path = format!("{}.o", output);
+        std::fs::write(&obj_path, &obj_bytes).unwrap_or_else(|e| {
+            eprintln!("Failed to write {}: {}", obj_path, e);
+            std::process::exit(1);
+        });
+
+        // Find airl-rt static library
+        let rt_lib = find_airl_rt_lib();
+
+        // Link with system cc
+        let status = std::process::Command::new("cc")
+            .arg(&obj_path)
+            .arg("-o")
+            .arg(&output)
+            .arg(&rt_lib)
+            .arg("-lm")    // math library
+            .arg("-lpthread") // threads
+            .arg("-ldl")   // dynamic loading
+            .status();
+
+        // Clean up object file
+        let _ = std::fs::remove_file(&obj_path);
+
+        match status {
+            Ok(s) if s.success() => {
+                eprintln!("Compiled to {}", output);
+            }
+            Ok(s) => {
+                eprintln!("Linker failed with exit code {:?}", s.code());
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Failed to run linker (cc): {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "aot")]
+fn find_airl_rt_lib() -> String {
+    // Look for libairl_rt.a in common locations
+    let candidates = [
+        "target/release/libairl_rt.a",
+        "target/debug/libairl_rt.a",
+        "../target/release/libairl_rt.a",
+        "../target/debug/libairl_rt.a",
+    ];
+    for c in &candidates {
+        if std::path::Path::new(c).exists() {
+            return c.to_string();
+        }
+    }
+    // Fall back to cargo-built location relative to exe
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let lib = dir.join("libairl_rt.a");
+            if lib.exists() {
+                return lib.to_string_lossy().to_string();
+            }
+            // Try ../../libairl_rt.a (common for target/release/airl-driver)
+            if let Some(parent) = dir.parent() {
+                let lib = parent.join("libairl_rt.a");
+                if lib.exists() {
+                    return lib.to_string_lossy().to_string();
+                }
+            }
+        }
+    }
+    // Last resort: assume it's findable by the linker
+    eprintln!("Warning: could not find libairl_rt.a, trying -lairl_rt");
+    "-lairl_rt".to_string()
 }
 
 fn cmd_check(args: &[String]) {

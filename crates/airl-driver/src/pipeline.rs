@@ -860,3 +860,88 @@ mod tests {
         assert!(!lin.has_errors(), "default ownership should not trigger linearity errors");
     }
 }
+
+// ── AOT Compilation Pipeline ──────────────────────────────────────────────
+
+/// Compile AIRL source files to a native object file.
+/// Returns the object file bytes (ELF on Linux, Mach-O on macOS).
+#[cfg(feature = "aot")]
+pub fn compile_to_object(paths: &[String]) -> Result<Vec<u8>, PipelineError> {
+    use airl_runtime::bytecode::BytecodeFunc;
+    use airl_runtime::bytecode_aot::BytecodeAot;
+    use std::collections::HashMap;
+
+    let mut all_funcs: Vec<BytecodeFunc> = Vec::new();
+
+    // 1. Compile stdlib to bytecode (skip their __main__ — they're no-op for pure defn modules)
+    for (src, name) in &[
+        (COLLECTIONS_SOURCE, "collections"),
+        (MATH_SOURCE, "math"),
+        (RESULT_SOURCE, "result"),
+        (STRING_SOURCE, "string"),
+        (MAP_SOURCE, "map"),
+    ] {
+        let (funcs, _stdlib_main) = compile_source_to_bytecode(src, name)?;
+        // Only take named functions, skip the __main__ (which just returns nil)
+        all_funcs.extend(funcs);
+    }
+
+    // 2. Compile user source files to bytecode
+    let mut all_source = String::new();
+    for path in paths {
+        let source = std::fs::read_to_string(path)
+            .map_err(|e| PipelineError::Io(format!("{}: {}", path, e)))?;
+        all_source.push_str(&source);
+        all_source.push('\n');
+    }
+
+    let (funcs, main_func) = compile_source_to_bytecode(&all_source, "user")?;
+    all_funcs.extend(funcs);
+    all_funcs.push(main_func); // Only the user's __main__
+
+    // 3. AOT compile bytecode → native object
+    let func_map: HashMap<String, BytecodeFunc> = all_funcs.iter()
+        .map(|f| (f.name.clone(), f.clone()))
+        .collect();
+
+    let mut aot = BytecodeAot::new().map_err(|e| PipelineError::Runtime(
+        airl_runtime::error::RuntimeError::TypeError(e)
+    ))?;
+
+    for func in &all_funcs {
+        aot.compile_all(std::slice::from_ref(func), &func_map);
+    }
+
+    aot.emit_entry_point().map_err(|e| PipelineError::Runtime(
+        airl_runtime::error::RuntimeError::TypeError(e)
+    ))?;
+
+    Ok(aot.finish())
+}
+
+/// Compile source string to bytecode functions (shared by run and AOT paths).
+#[cfg(feature = "aot")]
+fn compile_source_to_bytecode(source: &str, prefix: &str) -> Result<(Vec<airl_runtime::bytecode::BytecodeFunc>, airl_runtime::bytecode::BytecodeFunc), PipelineError> {
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
+    let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
+    let mut diags = Diagnostics::new();
+
+    let mut tops = Vec::new();
+    for sexpr in &sexprs {
+        match parser::parse_top_level(sexpr, &mut diags) {
+            Ok(top) => tops.push(top),
+            Err(d) => {
+                let mut diags2 = Diagnostics::new();
+                match parser::parse_expr(sexpr, &mut diags2) {
+                    Ok(expr) => tops.push(airl_syntax::ast::TopLevel::Expr(expr)),
+                    Err(_) => return Err(PipelineError::Syntax(d)),
+                }
+            }
+        }
+    }
+
+    let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
+    let mut bc_compiler = BytecodeCompiler::with_prefix(prefix);
+    Ok(bc_compiler.compile_program(&ir_nodes))
+}
