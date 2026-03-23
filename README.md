@@ -151,9 +151,10 @@ This is why AIRL makes contracts **grammar-level mandatory** — the parser lite
 
 ### Compilation
 - **Tree-walking interpreter** for all AIRL programs
-- **IR VM** — Compiled execution mode (`--compiled`) via tree-flattened IR with self-TCO, 10-30x faster than interpreted
-- **Cranelift JIT** — Functions with primitive signatures transparently compile to native code on first call
-- **Tensor JIT** — `tensor.add`, `tensor.mul`, `tensor.matmul` compile to native loops
+- **IR VM** — Compiled execution mode (`--compiled`) via tree-flattened IR with self-TCO, 5-10x faster than interpreted
+- **Bytecode VM** — Register-based bytecode compiler and VM (`--bytecode`), ~10x faster than interpreted
+- **Bytecode→Cranelift JIT** — Eligible bytecode functions JIT-compiled to native x86-64 (`--jit`), fib(30) in 10ms (460x faster than bytecode, 30x faster than Python)
+- **Tensor JIT** — `tensor.add`, `tensor.mul`, `tensor.matmul` compile to native loops via Cranelift
 - **Z3 SMT solver** — Formal verification of integer arithmetic contracts
 
 ### Self-Hosting
@@ -172,6 +173,8 @@ This is why AIRL makes contracts **grammar-level mandatory** — the parser lite
 ```
 airl run <file>              Run an AIRL source file (interpreted)
 airl run --compiled <file>   Run via IR VM (faster, no contracts)
+airl run --bytecode <file>   Run via bytecode VM (~10x faster than interpreted)
+airl run --jit <file>        Run via bytecode VM + Cranelift JIT (requires --features jit)
 airl check <file>            Type-check and verify contracts
 airl repl                    Interactive REPL with :env introspection
 airl agent <file>            Run as an agent worker (--listen tcp:HOST:PORT | stdio)
@@ -315,14 +318,21 @@ AIRL Source
     │
     ├─ Interpreted ──► [Evaluator]     Tree-walking interpreter
     │                     │
-    │                     ├─ Scalar JIT ────► Cranelift (i64/f64/bool)
     │                     ├─ Tensor JIT ────► Cranelift (matmul loops)
     │                     └─ Agent Ops ─────► spawn-agent, send (TCP/stdio)
     │
-    └─ Compiled ─────► [IR Compiler]   AST → IR nodes (no contracts/spans)
+    ├─ Compiled ─────► [IR Compiler]   AST → IR nodes (no contracts/spans)
+    │                     │
+    │                     ▼
+    │                  [IR VM]         Self-TCO, pattern matching, closures
+    │
+    └─ Bytecode ─────► [IR Compiler]   AST → IR → flat bytecode
                           │
                           ▼
-                       [IR VM]         Self-TCO, pattern matching, closures
+                       [Bytecode VM]   Register-based, self-TCO
+                          │
+                          ▼ (--jit)
+                       [Cranelift JIT] Eligible functions → native x86-64
 ```
 
 ### Crate Structure
@@ -332,7 +342,7 @@ AIRL Source
 | `airl-syntax` | Lexer, parser, AST, diagnostics | None |
 | `airl-types` | Type checker, linearity, exhaustiveness | airl-syntax |
 | `airl-contracts` | Contract evaluation, stub prover | airl-syntax, airl-types |
-| `airl-runtime` | Interpreter, IR VM, values, builtins, tensor ops | airl-syntax, airl-types, airl-contracts, airl-codegen |
+| `airl-runtime` | Interpreter, IR VM, bytecode VM, bytecode JIT, values, builtins, tensor ops | airl-syntax, airl-types, airl-contracts, airl-codegen, cranelift (optional, `jit` feature) |
 | `airl-codegen` | Cranelift JIT (scalar + tensor) | airl-syntax, airl-types, cranelift |
 | `airl-solver` | Z3 SMT formal verification | airl-syntax, z3 |
 | `airl-agent` | Transport, protocol, agent runtime | airl-syntax, airl-runtime |
@@ -397,7 +407,39 @@ Tensor builtins: `tensor.zeros`, `tensor.ones`, `tensor.rand`, `tensor.identity`
 
 ## JIT Compilation
 
-Functions with primitive signatures (i32, i64, f32, f64, bool) are transparently JIT-compiled on first call:
+AIRL has two JIT paths:
+
+### Bytecode→Cranelift JIT (`--jit`)
+
+The bytecode VM can JIT-compile eligible functions to native x86-64 via Cranelift. A function is eligible if it uses only primitive operations (arithmetic, comparisons, control flow, calls to other eligible functions) — no lists, closures, variants, or builtins.
+
+```bash
+# Build with JIT support
+cargo build --release --features jit
+
+# Run with JIT
+cargo run --features jit -- run --jit program.airl
+
+# Debug output shows what gets JIT'd
+AIRL_JIT_DEBUG=1 cargo run --features jit -- run --jit program.airl
+```
+
+**Performance:**
+
+| Benchmark | Bytecode | JIT | Speedup |
+|-----------|----------|-----|---------|
+| fib(30) | 4,605ms | 10ms | **460x** |
+| fact(12)x10K | 163ms | 6ms | **27x** |
+
+Ineligible functions fall back to bytecode transparently — all existing programs work unchanged.
+
+### Tensor JIT
+
+Tensor operations (`tensor.add`, `tensor.mul`, `tensor.matmul`) are JIT-compiled to native loops via Cranelift in the interpreter path. No feature flag required.
+
+### Scalar JIT (interpreter path)
+
+The tree-walking interpreter also detects functions with primitive signatures and JIT-compiles them via the `airl-codegen` crate:
 
 ```clojure
 (defn compute
@@ -411,15 +453,15 @@ Functions with primitive signatures (i32, i64, f32, f64, bool) are transparently
 ;; → 47
 ```
 
-No annotation needed — the interpreter detects eligible functions and compiles them automatically. Contracts are still checked by the interpreter before and after the native call.
+No annotation needed — the interpreter detects eligible functions automatically. Contracts are still checked before and after the native call.
 
 ## Project Stats
 
-- **485 tests** across 8 crates
+- **517 tests** across 8 crates
 - **~19,000 lines** of Rust + **~21,000 lines** of AIRL (bootstrap compiler + tests)
 - **Self-hosting** — lexer, parser, type checker, and IR compiler written in AIRL
 - **Compiler fixpoint verified** — the compiled compiler reproduces itself
-- **Zero external dependencies** for core crates (Cranelift and Z3 are isolated in `airl-codegen` and `airl-solver`)
+- **Zero external dependencies** for core crates by default (Cranelift in `airl-codegen` and optionally `airl-runtime` behind `jit` feature; Z3 in `airl-solver`)
 
 ## Specification
 
