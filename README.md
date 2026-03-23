@@ -1,6 +1,6 @@
 # AIRL — AI Intermediate Representation Language
 
-**A programming language designed for AI systems, not humans.**
+**A programming language designed for AI systems, not humans. NSFW. Not meant for human consumption. DO NOT EAT**
 
 AIRL is a typed, contract-verified programming language for inter-agent communication. AI systems generate AIRL programs, transmit them as messages, execute them with formal guarantees, and verify results against machine-checkable contracts. The syntax is the serialization format. The message is the program.
 
@@ -42,9 +42,15 @@ Every existing programming language optimizes for human readability. AIRL optimi
 
 ### Compilation
 - **Tree-walking interpreter** for all AIRL programs
+- **IR VM** — Compiled execution mode (`--compiled`) via tree-flattened IR with self-TCO, 10-30x faster than interpreted
 - **Cranelift JIT** — Functions with primitive signatures transparently compile to native code on first call
 - **Tensor JIT** — `tensor.add`, `tensor.mul`, `tensor.matmul` compile to native loops
 - **Z3 SMT solver** — Formal verification of integer arithmetic contracts
+
+### Self-Hosting
+- **Bootstrap compiler** — Lexer, parser, type checker, and IR compiler written in AIRL itself (~2,500 lines)
+- **Compiler fixpoint** — The compiled compiler produces identical IR to the interpreted compiler (verified via automated fixpoint test)
+- **Self-parse verified** — The bootstrap lexer tokenizes its own source (15,691 chars → 3,400 tokens)
 
 ### Agent Communication
 - Inter-agent task exchange over TCP and Unix sockets
@@ -55,12 +61,13 @@ Every existing programming language optimizes for human readability. AIRL optimi
 
 ### CLI
 ```
-airl run <file>       Run an AIRL source file
-airl check <file>     Type-check and verify contracts
-airl repl             Interactive REPL with :env introspection
-airl agent <file>     Run as an agent worker (--listen tcp:HOST:PORT | stdio)
-airl call <ep> <fn>   Call a remote agent function
-airl fmt <file>       Pretty-print an AIRL source file
+airl run <file>              Run an AIRL source file (interpreted)
+airl run --compiled <file>   Run via IR VM (faster, no contracts)
+airl check <file>            Type-check and verify contracts
+airl repl                    Interactive REPL with :env introspection
+airl agent <file>            Run as an agent worker (--listen tcp:HOST:PORT | stdio)
+airl call <ep> <fn>          Call a remote agent function
+airl fmt <file>              Pretty-print an AIRL source file
 ```
 
 ## Quick Start
@@ -197,12 +204,16 @@ AIRL Source
     ▼
 [Z3 Verifier]         Prove contracts via SMT (negation + UNSAT)
     │
-    ▼
-[Evaluator]           Tree-walking interpreter
+    ├─ Interpreted ──► [Evaluator]     Tree-walking interpreter
     │                     │
-    ├─ Scalar JIT ────► Cranelift (i64/f64/bool functions)
-    ├─ Tensor JIT ────► Cranelift (add/mul/matmul loops)
-    └─ Agent Ops ─────► spawn-agent, send (TCP/stdio)
+    │                     ├─ Scalar JIT ────► Cranelift (i64/f64/bool)
+    │                     ├─ Tensor JIT ────► Cranelift (matmul loops)
+    │                     └─ Agent Ops ─────► spawn-agent, send (TCP/stdio)
+    │
+    └─ Compiled ─────► [IR Compiler]   AST → IR nodes (no contracts/spans)
+                          │
+                          ▼
+                       [IR VM]         Self-TCO, pattern matching, closures
 ```
 
 ### Crate Structure
@@ -212,7 +223,7 @@ AIRL Source
 | `airl-syntax` | Lexer, parser, AST, diagnostics | None |
 | `airl-types` | Type checker, linearity, exhaustiveness | airl-syntax |
 | `airl-contracts` | Contract evaluation, stub prover | airl-syntax, airl-types |
-| `airl-runtime` | Interpreter, values, builtins, tensor ops | airl-syntax, airl-types, airl-contracts, airl-codegen |
+| `airl-runtime` | Interpreter, IR VM, values, builtins, tensor ops | airl-syntax, airl-types, airl-contracts, airl-codegen |
 | `airl-codegen` | Cranelift JIT (scalar + tensor) | airl-syntax, airl-types, cranelift |
 | `airl-solver` | Z3 SMT formal verification | airl-syntax, z3 |
 | `airl-agent` | Transport, protocol, agent runtime | airl-syntax, airl-runtime |
@@ -295,9 +306,10 @@ No annotation needed — the interpreter detects eligible functions and compiles
 
 ## Project Stats
 
-- **428 tests** across 8 crates
-- **~13,000 lines** of Rust
-- **89 commits** of incremental development
+- **485 tests** across 8 crates
+- **~19,000 lines** of Rust + **~21,000 lines** of AIRL (bootstrap compiler + tests)
+- **Self-hosting** — lexer, parser, type checker, and IR compiler written in AIRL
+- **Compiler fixpoint verified** — the compiled compiler reproduces itself
 - **Zero external dependencies** for core crates (Cranelift and Z3 are isolated in `airl-codegen` and `airl-solver`)
 
 ## Specification
