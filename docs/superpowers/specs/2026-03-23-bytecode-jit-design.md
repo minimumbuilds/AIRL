@@ -71,8 +71,11 @@ A `BytecodeFunc` is JIT-eligible if its instruction stream contains **none** of 
 | `MatchTag` / `JumpIfNoMatch` / `MatchWild` | Pattern matching on variants |
 | `TryUnwrap` | Error handling on Result variants |
 | `CallBuiltin` | Calls runtime builtins that operate on non-primitive values |
+| `CallReg` | Calls a closure or function reference in a register — implies non-primitive callable values |
 
 If none of these opcodes appear, all values flowing through the function must be primitives (Int, Float, Bool) — there's no way to create or inspect non-primitive values without them.
+
+**Marshal-time safety net:** Even if a function passes the opcode eligibility check, `marshal_arg` returns `None` for non-primitive `Value`s (e.g., `Value::Str`). This means a function that receives string arguments at runtime will transparently fall back to bytecode dispatch — the JIT path is never entered with incompatible types. This is the final guard against type-confused JIT execution (e.g., a function containing only `Add` that happens to receive strings instead of ints).
 
 `Call` to other functions is allowed **only if** the target is also JIT-eligible. During eager compilation, functions are compiled in dependency order: if `f` calls `g`, `g` must be compiled first. If `g` is ineligible, `f` is also ineligible.
 
@@ -112,6 +115,8 @@ Each bytecode register `r0..rN` maps to a Cranelift `Variable(0)..Variable(N)`. 
 
 **Pass 1 — find block boundaries:** Scan the instruction array for jump targets. Any instruction index that is the destination of a `Jump`, `JumpIfFalse`, `JumpIfTrue`, or `JumpIfNoMatch` starts a new basic block. Index 0 is always the entry block.
 
+**Jump target calculation:** The bytecode VM increments `ip` **before** applying the jump offset. So a jump instruction at index `i` with offset `o` targets instruction `i + 1 + o` (where `o` is a signed i16 cast from u16). The block boundary scanner must use this `i + 1 + offset` formula to compute correct targets. Getting this wrong produces silent control-flow mismatches between JIT and bytecode.
+
 **Pass 2 — emit IR:** Walk instructions linearly. When crossing a block boundary, seal the previous block and switch to the new one. Emit Cranelift instructions for each bytecode opcode.
 
 ### Opcode Translation
@@ -131,17 +136,25 @@ Each bytecode register `r0..rN` maps to a Cranelift `Variable(0)..Variable(N)`. 
 | `Mod` | `srem` | Int only |
 | `Neg` (int) | `ineg` | |
 | `Neg` (float) | `fneg` with bitcasts | |
-| `Eq` (int) | `icmp eq` → `bint` → `uextend.i64` | Bool result widened to i64 |
+| `Eq` (int) | `icmp eq` → `uextend.i64` | `icmp` returns `i8`, widened to i64 |
 | `Ne/Lt/Le/Gt/Ge` | `icmp`/`fcmp` variants | Same pattern |
 | `Not` | `iconst 1`, `isub` (1 - val) | Flip boolean |
 | `Jump` | `jump block_target` | Resolved from offset |
 | `JumpIfFalse` | `brif val, block_next, block_target` | Note: brif branches on nonzero, so condition is inverted |
 | `JumpIfTrue` | `brif val, block_target, block_next` | |
 | `Call` (JIT'd target) | `call fn_ref, [args...]` | Direct native call |
-| `TailCall` | Move args → param vars, `jump entry_block` | Loop back |
+| `TailCall` | Verify self-call, move args → param vars, `jump entry_block` | See TailCall section below |
 | `Return` | `return val` | |
 
-### TailCall as Loop
+### TailCall Handling
+
+The `TailCall` opcode stores a `func_idx` (constant pool index to the callee name string). The bytecode compiler only emits `TailCall` for **self-recursive** calls (verified in `compile_expr_tail` where `name == fn_name`). The JIT must verify this:
+
+1. Decode `func_idx` from `instr.a`, look up the callee name in the function's constant pool
+2. If the callee name equals the current function name → emit the loop-back pattern (see below)
+3. If the callee name differs → **the function is ineligible** (mutual tail-call optimization requires trampolines, which is Phase 2)
+
+**Self-TailCall as Loop:**
 
 Cranelift doesn't have a tail-call instruction. Instead, the function body is emitted inside an implicit loop structure:
 
@@ -149,7 +162,7 @@ Cranelift doesn't have a tail-call instruction. Instead, the function body is em
 entry_block(param0, param1, ...):
     ; function body
     ; ...
-    ; TailCall becomes:
+    ; TailCall (self-call) becomes:
     def_var(0, new_arg0)
     def_var(1, new_arg1)
     jump entry_block
@@ -219,8 +232,11 @@ pub struct BytecodeJit {
 - Look up in `self.compiled`; return `None` if not found
 - Marshal args; return `None` if any arg is non-primitive
 - `unsafe` call through function pointer (dispatch on arity 0-8)
+- If arity > 8, return `None` (fall back to bytecode — functions with >8 params are rare in numeric code)
 - Unmarshal result using stored `TypeHint`
 - Return `Some(Ok(value))`
+
+**Arity limit:** Functions with more than 8 parameters are not JIT-compiled. The `unsafe` call dispatch uses a match on arity to transmute the function pointer to the correct typed signature (`fn(u64) -> u64`, `fn(u64, u64) -> u64`, etc.). Supporting arbitrary arity would require a calling-convention abstraction (varargs or indirect call). 8 params covers all practical numeric functions.
 
 ## VM Integration
 
@@ -237,15 +253,21 @@ pub struct BytecodeVm {
 }
 ```
 
-**`load_function`** — after inserting into `self.functions`, try JIT compilation:
+**`load_function`** — unchanged, just inserts into the function table.
+
+**`jit_compile_all`** — new method, called **after** all functions are loaded (two-pass approach). This ensures inter-function dependencies are resolved correctly:
 
 ```rust
-pub fn load_function(&mut self, func: BytecodeFunc) {
+pub fn jit_compile_all(&mut self) {
     #[cfg(feature = "jit")]
     if let Some(ref mut jit) = self.jit {
-        jit.try_compile(&func, &self.functions);
+        let names: Vec<String> = self.functions.keys().cloned().collect();
+        for name in &names {
+            if let Some(func) = self.functions.get(name) {
+                jit.try_compile(func, &self.functions);
+            }
+        }
     }
-    self.functions.insert(func.name.clone(), func);
 }
 ```
 
@@ -263,7 +285,7 @@ if let Some(ref jit) = self.jit {
 
 ### Pipeline Changes
 
-New function `run_source_jit()` in `pipeline.rs` — identical to `run_source_bytecode()` but constructs `BytecodeVm::new_with_jit()`.
+New function `run_source_jit()` in `pipeline.rs` — identical to `run_source_bytecode()` but constructs `BytecodeVm::new_with_jit()`. After loading all stdlib and user functions, calls `vm.jit_compile_all()` before `vm.exec_main()`. This two-pass approach (load all, then compile all) ensures inter-function dependencies are resolved correctly.
 
 ### CLI
 
