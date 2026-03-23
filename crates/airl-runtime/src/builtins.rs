@@ -1013,6 +1013,7 @@ fn type_name(val: &Value) -> &'static str {
         Value::BuiltinFn(_) => "BuiltinFn",
         Value::IRClosure(_) => "IRClosure",
         Value::IRFuncRef(_) => "IRFuncRef",
+        Value::BytecodeClosure(_) => "BytecodeClosure",
     }
 }
 
