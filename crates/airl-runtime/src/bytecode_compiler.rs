@@ -131,6 +131,38 @@ impl BytecodeCompiler {
         }
     }
 
+    /// Recursively bind pattern variables to registers, emitting MatchTag for nested variants.
+    fn bind_pattern(&mut self, pat: &IRPattern, value_reg: u16) {
+        match pat {
+            IRPattern::Bind(name) => {
+                self.locals.insert(name.clone(), value_reg);
+            }
+            IRPattern::Wild => {}
+            IRPattern::Lit(_) => {} // Literal patterns in sub-positions don't bind
+            IRPattern::Variant(tag, sub_pats) => {
+                // Destructure nested variant: extract inner value
+                let tag_idx = self.add_constant(Value::Str(tag.clone()));
+                let inner_reg = self.alloc_reg();
+                self.emit(Op::MatchTag, inner_reg, value_reg, tag_idx);
+                // Note: we assume this matches (it was already checked at outer level)
+                if sub_pats.len() == 1 {
+                    self.bind_pattern(&sub_pats[0], inner_reg);
+                }
+            }
+        }
+    }
+
+    /// Remove pattern bindings from locals (reverse of bind_pattern).
+    fn unbind_pattern(&mut self, pat: &IRPattern) {
+        match pat {
+            IRPattern::Bind(name) => { self.locals.remove(name); }
+            IRPattern::Wild | IRPattern::Lit(_) => {}
+            IRPattern::Variant(_, sub_pats) => {
+                for p in sub_pats { self.unbind_pattern(p); }
+            }
+        }
+    }
+
     /// Compile an IRNode expression, placing the result in `dst`.
     pub fn compile_expr(&mut self, node: &IRNode, dst: u16) {
         match node {
@@ -264,22 +296,51 @@ impl BytecodeCompiler {
                     }
                 } else {
                     // General function call
-                    // Place args in consecutive registers starting at dst+1
-                    let arg_start = dst + 1;
+                    let is_local_call = self.locals.contains_key(name);
+                    let callee_orig = if is_local_call {
+                        Some(*self.locals.get(name).unwrap())
+                    } else {
+                        None
+                    };
+
+                    // 1. Compile args to temp registers (safe, above all locals)
                     let save = self.next_reg;
-                    self.next_reg = arg_start;
-                    if self.next_reg > self.max_reg { self.max_reg = self.next_reg; }
+                    let mut tmp_regs = Vec::new();
                     for arg in args {
                         let r = self.alloc_reg();
                         self.compile_expr(arg, r);
+                        tmp_regs.push(r);
                     }
-                    // Determine if user-defined or builtin
-                    if self.locals.contains_key(name) {
-                        // Closure/funcref in register
-                        let callee_reg = *self.locals.get(name).unwrap();
-                        self.emit(Op::CallReg, dst, callee_reg, args.len() as u16);
+
+                    // 2. Save callee to a safe register (AFTER args compiled,
+                    //    BEFORE moving args into call slots which may clobber it)
+                    let safe_callee = if let Some(orig) = callee_orig {
+                        let call_slot_end = dst + 1 + args.len() as u16;
+                        if orig >= dst + 1 && orig < call_slot_end {
+                            // Callee is in the danger zone — save it
+                            let safe = self.alloc_reg();
+                            self.emit(Op::Move, safe, orig, 0);
+                            safe
+                        } else {
+                            orig // Safe as-is
+                        }
                     } else {
-                        // Try as named function first, fall back to builtin
+                        0 // unused
+                    };
+
+                    // 3. Move temps into call slots [dst+1..]
+                    for (i, &tmp) in tmp_regs.iter().enumerate() {
+                        let slot = dst + 1 + i as u16;
+                        if slot >= self.max_reg { self.max_reg = slot + 1; }
+                        if tmp != slot {
+                            self.emit(Op::Move, slot, tmp, 0);
+                        }
+                    }
+
+                    // 4. Emit call
+                    if is_local_call {
+                        self.emit(Op::CallReg, dst, safe_callee, args.len() as u16);
+                    } else {
                         let name_idx = self.add_constant(Value::Str(name.clone()));
                         self.emit(Op::Call, dst, name_idx, args.len() as u16);
                     }
@@ -290,13 +351,20 @@ impl BytecodeCompiler {
             IRNode::CallExpr(callee, args) => {
                 let callee_reg = self.alloc_reg();
                 self.compile_expr(callee, callee_reg);
-                let arg_start = dst + 1;
                 let save = self.next_reg;
-                self.next_reg = arg_start;
-                if self.next_reg > self.max_reg { self.max_reg = self.next_reg; }
+                let mut tmp_regs = Vec::new();
                 for arg in args {
                     let r = self.alloc_reg();
                     self.compile_expr(arg, r);
+                    tmp_regs.push(r);
+                }
+                // Move temps into call slots [dst+1..]
+                for (i, &tmp) in tmp_regs.iter().enumerate() {
+                    let slot = dst + 1 + i as u16;
+                    if slot >= self.max_reg { self.max_reg = slot + 1; }
+                    if tmp != slot {
+                        self.emit(Op::Move, slot, tmp, 0);
+                    }
                 }
                 self.emit(Op::CallReg, dst, callee_reg, args.len() as u16);
                 self.free_reg_to(save.max(dst + 1));
@@ -398,22 +466,14 @@ impl BytecodeCompiler {
                             self.emit(Op::MatchTag, inner_reg, scr_reg, tag_idx);
                             let skip = self.instructions.len();
                             self.emit(Op::JumpIfNoMatch, 0, 0, 0); // patch later
-                            // Bind sub-patterns
+                            // Bind sub-patterns recursively
                             if sub_pats.len() == 1 {
-                                if let IRPattern::Bind(name) = &sub_pats[0] {
-                                    self.locals.insert(name.clone(), inner_reg);
-                                    self.compile_expr(&arm.body, dst);
-                                    self.locals.remove(name);
-                                } else if let IRPattern::Wild = &sub_pats[0] {
-                                    self.compile_expr(&arm.body, dst);
-                                } else {
-                                    // Nested pattern — compile body with inner bound
-                                    self.compile_expr(&arm.body, dst);
-                                }
+                                self.bind_pattern(&sub_pats[0], inner_reg);
+                                self.compile_expr(&arm.body, dst);
+                                self.unbind_pattern(&sub_pats[0]);
                             } else if sub_pats.is_empty() {
                                 self.compile_expr(&arm.body, dst);
                             } else {
-                                // Multi-field variant destructuring not common, handle basic case
                                 self.compile_expr(&arm.body, dst);
                             }
                             self.free_reg_to(inner_reg.max(dst + 1));
@@ -550,15 +610,11 @@ impl BytecodeCompiler {
                             let skip = self.instructions.len();
                             self.emit(Op::JumpIfNoMatch, 0, 0, 0);
                             if sub_pats.len() == 1 {
-                                if let IRPattern::Bind(name) = &sub_pats[0] {
-                                    self.locals.insert(name.clone(), inner_reg);
-                                    self.compile_expr_tail(&arm.body, dst, fn_name);
-                                    self.locals.remove(name);
-                                } else if let IRPattern::Wild = &sub_pats[0] {
-                                    self.compile_expr_tail(&arm.body, dst, fn_name);
-                                } else {
-                                    self.compile_expr_tail(&arm.body, dst, fn_name);
-                                }
+                                self.bind_pattern(&sub_pats[0], inner_reg);
+                                self.compile_expr_tail(&arm.body, dst, fn_name);
+                                self.unbind_pattern(&sub_pats[0]);
+                            } else if sub_pats.is_empty() {
+                                self.compile_expr_tail(&arm.body, dst, fn_name);
                             } else {
                                 self.compile_expr_tail(&arm.body, dst, fn_name);
                             }
