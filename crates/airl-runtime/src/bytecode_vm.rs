@@ -20,6 +20,8 @@ pub struct BytecodeVm {
     builtins: Builtins,
     call_stack: Vec<CallFrame>,
     recursion_depth: usize,
+    #[cfg(feature = "jit")]
+    jit: Option<crate::bytecode_jit::BytecodeJit>,
 }
 
 impl BytecodeVm {
@@ -29,6 +31,31 @@ impl BytecodeVm {
             builtins: Builtins::new(),
             call_stack: Vec::new(),
             recursion_depth: 0,
+            #[cfg(feature = "jit")]
+            jit: None,
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn new_with_jit() -> Self {
+        BytecodeVm {
+            functions: HashMap::new(),
+            builtins: Builtins::new(),
+            call_stack: Vec::new(),
+            recursion_depth: 0,
+            jit: crate::bytecode_jit::BytecodeJit::new().ok(),
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn jit_compile_all(&mut self) {
+        if let Some(ref mut jit) = self.jit {
+            let names: Vec<String> = self.functions.keys().cloned().collect();
+            for name in &names {
+                if let Some(func) = self.functions.get(name) {
+                    jit.try_compile(func, &self.functions);
+                }
+            }
         }
     }
 
@@ -379,6 +406,20 @@ impl BytecodeVm {
                         let frame = self.call_stack.last().unwrap();
                         (0..argc).map(|i| frame.registers[instr.dst as usize + 1 + i].clone()).collect()
                     };
+
+                    // Try JIT first
+                    #[cfg(feature = "jit")]
+                    if let Some(ref jit) = self.jit {
+                        if let Some(result) = jit.try_call_native(&name, &args) {
+                            match result {
+                                Ok(val) => {
+                                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = val;
+                                    continue; // skip bytecode dispatch
+                                }
+                                Err(e) => return Err(e),
+                            }
+                        }
+                    }
 
                     // Try builtin first
                     if let Some(f) = self.builtins.get(&name) {
