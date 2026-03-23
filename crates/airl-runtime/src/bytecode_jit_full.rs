@@ -90,7 +90,8 @@ pub struct RuntimeImports {
     pub call_closure: FuncId,  // (closure, args_ptr, argc) -> *mut RtValue
 
     // I/O / misc
-    pub print:    FuncId,   // (val) -> nil
+    pub print:    FuncId,        // (val) -> nil
+    pub print_values: FuncId,    // (args_ptr, count) -> nil  (variadic print)
     pub type_of:  FuncId,   // (val) -> str
     pub valid:    FuncId,   // (val) -> bool
 
@@ -244,6 +245,9 @@ pub struct BytecodeJitFull {
     pub compiled: HashMap<String, *const u8>,
     /// Maps AIRL builtin names to their Cranelift FuncId for `CallBuiltin` dispatch.
     pub builtin_map: HashMap<String, FuncId>,
+    /// Stable storage for string constants whose raw pointers are baked into JIT code.
+    /// Strings here live as long as the JIT module, preventing dangling pointer bugs.
+    stable_strings: Vec<String>,
 }
 
 // SAFETY: The raw pointers in `compiled` are to JIT-allocated executable
@@ -276,7 +280,16 @@ impl BytecodeJitFull {
             rt,
             compiled: HashMap::new(),
             builtin_map,
+            stable_strings: Vec::new(),
         })
+    }
+
+    /// Intern a string into stable storage, returning (ptr, len).
+    /// The pointer is valid for the lifetime of `self`.
+    fn intern_string(&mut self, s: &str) -> (*const u8, usize) {
+        self.stable_strings.push(s.to_string());
+        let stored = self.stable_strings.last().unwrap();
+        (stored.as_ptr(), stored.len())
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -340,9 +353,10 @@ impl BytecodeJitFull {
         builder.symbol("airl_call_closure", closure::airl_call_closure as *const u8);
 
         // I/O
-        builder.symbol("airl_print",   io::airl_print   as *const u8);
-        builder.symbol("airl_type_of", io::airl_type_of as *const u8);
-        builder.symbol("airl_valid",   io::airl_valid   as *const u8);
+        builder.symbol("airl_print",        io::airl_print        as *const u8);
+        builder.symbol("airl_print_values", io::airl_print_values as *const u8);
+        builder.symbol("airl_type_of",      io::airl_type_of      as *const u8);
+        builder.symbol("airl_valid",        io::airl_valid        as *const u8);
 
         // String
         builder.symbol("airl_char_at",     string::airl_char_at     as *const u8);
@@ -441,9 +455,10 @@ impl BytecodeJitFull {
         let call_closure = declare_import(m, "airl_call_closure", sig_ptr_ptr_i64_ret_ptr(m));
 
         // I/O / misc
-        let print   = declare_import(m, "airl_print",   s1.clone());
-        let type_of = declare_import(m, "airl_type_of", s1.clone());
-        let valid   = declare_import(m, "airl_valid",   s1.clone());
+        let print        = declare_import(m, "airl_print",        s1.clone());
+        let print_values = declare_import(m, "airl_print_values", sig_ptr_i64_ret_ptr(m));
+        let type_of      = declare_import(m, "airl_type_of",      s1.clone());
+        let valid        = declare_import(m, "airl_valid",        s1.clone());
 
         // String builtins
         let char_at     = declare_import(m, "airl_char_at",     s2.clone());
@@ -482,7 +497,7 @@ impl BytecodeJitFull {
             head, tail, cons, empty, length, at, append, list_new,
             make_variant, match_tag,
             make_closure, call_closure,
-            print, type_of, valid,
+            print, print_values, type_of, valid,
             char_at, substring, chars, split, join, contains, starts_with,
             ends_with, index_of, trim, to_upper, to_lower, replace,
             map_new, map_from, map_get, map_get_or, map_set, map_has,
@@ -569,6 +584,12 @@ impl BytecodeJitFull {
     /// Convert an interpreter `Value` into a heap-allocated `RtValue`.
     /// The caller owns one reference (rc=1).
     pub fn value_to_rt(v: &Value) -> *mut RtValue {
+        Self::value_to_rt_with_compiled(v, None)
+    }
+
+    /// Like `value_to_rt`, but with access to the compiled function map so that
+    /// `BytecodeClosure` values can be converted to proper `RtData::Closure`.
+    pub fn value_to_rt_with_compiled(v: &Value, compiled: Option<&HashMap<String, *const u8>>) -> *mut RtValue {
         use airl_rt::value::*;
         match v {
             Value::Int(n)   => rt_int(*n),
@@ -579,25 +600,41 @@ impl BytecodeJitFull {
             Value::Nil      => rt_nil(),
             Value::Unit     => rt_unit(),
             Value::List(items) => {
-                let ptrs: Vec<*mut RtValue> = items.iter().map(Self::value_to_rt).collect();
+                let ptrs: Vec<*mut RtValue> = items.iter().map(|i| Self::value_to_rt_with_compiled(i, compiled)).collect();
                 rt_list(ptrs)
             }
             Value::Tuple(items) => {
-                // Represent tuples as lists at the RT level.
-                let ptrs: Vec<*mut RtValue> = items.iter().map(Self::value_to_rt).collect();
+                let ptrs: Vec<*mut RtValue> = items.iter().map(|i| Self::value_to_rt_with_compiled(i, compiled)).collect();
                 rt_list(ptrs)
             }
             Value::Variant(tag, inner) => {
-                let inner_ptr = Self::value_to_rt(inner);
+                let inner_ptr = Self::value_to_rt_with_compiled(inner, compiled);
                 rt_variant(tag.clone(), inner_ptr)
             }
             Value::Map(map) => {
                 use std::collections::HashMap as HM;
                 let mut rt_map_data: HM<String, *mut RtValue> = HM::new();
                 for (k, val) in map {
-                    rt_map_data.insert(k.clone(), Self::value_to_rt(val));
+                    rt_map_data.insert(k.clone(), Self::value_to_rt_with_compiled(val, compiled));
                 }
                 rt_map(rt_map_data)
+            }
+            Value::BytecodeClosure(bc) => {
+                // Look up the compiled function pointer for this closure
+                let fn_ptr = compiled
+                    .and_then(|c| c.get(&bc.func_name).copied())
+                    .unwrap_or(std::ptr::null());
+                // Marshal captured values
+                let caps: Vec<*mut RtValue> = bc.captured.iter()
+                    .map(|c| Self::value_to_rt_with_compiled(c, compiled))
+                    .collect();
+                let cap_ptrs: Vec<*mut RtValue> = caps.clone();
+                // Call airl_make_closure to build a proper closure RtValue
+                airl_rt::closure::airl_make_closure(
+                    fn_ptr,
+                    if cap_ptrs.is_empty() { std::ptr::null() } else { cap_ptrs.as_ptr() },
+                    cap_ptrs.len(),
+                )
             }
             // Anything we cannot represent → nil
             _ => rt_nil(),
@@ -673,9 +710,9 @@ impl BytecodeJitFull {
     pub fn try_call_native(&self, name: &str, args: &[Value]) -> Option<Value> {
         let fn_ptr = *self.compiled.get(name)?;
 
-        // Marshal args → RtValue pointers
+        // Marshal args → RtValue pointers (pass compiled map for BytecodeClosure → Closure)
         let mut rt_args: Vec<*mut RtValue> =
-            args.iter().map(|v| Self::value_to_rt(v)).collect();
+            args.iter().map(|v| Self::value_to_rt_with_compiled(v, Some(&self.compiled))).collect();
 
         // Call through the function pointer, dispatch by arity
         let result_ptr = unsafe { Self::dispatch_call(fn_ptr, &mut rt_args) };
@@ -782,8 +819,9 @@ impl BytecodeJitFull {
         }
 
         // Compile call dependencies first (ensures callees are defined before callers).
+        // Also compile MakeClosure targets so their function pointers are available.
         for instr in &func.instructions {
-            if instr.op == Op::Call {
+            if instr.op == Op::Call || instr.op == Op::MakeClosure {
                 if let Value::Str(callee_name) = &func.constants[instr.a as usize] {
                     if callee_name != &func.name
                         && !self.compiled.contains_key(callee_name)
@@ -796,7 +834,7 @@ impl BytecodeJitFull {
             }
         }
 
-        match self.compile_func(func) {
+        match self.compile_func(func, all_functions) {
             Ok(ptr) => {
                 if std::env::var("AIRL_JIT_DEBUG").as_deref() == Ok("1") {
                     eprintln!("[JIT-full] compiled {}", name);
@@ -816,7 +854,7 @@ impl BytecodeJitFull {
     /// Compile a single `BytecodeFunc` to native code.  Every value is an
     /// `i64`-sized `*mut RtValue` pointer; all operations go through `airl_*`
     /// runtime helper calls.
-    pub fn compile_func(&mut self, func: &BytecodeFunc) -> Result<*const u8, String> {
+    pub fn compile_func(&mut self, func: &BytecodeFunc, all_functions: &HashMap<String, BytecodeFunc>) -> Result<*const u8, String> {
         // ── 1. Build Cranelift signature (all params & return are I64 ptrs) ─
         let mut sig = self.module.make_signature();
         for _ in 0..func.arity {
@@ -844,11 +882,15 @@ impl BytecodeJitFull {
             if instr.op == Op::Call || instr.op == Op::TailCall {
                 if let Value::Str(callee_name) = &func.constants[instr.a as usize] {
                     if callee_name != &func.name && !call_targets.contains_key(callee_name) {
-                        // Check if this callee is a runtime builtin (already imported).
-                        if let Some(&builtin_id) = self.builtin_map.get(callee_name.as_str()) {
+                        let argc = instr.b as usize;
+                        // "print" with argc != 1 is variadic — handled inline
+                        // via airl_print_values, so skip pre-declaration.
+                        let is_variadic_print = callee_name == "print" && argc != 1;
+                        if is_variadic_print {
+                            // no-op: handled inline in Op::Call emission
+                        } else if let Some(&builtin_id) = self.builtin_map.get(callee_name.as_str()) {
                             call_targets.insert(callee_name.clone(), builtin_id);
                         } else {
-                            let argc = instr.b as usize;
                             let mut call_sig = self.module.make_signature();
                             for _ in 0..argc {
                                 call_sig.params.push(AbiParam::new(PTR));
@@ -995,9 +1037,10 @@ impl BytecodeJitFull {
                             builder.def_var(vars[dst], result);
                         }
                         Value::Str(s) => {
+                            let (sptr, slen) = self.intern_string(s);
                             let str_ref = self.module.declare_func_in_func(self.rt.str_ctor, builder.func);
-                            let ptr_val = builder.ins().iconst(types::I64, s.as_ptr() as i64);
-                            let len_val = builder.ins().iconst(types::I64, s.len() as i64);
+                            let ptr_val = builder.ins().iconst(types::I64, sptr as i64);
+                            let len_val = builder.ins().iconst(types::I64, slen as i64);
                             let call = builder.ins().call(str_ref, &[ptr_val, len_val]);
                             let result = builder.inst_results(call)[0];
                             builder.def_var(vars[dst], result);
@@ -1247,24 +1290,45 @@ impl BytecodeJitFull {
                     let argc = instr.b as usize;
                     let dst = instr.dst as usize;
 
-                    let callee_func_id = if callee_name == func.name {
-                        func_id
-                    } else if let Some(&id) = call_targets.get(&callee_name) {
-                        id
+                    // Variadic print: pack args onto stack slot, call airl_print_values
+                    if callee_name == "print" && argc != 1 && !call_targets.contains_key("print") {
+                        // Allocate a stack slot for the argument array (argc pointers)
+                        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                            ir::StackSlotKind::ExplicitSlot,
+                            (argc as u32) * 8,
+                            3, // align 8
+                        ));
+                        for j in 0..argc {
+                            let arg = builder.use_var(vars[dst + 1 + j]);
+                            builder.ins().stack_store(arg, slot, (j as i32) * 8);
+                        }
+                        let slot_addr = builder.ins().stack_addr(PTR, slot, 0);
+                        let count_val = builder.ins().iconst(types::I64, argc as i64);
+                        let pv_ref = self.module.declare_func_in_func(self.rt.print_values, builder.func);
+                        let call = builder.ins().call(pv_ref, &[slot_addr, count_val]);
+                        let result = builder.inst_results(call)[0];
+                        builder.def_var(vars[dst], result);
+                        last_was_terminator = false;
                     } else {
-                        return Err(format!("call target '{}' not declared", callee_name));
-                    };
-                    let func_ref = self.module.declare_func_in_func(callee_func_id, builder.func);
+                        let callee_func_id = if callee_name == func.name {
+                            func_id
+                        } else if let Some(&id) = call_targets.get(&callee_name) {
+                            id
+                        } else {
+                            return Err(format!("call target '{}' not declared", callee_name));
+                        };
+                        let func_ref = self.module.declare_func_in_func(callee_func_id, builder.func);
 
-                    let mut call_args = Vec::new();
-                    for j in 0..argc {
-                        let arg = builder.use_var(vars[dst + 1 + j]);
-                        call_args.push(arg);
+                        let mut call_args = Vec::new();
+                        for j in 0..argc {
+                            let arg = builder.use_var(vars[dst + 1 + j]);
+                            call_args.push(arg);
+                        }
+                        let call = builder.ins().call(func_ref, &call_args);
+                        let result = builder.inst_results(call)[0];
+                        builder.def_var(vars[dst], result);
+                        last_was_terminator = false;
                     }
-                    let call = builder.ins().call(func_ref, &call_args);
-                    let result = builder.inst_results(call)[0];
-                    builder.def_var(vars[dst], result);
-                    last_was_terminator = false;
                 }
 
                 Op::TailCall => {
@@ -1288,7 +1352,24 @@ impl BytecodeJitFull {
                         Value::Str(s) => s.clone(),
                         _ => return Err("callbuiltin: name must be string".into()),
                     };
-                    if let Some(&builtin_func_id) = self.builtin_map.get(&builtin_name) {
+                    // Variadic print via CallBuiltin
+                    if builtin_name == "print" && argc != 1 {
+                        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                            ir::StackSlotKind::ExplicitSlot,
+                            (argc as u32) * 8,
+                            3,
+                        ));
+                        for j in 0..argc {
+                            let arg = builder.use_var(vars[dst + 1 + j]);
+                            builder.ins().stack_store(arg, slot, (j as i32) * 8);
+                        }
+                        let slot_addr = builder.ins().stack_addr(PTR, slot, 0);
+                        let count_val = builder.ins().iconst(types::I64, argc as i64);
+                        let pv_ref = self.module.declare_func_in_func(self.rt.print_values, builder.func);
+                        let call = builder.ins().call(pv_ref, &[slot_addr, count_val]);
+                        let result = builder.inst_results(call)[0];
+                        builder.def_var(vars[dst], result);
+                    } else if let Some(&builtin_func_id) = self.builtin_map.get(&builtin_name) {
                         let builtin_ref = self.module.declare_func_in_func(builtin_func_id, builder.func);
                         let mut call_args = Vec::new();
                         for j in 0..argc {
@@ -1382,14 +1463,14 @@ impl BytecodeJitFull {
                     let dst = instr.dst as usize;
                     let tag_idx = instr.a as usize;
                     let inner_reg = instr.b as usize;
-                    // Load tag string from constants
-                    let tag_str = match &func.constants[tag_idx] {
-                        Value::Str(s) => s.clone(),
+                    let tag_src = match &func.constants[tag_idx] {
+                        Value::Str(s) => s.as_str(),
                         _ => return Err("MakeVariant: tag must be string".into()),
                     };
+                    let (sptr, slen) = self.intern_string(tag_src);
                     let str_ref = self.module.declare_func_in_func(self.rt.str_ctor, builder.func);
-                    let ptr_val = builder.ins().iconst(types::I64, tag_str.as_ptr() as i64);
-                    let len_val = builder.ins().iconst(types::I64, tag_str.len() as i64);
+                    let ptr_val = builder.ins().iconst(types::I64, sptr as i64);
+                    let len_val = builder.ins().iconst(types::I64, slen as i64);
                     let tag_call = builder.ins().call(str_ref, &[ptr_val, len_val]);
                     let tag_rt = builder.inst_results(tag_call)[0];
 
@@ -1404,13 +1485,14 @@ impl BytecodeJitFull {
                 Op::MakeVariant0 => {
                     let dst = instr.dst as usize;
                     let tag_idx = instr.a as usize;
-                    let tag_str = match &func.constants[tag_idx] {
-                        Value::Str(s) => s.clone(),
+                    let tag_src = match &func.constants[tag_idx] {
+                        Value::Str(s) => s.as_str(),
                         _ => return Err("MakeVariant0: tag must be string".into()),
                     };
+                    let (sptr, slen) = self.intern_string(tag_src);
                     let str_ref = self.module.declare_func_in_func(self.rt.str_ctor, builder.func);
-                    let ptr_val = builder.ins().iconst(types::I64, tag_str.as_ptr() as i64);
-                    let len_val = builder.ins().iconst(types::I64, tag_str.len() as i64);
+                    let ptr_val = builder.ins().iconst(types::I64, sptr as i64);
+                    let len_val = builder.ins().iconst(types::I64, slen as i64);
                     let tag_call = builder.ins().call(str_ref, &[ptr_val, len_val]);
                     let tag_rt = builder.inst_results(tag_call)[0];
 
@@ -1428,35 +1510,49 @@ impl BytecodeJitFull {
                 Op::MakeClosure => {
                     let dst = instr.dst as usize;
                     let func_idx = instr.a as usize;
-                    let _capture_start = instr.b as usize;
+                    let capture_start = instr.b as usize;
 
-                    // Look up function name from constants
                     let closure_func_name = match &func.constants[func_idx] {
                         Value::Str(s) => s.clone(),
                         _ => return Err("MakeClosure: func name must be string".into()),
                     };
 
-                    // Get the compiled function pointer (it should already be compiled)
+                    // Get the compiled function pointer (should already be compiled)
                     let fn_ptr = self.compiled.get(&closure_func_name)
                         .copied()
                         .unwrap_or(std::ptr::null());
 
+                    // Get capture count from the target function
+                    let capture_count = all_functions.get(&closure_func_name)
+                        .map(|f| f.capture_count as usize)
+                        .unwrap_or(0);
+
                     let make_closure_ref = self.module.declare_func_in_func(self.rt.make_closure, builder.func);
                     let fn_ptr_val = builder.ins().iconst(PTR, fn_ptr as i64);
 
-                    // Determine capture count from the target function's capture_count
-                    // We infer it from the MakeClosure instruction context: registers
-                    // capture_start..capture_start+N hold the captured values.
-                    // The capture count is not directly in the instruction, so we need
-                    // to figure it out. Look at surrounding context or use 0 if unknown.
-                    // Actually, looking at bytecode_vm.rs, capture_count comes from the
-                    // target func's capture_count field. For now, use 0 captures and
-                    // pass null — closures with captures need the full pipeline.
-                    let null = builder.ins().iconst(PTR, 0);
-                    let zero = builder.ins().iconst(types::I64, 0);
-                    let call = builder.ins().call(make_closure_ref, &[fn_ptr_val, null, zero]);
-                    let result = builder.inst_results(call)[0];
-                    builder.def_var(vars[dst], result);
+                    if capture_count > 0 {
+                        // Pack captured values into a stack slot
+                        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                            ir::StackSlotKind::ExplicitSlot,
+                            (capture_count as u32) * 8,
+                            3, // align 8
+                        ));
+                        for j in 0..capture_count {
+                            let cap_val = builder.use_var(vars[capture_start + j]);
+                            builder.ins().stack_store(cap_val, slot, (j as i32) * 8);
+                        }
+                        let cap_addr = builder.ins().stack_addr(PTR, slot, 0);
+                        let count_val = builder.ins().iconst(types::I64, capture_count as i64);
+                        let call = builder.ins().call(make_closure_ref, &[fn_ptr_val, cap_addr, count_val]);
+                        let result = builder.inst_results(call)[0];
+                        builder.def_var(vars[dst], result);
+                    } else {
+                        let null = builder.ins().iconst(PTR, 0);
+                        let zero = builder.ins().iconst(types::I64, 0);
+                        let call = builder.ins().call(make_closure_ref, &[fn_ptr_val, null, zero]);
+                        let result = builder.inst_results(call)[0];
+                        builder.def_var(vars[dst], result);
+                    }
                     last_was_terminator = false;
                 }
 
@@ -1466,15 +1562,16 @@ impl BytecodeJitFull {
                     let scrutinee_reg = instr.a as usize;
                     let tag_idx = instr.b as usize;
 
-                    let tag_str = match &func.constants[tag_idx] {
-                        Value::Str(s) => s.clone(),
+                    let tag_src = match &func.constants[tag_idx] {
+                        Value::Str(s) => s.as_str(),
                         _ => return Err("MatchTag: tag must be string".into()),
                     };
+                    let (sptr, slen) = self.intern_string(tag_src);
 
                     // Build tag string RtValue
                     let str_ref = self.module.declare_func_in_func(self.rt.str_ctor, builder.func);
-                    let ptr_val = builder.ins().iconst(types::I64, tag_str.as_ptr() as i64);
-                    let len_val = builder.ins().iconst(types::I64, tag_str.len() as i64);
+                    let ptr_val = builder.ins().iconst(types::I64, sptr as i64);
+                    let len_val = builder.ins().iconst(types::I64, slen as i64);
                     let tag_call = builder.ins().call(str_ref, &[ptr_val, len_val]);
                     let tag_rt = builder.inst_results(tag_call)[0];
 
