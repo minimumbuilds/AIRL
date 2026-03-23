@@ -159,6 +159,27 @@ impl BytecodeJit {
 
         let mut builder_ctx = FunctionBuilderContext::new();
 
+        // Pre-declare function references for Call targets (before builder scope to avoid borrow conflicts)
+        let mut call_targets: HashMap<String, cranelift_module::FuncId> = HashMap::new();
+        for instr in &func.instructions {
+            if instr.op == Op::Call {
+                if let Value::Str(callee_name) = &func.constants[instr.a as usize] {
+                    if callee_name != &func.name && !call_targets.contains_key(callee_name) {
+                        let argc = instr.b as usize;
+                        let mut call_sig = self.module.make_signature();
+                        for _ in 0..argc {
+                            call_sig.params.push(AbiParam::new(types::I64));
+                        }
+                        call_sig.returns.push(AbiParam::new(types::I64));
+                        let callee_id = self.module
+                            .declare_function(callee_name, Linkage::Import, &call_sig)
+                            .map_err(|e| format!("call declare: {}", e))?;
+                        call_targets.insert(callee_name.clone(), callee_id);
+                    }
+                }
+            }
+        }
+
         // Type hints per register — used to decide int vs float ops.
         let reg_count = func.register_count as usize;
         let mut type_hints: Vec<TypeHint> = vec![TypeHint::Int; reg_count];
@@ -230,19 +251,34 @@ impl BytecodeJit {
             builder.def_var(vars[r], zero);
         }
 
-        // ── Pass 2: Walk instructions, emit IR ────────────────────────────
-        let mut last_was_terminator = false;
+        // ── Create loop_block for TailCall back-edges ─────────────────────
+        // entry_block has function-parameter block params. TailCall cannot
+        // jump back to entry_block with args (Cranelift verifier rejects
+        // empty-arg jumps to parameterized blocks). Instead, we create a
+        // param-free loop_block: entry_block falls through to it, and
+        // TailCall jumps back to it. Variables carry values across the edge
+        // via Cranelift's phi-insertion (def_var/use_var mechanism).
+        //
+        // We remap instruction index 0 → loop_block in index_to_block so that
+        // any jump targeting instruction 0 (i.e. a loop-back) goes to loop_block,
+        // not entry_block.
+        let loop_block = builder.create_block();
+        index_to_block.insert(0, loop_block); // remap: instr 0 → loop_block
+        builder.ins().jump(loop_block, &[]);
+        builder.switch_to_block(loop_block);
+        // entry_block just terminated with a jump; mark true so the loop
+        // at i=0 (which sees index_to_block[0]=loop_block) doesn't emit
+        // a redundant jump-to-self before switching to loop_block.
+        let mut last_was_terminator = true;
 
         for (i, instr) in instrs.iter().enumerate() {
             // When crossing a block boundary, emit a fallthrough jump from
             // the previous block (if it didn't already end with a terminator).
             if let Some(&blk) = index_to_block.get(&i) {
-                if blk != entry_block || i != 0 {
-                    if !last_was_terminator {
-                        builder.ins().jump(blk, &[]);
-                    }
-                    builder.switch_to_block(blk);
+                if !last_was_terminator {
+                    builder.ins().jump(blk, &[]);
                 }
+                builder.switch_to_block(blk);
                 last_was_terminator = false;
             }
 
@@ -459,9 +495,51 @@ impl BytecodeJit {
                     last_was_terminator = true;
                 }
 
-                // ── Call stubs (Task 4) ───────────────────────────────────
-                Op::Call | Op::TailCall => {
-                    return Err("Call/TailCall not yet implemented".into());
+                // ── Calls ────────────────────────────────────────────────
+                Op::Call => {
+                    let callee_name = match &func.constants[instr.a as usize] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err("call: func name must be string".into()),
+                    };
+                    let argc = instr.b as usize;
+                    let dst = instr.dst as usize;
+
+                    // Get the FuncRef — self-call uses func_id, cross-call uses pre-declared target
+                    let callee_func_id = if callee_name == func.name {
+                        func_id
+                    } else if let Some(&id) = call_targets.get(&callee_name) {
+                        id
+                    } else {
+                        return Err(format!("call target '{}' not declared", callee_name));
+                    };
+                    let func_ref = self.module.declare_func_in_func(callee_func_id, builder.func);
+
+                    let mut call_args = Vec::new();
+                    for i in 0..argc {
+                        let arg = builder.use_var(vars[dst + 1 + i]);
+                        call_args.push(arg);
+                    }
+                    let call = builder.ins().call(func_ref, &call_args);
+                    let result = builder.inst_results(call)[0];
+                    builder.def_var(vars[dst], result);
+                    last_was_terminator = false;
+                }
+                Op::TailCall => {
+                    // Self-recursive tail call — jump back to entry block.
+                    // The bytecode compiler emits Move instructions before TailCall to place
+                    // new arg values into r0..rN. Those Moves are already compiled by earlier
+                    // iterations, so parameter variables already hold the correct values.
+                    let callee_name = match &func.constants[instr.a as usize] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err("tailcall: func name must be string".into()),
+                    };
+                    if callee_name != func.name {
+                        return Err(format!("cross-function TailCall to '{}' not supported", callee_name));
+                    }
+                    // Jump back to loop_block (not entry_block, which has function params
+                    // as block params and cannot be re-entered with an empty-arg jump).
+                    builder.ins().jump(loop_block, &[]);
+                    last_was_terminator = true;
                 }
 
                 // Any other opcode should have been caught by is_eligible.
@@ -703,6 +781,60 @@ mod tests {
         let result = jit.try_call_native("sq_plus1", &[Value::Int(4)])
             .expect("Some").expect("Ok");
         assert_eq!(result, Value::Int(25));
+    }
+
+    #[test]
+    fn test_jit_factorial_recursive() {
+        use crate::ir::*;
+
+        // (defn fact [n] (if (<= n 1) 1 (* n (fact (- n 1)))))
+        let body = IRNode::If(
+            Box::new(IRNode::Call("<=".into(), vec![IRNode::Load("n".into()), IRNode::Int(1)])),
+            Box::new(IRNode::Int(1)),
+            Box::new(IRNode::Call("*".into(), vec![
+                IRNode::Load("n".into()),
+                IRNode::Call("fact".into(), vec![
+                    IRNode::Call("-".into(), vec![IRNode::Load("n".into()), IRNode::Int(1)]),
+                ]),
+            ])),
+        );
+
+        let mut compiler = BytecodeCompiler::new();
+        let func = compiler.compile_function("fact", &["n".into()], &body);
+
+        let all_funcs = HashMap::new();
+        let mut jit = BytecodeJit::new().unwrap();
+        jit.try_compile(&func, &all_funcs);
+        assert!(jit.compiled.contains_key("fact"), "factorial should be JIT-eligible");
+
+        let r = jit.try_call_native("fact", &[Value::Int(5)]).unwrap().unwrap();
+        assert_eq!(r, Value::Int(120));
+    }
+
+    #[test]
+    fn test_jit_tailcall_no_overflow() {
+        use crate::ir::*;
+
+        // (defn countdown [n] (if (= n 0) 0 (countdown (- n 1))))
+        let body = IRNode::If(
+            Box::new(IRNode::Call("=".into(), vec![IRNode::Load("n".into()), IRNode::Int(0)])),
+            Box::new(IRNode::Int(0)),
+            Box::new(IRNode::Call("countdown".into(), vec![
+                IRNode::Call("-".into(), vec![IRNode::Load("n".into()), IRNode::Int(1)]),
+            ])),
+        );
+
+        let mut compiler = BytecodeCompiler::new();
+        let func = compiler.compile_function("countdown", &["n".into()], &body);
+
+        let all_funcs = HashMap::new();
+        let mut jit = BytecodeJit::new().unwrap();
+        jit.try_compile(&func, &all_funcs);
+        assert!(jit.compiled.contains_key("countdown"));
+
+        // 100K iterations — would overflow stack without TailCall→loop
+        let r = jit.try_call_native("countdown", &[Value::Int(100_000)]).unwrap().unwrap();
+        assert_eq!(r, Value::Int(0));
     }
 
     /// Compile a function with MakeList and verify it's marked ineligible (not compiled).
