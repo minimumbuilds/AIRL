@@ -11,6 +11,7 @@ pub struct BytecodeCompiler {
     next_reg: u16,
     max_reg: u16,
     lambda_counter: usize,              // unique lambda name counter
+    lambda_prefix: String,              // prefix for lambda names (avoids cross-module collisions)
     compiled_lambdas: Vec<BytecodeFunc>, // lambdas compiled during expression compilation
 }
 
@@ -23,8 +24,15 @@ impl BytecodeCompiler {
             next_reg: 0,
             max_reg: 0,
             lambda_counter: 0,
+            lambda_prefix: String::new(),
             compiled_lambdas: Vec::new(),
         }
+    }
+
+    pub fn with_prefix(prefix: &str) -> Self {
+        let mut c = Self::new();
+        c.lambda_prefix = format!("{}_", prefix);
+        c
     }
 
     fn alloc_reg(&mut self) -> u16 {
@@ -82,10 +90,12 @@ impl BytecodeCompiler {
                 Self::free_vars(body, &inner_bound, out);
             }
             IRNode::Call(name, args) => {
-                // name is a function name, not a variable reference (unless it's in locals)
+                // The call target may be a variable holding a function value
+                // (e.g., a parameter like `transform` in map-map-values).
+                // Treat it as a potential free variable — the lambda compiler
+                // will filter to only names actually in locals.
                 if !bound.contains(name) && !out.contains(name) {
-                    // Only capture if it looks like a variable (not a function/builtin)
-                    // We check this by seeing if it's in the caller's locals later
+                    out.push(name.clone());
                 }
                 for arg in args { Self::free_vars(arg, bound, out); }
             }
@@ -395,7 +405,7 @@ impl BytecodeCompiler {
 
             IRNode::Lambda(params, body) => {
                 // Compile lambda body as a named function stored in a side table.
-                let lambda_name = format!("__lambda_{}", self.lambda_counter);
+                let lambda_name = format!("__lambda_{}{}",  self.lambda_prefix, self.lambda_counter);
                 self.lambda_counter += 1;
 
                 // Only capture variables actually referenced in the lambda body (free variables).
@@ -640,8 +650,9 @@ impl BytecodeCompiler {
     /// Compile a top-level function definition.
     pub fn compile_function(&mut self, name: &str, params: &[String], body: &IRNode) -> BytecodeFunc {
         let mut compiler = BytecodeCompiler::new();
-        // Inherit lambda counter to avoid name collisions across compilation passes
+        // Inherit lambda counter and prefix to avoid name collisions
         compiler.lambda_counter = self.lambda_counter;
+        compiler.lambda_prefix = self.lambda_prefix.clone();
         // Bind params to first N registers
         for (i, param) in params.iter().enumerate() {
             compiler.locals.insert(param.clone(), i as u16);

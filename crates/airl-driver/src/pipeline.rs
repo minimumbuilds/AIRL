@@ -455,7 +455,7 @@ pub fn run_source_bytecode(source: &str) -> Result<Value, PipelineError> {
 
     // Compile AST → IR → Bytecode
     let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
-    let mut bc_compiler = BytecodeCompiler::new();
+    let mut bc_compiler = BytecodeCompiler::with_prefix("user");
     let (funcs, main_func) = bc_compiler.compile_program(&ir_nodes);
 
     // Create VM, load stdlib, execute
@@ -495,7 +495,7 @@ fn compile_and_load_stdlib_bytecode(vm: &mut BytecodeVm, source: &str, name: &st
     }
 
     let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
-    let mut bc_compiler = BytecodeCompiler::new();
+    let mut bc_compiler = BytecodeCompiler::with_prefix(name);
     let (funcs, main_func) = bc_compiler.compile_program(&ir_nodes);
 
     for func in funcs {
