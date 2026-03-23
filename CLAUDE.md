@@ -26,11 +26,12 @@ AIRL (AI Intermediate Representation Language) is a programming language designe
 ## Build & Test
 
 ```bash
-cargo build                    # Build all crates
-cargo test --workspace         # Run all 485 tests
-cargo run -- run <file.airl>   # Execute an AIRL program
-cargo run -- check <file.airl> # Type-check and verify
-cargo run -- repl              # Interactive REPL
+cargo build                             # Build all crates
+cargo test --workspace                  # Run all 485 tests
+cargo run -- run <file.airl>            # Execute an AIRL program
+cargo run -- check <file.airl>          # Type-check and verify
+cargo run -- repl                       # Interactive REPL
+cargo run -- run --bytecode <file.airl> # Bytecode VM execution
 ```
 
 **First build note:** Z3 (in `airl-solver`) compiles from C++ source on first build (~5-15 min). Requires CMake, C++ compiler, Python 3.
@@ -204,6 +205,7 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **`deftype` Parsing** — Bootstrap parser handles `(deftype Name [Params] (| ...))` sum types and `(deftype Name (& ...))` product types. Includes `parse-variant`, `parse-field`, `parse-sum-body`, `parse-product-body`, `parse-type-params`, `parse-deftype`. Bootstrap lexer updated to include `|` in symbol characters.
 - **IR VM** — Tree-flattened IR format (`crates/airl-runtime/src/ir.rs`), Rust VM (`ir_vm.rs`) with self-TCO, value-to-IR marshalling (`ir_marshal.rs`), `run-ir` builtin. Self-hosted AIRL compiler (`bootstrap/compiler.airl`) transforms AST to IR. Rust-side compiler in `pipeline.rs` for native-speed compilation. `--compiled` flag on `cargo run -- run` for compiled execution mode. `IRClosure`/`IRFuncRef` value variants for first-class functions in compiled code.
 - **Bootstrap Fixpoint Verification** — Functional equivalence test (`bootstrap/equivalence_test.airl`, 32 tests) proves interpreted eval and compiled run-ir produce identical results across literals, arithmetic, control flow, functions, recursion, pattern matching, closures, higher-order functions, and lists. Compiler fixpoint test (`bootstrap/fixpoint_test.airl`) proves the compiled compiler produces identical IR to the interpreted compiler — Tier 1 (small program) and Tier 2 (compiler self-compilation). IR serializer (`ir-to-string`) for deterministic comparison. The compiler has reached fixpoint: compiler₁ compiling compiler.airl = compiler₂ compiling compiler.airl.
+- **Register-Based Bytecode VM** — Flat bytecode instruction set (~34 opcodes), register-based compiler (`bytecode_compiler.rs`) with linear register allocation, bytecode VM (`bytecode_vm.rs`) with tight execution loop and self-TCO. `--bytecode` flag on `cargo run -- run`. Pipeline integration in `pipeline.rs` with `run_source_bytecode()`.
 
 ---
 
