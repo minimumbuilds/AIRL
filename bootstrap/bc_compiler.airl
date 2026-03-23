@@ -1,0 +1,1445 @@
+;; bootstrap/bc_compiler.airl — Self-hosted AIRL-to-bytecode compiler
+;; Requires: bootstrap/lexer.airl, bootstrap/parser.airl (loaded first)
+;;
+;; Transforms AST nodes (from the parser) into BCFunc values (consumed by run-bytecode).
+;; Each BCFunc is: (BCFunc name arity reg_count capture_count [constants] [[op dst a b] ...])
+
+;; ── Opcode constants ────────────────────────────────────
+;; Must match crates/airl-runtime/src/bytecode.rs Op enum order
+
+(defn op-load-const  :sig [-> Int] :requires [true] :ensures [(= result 0)]  :body 0)
+(defn op-load-nil    :sig [-> Int] :requires [true] :ensures [(= result 1)]  :body 1)
+(defn op-load-true   :sig [-> Int] :requires [true] :ensures [(= result 2)]  :body 2)
+(defn op-load-false  :sig [-> Int] :requires [true] :ensures [(= result 3)]  :body 3)
+(defn op-move        :sig [-> Int] :requires [true] :ensures [(= result 4)]  :body 4)
+(defn op-add         :sig [-> Int] :requires [true] :ensures [(= result 5)]  :body 5)
+(defn op-sub         :sig [-> Int] :requires [true] :ensures [(= result 6)]  :body 6)
+(defn op-mul         :sig [-> Int] :requires [true] :ensures [(= result 7)]  :body 7)
+(defn op-div         :sig [-> Int] :requires [true] :ensures [(= result 8)]  :body 8)
+(defn op-mod         :sig [-> Int] :requires [true] :ensures [(= result 9)]  :body 9)
+(defn op-eq          :sig [-> Int] :requires [true] :ensures [(= result 10)] :body 10)
+(defn op-ne          :sig [-> Int] :requires [true] :ensures [(= result 11)] :body 11)
+(defn op-lt          :sig [-> Int] :requires [true] :ensures [(= result 12)] :body 12)
+(defn op-le          :sig [-> Int] :requires [true] :ensures [(= result 13)] :body 13)
+(defn op-gt          :sig [-> Int] :requires [true] :ensures [(= result 14)] :body 14)
+(defn op-ge          :sig [-> Int] :requires [true] :ensures [(= result 15)] :body 15)
+(defn op-not         :sig [-> Int] :requires [true] :ensures [(= result 16)] :body 16)
+(defn op-neG         :sig [-> Int] :requires [true] :ensures [(= result 17)] :body 17)
+(defn op-jump        :sig [-> Int] :requires [true] :ensures [(= result 18)] :body 18)
+(defn op-jump-if-false :sig [-> Int] :requires [true] :ensures [(= result 19)] :body 19)
+(defn op-jump-if-true  :sig [-> Int] :requires [true] :ensures [(= result 20)] :body 20)
+(defn op-call        :sig [-> Int] :requires [true] :ensures [(= result 21)] :body 21)
+(defn op-call-builtin :sig [-> Int] :requires [true] :ensures [(= result 22)] :body 22)
+(defn op-call-reg    :sig [-> Int] :requires [true] :ensures [(= result 23)] :body 23)
+(defn op-tail-call   :sig [-> Int] :requires [true] :ensures [(= result 24)] :body 24)
+(defn op-return      :sig [-> Int] :requires [true] :ensures [(= result 25)] :body 25)
+(defn op-make-list   :sig [-> Int] :requires [true] :ensures [(= result 26)] :body 26)
+(defn op-make-variant :sig [-> Int] :requires [true] :ensures [(= result 27)] :body 27)
+(defn op-make-variant0 :sig [-> Int] :requires [true] :ensures [(= result 28)] :body 28)
+(defn op-make-closure :sig [-> Int] :requires [true] :ensures [(= result 29)] :body 29)
+(defn op-match-tag   :sig [-> Int] :requires [true] :ensures [(= result 30)] :body 30)
+(defn op-jump-if-no-match :sig [-> Int] :requires [true] :ensures [(= result 31)] :body 31)
+(defn op-match-wild  :sig [-> Int] :requires [true] :ensures [(= result 32)] :body 32)
+(defn op-try-unwrap  :sig [-> Int] :requires [true] :ensures [(= result 33)] :body 33)
+
+;; ── Compiler state management ───────────────────────────
+;; State is a map with keys: "instrs", "consts", "locals", "next-reg", "max-reg",
+;; "lambdas", "lambda-ctr"
+
+(defn make-compiler-state
+  :sig [-> _]
+  :intent "Create a fresh compiler state"
+  :requires [true]
+  :ensures [(valid result)]
+  :body (map-from ["instrs" []
+                   "consts" []
+                   "locals" (map-new)
+                   "next-reg" 0
+                   "max-reg" 0
+                   "lambdas" []
+                   "lambda-ctr" 0]))
+
+;; ── Accessors ───────────────────────────────────────────
+
+(defn cs-instrs
+  :sig [(st : _) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-get st "instrs"))
+
+(defn cs-consts
+  :sig [(st : _) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-get st "consts"))
+
+(defn cs-locals
+  :sig [(st : _) -> _]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-get st "locals"))
+
+(defn cs-next-reg
+  :sig [(st : _) -> Int]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-get st "next-reg"))
+
+(defn cs-max-reg
+  :sig [(st : _) -> Int]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-get st "max-reg"))
+
+(defn cs-lambdas
+  :sig [(st : _) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-get st "lambdas"))
+
+(defn cs-lambda-ctr
+  :sig [(st : _) -> Int]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-get st "lambda-ctr"))
+
+;; ── Mutators ────────────────────────────────────────────
+
+(defn cs-emit
+  :sig [(st : _) (op : Int) (dst : Int) (a : Int) (b : Int) -> _]
+  :intent "Emit an instruction [op dst a b]"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-set st "instrs" (append (cs-instrs st) [op dst a b])))
+
+(defn cs-add-const
+  :sig [(st : _) (val : _) -> List]
+  :intent "Add a constant, return [new-state index]"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (consts : List (cs-consts st))
+      (let (found : _ (cs-find-const consts val 0))
+        (if (>= found 0)
+          [st found]
+          (let (idx : Int (length consts))
+            [(map-set st "consts" (append consts val)) idx])))))
+
+(defn cs-find-const
+  :sig [(consts : List) (val : _) (i : Int) -> Int]
+  :intent "Find index of val in consts, or -1 if not found"
+  :requires [(valid consts)]
+  :ensures [(valid result)]
+  :body
+    (if (>= i (length consts)) -1
+      (if (= (at consts i) val) i
+        (cs-find-const consts val (+ i 1)))))
+
+(defn cs-alloc-reg
+  :sig [(st : _) -> List]
+  :intent "Allocate one register, return [new-state reg-number]"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (r : Int (cs-next-reg st))
+      (let (nr : Int (+ r 1))
+        (let (mx : Int (cs-max-reg st))
+          (let (new-max : Int (if (> nr mx) nr mx))
+            [(map-set (map-set st "next-reg" nr) "max-reg" new-max) r])))))
+
+(defn cs-alloc-regs
+  :sig [(st : _) (n : Int) -> List]
+  :intent "Allocate n consecutive registers, return [new-state first-reg]"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (r : Int (cs-next-reg st))
+      (let (nr : Int (+ r n))
+        (let (mx : Int (cs-max-reg st))
+          (let (new-max : Int (if (> nr mx) nr mx))
+            [(map-set (map-set st "next-reg" nr) "max-reg" new-max) r])))))
+
+(defn cs-free-reg-to
+  :sig [(st : _) (r : Int) -> _]
+  :intent "Free registers back to r"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-set st "next-reg" r))
+
+(defn cs-set-local
+  :sig [(st : _) (name : String) (reg : Int) -> _]
+  :intent "Bind a variable name to a register"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-set st "locals" (map-set (cs-locals st) name reg)))
+
+(defn cs-remove-local
+  :sig [(st : _) (name : String) -> _]
+  :intent "Remove a variable binding"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-set st "locals" (map-remove (cs-locals st) name)))
+
+(defn cs-lookup-local
+  :sig [(st : _) (name : String) -> _]
+  :intent "Look up a variable, returns register number or nil"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-get (cs-locals st) name))
+
+(defn cs-instr-count
+  :sig [(st : _) -> Int]
+  :intent "Number of instructions emitted so far"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (length (cs-instrs st)))
+
+(defn cs-patch-jump
+  :sig [(st : _) (instr-idx : Int) (field : String) (value : Int) -> _]
+  :intent "Patch a field in an already-emitted instruction. field is 'a' (index 2) or 'b' (index 3)"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (instrs : List (cs-instrs st))
+      (let (instr : List (at instrs instr-idx))
+        (let (field-idx : Int (if (= field "a") 2 3))
+          (let (patched : List (bc-list-set instr field-idx value))
+            (map-set st "instrs" (bc-list-set instrs instr-idx patched)))))))
+
+(defn bc-list-set
+  :sig [(lst : List) (idx : Int) (val : _) -> List]
+  :intent "Return list with element at idx replaced by val"
+  :requires [(valid lst)]
+  :ensures [(valid result)]
+  :body (bc-list-set-loop lst idx val 0))
+
+(defn bc-list-set-loop
+  :sig [(lst : List) (idx : Int) (val : _) (i : Int) -> List]
+  :requires [(valid lst)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? lst) []
+      (if (= i idx)
+        (cons val (tail lst))
+        (cons (head lst) (bc-list-set-loop (tail lst) idx val (+ i 1))))))
+
+(defn cs-add-lambda
+  :sig [(st : _) (func : _) -> _]
+  :intent "Add a compiled lambda to the lambda list"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-set st "lambdas" (append (cs-lambdas st) func)))
+
+(defn bc-digit-to-char
+  :sig [(d : Int) -> String]
+  :requires [(valid d)]
+  :ensures [(valid result)]
+  :body (at ["0" "1" "2" "3" "4" "5" "6" "7" "8" "9"] d))
+
+(defn bc-nat-to-str
+  :sig [(n : Int) (acc : String) -> String]
+  :requires [(valid n)]
+  :ensures [(valid result)]
+  :body (if (= n 0)
+    (if (= acc "") "0" acc)
+    (let (digit : String (bc-digit-to-char (% n 10)))
+      (bc-nat-to-str (/ n 10) (+ digit acc)))))
+
+(defn bc-int-to-string
+  :sig [(n : Int) -> String]
+  :requires [(valid n)]
+  :ensures [(valid result)]
+  :body (if (< n 0)
+    (+ "-" (bc-nat-to-str (* n -1) ""))
+    (bc-nat-to-str n "")))
+
+(defn cs-next-lambda-name
+  :sig [(st : _) -> List]
+  :intent "Generate unique lambda name, return [new-state name]"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (ctr : Int (cs-lambda-ctr st))
+      (let (name : String (+ "__lambda_" (bc-int-to-string ctr)))
+        [(map-set st "lambda-ctr" (+ ctr 1)) name])))
+
+(defn cs-ensure-above-dst
+  :sig [(st : _) (dst : Int) -> _]
+  :intent "Ensure next-reg is above dst"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (<= (cs-next-reg st) dst)
+      (let (nr : Int (+ dst 1))
+        (let (mx : Int (cs-max-reg st))
+          (let (new-max : Int (if (> nr mx) nr mx))
+            (map-set (map-set st "next-reg" nr) "max-reg" new-max))))
+      st))
+
+;; ── Direct opcode lookup ────────────────────────────────
+
+(defn bc-direct-op
+  :sig [(name : String) -> _]
+  :intent "Return opcode for direct arithmetic/comparison ops, or nil"
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body
+    (if (= name "+") (op-add)
+      (if (= name "-") (op-sub)
+        (if (= name "*") (op-mul)
+          (if (= name "/") (op-div)
+            (if (= name "%") (op-mod)
+              (if (= name "=") (op-eq)
+                (if (= name "!=") (op-ne)
+                  (if (= name "<") (op-lt)
+                    (if (= name "<=") (op-le)
+                      (if (= name ">") (op-gt)
+                        (if (= name ">=") (op-ge)
+                          (if (= name "not") (op-not)
+                            nil)))))))))))))
+
+;; ── Expression compiler ─────────────────────────────────
+;; bc-compile-expr(state, ast-node, dst-reg) -> (Ok new-state) | (Err msg)
+
+(defn bc-compile-expr
+  :sig [(st : _) (node : _) (dst : Int) -> _]
+  :intent "Compile an AST expression node to bytecode in state st, placing result in dst"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (match node
+    ;; Literals
+    (ASTInt v _ _)
+      (let (pair : List (cs-add-const st v))
+        (let (st2 : _ (at pair 0))
+          (let (idx : Int (at pair 1))
+            (Ok (cs-emit st2 (op-load-const) dst idx 0)))))
+
+    (ASTFloat v _ _)
+      (let (pair : List (cs-add-const st v))
+        (let (st2 : _ (at pair 0))
+          (let (idx : Int (at pair 1))
+            (Ok (cs-emit st2 (op-load-const) dst idx 0)))))
+
+    (ASTStr s _ _)
+      (let (pair : List (cs-add-const st s))
+        (let (st2 : _ (at pair 0))
+          (let (idx : Int (at pair 1))
+            (Ok (cs-emit st2 (op-load-const) dst idx 0)))))
+
+    (ASTBool b _ _)
+      (if b
+        (Ok (cs-emit st (op-load-true) dst 0 0))
+        (Ok (cs-emit st (op-load-false) dst 0 0)))
+
+    (ASTNil _ _)
+      (Ok (cs-emit st (op-load-nil) dst 0 0))
+
+    (ASTKeyword k _ _)
+      (let (kstr : String (+ ":" k))
+        (let (pair : List (cs-add-const st kstr))
+          (let (st2 : _ (at pair 0))
+            (let (idx : Int (at pair 1))
+              (Ok (cs-emit st2 (op-load-const) dst idx 0))))))
+
+    ;; Variable reference
+    (ASTSymbol name _ _)
+      (let (local-reg : _ (cs-lookup-local st name))
+        (if (= local-reg nil)
+          ;; Not a local — emit as IRFuncRef constant
+          (let (pair : List (cs-add-const st (IRFuncRef name)))
+            (let (st2 : _ (at pair 0))
+              (let (idx : Int (at pair 1))
+                (Ok (cs-emit st2 (op-load-const) dst idx 0)))))
+          ;; Local variable — move if needed
+          (if (= local-reg dst)
+            (Ok st)
+            (Ok (cs-emit st (op-move) dst local-reg 0)))))
+
+    ;; If expression
+    (ASTIf cond then-br else-br _ _)
+      (bc-compile-if st cond then-br else-br dst)
+
+    ;; Do block
+    (ASTDo exprs _ _)
+      (bc-compile-do st exprs dst)
+
+    ;; Let expression
+    (ASTLet bindings body _ _)
+      (bc-compile-let st bindings body dst)
+
+    ;; Function call
+    (ASTCall callee args _ _)
+      (bc-compile-call-expr st callee args dst)
+
+    ;; Match expression
+    (ASTMatch scrutinee arms _ _)
+      (bc-compile-match st scrutinee arms dst)
+
+    ;; Lambda
+    (ASTLambda params body _ _)
+      (bc-compile-lambda st params body dst)
+
+    ;; Variant construction
+    (ASTVariant tag args _ _)
+      (bc-compile-variant st tag args dst)
+
+    ;; List literal
+    (ASTList items _ _)
+      (bc-compile-list st items dst)
+
+    ;; Try expression
+    (ASTTry expr _ _)
+      (bc-compile-try st expr dst)
+
+    _ (Err "bc-compile-expr: unknown AST node type")))
+
+;; ── If compilation ──────────────────────────────────────
+
+(defn bc-compile-if
+  :sig [(st : _) (cond : _) (then-br : _) (else-br : _) (dst : Int) -> _]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    ;; Compile condition to temp register
+    (let (pair : List (cs-alloc-reg st))
+      (let (st2 : _ (at pair 0))
+        (let (cond-reg : Int (at pair 1))
+          (match (bc-compile-expr st2 cond cond-reg)
+            (Err e) (Err e)
+            (Ok st3)
+              ;; Emit JumpIfFalse (will be patched)
+              (let (jump-to-else-idx : Int (cs-instr-count st3))
+                (let (st4 : _ (cs-emit st3 (op-jump-if-false) 0 cond-reg 0))
+                  ;; Free cond temp: if cond-reg > dst, free back to dst+1; else keep as-is
+                  (let (free-to : Int (if (> cond-reg (+ dst 1)) (+ dst 1) (cs-next-reg st4)))
+                    (let (st5 : _ (cs-free-reg-to st4 free-to))
+                      ;; Compile then branch
+                      (match (bc-compile-expr st5 then-br dst)
+                        (Err e) (Err e)
+                        (Ok st6)
+                          ;; Emit Jump to end (will be patched)
+                          (let (jump-to-end-idx : Int (cs-instr-count st6))
+                            (let (st7 : _ (cs-emit st6 (op-jump) 0 0 0))
+                              (let (else-start : Int (cs-instr-count st7))
+                                ;; Compile else branch
+                                (match (bc-compile-expr st7 else-br dst)
+                                  (Err e) (Err e)
+                                  (Ok st8)
+                                    (let (end-idx : Int (cs-instr-count st8))
+                                      ;; Patch both jumps
+                                      (let (st9 : _ (cs-patch-jump st8 jump-to-else-idx "b" (- (- else-start jump-to-else-idx) 1)))
+                                        (Ok (cs-patch-jump st9 jump-to-end-idx "a" (- (- end-idx jump-to-end-idx) 1)))))))))))))))))))
+
+;; ── Do block compilation ────────────────────────────────
+
+(defn bc-compile-do
+  :sig [(st : _) (exprs : List) (dst : Int) -> _]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? exprs)
+      (Ok (cs-emit st (op-load-nil) dst 0 0))
+      (if (= (length exprs) 1)
+        (bc-compile-expr st (head exprs) dst)
+        ;; Multiple expressions: compile all but last to temps, last to dst
+        (bc-compile-do-loop st exprs dst (cs-next-reg st)))))
+
+(defn bc-compile-do-loop
+  :sig [(st : _) (exprs : List) (dst : Int) (save-reg : Int) -> _]
+  :intent "Compile do-block expressions; last one goes to dst"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (= (length exprs) 1)
+      ;; Last expression -> compile to dst, then free temps
+      (match (bc-compile-expr st (head exprs) dst)
+        (Err e) (Err e)
+        (Ok st2)
+          (let (free-to : Int (if (> save-reg (+ dst 1)) save-reg (+ dst 1)))
+            (Ok (cs-free-reg-to st2 free-to))))
+      ;; Not last -> compile to temp, discard
+      (let (pair : List (cs-alloc-reg st))
+        (let (st2 : _ (at pair 0))
+          (let (tmp : Int (at pair 1))
+            (match (bc-compile-expr st2 (head exprs) tmp)
+              (Err e) (Err e)
+              (Ok st3) (bc-compile-do-loop st3 (tail exprs) dst save-reg)))))))
+
+;; ── Let compilation ─────────────────────────────────────
+
+(defn bc-compile-let
+  :sig [(st : _) (bindings : List) (body : _) (dst : Int) -> _]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (save-reg : Int (cs-next-reg st))
+      ;; Ensure we allocate above dst
+      (let (st2 : _ (cs-ensure-above-dst st dst))
+        (match (bc-compile-let-bindings st2 bindings)
+          (Err e) (Err e)
+          (Ok pair)
+            (let (st3 : _ (at pair 0))
+              (let (bound-names : List (at pair 1))
+                (match (bc-compile-expr st3 body dst)
+                  (Err e) (Err e)
+                  (Ok st4)
+                    ;; Remove bindings from locals
+                    (let (st5 : _ (bc-unbind-let st4 bound-names))
+                      (let (free-to : Int (if (> save-reg (+ dst 1)) save-reg (+ dst 1)))
+                        (Ok (cs-free-reg-to st5 free-to)))))))))))
+
+(defn bc-compile-let-bindings
+  :sig [(st : _) (bindings : List) -> _]
+  :intent "Compile let bindings, return (Ok [state bound-name-list]) or Err"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? bindings)
+      (Ok [st []])
+      (match (head bindings)
+        (ASTBinding name _ val-expr)
+          (let (pair : List (cs-alloc-reg st))
+            (let (st2 : _ (at pair 0))
+              (let (r : Int (at pair 1))
+                (match (bc-compile-expr st2 val-expr r)
+                  (Err e) (Err e)
+                  (Ok st3)
+                    (let (st4 : _ (cs-set-local st3 name r))
+                      (match (bc-compile-let-bindings st4 (tail bindings))
+                        (Err e) (Err e)
+                        (Ok rest-pair)
+                          (let (st5 : _ (at rest-pair 0))
+                            (let (rest-names : List (at rest-pair 1))
+                              (Ok [st5 (cons name rest-names)])))))))))
+        _ (Err "bc-compile-let-bindings: invalid binding"))))
+
+(defn bc-unbind-let
+  :sig [(st : _) (names : List) -> _]
+  :intent "Remove let bindings from locals"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? names) st
+      (bc-unbind-let (cs-remove-local st (head names)) (tail names))))
+
+;; ── Call compilation ────────────────────────────────────
+
+(defn bc-compile-call-expr
+  :sig [(st : _) (callee : _) (args : List) (dst : Int) -> _]
+  :intent "Compile a function call"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (match callee
+    (ASTSymbol name _ _)
+      ;; Check for direct arithmetic/comparison opcode
+      (let (dop : _ (bc-direct-op name))
+        (if (= dop nil)
+          ;; Not a direct op — general named call
+          (bc-compile-named-call st name args dst)
+          ;; Direct opcode
+          (if (= (length args) 2)
+            (bc-compile-binop st dop (at args 0) (at args 1) dst)
+            (if (= (length args) 1)
+              (bc-compile-unop st dop (at args 0) dst)
+              ;; Fallback to named call for unusual arity
+              (bc-compile-named-call st name args dst)))))
+    ;; Non-symbol callee — compile callee to reg, then CallReg
+    _ (bc-compile-call-reg st callee args dst)))
+
+(defn bc-compile-binop
+  :sig [(st : _) (op : Int) (left : _) (right : _) (dst : Int) -> _]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (pair-a : List (cs-alloc-reg st))
+      (let (st2 : _ (at pair-a 0))
+        (let (a-reg : Int (at pair-a 1))
+          (match (bc-compile-expr st2 left a-reg)
+            (Err e) (Err e)
+            (Ok st3)
+              (let (pair-b : List (cs-alloc-reg st3))
+                (let (st4 : _ (at pair-b 0))
+                  (let (b-reg : Int (at pair-b 1))
+                    (match (bc-compile-expr st4 right b-reg)
+                      (Err e) (Err e)
+                      (Ok st5)
+                        (let (st6 : _ (cs-emit st5 op dst a-reg b-reg))
+                          (let (free-to : Int (if (> a-reg (+ dst 1)) a-reg (+ dst 1)))
+                            (Ok (cs-free-reg-to st6 free-to)))))))))))))
+
+(defn bc-compile-unop
+  :sig [(st : _) (op : Int) (arg : _) (dst : Int) -> _]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (pair : List (cs-alloc-reg st))
+      (let (st2 : _ (at pair 0))
+        (let (a-reg : Int (at pair 1))
+          (match (bc-compile-expr st2 arg a-reg)
+            (Err e) (Err e)
+            (Ok st3)
+              (let (st4 : _ (cs-emit st3 op dst a-reg 0))
+                (let (free-to : Int (if (> a-reg (+ dst 1)) a-reg (+ dst 1)))
+                  (Ok (cs-free-reg-to st4 free-to)))))))))
+
+(defn bc-compile-named-call
+  :sig [(st : _) (name : String) (args : List) (dst : Int) -> _]
+  :intent "Compile a named function call (Call or CallReg)"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (local-reg : _ (cs-lookup-local st name))
+      (if (= local-reg nil)
+        ;; Not a local — use Call opcode
+        (bc-compile-call-named st name args dst)
+        ;; Local variable (closure/funcref) — use CallReg
+        (bc-compile-call-local st name local-reg args dst))))
+
+(defn bc-compile-call-named
+  :sig [(st : _) (name : String) (args : List) (dst : Int) -> _]
+  :intent "Compile Call dst name_idx argc with args in dst+1..dst+argc"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (save : Int (cs-next-reg st))
+      ;; Compile args to temp registers first
+      (match (bc-compile-args-to-temps st args)
+        (Err e) (Err e)
+        (Ok pair)
+          (let (st2 : _ (at pair 0))
+            (let (tmp-regs : List (at pair 1))
+              ;; Move temps into call slots [dst+1..]
+              (let (st3 : _ (bc-move-to-slots st2 tmp-regs dst 0))
+                (let (name-pair : List (cs-add-const st3 name))
+                  (let (st4 : _ (at name-pair 0))
+                    (let (name-idx : Int (at name-pair 1))
+                      (let (argc : Int (length args))
+                        ;; Ensure max-reg covers call slots
+                        (let (st4a : _ (bc-ensure-call-slots st4 dst argc))
+                          (let (st5 : _ (cs-emit st4a (op-call) dst name-idx argc))
+                            (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
+                              (Ok (cs-free-reg-to st5 free-to)))))))))))))))
+
+(defn bc-compile-call-local
+  :sig [(st : _) (name : String) (callee-reg : Int) (args : List) (dst : Int) -> _]
+  :intent "Compile CallReg for a local variable holding a function"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (save : Int (cs-next-reg st))
+      (match (bc-compile-args-to-temps st args)
+        (Err e) (Err e)
+        (Ok pair)
+          (let (st2 : _ (at pair 0))
+            (let (tmp-regs : List (at pair 1))
+              ;; Check if callee-reg is in danger zone (dst+1..dst+argc)
+              (let (argc : Int (length args))
+                (let (needs-save : _ (bc-in-danger-zone callee-reg dst argc))
+                  (if needs-save
+                    ;; Save callee to a safe register
+                    (let (save-pair : List (cs-alloc-reg st2))
+                      (let (st3 : _ (at save-pair 0))
+                        (let (safe-reg : Int (at save-pair 1))
+                          (let (st4 : _ (cs-emit st3 (op-move) safe-reg callee-reg 0))
+                            (let (st5 : _ (bc-move-to-slots st4 tmp-regs dst 0))
+                              (let (st5a : _ (bc-ensure-call-slots st5 dst argc))
+                                (let (st6 : _ (cs-emit st5a (op-call-reg) dst safe-reg argc))
+                                  (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
+                                    (Ok (cs-free-reg-to st6 free-to))))))))))
+                    ;; Callee is safe, no need to save
+                    (let (st3 : _ (bc-move-to-slots st2 tmp-regs dst 0))
+                      (let (st3a : _ (bc-ensure-call-slots st3 dst argc))
+                        (let (st4 : _ (cs-emit st3a (op-call-reg) dst callee-reg argc))
+                          (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
+                            (Ok (cs-free-reg-to st4 free-to))))))))))))))
+
+(defn bc-in-danger-zone
+  :sig [(reg : Int) (dst : Int) (argc : Int) -> Bool]
+  :intent "Check if reg is in the call argument slots"
+  :requires [(valid reg)]
+  :ensures [(valid result)]
+  :body
+    (if (>= reg (+ dst 1))
+      (if (< reg (+ (+ dst 1) argc)) true false)
+      false))
+
+(defn bc-compile-call-reg
+  :sig [(st : _) (callee : _) (args : List) (dst : Int) -> _]
+  :intent "Compile a call where callee is a non-symbol expression"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (pair : List (cs-alloc-reg st))
+      (let (st2 : _ (at pair 0))
+        (let (callee-reg : Int (at pair 1))
+          (match (bc-compile-expr st2 callee callee-reg)
+            (Err e) (Err e)
+            (Ok st3)
+              (let (save : Int (cs-next-reg st3))
+                (match (bc-compile-args-to-temps st3 args)
+                  (Err e) (Err e)
+                  (Ok pair2)
+                    (let (st4 : _ (at pair2 0))
+                      (let (tmp-regs : List (at pair2 1))
+                        (let (st5 : _ (bc-move-to-slots st4 tmp-regs dst 0))
+                          (let (argc : Int (length args))
+                            (let (st5a : _ (bc-ensure-call-slots st5 dst argc))
+                              (let (st6 : _ (cs-emit st5a (op-call-reg) dst callee-reg argc))
+                                (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
+                                  (Ok (cs-free-reg-to st6 free-to))))))))))))))))
+
+(defn bc-compile-args-to-temps
+  :sig [(st : _) (args : List) -> _]
+  :intent "Compile args to temp registers, return (Ok [state [reg1 reg2 ...]]) or Err"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? args) (Ok [st []])
+      (let (pair : List (cs-alloc-reg st))
+        (let (st2 : _ (at pair 0))
+          (let (r : Int (at pair 1))
+            (match (bc-compile-expr st2 (head args) r)
+              (Err e) (Err e)
+              (Ok st3)
+                (match (bc-compile-args-to-temps st3 (tail args))
+                  (Err e) (Err e)
+                  (Ok rest-pair)
+                    (let (st4 : _ (at rest-pair 0))
+                      (let (rest-regs : List (at rest-pair 1))
+                        (Ok [st4 (cons r rest-regs)]))))))))))
+
+(defn bc-move-to-slots
+  :sig [(st : _) (tmp-regs : List) (dst : Int) (i : Int) -> _]
+  :intent "Move temp registers into call slots dst+1+i, dst+2+i, etc."
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? tmp-regs) st
+      (let (slot : Int (+ (+ dst 1) i))
+        (let (tmp : Int (head tmp-regs))
+          (if (= tmp slot)
+            (bc-move-to-slots st (tail tmp-regs) dst (+ i 1))
+            (let (st2 : _ (cs-emit st (op-move) slot tmp 0))
+              (bc-move-to-slots st2 (tail tmp-regs) dst (+ i 1))))))))
+
+(defn bc-ensure-call-slots
+  :sig [(st : _) (dst : Int) (argc : Int) -> _]
+  :intent "Ensure max-reg covers dst+1+argc"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (needed : Int (+ (+ dst 1) argc))
+      (if (> needed (cs-max-reg st))
+        (map-set st "max-reg" needed)
+        st)))
+
+;; ── Variant compilation ─────────────────────────────────
+
+(defn bc-compile-variant
+  :sig [(st : _) (tag : String) (args : List) (dst : Int) -> _]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (tag-pair : List (cs-add-const st tag))
+      (let (st2 : _ (at tag-pair 0))
+        (let (tag-idx : Int (at tag-pair 1))
+          (if (empty? args)
+            ;; 0-arg variant
+            (Ok (cs-emit st2 (op-make-variant0) dst tag-idx 0))
+            (if (= (length args) 1)
+              ;; 1-arg variant
+              (let (pair : List (cs-alloc-reg st2))
+                (let (st3 : _ (at pair 0))
+                  (let (a-reg : Int (at pair 1))
+                    (match (bc-compile-expr st3 (head args) a-reg)
+                      (Err e) (Err e)
+                      (Ok st4)
+                        (let (st5 : _ (cs-emit st4 (op-make-variant) dst tag-idx a-reg))
+                          (let (free-to : Int (if (> a-reg (+ dst 1)) a-reg (+ dst 1)))
+                            (Ok (cs-free-reg-to st5 free-to))))))))
+              ;; Multi-arg variant: wrap in list first
+              (let (start : Int (cs-next-reg st2))
+                (match (bc-compile-items-to-regs st2 args)
+                  (Err e) (Err e)
+                  (Ok st3)
+                    (let (pair : List (cs-alloc-reg st3))
+                      (let (st4 : _ (at pair 0))
+                        (let (list-reg : Int (at pair 1))
+                          (let (st5 : _ (cs-emit st4 (op-make-list) list-reg start (length args)))
+                            (let (st6 : _ (cs-emit st5 (op-make-variant) dst tag-idx list-reg))
+                              (let (free-to : Int (if (> start (+ dst 1)) start (+ dst 1)))
+                                (Ok (cs-free-reg-to st6 free-to))))))))))))))))
+
+;; ── List compilation ────────────────────────────────────
+
+(defn bc-compile-list
+  :sig [(st : _) (items : List) (dst : Int) -> _]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (start : Int (cs-next-reg st))
+      (match (bc-compile-items-to-regs st items)
+        (Err e) (Err e)
+        (Ok st2)
+          (let (st3 : _ (cs-emit st2 (op-make-list) dst start (length items)))
+            (let (free-to : Int (if (> start (+ dst 1)) start (+ dst 1)))
+              (Ok (cs-free-reg-to st3 free-to)))))))
+
+(defn bc-compile-items-to-regs
+  :sig [(st : _) (items : List) -> _]
+  :intent "Compile each item to a consecutively allocated register"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? items) (Ok st)
+      (let (pair : List (cs-alloc-reg st))
+        (let (st2 : _ (at pair 0))
+          (let (r : Int (at pair 1))
+            (match (bc-compile-expr st2 (head items) r)
+              (Err e) (Err e)
+              (Ok st3) (bc-compile-items-to-regs st3 (tail items))))))))
+
+;; ── Try compilation ─────────────────────────────────────
+
+(defn bc-compile-try
+  :sig [(st : _) (expr : _) (dst : Int) -> _]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (pair : List (cs-alloc-reg st))
+      (let (st2 : _ (at pair 0))
+        (let (src : Int (at pair 1))
+          (match (bc-compile-expr st2 expr src)
+            (Err e) (Err e)
+            (Ok st3)
+              (let (st4 : _ (cs-emit st3 (op-try-unwrap) dst src 0))
+                (let (free-to : Int (if (> src (+ dst 1)) src (+ dst 1)))
+                  (Ok (cs-free-reg-to st4 free-to)))))))))
+
+;; ── Match compilation ───────────────────────────────────
+
+(defn bc-compile-match
+  :sig [(st : _) (scrutinee : _) (arms : List) (dst : Int) -> _]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    ;; Compile scrutinee to a register
+    (let (pair : List (cs-alloc-reg st))
+      (let (st2 : _ (at pair 0))
+        (let (scr-reg : Int (at pair 1))
+          (match (bc-compile-expr st2 scrutinee scr-reg)
+            (Err e) (Err e)
+            (Ok st3)
+              (match (bc-compile-match-arms st3 arms scr-reg dst [])
+                (Err e) (Err e)
+                (Ok pair2)
+                  (let (st4 : _ (at pair2 0))
+                    (let (end-jumps : List (at pair2 1))
+                      ;; Patch all end jumps
+                      (let (st5 : _ (bc-patch-end-jumps st4 end-jumps))
+                        (let (free-to : Int (if (> scr-reg (+ dst 1)) scr-reg (+ dst 1)))
+                          (Ok (cs-free-reg-to st5 free-to))))))))))))
+
+(defn bc-compile-match-arms
+  :sig [(st : _) (arms : List) (scr-reg : Int) (dst : Int) (end-jumps : List) -> _]
+  :intent "Compile match arms, return (Ok [state end-jumps]) or Err"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? arms) (Ok [st end-jumps])
+      (match (head arms)
+        (ASTArm pat body)
+          (match (bc-compile-one-arm st pat body scr-reg dst)
+            (Err e) (Err e)
+            (Ok pair)
+              (let (st2 : _ (at pair 0))
+                (let (new-end-jumps : List (at pair 1))
+                  (bc-compile-match-arms st2 (tail arms) scr-reg dst (concat end-jumps new-end-jumps)))))
+        _ (Err "bc-compile-match-arms: invalid arm"))))
+
+(defn bc-compile-one-arm
+  :sig [(st : _) (pat : _) (body : _) (scr-reg : Int) (dst : Int) -> _]
+  :intent "Compile one match arm, return (Ok [state [maybe-end-jump-idx]]) or Err"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (match pat
+    (PatWild _ _)
+      ;; Wildcard: always matches
+      (let (st2 : _ (cs-emit st (op-match-wild) dst scr-reg 0))
+        (match (bc-compile-expr st2 body dst)
+          (Err e) (Err e)
+          (Ok st3) (Ok [st3 []])))
+
+    (PatBind name _ _)
+      ;; Bind scrutinee to name
+      (let (st2 : _ (cs-set-local st name scr-reg))
+        (match (bc-compile-expr st2 body dst)
+          (Err e) (Err e)
+          (Ok st3)
+            (let (st4 : _ (cs-remove-local st3 name))
+              (Ok [st4 []]))))
+
+    (PatLit value _ _)
+      ;; Literal pattern: compare with scrutinee
+      (let (pair : List (cs-alloc-reg st))
+        (let (st2 : _ (at pair 0))
+          (let (val-reg : Int (at pair 1))
+            (let (const-pair : List (cs-add-const st2 value))
+              (let (st3 : _ (at const-pair 0))
+                (let (idx : Int (at const-pair 1))
+                  (let (st4 : _ (cs-emit st3 (op-load-const) val-reg idx 0))
+                    (let (st5 : _ (cs-emit st4 (op-eq) val-reg scr-reg val-reg))
+                      (let (skip-idx : Int (cs-instr-count st5))
+                        (let (st6 : _ (cs-emit st5 (op-jump-if-false) 0 val-reg 0))
+                          (let (st7 : _ (cs-free-reg-to st6 (if (> val-reg (+ dst 1)) val-reg (+ dst 1))))
+                            (match (bc-compile-expr st7 body dst)
+                              (Err e) (Err e)
+                              (Ok st8)
+                                (let (end-jump-idx : Int (cs-instr-count st8))
+                                  (let (st9 : _ (cs-emit st8 (op-jump) 0 0 0))
+                                    (let (here : Int (cs-instr-count st9))
+                                      (let (st10 : _ (cs-patch-jump st9 skip-idx "b" (- (- here skip-idx) 1)))
+                                        (Ok [st10 [end-jump-idx]])))))))))))))))))
+
+    (PatVariant tag sub-pats _ _)
+      ;; Variant pattern: MatchTag + JumpIfNoMatch
+      (let (tag-pair : List (cs-add-const st tag))
+        (let (st2 : _ (at tag-pair 0))
+          (let (tag-idx : Int (at tag-pair 1))
+            (let (pair : List (cs-alloc-reg st2))
+              (let (st3 : _ (at pair 0))
+                (let (inner-reg : Int (at pair 1))
+                  (let (st4 : _ (cs-emit st3 (op-match-tag) inner-reg scr-reg tag-idx))
+                    (let (skip-idx : Int (cs-instr-count st4))
+                      (let (st5 : _ (cs-emit st4 (op-jump-if-no-match) 0 0 0))
+                        ;; Bind sub-patterns and compile body
+                        (if (empty? sub-pats)
+                          ;; No sub-patterns
+                          (match (bc-compile-expr st5 body dst)
+                            (Err e) (Err e)
+                            (Ok st6)
+                              (let (free-to : Int (if (> inner-reg (+ dst 1)) inner-reg (+ dst 1)))
+                                (let (st7 : _ (cs-free-reg-to st6 free-to))
+                                  (let (end-jump-idx : Int (cs-instr-count st7))
+                                    (let (st8 : _ (cs-emit st7 (op-jump) 0 0 0))
+                                      (let (here : Int (cs-instr-count st8))
+                                        (let (st9 : _ (cs-patch-jump st8 skip-idx "a" (- (- here skip-idx) 1)))
+                                          (Ok [st9 [end-jump-idx]]))))))))
+                          (if (= (length sub-pats) 1)
+                            ;; Single sub-pattern: inner value bound directly
+                            (match (bc-bind-single-pattern st5 (head sub-pats) inner-reg)
+                              (Err e) (Err e)
+                              (Ok st6)
+                                (match (bc-compile-expr st6 body dst)
+                                  (Err e) (Err e)
+                                  (Ok st7)
+                                    (let (st8 : _ (bc-unbind-sub-patterns st7 sub-pats))
+                                      (let (free-to : Int (if (> inner-reg (+ dst 1)) inner-reg (+ dst 1)))
+                                        (let (st9 : _ (cs-free-reg-to st8 free-to))
+                                          (let (end-jump-idx : Int (cs-instr-count st9))
+                                            (let (st10 : _ (cs-emit st9 (op-jump) 0 0 0))
+                                              (let (here : Int (cs-instr-count st10))
+                                                (let (st11 : _ (cs-patch-jump st10 skip-idx "a" (- (- here skip-idx) 1)))
+                                                  (Ok [st11 [end-jump-idx]]))))))))))
+                            ;; Multi-field: inner is a list, extract each field with at()
+                            (match (bc-bind-multi-field st5 sub-pats inner-reg 0)
+                              (Err e) (Err e)
+                              (Ok st6)
+                                (match (bc-compile-expr st6 body dst)
+                                  (Err e) (Err e)
+                                  (Ok st7)
+                                    (let (st8 : _ (bc-unbind-sub-patterns st7 sub-pats))
+                                      (let (free-to : Int (if (> inner-reg (+ dst 1)) inner-reg (+ dst 1)))
+                                        (let (st9 : _ (cs-free-reg-to st8 free-to))
+                                          (let (end-jump-idx : Int (cs-instr-count st9))
+                                            (let (st10 : _ (cs-emit st9 (op-jump) 0 0 0))
+                                              (let (here : Int (cs-instr-count st10))
+                                                (let (st11 : _ (cs-patch-jump st10 skip-idx "a" (- (- here skip-idx) 1)))
+                                                  (Ok [st11 [end-jump-idx]])))))))))))))))))))))
+
+    _ (Err "bc-compile-one-arm: unknown pattern type")))
+
+;; ── Pattern binding helpers ─────────────────────────────
+
+(defn bc-bind-single-pattern
+  :sig [(st : _) (pat : _) (value-reg : Int) -> _]
+  :intent "Bind a single sub-pattern to value-reg"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (match pat
+    (PatBind name _ _)
+      (Ok (cs-set-local st name value-reg))
+    (PatWild _ _)
+      (Ok st)
+    (PatVariant tag nested _ _)
+      ;; Nested variant: extract inner
+      (let (tag-pair : List (cs-add-const st tag))
+        (let (st2 : _ (at tag-pair 0))
+          (let (tag-idx : Int (at tag-pair 1))
+            (let (pair : List (cs-alloc-reg st2))
+              (let (st3 : _ (at pair 0))
+                (let (nested-inner : Int (at pair 1))
+                  (let (st4 : _ (cs-emit st3 (op-match-tag) nested-inner value-reg tag-idx))
+                    (if (= (length nested) 1)
+                      (bc-bind-single-pattern st4 (head nested) nested-inner)
+                      (if (empty? nested)
+                        (Ok st4)
+                        (bc-bind-multi-field st4 nested nested-inner 0))))))))))
+    (PatLit _ _ _)
+      (Ok st)  ;; Literal in sub-position doesn't bind
+    _ (Err "bc-bind-single-pattern: unknown pattern")))
+
+(defn bc-bind-multi-field
+  :sig [(st : _) (pats : List) (inner-reg : Int) (i : Int) -> _]
+  :intent "Bind multi-field variant sub-patterns using at() builtin"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? pats) (Ok st)
+      (match (head pats)
+        (PatBind name _ _)
+          ;; Allocate 3 consecutive regs for CallBuiltin: result, arg0 (list), arg1 (index)
+          (let (alloc-pair : List (cs-alloc-regs st 3))
+            (let (st2 : _ (at alloc-pair 0))
+              (let (call-dst : Int (at alloc-pair 1))
+                (let (at-pair : List (cs-add-const st2 "at"))
+                  (let (st3 : _ (at at-pair 0))
+                    (let (at-idx : Int (at at-pair 1))
+                      (let (idx-pair : List (cs-add-const st3 i))
+                        (let (st4 : _ (at idx-pair 0))
+                          (let (idx-const : Int (at idx-pair 1))
+                            (let (st5 : _ (cs-emit st4 (op-move) (+ call-dst 1) inner-reg 0))
+                              (let (st6 : _ (cs-emit st5 (op-load-const) (+ call-dst 2) idx-const 0))
+                                (let (st7 : _ (cs-emit st6 (op-call-builtin) call-dst at-idx 2))
+                                  (let (st8 : _ (cs-set-local st7 name call-dst))
+                                    (bc-bind-multi-field st8 (tail pats) inner-reg (+ i 1)))))))))))))))
+
+        (PatWild _ _)
+          (bc-bind-multi-field st (tail pats) inner-reg (+ i 1))
+
+        (PatVariant tag nested _ _)
+          ;; Extract field by index, then destructure
+          (let (alloc-pair : List (cs-alloc-regs st 3))
+            (let (st2 : _ (at alloc-pair 0))
+              (let (call-dst : Int (at alloc-pair 1))
+                (let (at-pair : List (cs-add-const st2 "at"))
+                  (let (st3 : _ (at at-pair 0))
+                    (let (at-idx : Int (at at-pair 1))
+                      (let (idx-pair : List (cs-add-const st3 i))
+                        (let (st4 : _ (at idx-pair 0))
+                          (let (idx-const : Int (at idx-pair 1))
+                            (let (st5 : _ (cs-emit st4 (op-move) (+ call-dst 1) inner-reg 0))
+                              (let (st6 : _ (cs-emit st5 (op-load-const) (+ call-dst 2) idx-const 0))
+                                (let (st7 : _ (cs-emit st6 (op-call-builtin) call-dst at-idx 2))
+                                  ;; Now destructure the variant
+                                  (let (tag-pair : List (cs-add-const st7 tag))
+                                    (let (st8 : _ (at tag-pair 0))
+                                      (let (tag-idx2 : Int (at tag-pair 1))
+                                        (let (inner-pair : List (cs-alloc-reg st8))
+                                          (let (st9 : _ (at inner-pair 0))
+                                            (let (nested-inner : Int (at inner-pair 1))
+                                              (let (st10 : _ (cs-emit st9 (op-match-tag) nested-inner call-dst tag-idx2))
+                                                (if (= (length nested) 1)
+                                                  (match (bc-bind-single-pattern st10 (head nested) nested-inner)
+                                                    (Err e) (Err e)
+                                                    (Ok st11) (bc-bind-multi-field st11 (tail pats) inner-reg (+ i 1)))
+                                                  (if (empty? nested)
+                                                    (bc-bind-multi-field st10 (tail pats) inner-reg (+ i 1))
+                                                    (match (bc-bind-multi-field st10 nested nested-inner 0)
+                                                      (Err e) (Err e)
+                                                      (Ok st11) (bc-bind-multi-field st11 (tail pats) inner-reg (+ i 1))))))))))))))))))))))))
+
+        (PatLit _ _ _)
+          (bc-bind-multi-field st (tail pats) inner-reg (+ i 1))
+
+        _ (Err "bc-bind-multi-field: unknown pattern type"))))
+
+(defn bc-unbind-sub-patterns
+  :sig [(st : _) (pats : List) -> _]
+  :intent "Remove pattern bindings from locals"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? pats) st
+      (match (head pats)
+        (PatBind name _ _) (bc-unbind-sub-patterns (cs-remove-local st name) (tail pats))
+        (PatVariant _ nested _ _) (bc-unbind-sub-patterns (bc-unbind-sub-patterns st nested) (tail pats))
+        _ (bc-unbind-sub-patterns st (tail pats)))))
+
+(defn bc-patch-end-jumps
+  :sig [(st : _) (jumps : List) -> _]
+  :intent "Patch all end-of-arm jumps to point to current instruction"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? jumps) st
+      (let (j : Int (head jumps))
+        (let (end : Int (cs-instr-count st))
+          (let (offset : Int (- (- end j) 1))
+            (bc-patch-end-jumps (cs-patch-jump st j "a" offset) (tail jumps)))))))
+
+;; ── Free variable analysis ──────────────────────────────
+
+(defn bc-free-vars
+  :sig [(node : _) (bound : _) -> List]
+  :intent "Collect free variable names in node not in bound (a map)"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTInt _ _ _) []
+    (ASTFloat _ _ _) []
+    (ASTStr _ _ _) []
+    (ASTBool _ _ _) []
+    (ASTNil _ _) []
+    (ASTKeyword _ _ _) []
+
+    (ASTSymbol name _ _)
+      (if (map-has bound name) [] [name])
+
+    (ASTIf cond then-br else-br _ _)
+      (bc-fv-merge (bc-free-vars cond bound)
+        (bc-fv-merge (bc-free-vars then-br bound)
+          (bc-free-vars else-br bound)))
+
+    (ASTDo exprs _ _)
+      (bc-fv-list exprs bound)
+
+    (ASTLet bindings body _ _)
+      (bc-fv-let bindings body bound)
+
+    (ASTCall callee args _ _)
+      (match callee
+        (ASTSymbol name _ _)
+          ;; Named call: the name might be a variable (closure/funcref)
+          (let (callee-fv : List (if (map-has bound name) [] [name]))
+            (bc-fv-merge callee-fv (bc-fv-list args bound)))
+        _ (bc-fv-merge (bc-free-vars callee bound) (bc-fv-list args bound)))
+
+    (ASTLambda params body _ _)
+      (let (inner-bound : _ (bc-add-params-to-bound bound params))
+        (bc-free-vars body inner-bound))
+
+    (ASTVariant _ args _ _)
+      (bc-fv-list args bound)
+
+    (ASTList items _ _)
+      (bc-fv-list items bound)
+
+    (ASTMatch scrutinee arms _ _)
+      (bc-fv-merge (bc-free-vars scrutinee bound)
+        (bc-fv-arms arms bound))
+
+    (ASTTry expr _ _)
+      (bc-free-vars expr bound)
+
+    _ []))
+
+(defn bc-fv-list
+  :sig [(nodes : List) (bound : _) -> List]
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? nodes) []
+      (bc-fv-merge (bc-free-vars (head nodes) bound)
+        (bc-fv-list (tail nodes) bound))))
+
+(defn bc-fv-merge
+  :sig [(a : List) (b : List) -> List]
+  :intent "Merge two free-var lists, removing duplicates"
+  :requires [(valid a)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? b) a
+      (let (x : _ (head b))
+        (if (bc-list-contains a x)
+          (bc-fv-merge a (tail b))
+          (bc-fv-merge (append a x) (tail b))))))
+
+(defn bc-list-contains
+  :sig [(lst : List) (x : _) -> Bool]
+  :requires [(valid lst)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? lst) false
+      (if (= (head lst) x) true
+        (bc-list-contains (tail lst) x))))
+
+(defn bc-fv-let
+  :sig [(bindings : List) (body : _) (bound : _) -> List]
+  :requires [(valid bindings)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? bindings)
+      (bc-free-vars body bound)
+      (match (head bindings)
+        (ASTBinding name _ val-expr)
+          (bc-fv-merge (bc-free-vars val-expr bound)
+            (bc-fv-let (tail bindings) body (map-set bound name true)))
+        _ [])))
+
+(defn bc-fv-arms
+  :sig [(arms : List) (bound : _) -> List]
+  :requires [(valid arms)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? arms) []
+      (match (head arms)
+        (ASTArm pat body-expr)
+          (let (inner-bound : _ (bc-add-pattern-to-bound bound pat))
+            (bc-fv-merge (bc-free-vars body-expr inner-bound)
+              (bc-fv-arms (tail arms) bound)))
+        _ (bc-fv-arms (tail arms) bound))))
+
+(defn bc-add-pattern-to-bound
+  :sig [(bound : _) (pat : _) -> _]
+  :requires [(valid bound)]
+  :ensures [(valid result)]
+  :body (match pat
+    (PatBind name _ _) (map-set bound name true)
+    (PatVariant _ sub-pats _ _) (bc-add-patterns-to-bound bound sub-pats)
+    _ bound))
+
+(defn bc-add-patterns-to-bound
+  :sig [(bound : _) (pats : List) -> _]
+  :requires [(valid bound)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? pats) bound
+      (bc-add-patterns-to-bound (bc-add-pattern-to-bound bound (head pats)) (tail pats))))
+
+(defn bc-add-params-to-bound
+  :sig [(bound : _) (params : List) -> _]
+  :requires [(valid bound)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? params) bound
+      (bc-add-params-to-bound (map-set bound (head params) true) (tail params))))
+
+;; ── Lambda compilation ──────────────────────────────────
+
+(defn bc-compile-lambda
+  :sig [(st : _) (params : List) (body : _) (dst : Int) -> _]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    ;; Get unique lambda name
+    (let (name-pair : List (cs-next-lambda-name st))
+      (let (st2 : _ (at name-pair 0))
+        (let (lambda-name : String (at name-pair 1))
+          ;; Compute free variables
+          (let (param-bound : _ (bc-add-params-to-bound (map-new) params))
+            (let (free : List (bc-free-vars body param-bound))
+              ;; Filter to only variables in current locals
+              (let (captured : List (bc-filter-to-locals st2 free))
+                (let (capture-names : List (map (fn [pair] (at pair 0)) captured))
+                  (let (all-params : List (concat capture-names params))
+                    ;; Compile the lambda body as a separate function
+                    (match (bc-compile-function lambda-name all-params body (length captured))
+                      (Err e) (Err e)
+                      (Ok result-pair)
+                        (let (func : _ (at result-pair 0))
+                          (let (sub-lambdas : List (at result-pair 1))
+                            ;; Add lambda + any sub-lambdas to compiler state
+                            (let (st3 : _ (bc-add-all-lambdas (cs-add-lambda st2 func) sub-lambdas))
+                              ;; Emit MakeClosure: copy captures to consecutive regs
+                              (let (capture-start : Int (cs-next-reg st3))
+                                (let (st4 : _ (bc-emit-captures st3 captured))
+                                  (let (name-const-pair : List (cs-add-const st4 lambda-name))
+                                    (let (st5 : _ (at name-const-pair 0))
+                                      (let (name-idx : Int (at name-const-pair 1))
+                                        (let (st6 : _ (cs-emit st5 (op-make-closure) dst name-idx capture-start))
+                                          (let (free-to : Int (if (> capture-start (+ dst 1)) capture-start (+ dst 1)))
+                                            (Ok (cs-free-reg-to st6 free-to))))))))))))))))))))))
+
+(defn bc-filter-to-locals
+  :sig [(st : _) (names : List) -> List]
+  :intent "Filter free var names to only those in current locals, return [[name reg] ...]"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? names) []
+      (let (name : _ (head names))
+        (let (reg : _ (cs-lookup-local st name))
+          (if (= reg nil)
+            (bc-filter-to-locals st (tail names))
+            (cons [name reg] (bc-filter-to-locals st (tail names))))))))
+
+(defn bc-add-all-lambdas
+  :sig [(st : _) (lambdas : List) -> _]
+  :intent "Add all lambdas to compiler state"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? lambdas) st
+      (bc-add-all-lambdas (cs-add-lambda st (head lambdas)) (tail lambdas))))
+
+(defn bc-emit-captures
+  :sig [(st : _) (captured : List) -> _]
+  :intent "Emit Move instructions for each captured variable"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? captured) st
+      (let (pair : _ (head captured))
+        (let (slot : Int (at pair 1))
+          (let (alloc-pair : List (cs-alloc-reg st))
+            (let (st2 : _ (at alloc-pair 0))
+              (let (r : Int (at alloc-pair 1))
+                (let (st3 : _ (cs-emit st2 (op-move) r slot 0))
+                  (bc-emit-captures st3 (tail captured))))))))))
+
+;; ── Function compilation ────────────────────────────────
+
+(defn bc-compile-function
+  :sig [(name : String) (params : List) (body : _) (capture-count : Int) -> _]
+  :intent "Compile a function body into a BCFunc value. Returns (Ok [BCFunc [lambdas...]]) or (Err msg)."
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body
+    (let (st : _ (make-compiler-state))
+      ;; Bind params to first N registers
+      (let (st2 : _ (bc-bind-params st params 0))
+        (let (arity : Int (length params))
+          ;; Allocate dst register
+          (let (pair : List (cs-alloc-reg st2))
+            (let (st3 : _ (at pair 0))
+              (let (dst-reg : Int (at pair 1))
+                ;; Compile body
+                (match (bc-compile-expr st3 body dst-reg)
+                  (Err e) (Err e)
+                  (Ok st4)
+                    ;; Emit return
+                    (let (st5 : _ (cs-emit st4 (op-return) 0 dst-reg 0))
+                      ;; Build BCFunc variant and return with any lambdas
+                      (let (func : _ (BCFunc name arity (cs-max-reg st5) capture-count (cs-consts st5) (cs-instrs st5)))
+                        (Ok [func (cs-lambdas st5)])))))))))))
+
+(defn bc-bind-params
+  :sig [(st : _) (params : List) (i : Int) -> _]
+  :intent "Bind function parameters to registers r0..rN"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? params) st
+      (let (st2 : _ (cs-set-local st (head params) i))
+        (let (nr : Int (+ i 1))
+          (let (mx : Int (cs-max-reg st2))
+            (let (new-max : Int (if (> nr mx) nr mx))
+              (let (st3 : _ (map-set (map-set st2 "next-reg" nr) "max-reg" new-max))
+                (bc-bind-params st3 (tail params) nr))))))))
+
+;; ── Top-level compilation ───────────────────────────────
+
+(defn bc-compile-top-level
+  :sig [(node : _) -> _]
+  :intent "Compile a top-level AST node. Returns (Ok [bcfunc-or-nil lambdas]) or (Err msg)."
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTDefn name sig _ _ _ body _ _)
+      (match sig
+        (ASTSig params ret-name)
+          (let (param-names : List (map (fn [p] (match p (ASTParam n _) n _ "?")) params))
+            (match (bc-compile-function name param-names body 0)
+              (Err e) (Err e)
+              (Ok func) (Ok [func []])))
+        _ (Err "bc-compile-top-level: defn requires sig"))
+    (ASTDefType _ _ _ _ _)
+      ;; Type definitions are compile-time only, emit nil
+      (Ok [nil []])
+    _ ;; Expression: defer to program assembly
+      (Ok [nil []])))
+
+;; ── Program compilation ─────────────────────────────────
+
+(defn bc-compile-program
+  :sig [(ast-nodes : List) -> _]
+  :intent "Compile all AST nodes into a list of BCFunc values. Returns (Ok [BCFunc ...]) or (Err msg)."
+  :requires [(valid ast-nodes)]
+  :ensures [(valid result)]
+  :body
+    ;; Separate defns and expressions
+    (let (split : List (bc-split-top-levels ast-nodes))
+      (let (defns : List (at split 0))
+        (let (exprs : List (at split 1))
+          ;; Compile each defn
+          (match (bc-compile-defns defns)
+            (Err e) (Err e)
+            (Ok func-list)
+              ;; Compile remaining expressions as __main__
+              (let (main-body : _ (if (empty? exprs)
+                                    (ASTNil 0 0)
+                                    (if (= (length exprs) 1)
+                                      (head exprs)
+                                      (ASTDo exprs 0 0))))
+                (match (bc-compile-function "__main__" [] main-body 0)
+                  (Err e) (Err e)
+                  (Ok result-pair)
+                    (let (main-func : _ (at result-pair 0))
+                      (let (main-lambdas : List (at result-pair 1))
+                        (Ok (concat func-list (concat main-lambdas [main-func]))))))))))))
+
+(defn bc-split-top-levels
+  :sig [(nodes : List) -> List]
+  :intent "Split AST nodes into [defns exprs]"
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body (bc-split-loop nodes [] []))
+
+(defn bc-split-loop
+  :sig [(nodes : List) (defns : List) (exprs : List) -> List]
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? nodes) [defns exprs]
+      (let (node : _ (head nodes))
+        (match node
+          (ASTDefn _ _ _ _ _ _ _ _)
+            (bc-split-loop (tail nodes) (append defns node) exprs)
+          (ASTDefType _ _ _ _ _)
+            (bc-split-loop (tail nodes) defns exprs)
+          _ (bc-split-loop (tail nodes) defns (append exprs node))))))
+
+(defn bc-compile-defns
+  :sig [(defns : List) -> _]
+  :intent "Compile all defn nodes into BCFunc list (including lambdas)"
+  :requires [(valid defns)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? defns) (Ok [])
+      (match (head defns)
+        (ASTDefn name sig _ _ _ body _ _)
+          (match sig
+            (ASTSig params ret-name)
+              (let (param-names : List (map (fn [p] (match p (ASTParam n _) n _ "?")) params))
+                (match (bc-compile-function name param-names body 0)
+                  (Err e) (Err e)
+                  (Ok result-pair)
+                    (let (func : _ (at result-pair 0))
+                      (let (sub-lambdas : List (at result-pair 1))
+                        (match (bc-compile-defns (tail defns))
+                          (Err e) (Err e)
+                          (Ok rest) (Ok (concat (cons func sub-lambdas) rest)))))))
+            _ (Err "bc-compile-defns: defn requires sig"))
+        _ (Err "bc-compile-defns: expected defn"))))
+
+;; ── Full pipeline ───────────────────────────────────────
+
+(defn run-compiled-bc
+  :sig [(source : String) -> _]
+  :intent "Full bytecode pipeline: source -> lex -> parse -> bc-compile -> run-bytecode"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err e) (Err e)
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err e)
+          (Ok sexprs)
+            (match (parse-program sexprs)
+              (Err e) (Err e)
+              (Ok ast-nodes)
+                (match (bc-compile-program ast-nodes)
+                  (Err e) (Err e)
+                  (Ok bc-funcs) (Ok (run-bytecode bc-funcs)))))))
