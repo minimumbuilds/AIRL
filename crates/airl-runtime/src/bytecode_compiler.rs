@@ -56,6 +56,81 @@ impl BytecodeCompiler {
         idx
     }
 
+    /// Collect free variables referenced in an IR node that are not bound locally.
+    fn free_vars(node: &IRNode, bound: &std::collections::HashSet<String>, out: &mut Vec<String>) {
+        match node {
+            IRNode::Load(name) => {
+                if !bound.contains(name) && !out.contains(name) {
+                    out.push(name.clone());
+                }
+            }
+            IRNode::Int(_) | IRNode::Float(_) | IRNode::Str(_) | IRNode::Bool(_) | IRNode::Nil => {}
+            IRNode::If(c, t, e) => {
+                Self::free_vars(c, bound, out);
+                Self::free_vars(t, bound, out);
+                Self::free_vars(e, bound, out);
+            }
+            IRNode::Do(exprs) => {
+                for expr in exprs { Self::free_vars(expr, bound, out); }
+            }
+            IRNode::Let(bindings, body) => {
+                let mut inner_bound = bound.clone();
+                for b in bindings {
+                    Self::free_vars(&b.expr, &inner_bound, out);
+                    inner_bound.insert(b.name.clone());
+                }
+                Self::free_vars(body, &inner_bound, out);
+            }
+            IRNode::Call(name, args) => {
+                // name is a function name, not a variable reference (unless it's in locals)
+                if !bound.contains(name) && !out.contains(name) {
+                    // Only capture if it looks like a variable (not a function/builtin)
+                    // We check this by seeing if it's in the caller's locals later
+                }
+                for arg in args { Self::free_vars(arg, bound, out); }
+            }
+            IRNode::CallExpr(callee, args) => {
+                Self::free_vars(callee, bound, out);
+                for arg in args { Self::free_vars(arg, bound, out); }
+            }
+            IRNode::Lambda(params, body) => {
+                let mut inner_bound = bound.clone();
+                for p in params { inner_bound.insert(p.clone()); }
+                Self::free_vars(body, &inner_bound, out);
+            }
+            IRNode::List(items) => {
+                for item in items { Self::free_vars(item, bound, out); }
+            }
+            IRNode::Variant(_, args) => {
+                for arg in args { Self::free_vars(arg, bound, out); }
+            }
+            IRNode::Match(scrutinee, arms) => {
+                Self::free_vars(scrutinee, bound, out);
+                for arm in arms {
+                    let mut inner_bound = bound.clone();
+                    Self::collect_pattern_bindings(&arm.pattern, &mut inner_bound);
+                    Self::free_vars(&arm.body, &inner_bound, out);
+                }
+            }
+            IRNode::Try(expr) => Self::free_vars(expr, bound, out),
+            IRNode::Func(_, params, body) => {
+                let mut inner_bound = bound.clone();
+                for p in params { inner_bound.insert(p.clone()); }
+                Self::free_vars(body, &inner_bound, out);
+            }
+        }
+    }
+
+    fn collect_pattern_bindings(pat: &IRPattern, bound: &mut std::collections::HashSet<String>) {
+        match pat {
+            IRPattern::Bind(name) => { bound.insert(name.clone()); }
+            IRPattern::Variant(_, sub) => {
+                for p in sub { Self::collect_pattern_bindings(p, bound); }
+            }
+            IRPattern::Wild | IRPattern::Lit(_) => {}
+        }
+    }
+
     /// Compile an IRNode expression, placing the result in `dst`.
     pub fn compile_expr(&mut self, node: &IRNode, dst: u16) {
         match node {
@@ -255,15 +330,22 @@ impl BytecodeCompiler {
                 let lambda_name = format!("__lambda_{}", self.lambda_counter);
                 self.lambda_counter += 1;
 
-                // Captured variables become additional parameters prepended before user params.
-                let captured_names: Vec<(String, u16)> = self.locals.iter()
-                    .map(|(k, &v)| (k.clone(), v))
+                // Only capture variables actually referenced in the lambda body (free variables).
+                let mut param_set = std::collections::HashSet::new();
+                for p in params { param_set.insert(p.clone()); }
+                let mut free = Vec::new();
+                Self::free_vars(body, &param_set, &mut free);
+
+                // Filter to only variables that are in our current locals
+                let captured_names: Vec<(String, u16)> = free.iter()
+                    .filter_map(|name| self.locals.get(name).map(|&slot| (name.clone(), slot)))
                     .collect();
 
                 let mut all_params: Vec<String> = captured_names.iter().map(|(n, _)| n.clone()).collect();
                 all_params.extend(params.iter().cloned());
 
-                let func = self.compile_function(&lambda_name, &all_params, body);
+                let mut func = self.compile_function(&lambda_name, &all_params, body);
+                func.capture_count = captured_names.len() as u16;
                 self.compiled_lambdas.push(func);
 
                 // Emit MakeClosure: copy captured values to consecutive regs, then emit opcode
@@ -502,6 +584,8 @@ impl BytecodeCompiler {
     /// Compile a top-level function definition.
     pub fn compile_function(&mut self, name: &str, params: &[String], body: &IRNode) -> BytecodeFunc {
         let mut compiler = BytecodeCompiler::new();
+        // Inherit lambda counter to avoid name collisions across compilation passes
+        compiler.lambda_counter = self.lambda_counter;
         // Bind params to first N registers
         for (i, param) in params.iter().enumerate() {
             compiler.locals.insert(param.clone(), i as u16);
@@ -511,6 +595,10 @@ impl BytecodeCompiler {
         let dst = compiler.alloc_reg();
         compiler.compile_expr_tail(body, dst, name);
         compiler.emit(Op::Return, 0, dst, 0);
+
+        // Transfer compiled lambdas and updated counter back to outer compiler
+        self.lambda_counter = compiler.lambda_counter;
+        self.compiled_lambdas.extend(compiler.compiled_lambdas.drain(..));
 
         BytecodeFunc {
             name: name.to_string(),
