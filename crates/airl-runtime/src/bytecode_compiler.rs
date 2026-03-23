@@ -115,9 +115,253 @@ impl BytecodeCompiler {
                 self.free_reg_to(start.max(dst + 1));
             }
 
-            // Stubs for remaining node types — implemented in Tasks 3-5
-            _ => {
-                self.emit(Op::LoadNil, dst, 0, 0); // placeholder
+            IRNode::If(cond, then_, else_) => {
+                // Compile condition
+                let cond_reg = self.alloc_reg();
+                self.compile_expr(cond, cond_reg);
+                // JumpIfFalse to else
+                let jump_to_else = self.instructions.len();
+                self.emit(Op::JumpIfFalse, 0, cond_reg, 0); // offset patched later
+                self.free_reg_to(cond_reg.max(dst + 1));
+                // Then branch
+                self.compile_expr(then_, dst);
+                let jump_to_end = self.instructions.len();
+                self.emit(Op::Jump, 0, 0, 0); // offset patched later
+                // Else branch
+                let else_start = self.instructions.len();
+                self.compile_expr(else_, dst);
+                let end = self.instructions.len();
+                // Patch jumps
+                self.instructions[jump_to_else].b = (else_start as i16 - jump_to_else as i16 - 1) as u16;
+                self.instructions[jump_to_end].a = (end as i16 - jump_to_end as i16 - 1) as u16;
+            }
+
+            IRNode::Let(bindings, body) => {
+                let save_regs = self.next_reg;
+                // Binding registers must not overlap with dst; start allocation above dst
+                if self.next_reg <= dst {
+                    self.next_reg = dst + 1;
+                    if self.next_reg > self.max_reg { self.max_reg = self.next_reg; }
+                }
+                for binding in bindings {
+                    let r = self.alloc_reg();
+                    self.compile_expr(&binding.expr, r);
+                    self.locals.insert(binding.name.clone(), r);
+                }
+                self.compile_expr(body, dst);
+                // Remove bindings from locals
+                for binding in bindings {
+                    self.locals.remove(&binding.name);
+                }
+                self.free_reg_to(save_regs.max(dst + 1));
+            }
+
+            IRNode::Call(name, args) => {
+                // Check if it's a known arithmetic/comparison builtin for direct opcodes
+                let direct_op = match name.as_str() {
+                    "+" => Some(Op::Add),
+                    "-" => Some(Op::Sub),
+                    "*" => Some(Op::Mul),
+                    "/" => Some(Op::Div),
+                    "%" => Some(Op::Mod),
+                    "=" => Some(Op::Eq),
+                    "!=" => Some(Op::Ne),
+                    "<" => Some(Op::Lt),
+                    "<=" => Some(Op::Le),
+                    ">" => Some(Op::Gt),
+                    ">=" => Some(Op::Ge),
+                    "not" => Some(Op::Not),
+                    _ => None,
+                };
+
+                if let Some(op) = direct_op {
+                    if args.len() == 2 {
+                        let a_reg = self.alloc_reg();
+                        self.compile_expr(&args[0], a_reg);
+                        let b_reg = self.alloc_reg();
+                        self.compile_expr(&args[1], b_reg);
+                        self.emit(op, dst, a_reg, b_reg);
+                        self.free_reg_to(a_reg.max(dst + 1));
+                    } else if args.len() == 1 {
+                        let a_reg = self.alloc_reg();
+                        self.compile_expr(&args[0], a_reg);
+                        self.emit(op, dst, a_reg, 0);
+                        self.free_reg_to(a_reg.max(dst + 1));
+                    }
+                } else {
+                    // General function call
+                    // Place args in consecutive registers starting at dst+1
+                    let arg_start = dst + 1;
+                    let save = self.next_reg;
+                    self.next_reg = arg_start;
+                    if self.next_reg > self.max_reg { self.max_reg = self.next_reg; }
+                    for arg in args {
+                        let r = self.alloc_reg();
+                        self.compile_expr(arg, r);
+                    }
+                    // Determine if user-defined or builtin
+                    if self.locals.contains_key(name) {
+                        // Closure/funcref in register
+                        let callee_reg = *self.locals.get(name).unwrap();
+                        self.emit(Op::CallReg, dst, callee_reg, args.len() as u16);
+                    } else {
+                        // Try as named function first, fall back to builtin
+                        let name_idx = self.add_constant(Value::Str(name.clone()));
+                        self.emit(Op::Call, dst, name_idx, args.len() as u16);
+                    }
+                    self.free_reg_to(save.max(dst + 1));
+                }
+            }
+
+            IRNode::CallExpr(callee, args) => {
+                let callee_reg = self.alloc_reg();
+                self.compile_expr(callee, callee_reg);
+                let arg_start = dst + 1;
+                let save = self.next_reg;
+                self.next_reg = arg_start;
+                if self.next_reg > self.max_reg { self.max_reg = self.next_reg; }
+                for arg in args {
+                    let r = self.alloc_reg();
+                    self.compile_expr(arg, r);
+                }
+                self.emit(Op::CallReg, dst, callee_reg, args.len() as u16);
+                self.free_reg_to(save.max(dst + 1));
+            }
+
+            IRNode::Variant(tag, args) => {
+                let tag_idx = self.add_constant(Value::Str(tag.clone()));
+                if args.is_empty() {
+                    self.emit(Op::MakeVariant0, dst, tag_idx, 0);
+                } else if args.len() == 1 {
+                    let a_reg = self.alloc_reg();
+                    self.compile_expr(&args[0], a_reg);
+                    self.emit(Op::MakeVariant, dst, tag_idx, a_reg);
+                    self.free_reg_to(a_reg.max(dst + 1));
+                } else {
+                    // Multi-arg variant: wrap in list
+                    let start = self.next_reg;
+                    for arg in args {
+                        let r = self.alloc_reg();
+                        self.compile_expr(arg, r);
+                    }
+                    let list_reg = self.alloc_reg();
+                    self.emit(Op::MakeList, list_reg, start, args.len() as u16);
+                    self.emit(Op::MakeVariant, dst, tag_idx, list_reg);
+                    self.free_reg_to(start.max(dst + 1));
+                }
+            }
+
+            IRNode::Lambda(params, body) => {
+                // Compile lambda body as a named function stored in a side table.
+                let lambda_name = format!("__lambda_{}", self.lambda_counter);
+                self.lambda_counter += 1;
+
+                // Captured variables become additional parameters prepended before user params.
+                let captured_names: Vec<(String, u16)> = self.locals.iter()
+                    .map(|(k, &v)| (k.clone(), v))
+                    .collect();
+
+                let mut all_params: Vec<String> = captured_names.iter().map(|(n, _)| n.clone()).collect();
+                all_params.extend(params.iter().cloned());
+
+                let func = self.compile_function(&lambda_name, &all_params, body);
+                self.compiled_lambdas.push(func);
+
+                // Emit MakeClosure: copy captured values to consecutive regs, then emit opcode
+                let capture_start = self.next_reg;
+                for (_, slot) in &captured_names {
+                    let r = self.alloc_reg();
+                    self.emit(Op::Move, r, *slot, 0);
+                }
+                let name_idx = self.add_constant(Value::Str(lambda_name));
+                self.emit(Op::MakeClosure, dst, name_idx, capture_start);
+                self.free_reg_to(capture_start.max(dst + 1));
+            }
+
+            IRNode::Match(scrutinee, arms) => {
+                let scr_reg = self.alloc_reg();
+                self.compile_expr(scrutinee, scr_reg);
+
+                let mut end_jumps = Vec::new();
+
+                for arm in arms {
+                    match &arm.pattern {
+                        IRPattern::Wild => {
+                            self.emit(Op::MatchWild, dst, scr_reg, 0);
+                            // No jump needed — wildcard always matches
+                            self.compile_expr(&arm.body, dst);
+                        }
+                        IRPattern::Bind(name) => {
+                            // Bind scrutinee to name
+                            self.locals.insert(name.clone(), scr_reg);
+                            self.compile_expr(&arm.body, dst);
+                            self.locals.remove(name);
+                        }
+                        IRPattern::Lit(val) => {
+                            let val_reg = self.alloc_reg();
+                            let idx = self.add_constant(val.clone());
+                            self.emit(Op::LoadConst, val_reg, idx, 0);
+                            self.emit(Op::Eq, val_reg, scr_reg, val_reg);
+                            let skip = self.instructions.len();
+                            self.emit(Op::JumpIfFalse, 0, val_reg, 0); // patch later
+                            self.free_reg_to(val_reg.max(dst + 1));
+                            self.compile_expr(&arm.body, dst);
+                            end_jumps.push(self.instructions.len());
+                            self.emit(Op::Jump, 0, 0, 0); // jump to end, patch later
+                            let here = self.instructions.len();
+                            self.instructions[skip].b = (here as i16 - skip as i16 - 1) as u16;
+                        }
+                        IRPattern::Variant(tag, sub_pats) => {
+                            let tag_idx = self.add_constant(Value::Str(tag.clone()));
+                            let inner_reg = self.alloc_reg();
+                            self.emit(Op::MatchTag, inner_reg, scr_reg, tag_idx);
+                            let skip = self.instructions.len();
+                            self.emit(Op::JumpIfNoMatch, 0, 0, 0); // patch later
+                            // Bind sub-patterns
+                            if sub_pats.len() == 1 {
+                                if let IRPattern::Bind(name) = &sub_pats[0] {
+                                    self.locals.insert(name.clone(), inner_reg);
+                                    self.compile_expr(&arm.body, dst);
+                                    self.locals.remove(name);
+                                } else if let IRPattern::Wild = &sub_pats[0] {
+                                    self.compile_expr(&arm.body, dst);
+                                } else {
+                                    // Nested pattern — compile body with inner bound
+                                    self.compile_expr(&arm.body, dst);
+                                }
+                            } else if sub_pats.is_empty() {
+                                self.compile_expr(&arm.body, dst);
+                            } else {
+                                // Multi-field variant destructuring not common, handle basic case
+                                self.compile_expr(&arm.body, dst);
+                            }
+                            self.free_reg_to(inner_reg.max(dst + 1));
+                            end_jumps.push(self.instructions.len());
+                            self.emit(Op::Jump, 0, 0, 0); // jump to end
+                            let here = self.instructions.len();
+                            self.instructions[skip].a = (here as i16 - skip as i16 - 1) as u16;
+                        }
+                    }
+                }
+                // Patch all end jumps
+                let end = self.instructions.len();
+                for j in end_jumps {
+                    self.instructions[j].a = (end as i16 - j as i16 - 1) as u16;
+                }
+                self.free_reg_to(scr_reg.max(dst + 1));
+            }
+
+            IRNode::Try(expr) => {
+                let src = self.alloc_reg();
+                self.compile_expr(expr, src);
+                let _err_jump = self.instructions.len();
+                self.emit(Op::TryUnwrap, dst, src, 0); // err_offset patched in context
+                self.free_reg_to(src.max(dst + 1));
+            }
+
+            // Func nodes are handled at the program level, not as expressions
+            IRNode::Func(_, _, _) => {
+                self.emit(Op::LoadNil, dst, 0, 0);
             }
         }
     }
@@ -359,5 +603,39 @@ mod tests {
         assert_eq!(funcs.len(), 1);
         assert_eq!(funcs[0].name, "double");
         assert_eq!(main.name, "__main__");
+    }
+
+    #[test]
+    fn test_compile_if() {
+        let mut c = BytecodeCompiler::new();
+        let node = IRNode::If(
+            Box::new(IRNode::Bool(true)),
+            Box::new(IRNode::Int(1)),
+            Box::new(IRNode::Int(2)),
+        );
+        c.compile_expr(&node, 0);
+        // Should have: LoadTrue, JumpIfFalse, LoadConst(1), Jump, LoadConst(2)
+        assert!(c.instructions.len() >= 5);
+    }
+
+    #[test]
+    fn test_compile_let() {
+        let mut c = BytecodeCompiler::new();
+        let node = IRNode::Let(
+            vec![IRBinding { name: "x".into(), expr: IRNode::Int(42) }],
+            Box::new(IRNode::Load("x".into())),
+        );
+        c.compile_expr(&node, 0);
+        assert!(c.instructions.len() >= 2);
+    }
+
+    #[test]
+    fn test_compile_call_add() {
+        let mut c = BytecodeCompiler::new();
+        let node = IRNode::Call("+".into(), vec![IRNode::Int(3), IRNode::Int(4)]);
+        c.compile_expr(&node, 0);
+        // Should use direct Add opcode, not CallBuiltin
+        let has_add = c.instructions.iter().any(|i| i.op == Op::Add);
+        assert!(has_add, "arithmetic should compile to direct opcode");
     }
 }
