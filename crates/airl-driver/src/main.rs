@@ -1,6 +1,8 @@
 use airl_driver::pipeline::{run_file, run_file_compiled, run_file_bytecode, check_file, format_diagnostic_with_source, PipelineError};
 #[cfg(feature = "jit")]
 use airl_driver::pipeline::run_file_jit;
+#[cfg(feature = "jit")]
+use airl_driver::pipeline::run_file_jit_full;
 use airl_driver::fmt::format_source;
 use airl_agent::transport::Transport;
 
@@ -26,7 +28,7 @@ fn main() {
 
 fn cmd_run(args: &[String]) {
     if args.is_empty() {
-        eprintln!("Usage: airl run [--compiled|--bytecode|--jit] <file.airl>");
+        eprintln!("Usage: airl run [--compiled|--bytecode|--jit|--jit-full] <file.airl>");
         std::process::exit(1);
     }
 
@@ -43,6 +45,10 @@ fn cmd_run(args: &[String]) {
             if args.len() < 2 { eprintln!("Usage: airl run --jit <file.airl>"); std::process::exit(1); }
             ("jit", &args[1])
         }
+        "--jit-full" => {
+            if args.len() < 2 { eprintln!("Usage: airl run --jit-full <file.airl>"); std::process::exit(1); }
+            ("jit-full", &args[1])
+        }
         _ => ("interpreted", &args[0]),
     };
 
@@ -52,6 +58,15 @@ fn cmd_run(args: &[String]) {
         "jit" => {
             #[cfg(feature = "jit")]
             { run_file_jit(path) }
+            #[cfg(not(feature = "jit"))]
+            {
+                eprintln!("JIT not available: rebuild with --features jit");
+                std::process::exit(1);
+            }
+        }
+        "jit-full" => {
+            #[cfg(feature = "jit")]
+            { run_file_jit_full(path) }
             #[cfg(not(feature = "jit"))]
             {
                 eprintln!("JIT not available: rebuild with --features jit");
@@ -291,7 +306,7 @@ fn print_usage() {
 Usage: airl <command> [args]
 
 Commands:
-  run <file>       Run an AIRL source file (--compiled for IR VM, --bytecode for register VM, --jit for Cranelift JIT)
+  run <file>       Run an AIRL source file (--compiled for IR VM, --bytecode for register VM, --jit for Cranelift JIT, --jit-full for full Cranelift JIT)
   check <file>     Parse and check a file without running
   repl             Start the interactive REPL
   agent <file>     Run an agent worker (--listen <endpoint>)
