@@ -63,12 +63,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "airl-rt"
+version = "0.1.0"
+
+[[package]]
 name = "airl-runtime"
 version = "0.1.0"
 dependencies = [
  "airl-codegen",
  "airl-contracts",
  "airl-mlir",
+ "airl-rt",
  "airl-syntax",
  "airl-types",
  "cranelift-codegen",

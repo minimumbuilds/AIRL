@@ -1,0 +1,1543 @@
+# Self-Hosted Parser Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Implement a self-hosted AIRL parser in pure AIRL that converts the lexer's token stream into a typed AST, using a two-phase architecture (tokens → S-expressions → AST).
+
+**Architecture:** Two-phase recursive descent. Phase 1 groups flat tokens into nested S-expression nodes (`SAtom`, `SList`, `SBracket`) by matching parens/brackets. Phase 2 walks the S-expression tree, dispatching on head symbols to build typed AST nodes. All functions return `(Ok ...)` or `(Err (ParseError msg line col))`.
+
+**Tech Stack:** Pure AIRL — uses existing builtins (`at`, `length`, `head`, `tail`, `empty?`, `cons`, `char-at`, `contains`), stdlib (`reverse`, `map`), and the self-hosted lexer (`bootstrap/lexer.airl`). No Rust changes required.
+
+**Spec:** `docs/superpowers/specs/2026-03-21-self-hosted-parser-design.md`
+
+---
+
+## File Structure
+
+| File | Purpose |
+|------|---------|
+| Create: `bootstrap/parser.airl` | The self-hosted parser — all functions (~250 lines) |
+| Create: `bootstrap/parser_test.airl` | AIRL test program that validates the parser (~400 lines) |
+
+No Rust files modified. No stdlib changes. The parser is a pure user-space AIRL program.
+
+**Note:** Because AIRL has no import system, `bootstrap/parser_test.airl` must include all lexer functions (copy from `bootstrap/lexer.airl`) before the parser functions. The parser file itself (`bootstrap/parser.airl`) is standalone but depends on the lexer being loaded first (the test runner will load both via `read-file`).
+
+---
+
+## Reference: AIRL Constraints
+
+These apply to all tasks below:
+- **Eager `and`/`or`:** Always use nested `if` for short-circuit logic
+- **No `to-string`:** Use structured `(ParseError msg line col)` errors, not string-formatted messages
+- **List access:** `(at list idx)` for positional, `(head list)`/`(tail list)` for destructuring
+- **No import system:** Test file must be self-contained (includes all definitions)
+- **Recursion limit 50K:** Not a concern for parser (depth bounded by AST nesting)
+- **Capitalization check:** Use `(contains "ABCDEFGHIJKLMNOPQRSTUVWXYZ" (char-at name 0))` to detect variant constructors
+
+---
+
+### Task 1: S-Expression Nodes, Error Helper, and Test Scaffold
+
+**Files:**
+- Create: `bootstrap/parser.airl`
+- Create: `bootstrap/parser_test.airl`
+
+Write the foundation: S-expr node constructors, error helper, capitalization predicate, and test harness.
+
+- [ ] **Step 1: Create `bootstrap/parser.airl` with header, helpers, and S-expr nodes**
+
+```clojure
+;; bootstrap/parser.airl — Self-hosted AIRL parser
+;; Requires: bootstrap/lexer.airl (loaded first)
+
+;; ── Helpers ───────────────────────────────────────
+
+(defn is-upper?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if single-char string is uppercase letter"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (contains "ABCDEFGHIJKLMNOPQRSTUVWXYZ" ch))
+
+(defn parse-error
+  :sig [(msg : String) (line : i64) (col : i64) -> List]
+  :intent "Create a structured parse error"
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (Err (ParseError msg line col)))
+
+(defn token-line
+  :sig [(tok : Any) -> i64]
+  :intent "Extract line number from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token _ _ line _) line))
+
+(defn token-col
+  :sig [(tok : Any) -> i64]
+  :intent "Extract column number from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token _ _ _ col) col))
+
+(defn token-kind
+  :sig [(tok : Any) -> String]
+  :intent "Extract kind string from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token kind _ _ _) kind))
+
+(defn token-value
+  :sig [(tok : Any) -> Any]
+  :intent "Extract value from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token _ value _ _) value))
+```
+
+- [ ] **Step 2: Create `bootstrap/parser_test.airl` with assert helper and first smoke test**
+
+```clojure
+;; bootstrap/parser_test.airl — Parser tests
+;; This file must be self-contained: includes lexer + parser functions.
+
+;; ── Test helper ───────────────────────────────────
+
+(defn assert-eq
+  :sig [(a : Any) (b : Any) -> Bool]
+  :intent "Assert equality, print error if not"
+  :requires [(valid a) (valid b)]
+  :ensures [(valid result)]
+  :body (if (= a b) true
+          (do (print "FAIL: expected" b "got" a) false)))
+
+;; ── Helpers smoke test ─────────────────────────────
+
+(assert-eq (is-upper? "A") true)
+(assert-eq (is-upper? "z") false)
+(assert-eq (is-upper? "1") false)
+(assert-eq (token-kind (Token "symbol" "foo" 1 0)) "symbol")
+(assert-eq (token-value (Token "integer" 42 1 0)) 42)
+(assert-eq (token-line (Token "symbol" "x" 5 3)) 5)
+
+(print "=== Task 1 tests complete ===")
+```
+
+- [ ] **Step 3: Run the test to verify it passes**
+
+Run: `cargo run -- run bootstrap/parser_test.airl`
+Expected: All PASS, "Task 1 tests complete"
+
+Note: The test file will need the lexer functions and parser functions included. For this first task, only the helpers from parser.airl are needed. Copy them directly into the test file above the test assertions. In later tasks, the full lexer will be prepended.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add bootstrap/parser.airl bootstrap/parser_test.airl
+git commit -m "feat(bootstrap): add parser helpers, S-expr nodes, and test scaffold"
+```
+
+---
+
+### Task 2: Phase 1 — Token to S-Expression Grouping
+
+**Files:**
+- Modify: `bootstrap/parser.airl`
+- Modify: `bootstrap/parser_test.airl`
+
+Implement `parse-sexpr`, `parse-sexprs`, and `parse-sexpr-all` that group tokens into nested S-expression nodes.
+
+- [ ] **Step 1: Add Phase 1 tests to `parser_test.airl`**
+
+These tests call `lex` then `parse-sexpr-all` on the result.
+
+```clojure
+;; ── Phase 1: S-expr grouping tests ──────────────
+
+;; Helper: lex then group into S-exprs
+(defn lex-and-group
+  :sig [(source : String) -> List]
+  :intent "Lex source then group tokens into S-expressions"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err msg) (Err msg)
+      (Ok tokens) (parse-sexpr-all tokens)))
+
+;; Single atom
+(let (r : Any (lex-and-group "42"))
+  (match r
+    (Ok sexprs)
+      (match (head sexprs)
+        (SAtom tok)
+          (assert-eq (token-kind tok) "integer")
+        _ (print "FAIL: expected SAtom"))
+    (Err e) (print "FAIL: lex-and-group error" e)))
+
+;; Simple list: (+ 1 2)
+(let (r : Any (lex-and-group "(+ 1 2)"))
+  (match r
+    (Ok sexprs)
+      (match (head sexprs)
+        (SList items line col)
+          (assert-eq (length items) 3)
+        _ (print "FAIL: expected SList"))
+    (Err e) (print "FAIL: error")))
+
+;; Bracket list: [1 2 3]
+(let (r : Any (lex-and-group "[1 2 3]"))
+  (match r
+    (Ok sexprs)
+      (match (head sexprs)
+        (SBracket items line col)
+          (assert-eq (length items) 3)
+        _ (print "FAIL: expected SBracket"))
+    (Err e) (print "FAIL: error")))
+
+;; Nested: (if (> x 0) x (- 0 x))
+(let (r : Any (lex-and-group "(if (> x 0) x (- 0 x))"))
+  (match r
+    (Ok sexprs)
+      (match (head sexprs)
+        (SList items _ _)
+          (do
+            (assert-eq (length items) 4)
+            ;; items[1] should be SList (> x 0)
+            (match (at items 1)
+              (SList inner _ _)
+                (assert-eq (length inner) 3)
+              _ (print "FAIL: expected nested SList")))
+        _ (print "FAIL: expected SList"))
+    (Err e) (print "FAIL: error")))
+
+;; Error: unclosed paren
+(let (r : Any (lex-and-group "(+ 1 2"))
+  (match r
+    (Ok _) (print "FAIL: expected error for unclosed paren")
+    (Err e) (assert-eq true true)))
+
+;; Error: unexpected closer
+(let (r : Any (lex-and-group ")"))
+  (match r
+    (Ok _) (print "FAIL: expected error for unexpected )")
+    (Err e) (assert-eq true true)))
+
+;; Multiple top-level forms
+(let (r : Any (lex-and-group "1 2 3"))
+  (match r
+    (Ok sexprs) (assert-eq (length sexprs) 3)
+    (Err e) (print "FAIL: error")))
+
+(print "=== Task 2 tests complete ===")
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cargo run -- run bootstrap/parser_test.airl`
+Expected: FAIL (parse-sexpr-all not defined)
+
+- [ ] **Step 3: Implement Phase 1 in `parser.airl`**
+
+```clojure
+;; ── Phase 1: Token → S-Expression grouping ────────
+
+(defn parse-sexpr
+  :sig [(tokens : List) (pos : i64) -> List]
+  :intent "Parse one S-expression from token list at pos, return (Ok [sexpr new-pos]) or (Err ...)"
+  :requires [(valid tokens)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length tokens))
+      (Err (ParseError "unexpected end of input" 0 0))
+      (let (tok : Any (at tokens pos))
+        (match tok
+          (Token kind value line col)
+            (if (= kind "lparen")
+              ;; Parse list contents until rparen
+              (match (parse-sexprs tokens (+ pos 1) "rparen")
+                (Ok result)
+                  (let (items : List (at result 0))
+                    (let (end-pos : i64 (at result 1))
+                      ;; Check for closing rparen
+                      (if (>= end-pos (length tokens))
+                        (Err (ParseError "unclosed parenthesis" line col))
+                        (let (closer : Any (at tokens end-pos))
+                          (match closer
+                            (Token ck _ _ _)
+                              (if (= ck "rparen")
+                                (Ok [(SList items line col) (+ end-pos 1)])
+                                (Err (ParseError "unclosed parenthesis" line col))))))))
+                (Err e) (Err e))
+              (if (= kind "lbracket")
+                ;; Parse bracket contents until rbracket
+                (match (parse-sexprs tokens (+ pos 1) "rbracket")
+                  (Ok result)
+                    (let (items : List (at result 0))
+                      (let (end-pos : i64 (at result 1))
+                        (if (>= end-pos (length tokens))
+                          (Err (ParseError "unclosed bracket" line col))
+                          (let (closer : Any (at tokens end-pos))
+                            (match closer
+                              (Token ck _ _ _)
+                                (if (= ck "rbracket")
+                                  (Ok [(SBracket items line col) (+ end-pos 1)])
+                                  (Err (ParseError "unclosed bracket" line col))))))))
+                  (Err e) (Err e))
+                (if (= kind "rparen")
+                  (Err (ParseError "unexpected ')'" line col))
+                  (if (= kind "rbracket")
+                    (Err (ParseError "unexpected ']'" line col))
+                    (if (= kind "eof")
+                      (Err (ParseError "unexpected end of input" line col))
+                      ;; Any other token is an atom
+                      (Ok [(SAtom tok) (+ pos 1)]))))))))))
+
+(defn parse-sexprs
+  :sig [(tokens : List) (pos : i64) (stop-kind : String) -> List]
+  :intent "Parse S-expressions until stop token or EOF, return (Ok [sexprs pos])"
+  :requires [(valid tokens)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length tokens))
+      (Ok [[] pos])
+      (let (tok : Any (at tokens pos))
+        (match tok
+          (Token kind _ _ _)
+            (if (= kind stop-kind)
+              ;; Hit the stop token — return what we have
+              (Ok [[] pos])
+              (if (= kind "eof")
+                ;; EOF — return what we have
+                (Ok [[] pos])
+                ;; Parse one sexpr, then continue
+                (match (parse-sexpr tokens pos)
+                  (Ok result)
+                    (let (sexpr : Any (at result 0))
+                      (let (new-pos : i64 (at result 1))
+                        (match (parse-sexprs tokens new-pos stop-kind)
+                          (Ok rest-result)
+                            (let (rest-sexprs : List (at rest-result 0))
+                              (let (final-pos : i64 (at rest-result 1))
+                                (Ok [(cons sexpr rest-sexprs) final-pos])))
+                          (Err e) (Err e))))
+                  (Err e) (Err e))))))))
+
+(defn parse-sexpr-all
+  :sig [(tokens : List) -> List]
+  :intent "Parse all tokens into S-expressions, return (Ok sexprs) or (Err ...)"
+  :requires [(valid tokens)]
+  :ensures [(valid result)]
+  :body
+    (match (parse-sexprs tokens 0 "eof")
+      (Ok result) (Ok (at result 0))
+      (Err e) (Err e)))
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cargo run -- run bootstrap/parser_test.airl`
+Expected: All PASS, "Task 2 tests complete"
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add bootstrap/parser.airl bootstrap/parser_test.airl
+git commit -m "feat(bootstrap): add Phase 1 S-expression grouping"
+```
+
+---
+
+### Task 3: Phase 2 — Atom and Simple Expression Parsing
+
+**Files:**
+- Modify: `bootstrap/parser.airl`
+- Modify: `bootstrap/parser_test.airl`
+
+Implement `parse-expr`, `parse-atom`, list literal parsing, function call, and variant constructor dispatch.
+
+- [ ] **Step 1: Add atom and simple expression tests**
+
+```clojure
+;; ── Phase 2: Atom tests ─────────────────────────
+
+;; Helper: source → parse one expression
+(defn parse-one-expr
+  :sig [(source : String) -> List]
+  :intent "Lex, group, and parse one expression from source"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err msg) (Err msg)
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err e)
+          (Ok sexprs)
+            (if (empty? sexprs)
+              (Err (ParseError "no expression" 0 0))
+              (parse-expr (head sexprs))))))
+
+;; Atoms
+(match (parse-one-expr "42")
+  (Ok node) (match node
+    (ASTInt v _ _) (assert-eq v 42)
+    _ (print "FAIL: expected ASTInt"))
+  (Err e) (print "FAIL: error"))
+
+(match (parse-one-expr "3.14")
+  (Ok node) (match node
+    (ASTFloat v _ _) (assert-eq v 3.14)
+    _ (print "FAIL: expected ASTFloat"))
+  (Err e) (print "FAIL: error"))
+
+(match (parse-one-expr "\"hello\"")
+  (Ok node) (match node
+    (ASTStr v _ _) (assert-eq v "hello")
+    _ (print "FAIL: expected ASTStr"))
+  (Err e) (print "FAIL: error"))
+
+(match (parse-one-expr "true")
+  (Ok node) (match node
+    (ASTBool v _ _) (assert-eq v true)
+    _ (print "FAIL: expected ASTBool"))
+  (Err e) (print "FAIL: error"))
+
+(match (parse-one-expr "nil")
+  (Ok node) (match node
+    (ASTNil _ _) (assert-eq true true)
+    _ (print "FAIL: expected ASTNil"))
+  (Err e) (print "FAIL: error"))
+
+(match (parse-one-expr "foo")
+  (Ok node) (match node
+    (ASTSymbol name _ _) (assert-eq name "foo")
+    _ (print "FAIL: expected ASTSymbol"))
+  (Err e) (print "FAIL: error"))
+
+(match (parse-one-expr ":keyword")
+  (Ok node) (match node
+    (ASTKeyword name _ _) (assert-eq name "keyword")
+    _ (print "FAIL: expected ASTKeyword"))
+  (Err e) (print "FAIL: error"))
+
+;; List literal
+(match (parse-one-expr "[1 2 3]")
+  (Ok node) (match node
+    (ASTList items _ _) (assert-eq (length items) 3)
+    _ (print "FAIL: expected ASTList"))
+  (Err e) (print "FAIL: error"))
+
+;; Function call
+(match (parse-one-expr "(+ 1 2)")
+  (Ok node) (match node
+    (ASTCall callee args _ _)
+      (do
+        (match callee
+          (ASTSymbol name _ _) (assert-eq name "+")
+          _ (print "FAIL: expected ASTSymbol callee"))
+        (assert-eq (length args) 2))
+    _ (print "FAIL: expected ASTCall"))
+  (Err e) (print "FAIL: error"))
+
+;; Variant constructor
+(match (parse-one-expr "(Ok 42)")
+  (Ok node) (match node
+    (ASTVariant name args _ _)
+      (do
+        (assert-eq name "Ok")
+        (assert-eq (length args) 1))
+    _ (print "FAIL: expected ASTVariant"))
+  (Err e) (print "FAIL: error"))
+
+;; Nullary variant
+(match (parse-one-expr "Ok")
+  (Ok node) (match node
+    (ASTVariant name args _ _)
+      (do
+        (assert-eq name "Ok")
+        (assert-eq (length args) 0))
+    _ (print "FAIL: expected ASTVariant for bare Ok"))
+  (Err e) (print "FAIL: error"))
+
+(print "=== Task 3 tests complete ===")
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cargo run -- run bootstrap/parser_test.airl`
+Expected: FAIL (parse-expr not defined)
+
+- [ ] **Step 3: Implement `parse-expr`, `parse-atom`, and expression dispatch**
+
+```clojure
+;; ── Phase 2: S-Expression → AST ──────────────────
+
+(defn parse-atom
+  :sig [(tok : Any) -> List]
+  :intent "Convert a token to an AST atom node"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body
+    (match tok
+      (Token kind value line col)
+        (if (= kind "integer") (Ok (ASTInt value line col))
+        (if (= kind "float")   (Ok (ASTFloat value line col))
+        (if (= kind "string")  (Ok (ASTStr value line col))
+        (if (= kind "bool")    (Ok (ASTBool value line col))
+        (if (= kind "nil")     (Ok (ASTNil line col))
+        (if (= kind "keyword") (Ok (ASTKeyword value line col))
+        (if (= kind "symbol")
+          ;; Check if it's a capitalized symbol (nullary variant)
+          (if (is-upper? (char-at value 0))
+            (Ok (ASTVariant value [] line col))
+            (Ok (ASTSymbol value line col)))
+          (Err (ParseError (+ "unexpected token kind: " kind) line col)))))))))))
+
+(defn parse-list-items
+  :sig [(sexprs : List) (pos : i64) -> List]
+  :intent "Parse a list of S-expressions into AST exprs, return (Ok exprs) or (Err ...)"
+  :requires [(valid sexprs)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length sexprs))
+      (Ok [])
+      (match (parse-expr (at sexprs pos))
+        (Ok node)
+          (match (parse-list-items sexprs (+ pos 1))
+            (Ok rest) (Ok (cons node rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn parse-expr
+  :sig [(sexpr : Any) -> List]
+  :intent "Parse an S-expression into an AST expression node"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      ;; Atom — delegate to parse-atom
+      (SAtom tok) (parse-atom tok)
+
+      ;; Bracket list — list literal [1 2 3]
+      (SBracket items line col)
+        (match (parse-list-items items 0)
+          (Ok exprs) (Ok (ASTList exprs line col))
+          (Err e) (Err e))
+
+      ;; Parenthesized list — dispatch on head
+      (SList items line col)
+        (if (empty? items)
+          (Ok (ASTNil line col))
+          (let (first : Any (head items))
+            (match first
+              ;; Head is an atom token — check if it's a special form
+              (SAtom tok)
+                (match tok
+                  (Token kind value _ _)
+                    (if (= kind "symbol")
+                      ;; Dispatch on symbol name
+                      (if (= value "if")      (parse-if items line col)
+                      (if (= value "let")     (parse-let items line col)
+                      (if (= value "do")      (parse-do items line col)
+                      (if (= value "match")   (parse-match items line col)
+                      (if (= value "fn")      (parse-lambda items line col)
+                      (if (= value "try")     (parse-try items line col)
+                      ;; Check for variant constructor (capitalized)
+                      (if (is-upper? (char-at value 0))
+                        (match (parse-list-items items 1)
+                          (Ok args) (Ok (ASTVariant value args line col))
+                          (Err e) (Err e))
+                        ;; Regular function call
+                        (match (parse-expr first)
+                          (Ok callee)
+                            (match (parse-list-items items 1)
+                              (Ok args) (Ok (ASTCall callee args line col))
+                              (Err e) (Err e))
+                          (Err e) (Err e)))))))))
+                      ;; Non-symbol atom as head — function call with computed callee
+                      (match (parse-expr first)
+                        (Ok callee)
+                          (match (parse-list-items items 1)
+                            (Ok args) (Ok (ASTCall callee args line col))
+                            (Err e) (Err e))
+                        (Err e) (Err e))))
+
+              ;; Head is a list or bracket — computed callee: ((fn [x] x) 42)
+              _
+                (match (parse-expr first)
+                  (Ok callee)
+                    (match (parse-list-items items 1)
+                      (Ok args) (Ok (ASTCall callee args line col))
+                      (Err e) (Err e))
+                  (Err e) (Err e)))))))
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cargo run -- run bootstrap/parser_test.airl`
+Expected: All PASS, "Task 3 tests complete"
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add bootstrap/parser.airl bootstrap/parser_test.airl
+git commit -m "feat(bootstrap): add Phase 2 atom and expression parsing"
+```
+
+---
+
+### Task 4: Compound Expression Parsers — if, let, do
+
+**Files:**
+- Modify: `bootstrap/parser.airl`
+- Modify: `bootstrap/parser_test.airl`
+
+Implement `parse-if`, `parse-let`, `parse-let-binding`, and `parse-do`.
+
+- [ ] **Step 1: Add compound expression tests**
+
+```clojure
+;; ── Compound expression tests ───────────────────
+
+;; if expression
+(match (parse-one-expr "(if true 1 2)")
+  (Ok node) (match node
+    (ASTIf cond then-e else-e _ _)
+      (do
+        (match cond (ASTBool v _ _) (assert-eq v true) _ (print "FAIL: if cond"))
+        (match then-e (ASTInt v _ _) (assert-eq v 1) _ (print "FAIL: if then"))
+        (match else-e (ASTInt v _ _) (assert-eq v 2) _ (print "FAIL: if else")))
+    _ (print "FAIL: expected ASTIf"))
+  (Err e) (print "FAIL: error"))
+
+;; if with wrong arg count
+(match (parse-one-expr "(if true 1)")
+  (Ok _) (print "FAIL: if with 2 args should error")
+  (Err _) (assert-eq true true))
+
+;; let expression
+(match (parse-one-expr "(let (x : i32 5) (+ x 1))")
+  (Ok node) (match node
+    (ASTLet bindings body _ _)
+      (do
+        (assert-eq (length bindings) 1)
+        (match (head bindings)
+          (ASTBinding name type-name expr)
+            (do
+              (assert-eq name "x")
+              (assert-eq type-name "i32")
+              (match expr (ASTInt v _ _) (assert-eq v 5) _ (print "FAIL")))
+          _ (print "FAIL: expected ASTBinding")))
+    _ (print "FAIL: expected ASTLet"))
+  (Err e) (print "FAIL: error"))
+
+;; let with multiple bindings
+(match (parse-one-expr "(let (x : i32 1) (y : i32 2) (+ x y))")
+  (Ok node) (match node
+    (ASTLet bindings body _ _)
+      (assert-eq (length bindings) 2)
+    _ (print "FAIL: expected ASTLet"))
+  (Err e) (print "FAIL: error"))
+
+;; do expression
+(match (parse-one-expr "(do 1 2 3)")
+  (Ok node) (match node
+    (ASTDo exprs _ _)
+      (assert-eq (length exprs) 3)
+    _ (print "FAIL: expected ASTDo"))
+  (Err e) (print "FAIL: error"))
+
+(print "=== Task 4 tests complete ===")
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cargo run -- run bootstrap/parser_test.airl`
+Expected: FAIL (parse-if not defined)
+
+- [ ] **Step 3: Implement `parse-if`, `parse-let`, `parse-let-binding`, `parse-do`**
+
+```clojure
+;; ── Compound expression parsers ───────────────────
+
+(defn parse-if
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (if cond then else) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [if-sym cond then else]
+    (if (= (length items) 4)
+      (match (parse-expr (at items 1))
+        (Ok cond-node)
+          (match (parse-expr (at items 2))
+            (Ok then-node)
+              (match (parse-expr (at items 3))
+                (Ok else-node)
+                  (Ok (ASTIf cond-node then-node else-node line col))
+                (Err e) (Err e))
+            (Err e) (Err e))
+        (Err e) (Err e))
+      (Err (ParseError "if requires exactly 3 arguments (cond then else)" line col))))
+
+(defn parse-let-binding
+  :sig [(sexpr : Any) -> List]
+  :intent "Parse a single let binding (name : Type value)"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (< (length items) 4)
+          (Err (ParseError "let binding requires (name : Type value)" line col))
+          (let (name-sexpr : Any (at items 0))
+            (match name-sexpr
+              (SAtom tok)
+                (match tok
+                  (Token kind name _ _)
+                    (if (= kind "symbol")
+                      ;; items[1] should be colon, items[2] should be type, items[3] should be value
+                      (let (type-sexpr : Any (at items 2))
+                        (match type-sexpr
+                          (SAtom type-tok)
+                            (match type-tok
+                              (Token tk tv _ _)
+                                (if (= tk "symbol")
+                                  (match (parse-expr (at items 3))
+                                    (Ok val-node) (Ok (ASTBinding name tv val-node))
+                                    (Err e) (Err e))
+                                  (Err (ParseError "expected type name in let binding" line col))))
+                          _ (Err (ParseError "expected type name in let binding" line col))))
+                      (Err (ParseError "expected symbol name in let binding" line col))))
+              _ (Err (ParseError "expected symbol name in let binding" line col)))))
+      _ (Err (ParseError "let binding must be a list" 0 0))))
+
+(defn parse-let-bindings
+  :sig [(items : List) (pos : i64) (end : i64) -> List]
+  :intent "Parse let bindings from items[pos] to items[end-1], return (Ok bindings)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos end)
+      (Ok [])
+      (match (parse-let-binding (at items pos))
+        (Ok binding)
+          (match (parse-let-bindings items (+ pos 1) end)
+            (Ok rest) (Ok (cons binding rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn parse-let
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (let (bindings...) body) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [let-sym binding1 binding2 ... body]
+    ;; At least 3 items: let + one binding + body
+    (if (< (length items) 3)
+      (Err (ParseError "let requires at least one binding and a body" line col))
+      ;; bindings are items[1] to items[n-2], body is items[n-1]
+      (let (num-items : i64 (length items))
+        (let (body-idx : i64 (- num-items 1))
+          (match (parse-let-bindings items 1 body-idx)
+            (Ok bindings)
+              (match (parse-expr (at items body-idx))
+                (Ok body-node) (Ok (ASTLet bindings body-node line col))
+                (Err e) (Err e))
+            (Err e) (Err e))))))
+
+(defn parse-do
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (do expr1 expr2 ...) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [do-sym expr1 expr2 ...]
+    (if (< (length items) 2)
+      (Err (ParseError "do requires at least one expression" line col))
+      (match (parse-list-items items 1)
+        (Ok exprs) (Ok (ASTDo exprs line col))
+        (Err e) (Err e))))
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cargo run -- run bootstrap/parser_test.airl`
+Expected: All PASS, "Task 4 tests complete"
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add bootstrap/parser.airl bootstrap/parser_test.airl
+git commit -m "feat(bootstrap): add if, let, do expression parsers"
+```
+
+---
+
+### Task 5: Compound Expression Parsers — match, lambda, try
+
+**Files:**
+- Modify: `bootstrap/parser.airl`
+- Modify: `bootstrap/parser_test.airl`
+
+Implement `parse-match`, `parse-pattern`, `parse-lambda`, and `parse-try`.
+
+- [ ] **Step 1: Add match, lambda, try tests**
+
+```clojure
+;; ── Match, lambda, try tests ────────────────────
+
+;; match with two arms
+(match (parse-one-expr "(match x (Ok v) v (Err e) nil)")
+  (Ok node) (match node
+    (ASTMatch scrutinee arms _ _)
+      (do
+        (match scrutinee (ASTSymbol n _ _) (assert-eq n "x") _ (print "FAIL"))
+        (assert-eq (length arms) 2)
+        ;; First arm: (Ok v) → v
+        (match (head arms)
+          (ASTArm pat body)
+            (match pat
+              (PatVariant name sub-pats _ _)
+                (do (assert-eq name "Ok")
+                    (assert-eq (length sub-pats) 1))
+              _ (print "FAIL: expected PatVariant"))
+          _ (print "FAIL: expected ASTArm")))
+    _ (print "FAIL: expected ASTMatch"))
+  (Err e) (print "FAIL: error"))
+
+;; Pattern: wildcard
+(match (parse-one-expr "(match x _ 1)")
+  (Ok node) (match node
+    (ASTMatch _ arms _ _)
+      (match (head arms)
+        (ASTArm pat _)
+          (match pat
+            (PatWild _ _) (assert-eq true true)
+            _ (print "FAIL: expected PatWild"))
+        _ (print "FAIL"))
+    _ (print "FAIL"))
+  (Err e) (print "FAIL: error"))
+
+;; Pattern: literal
+(match (parse-one-expr "(match x 42 1)")
+  (Ok node) (match node
+    (ASTMatch _ arms _ _)
+      (match (head arms)
+        (ASTArm pat _)
+          (match pat
+            (PatLit v _ _) (assert-eq v 42)
+            _ (print "FAIL: expected PatLit"))
+        _ (print "FAIL"))
+    _ (print "FAIL"))
+  (Err e) (print "FAIL: error"))
+
+;; Nested pattern: (Token kind _ _ _)
+(match (parse-one-expr "(match x (Token kind _ _ _) kind)")
+  (Ok node) (match node
+    (ASTMatch _ arms _ _)
+      (match (head arms)
+        (ASTArm pat _)
+          (match pat
+            (PatVariant name subs _ _)
+              (do (assert-eq name "Token")
+                  (assert-eq (length subs) 4))
+            _ (print "FAIL: expected PatVariant"))
+        _ (print "FAIL"))
+    _ (print "FAIL"))
+  (Err e) (print "FAIL: error"))
+
+;; Odd match arms → error
+(match (parse-one-expr "(match x (Ok v))")
+  (Ok _) (print "FAIL: odd match arms should error")
+  (Err _) (assert-eq true true))
+
+;; Lambda
+(match (parse-one-expr "(fn [x y] (+ x y))")
+  (Ok node) (match node
+    (ASTLambda params body _ _)
+      (do
+        (assert-eq (length params) 2)
+        (match body
+          (ASTCall _ _ _ _) (assert-eq true true)
+          _ (print "FAIL: expected ASTCall body")))
+    _ (print "FAIL: expected ASTLambda"))
+  (Err e) (print "FAIL: error"))
+
+;; Try
+(match (parse-one-expr "(try (f x))")
+  (Ok node) (match node
+    (ASTTry expr _ _)
+      (match expr
+        (ASTCall _ _ _ _) (assert-eq true true)
+        _ (print "FAIL: expected ASTCall in try"))
+    _ (print "FAIL: expected ASTTry"))
+  (Err e) (print "FAIL: error"))
+
+(print "=== Task 5 tests complete ===")
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cargo run -- run bootstrap/parser_test.airl`
+Expected: FAIL (parse-match not defined)
+
+- [ ] **Step 3: Implement `parse-match`, `parse-pattern`, `parse-lambda`, `parse-try`**
+
+```clojure
+;; ── Pattern parsing ───────────────────────────────
+
+(defn parse-pattern
+  :sig [(sexpr : Any) -> List]
+  :intent "Parse an S-expression into a pattern node"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SAtom tok)
+        (match tok
+          (Token kind value line col)
+            (if (= kind "symbol")
+              (if (= value "_")
+                (Ok (PatWild line col))
+                ;; Capitalized = nullary variant pattern, lowercase = binding
+                (if (is-upper? (char-at value 0))
+                  (Ok (PatVariant value [] line col))
+                  (Ok (PatBind value line col))))
+              ;; Literal pattern
+              (if (= kind "integer") (Ok (PatLit value line col))
+              (if (= kind "float")   (Ok (PatLit value line col))
+              (if (= kind "string")  (Ok (PatLit value line col))
+              (if (= kind "bool")    (Ok (PatLit value line col))
+              (if (= kind "nil")     (Ok (PatLit nil line col))
+                (Err (ParseError (+ "unexpected token in pattern: " kind) line col)))))))))
+
+      (SList items line col)
+        (if (empty? items)
+          (Err (ParseError "empty list in pattern" line col))
+          (let (head-sexpr : Any (head items))
+            (match head-sexpr
+              (SAtom tok)
+                (match tok
+                  (Token kind value _ _)
+                    (if (= kind "symbol")
+                      (if (is-upper? (char-at value 0))
+                        ;; Variant pattern: (Ok v), (Token kind _ _ _)
+                        (match (parse-patterns items 1)
+                          (Ok sub-pats) (Ok (PatVariant value sub-pats line col))
+                          (Err e) (Err e))
+                        (Err (ParseError "pattern list must start with capitalized variant" line col)))
+                      (Err (ParseError "pattern list must start with symbol" line col))))
+              _ (Err (ParseError "pattern list must start with symbol" line col)))))
+
+      _ (Err (ParseError "unexpected S-expression in pattern" 0 0))))
+
+(defn parse-patterns
+  :sig [(items : List) (pos : i64) -> List]
+  :intent "Parse sub-patterns from items[pos..], return (Ok patterns)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [])
+      (match (parse-pattern (at items pos))
+        (Ok pat)
+          (match (parse-patterns items (+ pos 1))
+            (Ok rest) (Ok (cons pat rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+;; ── Match expression ──────────────────────────────
+
+(defn parse-match-arms
+  :sig [(items : List) (pos : i64) -> List]
+  :intent "Parse pattern/body pairs from items[pos..], return (Ok arms)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [])
+      ;; Need at least 2 more items (pattern + body)
+      (if (>= (+ pos 1) (length items))
+        (Err (ParseError "match arms must come in pairs (pattern body)" 0 0))
+        (match (parse-pattern (at items pos))
+          (Ok pat)
+            (match (parse-expr (at items (+ pos 1)))
+              (Ok body)
+                (match (parse-match-arms items (+ pos 2))
+                  (Ok rest) (Ok (cons (ASTArm pat body) rest))
+                  (Err e) (Err e))
+              (Err e) (Err e))
+          (Err e) (Err e)))))
+
+(defn parse-match
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (match scrutinee pattern body ...) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [match-sym scrutinee pat1 body1 pat2 body2 ...]
+    (if (< (length items) 4)
+      (Err (ParseError "match requires scrutinee and at least one arm" line col))
+      ;; Check even number of remaining items after scrutinee
+      (let (arm-count : i64 (- (length items) 2))
+        (if (= (% arm-count 2) 1)
+          (Err (ParseError "match arms must come in pairs (pattern body)" line col))
+          (match (parse-expr (at items 1))
+            (Ok scrutinee)
+              (match (parse-match-arms items 2)
+                (Ok arms) (Ok (ASTMatch scrutinee arms line col))
+                (Err e) (Err e))
+            (Err e) (Err e))))))
+
+;; ── Lambda ────────────────────────────────────────
+
+(defn parse-lambda-params
+  :sig [(items : List) (pos : i64) -> List]
+  :intent "Parse lambda parameter names from bracket items"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [])
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind value _ _)
+              (if (= kind "symbol")
+                (match (parse-lambda-params items (+ pos 1))
+                  (Ok rest) (Ok (cons value rest))
+                  (Err e) (Err e))
+                (Err (ParseError "lambda parameter must be a symbol" 0 0))))
+        _ (Err (ParseError "lambda parameter must be a symbol" 0 0)))))
+
+(defn parse-lambda
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (fn [params] body) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [fn-sym params-bracket body]
+    (if (= (length items) 3)
+      (match (at items 1)
+        (SBracket param-items _ _)
+          (match (parse-lambda-params param-items 0)
+            (Ok params)
+              (match (parse-expr (at items 2))
+                (Ok body) (Ok (ASTLambda params body line col))
+                (Err e) (Err e))
+            (Err e) (Err e))
+        _ (Err (ParseError "fn expects [params] as second argument" line col)))
+      (Err (ParseError "fn requires [params] and body" line col))))
+
+;; ── Try ───────────────────────────────────────────
+
+(defn parse-try
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (try expr) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (= (length items) 2)
+      (match (parse-expr (at items 1))
+        (Ok expr) (Ok (ASTTry expr line col))
+        (Err e) (Err e))
+      (Err (ParseError "try requires exactly one argument" line col))))
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cargo run -- run bootstrap/parser_test.airl`
+Expected: All PASS, "Task 5 tests complete"
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add bootstrap/parser.airl bootstrap/parser_test.airl
+git commit -m "feat(bootstrap): add match, lambda, try parsers with pattern matching"
+```
+
+---
+
+### Task 6: Function Definition Parser (defn)
+
+**Files:**
+- Modify: `bootstrap/parser.airl`
+- Modify: `bootstrap/parser_test.airl`
+
+Implement `parse-defn`, `parse-sig`, `parse-param`, `parse-top-level`, `parse-program`, and the `parse` entry point.
+
+**Important:** Update `parse-one-expr` in the test file to call `parse-top-level` instead of `parse-expr`, so that `defn` forms are recognized. Previously it called `parse-expr` (which doesn't know about `defn`).
+
+- [ ] **Step 1: Update `parse-one-expr` and add defn tests**
+
+Update `parse-one-expr` to call `parse-top-level`:
+
+```clojure
+;; In parse-one-expr, change the last line from:
+;;   (parse-expr (head sexprs))
+;; to:
+;;   (parse-top-level (head sexprs))
+```
+
+Then add the defn tests:
+
+```clojure
+;; ── defn parsing tests ──────────────────────────
+
+;; Minimal defn
+(match (parse-one-expr "(defn foo :body 42)")
+  (Ok node) (match node
+    (ASTDefn name sig intent requires ensures body _ _)
+      (do
+        (assert-eq name "foo")
+        (match body (ASTInt v _ _) (assert-eq v 42) _ (print "FAIL")))
+    _ (print "FAIL: expected ASTDefn"))
+  (Err e) (print "FAIL: error"))
+
+;; Full defn with all clauses
+(let (src : String "(defn add :sig [(a : i32) (b : i32) -> i32] :intent \"Add two numbers\" :requires [(valid a)] :ensures [(valid result)] :body (+ a b))")
+  (match (parse-one-expr src)
+    (Ok node) (match node
+      (ASTDefn name sig intent requires ensures body _ _)
+        (do
+          (assert-eq name "add")
+          (match sig
+            (ASTSig params ret-type)
+              (do
+                (assert-eq (length params) 2)
+                (assert-eq ret-type "i32")
+                (match (head params)
+                  (ASTParam pname ptype) (do (assert-eq pname "a")
+                                             (assert-eq ptype "i32"))
+                  _ (print "FAIL: expected ASTParam")))
+            _ (print "FAIL: expected ASTSig"))
+          (assert-eq intent "Add two numbers")
+          (assert-eq (length requires) 1)
+          (assert-eq (length ensures) 1))
+      _ (print "FAIL: expected ASTDefn"))
+    (Err e) (print "FAIL: error" e))))
+
+;; defn with clauses in different order
+(match (parse-one-expr "(defn bar :body 1 :intent \"test\" :sig [(x : i32) -> i32])")
+  (Ok node) (match node
+    (ASTDefn name sig intent _ _ body _ _)
+      (do
+        (assert-eq name "bar")
+        (assert-eq intent "test")
+        (match body (ASTInt v _ _) (assert-eq v 1) _ (print "FAIL")))
+    _ (print "FAIL: expected ASTDefn"))
+  (Err e) (print "FAIL: error"))
+
+;; parse entry point: full pipeline
+(match (parse "(defn id :sig [(x : i32) -> i32] :body x)")
+  (Ok nodes)
+    (do
+      (assert-eq (length nodes) 1)
+      (match (head nodes)
+        (ASTDefn name _ _ _ _ _ _ _) (assert-eq name "id")
+        _ (print "FAIL: expected ASTDefn")))
+  (Err e) (print "FAIL: parse error"))
+
+;; parse multiple top-level forms
+(match (parse "(defn a :body 1) (defn b :body 2)")
+  (Ok nodes) (assert-eq (length nodes) 2)
+  (Err e) (print "FAIL: error"))
+
+(print "=== Task 6 tests complete ===")
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cargo run -- run bootstrap/parser_test.airl`
+Expected: FAIL (parse-defn not defined)
+
+- [ ] **Step 3: Implement defn, sig, param parsing and entry point**
+
+```clojure
+;; ── Signature parsing ─────────────────────────────
+
+(defn parse-param
+  :sig [(sexpr : Any) -> List]
+  :intent "Parse a parameter (name : Type) from S-expression"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (< (length items) 3)
+          (Err (ParseError "parameter requires (name : Type)" line col))
+          (let (name-sexpr : Any (at items 0))
+            (match name-sexpr
+              (SAtom tok)
+                (match tok
+                  (Token kind name _ _)
+                    (if (= kind "symbol")
+                      ;; items[1] = colon, items[2] = type
+                      (let (type-sexpr : Any (at items 2))
+                        (match type-sexpr
+                          (SAtom type-tok)
+                            (match type-tok
+                              (Token tk tv _ _)
+                                (if (= tk "symbol")
+                                  (Ok (ASTParam name tv))
+                                  (Err (ParseError "expected type name in parameter" line col))))
+                          _ (Err (ParseError "expected type name in parameter" line col))))
+                      (Err (ParseError "expected symbol name in parameter" line col))))
+              _ (Err (ParseError "expected symbol name in parameter" line col)))))
+      _ (Err (ParseError "parameter must be a list" 0 0))))
+
+(defn parse-sig-params
+  :sig [(items : List) (pos : i64) (arrow-pos : i64) -> List]
+  :intent "Parse signature parameters from items[pos..arrow-pos]"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos arrow-pos)
+      (Ok [])
+      (match (parse-param (at items pos))
+        (Ok param)
+          (match (parse-sig-params items (+ pos 1) arrow-pos)
+            (Ok rest) (Ok (cons param rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn find-arrow
+  :sig [(items : List) (pos : i64) -> i64]
+  :intent "Find index of -> arrow token in S-expr list, return -1 if not found"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (- 0 1)
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind _ _ _)
+              (if (= kind "arrow")
+                pos
+                (find-arrow items (+ pos 1))))
+        _ (find-arrow items (+ pos 1)))))
+
+(defn parse-sig
+  :sig [(sexpr : Any) -> List]
+  :intent "Parse :sig [(params...) -> ReturnType] from bracket S-expression"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SBracket items line col)
+        (let (arrow-idx : i64 (find-arrow items 0))
+          (if (< arrow-idx 0)
+            ;; No arrow — all params, default return type
+            (match (parse-sig-params items 0 (length items))
+              (Ok params) (Ok (ASTSig params "Unit"))
+              (Err e) (Err e))
+            ;; Arrow found — params before, return type after
+            (match (parse-sig-params items 0 arrow-idx)
+              (Ok params)
+                (if (>= (+ arrow-idx 1) (length items))
+                  (Err (ParseError "expected return type after ->" line col))
+                  (match (at items (+ arrow-idx 1))
+                    (SAtom tok)
+                      (match tok
+                        (Token kind value _ _)
+                          (if (= kind "symbol")
+                            (Ok (ASTSig params value))
+                            (Err (ParseError "expected type name after ->" line col))))
+                    _ (Err (ParseError "expected type name after ->" line col))))
+              (Err e) (Err e))))
+      _ (Err (ParseError "sig must be a bracket list" 0 0))))
+
+;; ── defn clause walker ────────────────────────────
+
+(defn walk-defn-clauses
+  :sig [(items : List) (pos : i64) (sig : Any) (intent : String) (requires : List) (ensures : List) (body : Any) -> List]
+  :intent "Walk keyword clauses in defn, accumulate values"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      ;; Done — return accumulated values
+      (Ok [sig intent requires ensures body])
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind value _ _)
+              (if (= kind "keyword")
+                ;; Keyword clause — need value at pos+1
+                (if (>= (+ pos 1) (length items))
+                  (Err (ParseError (+ "missing value for :" value) 0 0))
+                  (let (val-sexpr : Any (at items (+ pos 1)))
+                    (if (= value "sig")
+                      (match (parse-sig val-sexpr)
+                        (Ok new-sig) (walk-defn-clauses items (+ pos 2) new-sig intent requires ensures body)
+                        (Err e) (Err e))
+                    (if (= value "intent")
+                      (match val-sexpr
+                        (SAtom itok)
+                          (match itok
+                            (Token ik iv _ _)
+                              (if (= ik "string")
+                                (walk-defn-clauses items (+ pos 2) sig iv requires ensures body)
+                                (Err (ParseError "intent must be a string" 0 0))))
+                        _ (Err (ParseError "intent must be a string" 0 0)))
+                    (if (= value "requires")
+                      (match val-sexpr
+                        (SBracket req-items _ _)
+                          (match (parse-list-items req-items 0)
+                            (Ok req-exprs) (walk-defn-clauses items (+ pos 2) sig intent req-exprs ensures body)
+                            (Err e) (Err e))
+                        _ (Err (ParseError "requires must be a bracket list" 0 0)))
+                    (if (= value "ensures")
+                      (match val-sexpr
+                        (SBracket ens-items _ _)
+                          (match (parse-list-items ens-items 0)
+                            (Ok ens-exprs) (walk-defn-clauses items (+ pos 2) sig intent requires ens-exprs body)
+                            (Err e) (Err e))
+                        _ (Err (ParseError "ensures must be a bracket list" 0 0)))
+                    (if (= value "body")
+                      (match (parse-expr val-sexpr)
+                        (Ok body-node) (walk-defn-clauses items (+ pos 2) sig intent requires ensures body-node)
+                        (Err e) (Err e))
+                      ;; Unknown keyword — skip
+                      (walk-defn-clauses items (+ pos 2) sig intent requires ensures body))))))))
+                ;; Non-keyword token — error
+                (Err (ParseError "expected keyword clause in defn" 0 0))))
+        ;; Non-atom — error
+        _ (Err (ParseError "expected keyword clause in defn" 0 0)))))
+
+(defn parse-defn
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (defn name :clause value ...) definition"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items[0] = "defn", items[1] = name, items[2..] = keyword clauses
+    (if (< (length items) 2)
+      (Err (ParseError "defn requires a name" line col))
+      (match (at items 1)
+        (SAtom tok)
+          (match tok
+            (Token kind name _ _)
+              (if (= kind "symbol")
+                (match (walk-defn-clauses items 2 nil "" [] [] nil)
+                  (Ok clause-vals)
+                    (Ok (ASTDefn name
+                      (at clause-vals 0)   ;; sig
+                      (at clause-vals 1)   ;; intent
+                      (at clause-vals 2)   ;; requires
+                      (at clause-vals 3)   ;; ensures
+                      (at clause-vals 4)   ;; body
+                      line col))
+                  (Err e) (Err e))
+                (Err (ParseError "defn name must be a symbol" line col))))
+        _ (Err (ParseError "defn name must be a symbol" line col)))))
+
+;; ── Top-level and entry point ─────────────────────
+
+(defn parse-top-level
+  :sig [(sexpr : Any) -> List]
+  :intent "Parse a top-level S-expression into an AST node"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (empty? items)
+          (parse-expr sexpr)
+          (match (head items)
+            (SAtom tok)
+              (match tok
+                (Token kind value _ _)
+                  (if (= kind "symbol")
+                    (if (= value "defn")
+                      (parse-defn items line col)
+                      (parse-expr sexpr))
+                    (parse-expr sexpr)))
+            _ (parse-expr sexpr)))
+      _ (parse-expr sexpr)))
+
+(defn parse-top-levels
+  :sig [(sexprs : List) (pos : i64) -> List]
+  :intent "Parse all top-level S-expressions into AST nodes"
+  :requires [(valid sexprs)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length sexprs))
+      (Ok [])
+      (match (parse-top-level (at sexprs pos))
+        (Ok node)
+          (match (parse-top-levels sexprs (+ pos 1))
+            (Ok rest) (Ok (cons node rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn parse-program
+  :sig [(sexprs : List) -> List]
+  :intent "Parse a list of S-expressions into AST nodes"
+  :requires [(valid sexprs)]
+  :ensures [(valid result)]
+  :body (parse-top-levels sexprs 0))
+
+(defn parse
+  :sig [(source : String) -> List]
+  :intent "Full pipeline: source → tokens → S-exprs → AST"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err msg) (Err msg)
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err e)
+          (Ok sexprs)
+            (parse-program sexprs))))
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cargo run -- run bootstrap/parser_test.airl`
+Expected: All PASS, "Task 6 tests complete"
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add bootstrap/parser.airl bootstrap/parser_test.airl
+git commit -m "feat(bootstrap): add defn parser, sig/param parsing, and parse entry point"
+```
+
+---
+
+### Task 7: Integration Tests — Parse Real AIRL Files
+
+**Files:**
+- Modify: `bootstrap/parser_test.airl`
+Test the parser on real AIRL source code, including the lexer itself.
+
+- [ ] **Step 1: Add integration tests to `parser_test.airl`**
+
+```clojure
+;; ── Integration tests ───────────────────────────
+
+;; Parse a realistic function definition (from the lexer)
+(let (src : String "(defn is-digit?
+  :sig [(ch : String) -> Bool]
+  :intent \"Check if single-char string is a decimal digit\"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (contains \"0123456789\" ch))")
+  (match (parse src)
+    (Ok nodes)
+      (do
+        (assert-eq (length nodes) 1)
+        (match (head nodes)
+          (ASTDefn name sig _ _ _ _ _ _)
+            (do
+              (assert-eq name "is-digit?")
+              (match sig
+                (ASTSig params ret)
+                  (do (assert-eq (length params) 1)
+                      (assert-eq ret "Bool"))
+                _ (print "FAIL: expected ASTSig")))
+          _ (print "FAIL: expected ASTDefn")))
+    (Err e) (print "FAIL: integration error" e))))
+
+;; Parse a function with nested match and let
+(let (src : String "(defn next-token
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
+  :intent \"Read next token\"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (skip-ws source pos line col)
+      (Err msg) (Err msg)
+      (Ok ws-state)
+        (let (p : i64 (head ws-state))
+          (if (>= p (length source))
+            (Ok [(Token \"eof\" nil p 0) p 0 0])
+            (+ p 1)))))")
+  (match (parse src)
+    (Ok nodes) (assert-eq (length nodes) 1)
+    (Err e) (print "FAIL: complex defn error" e))))
+
+;; Parse the actual lexer file (the ultimate integration test)
+(let (lexer-src : String (read-file "bootstrap/lexer.airl"))
+  (match (parse lexer-src)
+    (Ok nodes)
+      (do
+        (assert-eq true true)
+        (print "  parsed" (length nodes) "top-level forms from lexer.airl"))
+    (Err e)
+      (print "FAIL: lexer.airl parse error" e))))
+
+(print "=== Task 7 integration tests complete ===")
+(print "=== All parser tests complete ===")
+```
+
+- [ ] **Step 2: Run integration tests**
+
+Run: `cargo run -- run bootstrap/parser_test.airl`
+Expected: All PASS, including "lexer.airl parses successfully"
+
+- [ ] **Step 3: Run existing tests to verify no regressions**
+
+Run: `cargo test --workspace --exclude airl-mlir`
+Expected: All existing tests still pass
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add bootstrap/parser_test.airl
+git commit -m "feat(bootstrap): add parser integration tests including lexer self-parse"
+```
+
+---
+
+### Task 8: Update CLAUDE.md and Final Validation
+
+**Files:**
+- Modify: `CLAUDE.md`
+
+Update the project documentation to reflect the new parser.
+
+- [ ] **Step 1: Update CLAUDE.md bootstrap section**
+
+In the "Self-Hosting (Phase 3)" status section, update to reflect parser completion:
+
+```markdown
+**Status:** Lexer and parser complete. The self-hosted lexer (`bootstrap/lexer.airl`, ~360 lines) tokenizes AIRL source strings. The self-hosted parser (`bootstrap/parser.airl`, ~250 lines) converts token streams to typed AST nodes using a two-phase architecture (tokens → S-expressions → AST). Handles the bootstrap subset: defn, if, let, do, match, fn, try, function calls, variant constructors, and pattern matching. Tested by `bootstrap/parser_test.airl`.
+
+**Next steps:** Evaluator in AIRL. The parser produces AST nodes that the evaluator will walk to interpret programs.
+```
+
+Also update the bootstrap compiler section:
+
+```markdown
+## Bootstrap Compiler
+
+The self-hosted compiler lives in `bootstrap/`. Run tests with:
+\```bash
+cargo run -- run bootstrap/lexer_test.airl    # Lexer tests
+cargo run -- run bootstrap/parser_test.airl   # Parser tests
+\```
+```
+
+- [ ] **Step 2: Run full validation**
+
+Run: `cargo run -- run bootstrap/parser_test.airl && cargo test --workspace --exclude airl-mlir`
+Expected: All tests pass
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add CLAUDE.md
+git commit -m "docs: update CLAUDE.md with self-hosted parser status"
+```
