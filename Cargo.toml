@@ -10,6 +10,7 @@ members = [
     "crates/airl-solver",
     "crates/airl-mlir",
     "crates/airl-driver",
+    "crates/airl-rt",
 ]
 # Note: airl-mlir requires libzstd-dev and LLVM 19+ for melior.
 # If not installed, use: cargo test --workspace --exclude airl-mlir
