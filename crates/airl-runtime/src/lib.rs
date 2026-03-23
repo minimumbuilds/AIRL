@@ -10,6 +10,7 @@ pub mod ir;
 pub mod ir_vm;
 pub mod ir_marshal;
 pub mod bytecode;
+pub mod bytecode_compiler;
 
 // Convenience re-exports
 pub use error::RuntimeError;
