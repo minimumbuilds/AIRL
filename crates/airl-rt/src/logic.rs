@@ -29,6 +29,18 @@ pub extern "C" fn airl_xor(a: *mut RtValue, b: *mut RtValue) -> *mut RtValue {
     rt_bool(as_bool(a) ^ as_bool(b))
 }
 
+/// Return 1 if the value is truthy (Bool(true) or any non-nil non-bool), 0 for Bool(false)/Nil.
+/// Used by JIT-compiled code to convert a boxed bool to a raw i64 branch condition.
+#[no_mangle]
+pub extern "C" fn airl_as_bool_raw(v: *mut crate::value::RtValue) -> i64 {
+    let val = unsafe { &*v };
+    match &val.data {
+        crate::value::RtData::Bool(b) => *b as i64,
+        crate::value::RtData::Nil => 0,
+        _ => 1,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
