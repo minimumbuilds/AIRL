@@ -6,6 +6,8 @@ use airl_runtime::value::Value;
 use airl_runtime::error::RuntimeError;
 use airl_runtime::ir::*;
 use airl_runtime::ir_vm::IrVm;
+use airl_runtime::bytecode_compiler::BytecodeCompiler;
+use airl_runtime::bytecode_vm::BytecodeVm;
 use airl_types::checker::TypeChecker;
 use airl_types::linearity::LinearityChecker;
 
@@ -422,6 +424,93 @@ pub fn run_file_compiled(path: &str) -> Result<Value, PipelineError> {
     let source = std::fs::read_to_string(path)
         .map_err(|e| PipelineError::Io(e.to_string()))?;
     run_source_compiled(&source)
+}
+
+// ── Bytecode Pipeline ─────────────────────────────────────
+
+/// Run source through bytecode pipeline: parse → IR compile → bytecode compile → bytecode VM
+pub fn run_source_bytecode(source: &str) -> Result<Value, PipelineError> {
+    // Lex + parse (same as other paths)
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
+    let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
+    let mut diags = Diagnostics::new();
+
+    let mut tops = Vec::new();
+    for sexpr in &sexprs {
+        match parser::parse_top_level(sexpr, &mut diags) {
+            Ok(top) => tops.push(top),
+            Err(d) => {
+                let mut diags2 = Diagnostics::new();
+                match parser::parse_expr(sexpr, &mut diags2) {
+                    Ok(expr) => tops.push(airl_syntax::ast::TopLevel::Expr(expr)),
+                    Err(_) => return Err(PipelineError::Syntax(d)),
+                }
+            }
+        }
+    }
+    if diags.has_errors() {
+        return Err(PipelineError::Parse(diags));
+    }
+
+    // Compile AST → IR → Bytecode
+    let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
+    let mut bc_compiler = BytecodeCompiler::new();
+    let (funcs, main_func) = bc_compiler.compile_program(&ir_nodes);
+
+    // Create VM, load stdlib, execute
+    let mut vm = BytecodeVm::new();
+
+    // Load stdlib through bytecode path
+    for (src, name) in &[
+        (COLLECTIONS_SOURCE, "collections"),
+        (MATH_SOURCE, "math"),
+        (RESULT_SOURCE, "result"),
+        (STRING_SOURCE, "string"),
+        (MAP_SOURCE, "map"),
+    ] {
+        compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
+    }
+
+    // Load user functions and execute
+    for func in funcs {
+        vm.load_function(func);
+    }
+    vm.load_function(main_func);
+    vm.exec_main().map_err(PipelineError::Runtime)
+}
+
+fn compile_and_load_stdlib_bytecode(vm: &mut BytecodeVm, source: &str, name: &str) -> Result<(), PipelineError> {
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
+    let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
+    let mut diags = Diagnostics::new();
+
+    let mut tops = Vec::new();
+    for sexpr in &sexprs {
+        match parser::parse_top_level(sexpr, &mut diags) {
+            Ok(top) => tops.push(top),
+            Err(d) => panic!("{} parse error: {}", name, d.message),
+        }
+    }
+
+    let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
+    let mut bc_compiler = BytecodeCompiler::new();
+    let (funcs, main_func) = bc_compiler.compile_program(&ir_nodes);
+
+    for func in funcs {
+        vm.load_function(func);
+    }
+    vm.load_function(main_func);
+    vm.exec_main().unwrap_or_else(|e| panic!("{} stdlib load failed: {}", name, e));
+
+    Ok(())
+}
+
+pub fn run_file_bytecode(path: &str) -> Result<Value, PipelineError> {
+    let source = std::fs::read_to_string(path)
+        .map_err(|e| PipelineError::Io(e.to_string()))?;
+    run_source_bytecode(&source)
 }
 
 pub fn check_file(path: &str) -> Result<(), PipelineError> {
