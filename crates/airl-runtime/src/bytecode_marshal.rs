@@ -165,6 +165,34 @@ pub fn run_bytecode_program(funcs: &[Value]) -> Result<Value, RuntimeError> {
     vm.exec_main()
 }
 
+/// C-ABI entry point for `run-bytecode`.  Takes a single `*mut RtValue`
+/// that is a List of BCFunc variants, marshals them into a BytecodeVm,
+/// executes `__main__`, and returns the result as a new `*mut RtValue`.
+///
+/// This allows AOT-compiled native binaries to execute bytecode at runtime
+/// (needed for the self-hosting compiler pipeline).
+#[no_mangle]
+pub extern "C" fn airl_run_bytecode(prog: *mut airl_rt::value::RtValue) -> *mut airl_rt::value::RtValue {
+    use crate::bytecode_jit_full::BytecodeJitFull;
+
+    // Convert the RtValue list → Vec<Value>
+    let val = BytecodeJitFull::rt_to_value(prog);
+    let funcs = match &val {
+        Value::List(items) => items.clone(),
+        _ => {
+            eprintln!("airl_run_bytecode: expected list of BCFunc, got {}", val);
+            return airl_rt::value::rt_nil();
+        }
+    };
+    match run_bytecode_program(&funcs) {
+        Ok(result) => BytecodeJitFull::value_to_rt(&result),
+        Err(e) => {
+            eprintln!("Runtime error: {}", e);
+            airl_rt::value::rt_nil()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

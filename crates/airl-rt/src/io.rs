@@ -38,6 +38,31 @@ pub extern "C" fn airl_flush_stdout() {
     let _ = std::io::stdout().flush();
 }
 
+/// Read a file's contents as a string.  Takes a path (*mut RtValue Str),
+/// returns the file contents as an RtValue Str, or calls rt_error on failure.
+#[no_mangle]
+pub extern "C" fn airl_read_file(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("read-file: expected string path"),
+        }
+    };
+    match std::fs::read_to_string(&path_str) {
+        Ok(contents) => rt_str(contents),
+        Err(e) => crate::error::rt_error(&format!("read-file: {}: {}", path_str, e)),
+    }
+}
+
+/// Return command-line arguments as a List of Str values.
+#[no_mangle]
+pub extern "C" fn airl_get_args() -> *mut RtValue {
+    let args: Vec<*mut RtValue> = std::env::args()
+        .map(|a| rt_str(a))
+        .collect();
+    crate::value::rt_list(args)
+}
+
 #[no_mangle]
 pub extern "C" fn airl_type_of(v: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*v };

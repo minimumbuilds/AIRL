@@ -149,6 +149,7 @@ impl Builtins {
         self.register("read-file", builtin_read_file);
         self.register("write-file", builtin_write_file);
         self.register("file-exists?", builtin_file_exists);
+        self.register("get-args", builtin_get_args);
     }
 
     // ── IR VM ────────────────────────────────────────────
@@ -1087,6 +1088,12 @@ fn builtin_file_exists(args: &[Value]) -> Result<Value, RuntimeError> {
     };
     let validated = validate_sandboxed_path("file-exists?", &path)?;
     Ok(Value::Bool(validated.exists()))
+}
+
+fn builtin_get_args(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("get-args", args, 0)?;
+    let argv: Vec<Value> = std::env::args().map(Value::Str).collect();
+    Ok(Value::List(argv))
 }
 
 // ── IR VM implementation ─────────────────────────────────
