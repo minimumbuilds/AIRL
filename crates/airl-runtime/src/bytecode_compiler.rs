@@ -81,9 +81,8 @@ impl BytecodeCompiler {
                         self.emit(Op::Move, dst, slot, 0);
                     }
                 } else {
-                    // Will be handled in Task 3 (function refs, builtins)
-                    // For now, treat as constant string lookup
-                    let idx = self.add_constant(Value::Str(name.clone()));
+                    // Function ref or builtin — emit as IRFuncRef for CallReg resolution
+                    let idx = self.add_constant(Value::IRFuncRef(name.clone()));
                     self.emit(Op::LoadConst, dst, idx, 0);
                 }
             }
@@ -366,6 +365,140 @@ impl BytecodeCompiler {
         }
     }
 
+    /// Compile in tail position — emits TailCall for self-recursive calls.
+    pub fn compile_expr_tail(&mut self, node: &IRNode, dst: u16, fn_name: &str) {
+        match node {
+            IRNode::Call(name, args) if name == fn_name => {
+                // Self-recursive tail call.
+                // Parallel-move safety: compile all args to temp registers first,
+                // THEN move temps to r0..rN. This prevents clobbering a source
+                // register that a later arg still needs (e.g., (f b a) where a=r0, b=r1).
+                let save = self.next_reg;
+                let mut tmps = Vec::new();
+                for arg in args {
+                    let tmp = self.alloc_reg();
+                    self.compile_expr(arg, tmp);
+                    tmps.push(tmp);
+                }
+                for (i, tmp) in tmps.iter().enumerate() {
+                    if *tmp != i as u16 {
+                        self.emit(Op::Move, i as u16, *tmp, 0);
+                    }
+                }
+                self.free_reg_to(save);
+                let name_idx = self.add_constant(Value::Str(fn_name.to_string()));
+                self.emit(Op::TailCall, 0, name_idx, args.len() as u16);
+            }
+            IRNode::If(cond, then_, else_) => {
+                // Propagate tail context to branches
+                let cond_reg = self.alloc_reg();
+                self.compile_expr(cond, cond_reg);
+                let jump_to_else = self.instructions.len();
+                self.emit(Op::JumpIfFalse, 0, cond_reg, 0);
+                self.free_reg_to(cond_reg.max(dst + 1));
+                self.compile_expr_tail(then_, dst, fn_name);
+                let jump_to_end = self.instructions.len();
+                self.emit(Op::Jump, 0, 0, 0);
+                let else_start = self.instructions.len();
+                self.compile_expr_tail(else_, dst, fn_name);
+                let end = self.instructions.len();
+                self.instructions[jump_to_else].b = (else_start as i16 - jump_to_else as i16 - 1) as u16;
+                self.instructions[jump_to_end].a = (end as i16 - jump_to_end as i16 - 1) as u16;
+            }
+            IRNode::Do(exprs) if !exprs.is_empty() => {
+                let save = self.next_reg;
+                for (i, expr) in exprs.iter().enumerate() {
+                    if i == exprs.len() - 1 {
+                        self.compile_expr_tail(expr, dst, fn_name);
+                    } else {
+                        let tmp = self.alloc_reg();
+                        self.compile_expr(expr, tmp);
+                    }
+                }
+                self.free_reg_to(save.max(dst + 1));
+            }
+            IRNode::Let(bindings, body) => {
+                let save = self.next_reg;
+                for binding in bindings {
+                    let r = self.alloc_reg();
+                    self.compile_expr(&binding.expr, r);
+                    self.locals.insert(binding.name.clone(), r);
+                }
+                self.compile_expr_tail(body, dst, fn_name);
+                for binding in bindings {
+                    self.locals.remove(&binding.name);
+                }
+                self.free_reg_to(save.max(dst + 1));
+            }
+            IRNode::Match(scrutinee, arms) => {
+                // Propagate tail context into match arms
+                let scr_reg = self.alloc_reg();
+                self.compile_expr(scrutinee, scr_reg);
+                let mut end_jumps = Vec::new();
+
+                for arm in arms {
+                    match &arm.pattern {
+                        IRPattern::Wild => {
+                            self.emit(Op::MatchWild, dst, scr_reg, 0);
+                            self.compile_expr_tail(&arm.body, dst, fn_name);
+                        }
+                        IRPattern::Bind(name) => {
+                            self.locals.insert(name.clone(), scr_reg);
+                            self.compile_expr_tail(&arm.body, dst, fn_name);
+                            self.locals.remove(name);
+                        }
+                        IRPattern::Lit(val) => {
+                            let val_reg = self.alloc_reg();
+                            let idx = self.add_constant(val.clone());
+                            self.emit(Op::LoadConst, val_reg, idx, 0);
+                            self.emit(Op::Eq, val_reg, scr_reg, val_reg);
+                            let skip = self.instructions.len();
+                            self.emit(Op::JumpIfFalse, 0, val_reg, 0);
+                            self.free_reg_to(val_reg.max(dst + 1));
+                            self.compile_expr_tail(&arm.body, dst, fn_name);
+                            end_jumps.push(self.instructions.len());
+                            self.emit(Op::Jump, 0, 0, 0);
+                            let here = self.instructions.len();
+                            self.instructions[skip].b = (here as i16 - skip as i16 - 1) as u16;
+                        }
+                        IRPattern::Variant(tag, sub_pats) => {
+                            let tag_idx = self.add_constant(Value::Str(tag.clone()));
+                            let inner_reg = self.alloc_reg();
+                            self.emit(Op::MatchTag, inner_reg, scr_reg, tag_idx);
+                            let skip = self.instructions.len();
+                            self.emit(Op::JumpIfNoMatch, 0, 0, 0);
+                            if sub_pats.len() == 1 {
+                                if let IRPattern::Bind(name) = &sub_pats[0] {
+                                    self.locals.insert(name.clone(), inner_reg);
+                                    self.compile_expr_tail(&arm.body, dst, fn_name);
+                                    self.locals.remove(name);
+                                } else if let IRPattern::Wild = &sub_pats[0] {
+                                    self.compile_expr_tail(&arm.body, dst, fn_name);
+                                } else {
+                                    self.compile_expr_tail(&arm.body, dst, fn_name);
+                                }
+                            } else {
+                                self.compile_expr_tail(&arm.body, dst, fn_name);
+                            }
+                            self.free_reg_to(inner_reg.max(dst + 1));
+                            end_jumps.push(self.instructions.len());
+                            self.emit(Op::Jump, 0, 0, 0);
+                            let here = self.instructions.len();
+                            self.instructions[skip].a = (here as i16 - skip as i16 - 1) as u16;
+                        }
+                    }
+                }
+                let end = self.instructions.len();
+                for j in end_jumps {
+                    self.instructions[j].a = (end as i16 - j as i16 - 1) as u16;
+                }
+                self.free_reg_to(scr_reg.max(dst + 1));
+            }
+            // Non-tail — delegate to regular compile
+            _ => self.compile_expr(node, dst),
+        }
+    }
+
     /// Compile a top-level function definition.
     pub fn compile_function(&mut self, name: &str, params: &[String], body: &IRNode) -> BytecodeFunc {
         let mut compiler = BytecodeCompiler::new();
@@ -376,7 +509,7 @@ impl BytecodeCompiler {
             compiler.max_reg = compiler.next_reg;
         }
         let dst = compiler.alloc_reg();
-        compiler.compile_expr(body, dst);
+        compiler.compile_expr_tail(body, dst, name);
         compiler.emit(Op::Return, 0, dst, 0);
 
         BytecodeFunc {
@@ -496,10 +629,10 @@ mod tests {
     #[test]
     fn test_compile_load_unknown() {
         let mut c = BytecodeCompiler::new();
-        // Unknown variable: falls back to LoadConst string
+        // Unknown variable: emits IRFuncRef for CallReg resolution
         c.compile_expr(&IRNode::Load("foo".to_string()), 0);
         assert_eq!(c.instructions[0].op, Op::LoadConst);
-        assert_eq!(c.constants[0], Value::Str("foo".to_string()));
+        assert_eq!(c.constants[0], Value::IRFuncRef("foo".to_string()));
     }
 
     #[test]

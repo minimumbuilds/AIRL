@@ -614,4 +614,21 @@ mod tests {
             _ => panic!("expected list"),
         }
     }
+
+    #[test]
+    fn test_tco_no_overflow() {
+        // count-down(n) = if (= n 0) 0 (count-down (- n 1))
+        let body = IRNode::If(
+            Box::new(IRNode::Call("=".into(), vec![IRNode::Load("n".into()), IRNode::Int(0)])),
+            Box::new(IRNode::Int(0)),
+            Box::new(IRNode::Call("count-down".into(), vec![
+                IRNode::Call("-".into(), vec![IRNode::Load("n".into()), IRNode::Int(1)]),
+            ])),
+        );
+        let nodes = vec![
+            IRNode::Func("count-down".into(), vec!["n".into()], Box::new(body)),
+            IRNode::Call("count-down".into(), vec![IRNode::Int(100_000)]),
+        ];
+        assert_eq!(compile_and_run(&nodes), Value::Int(0));
+    }
 }
