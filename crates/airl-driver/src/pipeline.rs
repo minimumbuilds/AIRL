@@ -513,6 +513,71 @@ pub fn run_file_bytecode(path: &str) -> Result<Value, PipelineError> {
     run_source_bytecode(&source)
 }
 
+// ── JIT Pipeline ───────────────────────────────────────────
+
+/// Run source through JIT pipeline: parse → IR compile → bytecode compile → JIT → execute
+#[cfg(feature = "jit")]
+pub fn run_source_jit(source: &str) -> Result<Value, PipelineError> {
+    // Lex + parse (same as other paths)
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
+    let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
+    let mut diags = Diagnostics::new();
+
+    let mut tops = Vec::new();
+    for sexpr in &sexprs {
+        match parser::parse_top_level(sexpr, &mut diags) {
+            Ok(top) => tops.push(top),
+            Err(d) => {
+                let mut diags2 = Diagnostics::new();
+                match parser::parse_expr(sexpr, &mut diags2) {
+                    Ok(expr) => tops.push(airl_syntax::ast::TopLevel::Expr(expr)),
+                    Err(_) => return Err(PipelineError::Syntax(d)),
+                }
+            }
+        }
+    }
+    if diags.has_errors() {
+        return Err(PipelineError::Parse(diags));
+    }
+
+    // Compile AST → IR → Bytecode
+    let ir_nodes: Vec<airl_runtime::ir::IRNode> = tops.iter().map(compile_top_level).collect();
+    let mut bc_compiler = BytecodeCompiler::with_prefix("user");
+    let (funcs, main_func) = bc_compiler.compile_program(&ir_nodes);
+
+    // Create JIT-enabled VM
+    let mut vm = airl_runtime::bytecode_vm::BytecodeVm::new_with_jit();
+
+    // Load stdlib through bytecode path
+    for (src, name) in &[
+        (COLLECTIONS_SOURCE, "collections"),
+        (MATH_SOURCE, "math"),
+        (RESULT_SOURCE, "result"),
+        (STRING_SOURCE, "string"),
+        (MAP_SOURCE, "map"),
+    ] {
+        compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
+    }
+
+    // Load user functions
+    for func in funcs {
+        vm.load_function(func);
+    }
+    vm.load_function(main_func);
+
+    // Two-pass: compile all loaded functions, then execute
+    vm.jit_compile_all();
+    vm.exec_main().map_err(PipelineError::Runtime)
+}
+
+#[cfg(feature = "jit")]
+pub fn run_file_jit(path: &str) -> Result<Value, PipelineError> {
+    let source = std::fs::read_to_string(path)
+        .map_err(|e| PipelineError::Io(e.to_string()))?;
+    run_source_jit(&source)
+}
+
 pub fn check_file(path: &str) -> Result<(), PipelineError> {
     let source = std::fs::read_to_string(path)
         .map_err(|e| PipelineError::Io(e.to_string()))?;
