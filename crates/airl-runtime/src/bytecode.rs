@@ -29,6 +29,7 @@ pub enum Op {
 
     // Logic
     Not,            // dst, a, _
+    Neg,            // dst, a, _
 
     // Control flow
     Jump,           // _, a(offset), _       -- signed i16 in a
@@ -58,7 +59,7 @@ pub enum Op {
 }
 
 /// A single bytecode instruction — fixed size for cache-friendly execution.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Instruction {
     pub op: Op,
     pub dst: u16,
