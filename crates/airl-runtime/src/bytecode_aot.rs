@@ -445,9 +445,10 @@ impl BytecodeAot {
         funcs: &[BytecodeFunc],
         all_functions: &HashMap<String, BytecodeFunc>,
     ) -> Result<(), String> {
+        let mut in_progress = std::collections::HashSet::new();
         for func in funcs {
             if !self.compiled_funcs.contains_key(&func.name) {
-                self.compile_with_deps(func, all_functions)?;
+                self.compile_with_deps(func, all_functions, &mut in_progress)?;
             }
         }
         Ok(())
@@ -458,11 +459,18 @@ impl BytecodeAot {
         &mut self,
         func: &BytecodeFunc,
         all_functions: &HashMap<String, BytecodeFunc>,
+        in_progress: &mut std::collections::HashSet<String>,
     ) -> Result<(), String> {
         let name = func.name.clone();
         if self.compiled_funcs.contains_key(&name) {
             return Ok(());
         }
+        // Prevent infinite recursion on mutual dependencies
+        if in_progress.contains(&name) {
+            // Already being compiled (forward declaration will resolve at link time)
+            return Ok(());
+        }
+        in_progress.insert(name.clone());
 
         // Compile call dependencies first.
         for instr in &func.instructions {
@@ -472,14 +480,18 @@ impl BytecodeAot {
                         && !self.compiled_funcs.contains_key(callee_name)
                     {
                         if let Some(callee) = all_functions.get(callee_name).cloned() {
-                            self.compile_with_deps(&callee, all_functions)?;
+                            self.compile_with_deps(&callee, all_functions, in_progress)?;
                         }
                     }
                 }
             }
         }
 
+        if std::env::var("AIRL_AOT_DEBUG").as_deref() == Ok("1") {
+            eprintln!("[AOT] compiling {} ({} instrs)", name, func.instructions.len());
+        }
         self.compile_func(func, all_functions)?;
+        in_progress.remove(&name);
         Ok(())
     }
 
