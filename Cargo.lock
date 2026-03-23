@@ -71,6 +71,11 @@ dependencies = [
  "airl-mlir",
  "airl-syntax",
  "airl-types",
+ "cranelift-codegen",
+ "cranelift-frontend",
+ "cranelift-jit",
+ "cranelift-module",
+ "target-lexicon",
 ]
 
 [[package]]
