@@ -28,6 +28,38 @@ Every existing programming language optimizes for human readability. AIRL optimi
 - **Formal verification** — Z3 SMT solver proves contracts at compile time. What can't be proven is checked at runtime.
 - **Linear ownership** — Rust-style move semantics enforced at runtime. No garbage collector.
 
+## Why Not Generate Low-Level IR Directly?
+
+If no human reads the code, why not have AI generate Cranelift IR (or LLVM IR, or WASM) directly and skip the high-level language entirely?
+
+**1. High-level code uses fewer tokens, not more.** Cranelift IR requires explicit SSA variables, typed instructions, named basic blocks, and manual control flow. A 2-line AIRL function becomes 15+ lines of CLIF. S-expression syntax is already maximally token-efficient — it *is* the AST.
+
+```clojure
+;; AIRL: 1 expression, ~20 tokens
+(if (<= n 1) 1 (* n (factorial (- n 1))))
+```
+```
+;; Cranelift IR: 4 basic blocks, ~60 tokens
+block0(v0: i64):
+    v1 = iconst.i64 1
+    v2 = icmp sle v0, v1
+    brnz v2, block1
+    jump block2
+block1:
+    return v1
+block2:
+    v3 = isub v0, v1
+    v4 = call %factorial(v3)
+    v5 = imul v0, v4
+    return v5
+```
+
+**2. LLMs have non-zero error rates — safety layers are load-bearing.** AIRL's type checker, contract verifier, linearity checker, and Z3 solver catch mistakes *before* execution. In low-level IR, a wrong register or a missing bounds check is silent corruption or a segfault. There is no error message, no diagnosis, no recovery. The cost of safety infrastructure is paid once at compile time; the cost of a runtime bug is paid every time the program executes.
+
+**3. The abstraction gap determines the defect rate.** The further generated code is from intent, the more places bugs hide. "Divide safely, return Err on zero" → AIRL is a small step. The same intent → register allocation + SSA + calling conventions is a large step with many more failure modes. Current LLMs are trained on high-level code and generate it with far lower error rates than low-level IR.
+
+**4. AIRL already compiles to native code — the AI doesn't need to.** The runtime transparently JIT-compiles eligible functions via Cranelift, compiles to a bytecode VM (`--bytecode`), or lowers to a tree-flattened IR VM (`--compiled`). AI generates high-level, verified AIRL once; the toolchain picks the fastest execution strategy automatically.
+
 ## Features
 
 ### Language
