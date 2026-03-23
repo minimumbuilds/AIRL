@@ -1,0 +1,17 @@
+(defn fact
+  :sig [(n : i64) -> i64]
+  :requires [(valid n)]
+  :ensures [(valid result)]
+  :body (if (<= n 1) 1 (* n (fact (- n 1)))))
+
+(defn apply-fn
+  :sig [(f : fn) (x : i64) -> i64]
+  :requires [(valid f)]
+  :ensures [(valid result)]
+  :body (f x))
+
+(let (result : i64 (apply-fn (fn [x] (+ x 10)) 5))
+  (match (Ok result)
+    (Ok v) (+ v (fact 5))
+    (Err e) 0
+    _ -1))
