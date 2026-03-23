@@ -2,6 +2,8 @@
 
 **A programming language designed for AI systems, not humans. NSFW. Not meant for human consumption. DO NOT EAT**
 
+> **Note:** AIRL is a thought experiment and exploration of AI-assisted compiler construction — not a production tool. The entire toolchain (~43K lines of Rust and AIRL, 213 commits) was built in 4 days, almost entirely by Claude. It combines known ideas (S-expression syntax, mandatory contracts, Z3 verification, linear types, Cranelift JIT, agent message-passing) without advancing any of them beyond prior art. The problem it targets — AI inter-agent program exchange — is speculative, and mature alternatives (Dafny, WASM, typed Python) exist for every claimed capability. It is an exploration of what an AI can build in a weekend, not something anyone should use.
+
 AIRL is a typed, contract-verified programming language for inter-agent communication. AI systems generate AIRL programs, transmit them as messages, execute them with formal guarantees, and verify results against machine-checkable contracts. The syntax is the serialization format. The message is the program.
 
 ```clojure
@@ -153,7 +155,7 @@ This is why AIRL makes contracts **grammar-level mandatory** — the parser lite
 - **Tree-walking interpreter** for all AIRL programs
 - **IR VM** — Compiled execution mode (`--compiled`) via tree-flattened IR with self-TCO, 5-10x faster than interpreted
 - **Bytecode VM** — Register-based bytecode compiler and VM (`--bytecode`), ~10x faster than interpreted
-- **Bytecode→Cranelift JIT** — Eligible bytecode functions JIT-compiled to native x86-64 (`--jit`), fib(30) in 10ms (460x faster than bytecode, 30x faster than Python)
+- **Bytecode→Cranelift JIT** — Eligible bytecode functions JIT-compiled to native x86-64 (`--jit`), fib(30) 67x faster than bytecode
 - **Tensor JIT** — `tensor.add`, `tensor.mul`, `tensor.matmul` compile to native loops via Cranelift
 - **Z3 SMT solver** — Formal verification of integer arithmetic contracts
 
@@ -428,8 +430,8 @@ AIRL_JIT_DEBUG=1 cargo run --features jit -- run --jit program.airl
 
 | Benchmark | Bytecode | JIT | Speedup |
 |-----------|----------|-----|---------|
-| fib(30) | 4,605ms | 10ms | **460x** |
-| fact(12)x10K | 163ms | 6ms | **27x** |
+| fib(30) | 4,559ms | 68ms | **67x** |
+| fact(12)x10K | 158ms | 68ms | **2.3x** |
 
 Ineligible functions fall back to bytecode transparently — all existing programs work unchanged.
 
