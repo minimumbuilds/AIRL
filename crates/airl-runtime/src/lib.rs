@@ -12,6 +12,7 @@ pub mod ir_marshal;
 pub mod bytecode;
 pub mod bytecode_compiler;
 pub mod bytecode_vm;
+pub mod bytecode_marshal;
 #[cfg(feature = "jit")]
 pub mod bytecode_jit;
 #[cfg(feature = "jit")]
