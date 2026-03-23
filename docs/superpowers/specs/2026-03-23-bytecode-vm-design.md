@@ -101,11 +101,11 @@ Fixed size ensures cache-friendly sequential access. The VM's inner loop indexes
 
 | Opcode | Operands | Semantics |
 |--------|----------|-----------|
-| `Jump` | `_, offset, _` | `ip += offset` (signed, relative) |
-| `JumpIfFalse` | `_, a, offset` | `if !registers[a].as_bool() { ip += offset }` |
-| `JumpIfTrue` | `_, a, offset` | `if registers[a].as_bool() { ip += offset }` |
+| `Jump` | `_, a(offset), _` | `ip = (ip as i32 + a as i16 as i32) as usize` |
+| `JumpIfFalse` | `_, a(reg), b(offset)` | `if !registers[a].as_bool() { ip = (ip as i32 + b as i16 as i32) as usize }` |
+| `JumpIfTrue` | `_, a(reg), b(offset)` | `if registers[a].as_bool() { ip = (ip as i32 + b as i16 as i32) as usize }` |
 
-Offsets are signed i16 encoded as u16. Forward jumps are positive, backward jumps for loops are negative.
+**Jump offset convention:** All jump offsets are signed i16 values stored in `a` (for unconditional `Jump`) or `b` (for conditional jumps where `a` holds the condition register). Offsets are relative to the *next* instruction (ip has already been incremented). Positive = forward, negative = backward.
 
 ### Function Calls
 
@@ -119,6 +119,25 @@ Offsets are signed i16 encoded as u16. Forward jumps are positive, backward jump
 
 **Calling convention:** Before a `Call`, the compiler arranges arguments in consecutive registers starting at `dst+1`. The callee receives them as its first N registers. The result goes into `dst`.
 
+**Call pseudocode:**
+```
+Op::Call => {
+    let callee = &self.functions[func_idx];
+    let mut new_regs = vec![Value::Nil; callee.register_count as usize];
+    // Transfer args from caller's [dst+1..dst+1+argc] to callee's [0..argc]
+    for i in 0..argc {
+        new_regs[i] = frame.registers[(instr.dst as usize) + 1 + i].clone();
+    }
+    self.call_stack.push(CallFrame {
+        registers: new_regs,
+        func_name: callee.name.clone(),
+        ip: 0,
+        return_reg: instr.dst,  // caller's register to receive result
+    });
+    self.recursion_depth += 1;
+}
+```
+
 ### Data Construction
 
 | Opcode | Operands | Semantics |
@@ -126,15 +145,17 @@ Offsets are signed i16 encoded as u16. Forward jumps are positive, backward jump
 | `MakeList` | `dst, start, count` | `registers[dst] = List(registers[start..start+count])` |
 | `MakeVariant` | `dst, tag_idx, a` | `registers[dst] = Variant(constants[tag_idx], registers[a])` |
 | `MakeVariant0` | `dst, tag_idx, _` | `registers[dst] = Variant(constants[tag_idx], Nil)` — 0-arg variant |
-| `MakeClosure` | `dst, func_idx, capture_start` | Create closure capturing registers `[capture_start..]` |
+| `MakeClosure` | `dst, func_idx, capture_start` | Create closure capturing registers `[capture_start..capture_start+N]` where N is the callee's capture count (stored in `BytecodeFunc.capture_count`) |
 
 ### Pattern Matching
 
 | Opcode | Operands | Semantics |
 |--------|----------|-----------|
-| `MatchTag` | `dst, scrutinee, tag_idx` | If `registers[scrutinee]` is `Variant(tag, inner)` where `tag == constants[tag_idx]`, store `inner` in `dst` and set match flag; else clear flag |
-| `JumpIfNoMatch` | `_, offset, _` | Jump if last `MatchTag` failed |
-| `MatchWild` | `dst, scrutinee, _` | Always matches, binds `registers[scrutinee]` to `dst` |
+| `MatchTag` | `dst, scrutinee, tag_idx` | If `registers[scrutinee]` is `Variant(tag, inner)` where `tag == constants[tag_idx]`, store `inner` in `dst` and set `match_flag = true`; else set `match_flag = false` |
+| `JumpIfNoMatch` | `_, offset, _` | If `match_flag == false`, jump by `offset` |
+| `MatchWild` | `dst, scrutinee, _` | Always succeeds: `registers[dst] = registers[scrutinee]`, sets `match_flag = true` |
+
+`match_flag` lives on `CallFrame` (not `BytecodeVm`) so that function calls inside match arm bodies don't clobber the caller's match state.
 
 Match compilation emits a sequence of `MatchTag`/`JumpIfNoMatch` pairs for each arm, with the body code between jumps.
 
@@ -153,6 +174,7 @@ struct BytecodeFunc {
     name: String,
     arity: u16,                     // number of parameters
     register_count: u16,            // total registers needed (params + locals + temps)
+    capture_count: u16,             // number of free variables captured by closures referencing this func
     instructions: Vec<Instruction>,
     constants: Vec<Value>,          // per-function constant pool
 }
@@ -169,6 +191,8 @@ Simple linear allocation — AIRL has no mutable variables, so register liveness
 5. The compiler tracks the high-water mark as `register_count`
 
 No graph coloring or interference analysis needed. The lack of mutation means no variable has conflicting live ranges.
+
+**Register reuse rule:** A register may be reused once the value it holds is no longer referenced by any subsequent instruction in the current scope. In practice: parameter registers are reusable after the last instruction that reads them; let-binding registers are reusable after the let body is compiled. The compiler tracks liveness as a simple "last use" marker per register.
 
 ### Example
 
@@ -204,7 +228,6 @@ struct BytecodeVm {
     builtins: Builtins,
     call_stack: Vec<CallFrame>,
     recursion_depth: usize,
-    match_flag: bool,               // set by MatchTag
 }
 
 struct CallFrame {
@@ -212,6 +235,7 @@ struct CallFrame {
     func_name: String,              // for TCO detection
     ip: usize,                      // instruction pointer
     return_reg: u16,                // caller's destination register
+    match_flag: bool,               // set by MatchTag/MatchWild, read by JumpIfNoMatch
 }
 ```
 
