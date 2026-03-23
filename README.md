@@ -2,7 +2,7 @@
 
 **A programming language designed for AI systems, not humans. NSFW. Not meant for human consumption. DO NOT EAT**
 
-> **Note:** AIRL is a thought experiment and exploration of AI-assisted compiler construction — not a production tool. The entire toolchain (~43K lines of Rust and AIRL, 213 commits) was built in 4 days, almost entirely by Claude. It combines known ideas (S-expression syntax, mandatory contracts, Z3 verification, linear types, Cranelift JIT, agent message-passing) without advancing any of them beyond prior art. The problem it targets — AI inter-agent program exchange — is speculative, and mature alternatives (Dafny, WASM, typed Python) exist for every claimed capability. It is an exploration of what an AI can build in a weekend, not something anyone should use.
+> **Note:** AIRL is a thought experiment and exploration of AI-assisted compiler construction — not a production tool. The entire toolchain (~43K lines of Rust and AIRL, 213 commits) was built in 4 days, almost entirely by Claude. It combines known ideas (S-expression syntax, mandatory contracts, Z3 verification, linear types, Cranelift JIT, agent message-passing) without advancing any of them beyond prior art. The problem it targets — AI inter-agent program exchange — is speculative, and mature alternatives (Dafny, WASM, typed Python) exist for every claimed capability. It is an exploration of what an AI can build in a weekend, not something anyone should use. Do not beleive it's claims.
 
 AIRL is a typed, contract-verified programming language for inter-agent communication. AI systems generate AIRL programs, transmit them as messages, execute them with formal guarantees, and verify results against machine-checkable contracts. The syntax is the serialization format. The message is the program.
 
@@ -159,10 +159,11 @@ This is why AIRL makes contracts **grammar-level mandatory** — the parser lite
 - **Tensor JIT** — `tensor.add`, `tensor.mul`, `tensor.matmul` compile to native loops via Cranelift
 - **Z3 SMT solver** — Formal verification of integer arithmetic contracts
 
-### Self-Hosting
-- **Bootstrap compiler** — Lexer, parser, type checker, and IR compiler written in AIRL itself (~2,500 lines)
-- **Compiler fixpoint** — The compiled compiler produces identical IR to the interpreted compiler (verified via automated fixpoint test)
+### Bootstrap Compiler (not yet self-hosting)
+- **Compiler phases in AIRL** — Lexer, parser, type checker, and IR compiler implemented in AIRL (~2,500 lines), running on the Rust runtime
 - **Self-parse verified** — The bootstrap lexer tokenizes its own source (15,691 chars → 3,400 tokens)
+- **Fixpoint verified** — The AIRL compiler produces identical IR whether run interpreted or via the IR VM
+- **Not self-hosting** — The Rust runtime (builtins, value representation, bytecode VM) is still required. A native code generator backend would be needed to produce a standalone binary.
 
 ### Agent Communication
 - Inter-agent task exchange over TCP and Unix sockets
@@ -461,8 +462,8 @@ No annotation needed — the interpreter detects eligible functions automaticall
 
 - **517 tests** across 8 crates
 - **~19,000 lines** of Rust + **~21,000 lines** of AIRL (bootstrap compiler + tests)
-- **Self-hosting** — lexer, parser, type checker, and IR compiler written in AIRL
-- **Compiler fixpoint verified** — the compiled compiler reproduces itself
+- **Bootstrap compiler** — lexer, parser, type checker, and IR compiler implemented in AIRL (runs on Rust runtime, not yet self-hosting)
+- **Compiler fixpoint verified** — the AIRL compiler produces identical IR whether run interpreted or via the IR VM
 - **Zero external dependencies** for core crates by default (Cranelift in `airl-codegen` and optionally `airl-runtime` behind `jit` feature; Z3 in `airl-solver`)
 
 ## Specification

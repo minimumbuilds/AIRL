@@ -201,10 +201,10 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **String `length` Fix** — `builtin_length` for strings changed from `s.len()` (byte count) to `s.chars().count()` (character count), aligning with `char-at`'s character-based indexing. Fixes out-of-bounds crashes on non-ASCII strings.
 - **Lexer UTF-8 String Support** — `lex_string` in `crates/airl-syntax/src/lexer.rs` now properly decodes multi-byte UTF-8 characters in string literals, instead of treating each byte as a separate `char`. Detects UTF-8 sequence length from leading byte and uses `std::str::from_utf8` to decode.
 - **TCO Through Match/Let Arms** — `match` and `let` body evaluation in `eval.rs` now uses inline trampolines that preserve `in_tail_context`, enabling tail-call optimization for recursive functions that recurse inside `match` arms (e.g., `lex-loop`). Previously, these called `eval()` which cleared the tail context flag.
-- **Bootstrap Self-Parse Milestone** — The self-hosted lexer can lex its own source (`bootstrap/lexer.airl`, 15,691 chars → 3,400 tokens). Timing: ~56s release, ~100s debug.
-- **Bootstrap Type Checker** — Self-hosted type checker in AIRL (`bootstrap/types.airl` ~215 lines, `bootstrap/typecheck.airl` ~500 lines). Two-pass architecture: registration (deftype → constructor registry, defn → function signatures) then checking (expressions, functions, patterns). Eliminates all `Any` usage from bootstrap code (95 in eval, 24 in parser, 1 in lexer). Lexer type-checks cleanly via the bootstrap type checker.
+- **Bootstrap Self-Parse Milestone** — The bootstrap lexer can lex its own source (`bootstrap/lexer.airl`, 15,691 chars → 3,400 tokens). Timing: ~56s release, ~100s debug.
+- **Bootstrap Type Checker** — Type checker implemented in AIRL (`bootstrap/types.airl` ~215 lines, `bootstrap/typecheck.airl` ~500 lines). Two-pass architecture: registration (deftype → constructor registry, defn → function signatures) then checking (expressions, functions, patterns). Eliminates all `Any` usage from bootstrap code (95 in eval, 24 in parser, 1 in lexer). Lexer type-checks cleanly via the bootstrap type checker.
 - **`deftype` Parsing** — Bootstrap parser handles `(deftype Name [Params] (| ...))` sum types and `(deftype Name (& ...))` product types. Includes `parse-variant`, `parse-field`, `parse-sum-body`, `parse-product-body`, `parse-type-params`, `parse-deftype`. Bootstrap lexer updated to include `|` in symbol characters.
-- **IR VM** — Tree-flattened IR format (`crates/airl-runtime/src/ir.rs`), Rust VM (`ir_vm.rs`) with self-TCO, value-to-IR marshalling (`ir_marshal.rs`), `run-ir` builtin. Self-hosted AIRL compiler (`bootstrap/compiler.airl`) transforms AST to IR. Rust-side compiler in `pipeline.rs` for native-speed compilation. `--compiled` flag on `cargo run -- run` for compiled execution mode. `IRClosure`/`IRFuncRef` value variants for first-class functions in compiled code.
+- **IR VM** — Tree-flattened IR format (`crates/airl-runtime/src/ir.rs`), Rust VM (`ir_vm.rs`) with self-TCO, value-to-IR marshalling (`ir_marshal.rs`), `run-ir` builtin. Bootstrap AIRL compiler (`bootstrap/compiler.airl`) transforms AST to IR. Rust-side compiler in `pipeline.rs` for native-speed compilation. `--compiled` flag on `cargo run -- run` for compiled execution mode. `IRClosure`/`IRFuncRef` value variants for first-class functions in compiled code.
 - **Bootstrap Fixpoint Verification** — Functional equivalence test (`bootstrap/equivalence_test.airl`, 32 tests) proves interpreted eval and compiled run-ir produce identical results across literals, arithmetic, control flow, functions, recursion, pattern matching, closures, higher-order functions, and lists. Compiler fixpoint test (`bootstrap/fixpoint_test.airl`) proves the compiled compiler produces identical IR to the interpreted compiler — Tier 1 (small program) and Tier 2 (compiler self-compilation). IR serializer (`ir-to-string`) for deterministic comparison. The compiler has reached fixpoint: compiler₁ compiling compiler.airl = compiler₂ compiling compiler.airl.
 - **Register-Based Bytecode VM** — Flat bytecode instruction set (~34 opcodes), register-based compiler (`bytecode_compiler.rs`) with linear register allocation, bytecode VM (`bytecode_vm.rs`) with tight execution loop and self-TCO. `--bytecode` flag on `cargo run -- run`. Pipeline integration in `pipeline.rs` with `run_source_bytecode()`.
 - **Bytecode→Cranelift JIT** — JIT compilation of eligible bytecode functions to native x86-64 via Cranelift (`bytecode_jit.rs`). Primitive-typed functions (no lists/variants/closures) are compiled eagerly at load time. `--jit` flag on `cargo run --features jit -- run`. Transparent fallback to bytecode for ineligible functions. fib(30) 67x faster than bytecode (68ms vs 4,559ms). Behind `#[cfg(feature = "jit")]` — zero overhead when disabled.
@@ -215,21 +215,23 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 ### Tier 1 — Long-term
 
-#### 1. Self-Hosting (Phase 3)
+#### 1. Bootstrap Compiler (not yet self-hosting)
 
-**Status:** Lexer, parser, evaluator, and type checker complete. The self-hosted lexer (`bootstrap/lexer.airl`, ~365 lines) tokenizes AIRL source strings. The self-hosted parser (`bootstrap/parser.airl`, ~930 lines) converts token streams to typed AST nodes, including `deftype` declarations. The self-hosted evaluator (`bootstrap/eval.airl`, ~616 lines) interprets AST nodes using tagged value variants (`ValInt`, `ValStr`, etc.), a map-based environment frame stack, and builtin delegation to the Rust runtime. The self-hosted type checker (`bootstrap/types.airl` + `bootstrap/typecheck.airl`, ~715 lines) enforces the type system with a two-pass architecture. The full lex→parse→eval pipeline is tested by `bootstrap/pipeline_test.airl`.
+**Status:** Compiler front-end phases implemented in AIRL, running on the Rust runtime. The bootstrap lexer (`bootstrap/lexer.airl`, ~365 lines) tokenizes AIRL source strings. The bootstrap parser (`bootstrap/parser.airl`, ~930 lines) converts token streams to typed AST nodes, including `deftype` declarations. The bootstrap evaluator (`bootstrap/eval.airl`, ~616 lines) interprets AST nodes using tagged value variants (`ValInt`, `ValStr`, etc.), a map-based environment frame stack, and builtin delegation to the Rust runtime. The bootstrap type checker (`bootstrap/types.airl` + `bootstrap/typecheck.airl`, ~715 lines) enforces the type system with a two-pass architecture. The full lex→parse→eval pipeline is tested by `bootstrap/pipeline_test.airl`.
 
 **Self-parse verified:** The bootstrap lexer successfully lexes its own source (15,691 chars → 3,400 tokens, ~56s release). TCO through `match`/`let` arms is required for this to work — without it, `lex-loop`'s recursion overflows the stack.
 
-**Type-check verified:** All three bootstrap modules (lexer, parser, eval) pass the self-hosted type checker cleanly. All `Any` annotations have been eliminated from the bootstrap codebase (~120 replacements). The integration tests parse each module through the bootstrap parser and type-check the AST — slow (~5-10 min total in release mode) but comprehensive.
+**Type-check verified:** All three bootstrap modules (lexer, parser, eval) pass the bootstrap type checker cleanly. All `Any` annotations have been eliminated from the bootstrap codebase (~120 replacements). The integration tests parse each module through the bootstrap parser and type-check the AST — slow (~5-10 min total in release mode) but comprehensive.
 
-**Next steps:** Potential future work includes optimization passes or a self-hosted code generator.
+**Not self-hosting:** The Rust runtime is still required — ~48 builtins (arithmetic, string ops, map ops, list primitives, I/O) are implemented in Rust and called by the bootstrap code. True self-hosting would require a native code generator backend that can emit machine code or link against a minimal runtime.
+
+**Next steps:** Potential future work includes a native code generator (e.g., extending the bytecode→Cranelift JIT to AOT compilation with runtime helper calls for non-primitive operations).
 
 ---
 
 ## Bootstrap Compiler
 
-The self-hosted compiler lives in `bootstrap/`. Run tests with:
+The bootstrap compiler (AIRL compiler phases implemented in AIRL, running on the Rust runtime) lives in `bootstrap/`. Run tests with:
 ```bash
 cargo run -- run bootstrap/lexer_test.airl       # Lexer tests
 cargo run -- run bootstrap/parser_test.airl      # Parser unit tests
