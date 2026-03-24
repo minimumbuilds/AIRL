@@ -157,10 +157,10 @@ AIRL v0.2 uses a single execution pipeline. There are no mode flags — `airl ru
 
 1. **Source → AST** — Hand-written recursive descent parser (LL(1))
 2. **Static analysis** — Type checking, linearity checking, Z3 contract verification
-3. **AST → IR → Bytecode** — Contracts compiled as assertion opcodes
-4. **JIT compilation** — Eligible functions compiled to native x86-64 via Cranelift. Contract assertions become conditional branches (one native instruction on the happy path). Ineligible functions (those using lists, closures, variants, or builtins) run on the bytecode VM as fallback.
+3. **AST → IR → Bytecode** — Contracts compiled as assertion opcodes, ownership annotations compiled as move-tracking opcodes
+4. **JIT-full compilation** — **All** functions compiled to native x86-64 via Cranelift, using the `airl-rt` C-ABI runtime library for value operations. Contract assertions and ownership checks become native conditional branches. Quantifier expressions (`forall`/`exists`) are desugared to stdlib `fold`+`range` loops.
 
-Contracts are **always enforced** — in both JIT-compiled native code and bytecode. There is no "fast but unsafe" mode.
+Contracts are **always enforced** — in JIT-compiled native code, every contract assertion is a single conditional branch (essentially free on the happy path). Ownership is enforced both statically (linearity checker) and at runtime (move-tracking opcodes). There is no "fast but unsafe" mode.
 
 ### Performance
 
@@ -378,11 +378,11 @@ AIRL Source
 [Bytecode Compiler]   IR → register-based bytecode (contracts compiled as assertion opcodes)
     │
     ▼
-[Cranelift JIT]       Eligible functions → native x86-64
-    │                 Contract assertions → conditional branches
-    │                 Ineligible functions → bytecode VM fallback
+[Cranelift JIT-Full]  ALL functions → native x86-64 via airl-rt runtime
+    │                 Contract assertions → native conditional branches
+    │                 Ownership checks → native move tracking
     ▼
-[Execution]           Native code + bytecode VM (transparent dispatch)
+[Execution]           Native code (all functions JIT-compiled)
 ```
 
 ### Crate Structure
@@ -423,7 +423,7 @@ Contracts are compiled to bytecode assertion opcodes and, for JIT-eligible funct
 
 ## Ownership Model
 
-AIRL uses linear ownership with explicit annotations, enforced by static analysis before execution:
+AIRL uses linear ownership with explicit annotations, enforced by both static analysis and runtime move tracking:
 
 ```clojure
 (defn consume
@@ -459,32 +459,37 @@ Tensor builtins: `tensor.zeros`, `tensor.ones`, `tensor.rand`, `tensor.identity`
 
 ## JIT Compilation
 
-AIRL's JIT compiler transparently compiles eligible functions to native x86-64 via Cranelift at load time, before execution starts. No flags or annotations are needed — the runtime decides automatically.
+AIRL's JIT-full compiler compiles **every function** to native x86-64 via Cranelift at load time, before execution starts. No flags or annotations are needed — the runtime compiles all functions automatically.
 
-**What gets JIT-compiled:** Functions using only primitive operations (arithmetic, comparisons, control flow, contract assertions, calls to other eligible functions). Contract assertions compile to a single conditional branch on the happy path, with a call to a runtime error helper on the failure path.
+**How it works:** Every AIRL value is represented as a `*mut RtValue` pointer — a boxed, ref-counted heap allocation. All operations (arithmetic, list manipulation, string processing, closures) go through C-ABI runtime helper calls in the `airl-rt` crate. This means every function is JIT-compilable, regardless of what operations it uses.
 
-**What falls back to bytecode:** Functions using lists, closures, pattern matching on variants, or builtin calls. These run on the register-based bytecode VM, which is slower but fully functional.
+**Contract-aware compilation:** Contract assertions (`AssertRequires`, `AssertEnsures`, `AssertInvariant`) compile to native conditional branches. The happy path is a single branch instruction — essentially free with branch prediction. On failure, the runtime stores the error in a thread-local cell and the VM propagates it as a `ContractViolation`.
+
+**Ownership-aware compilation:** Move-tracking opcodes (`MarkMoved`, `CheckNotMoved`) enforce use-after-move detection at runtime for `own`-annotated parameters, complementing the static linearity checker.
 
 ```bash
 # Build with JIT support (recommended)
 cargo build --release --features jit
 
-# Run — JIT is automatic
+# Run — JIT-full is automatic, all functions compile to native code
 cargo run --release --features jit -- run program.airl
 
 # Debug output shows what gets JIT-compiled
 AIRL_JIT_DEBUG=1 cargo run --release --features jit -- run program.airl
 ```
 
-Ineligible functions fall back to bytecode transparently — all existing programs work unchanged.
-
 ## Project Stats
 
-- **~479 tests** across 8 crates
+- **~508 tests** across 8 crates
 - **~19,000 lines** of Rust + **~21,000 lines** of AIRL (bootstrap compiler + tests)
+- **All functions JIT-compiled** — every function compiles to native x86-64 via Cranelift (jit-full)
+- **Contracts always enforced** — native conditional branches in JIT, assertion opcodes in bytecode
+- **Ownership enforced** — static linearity analysis + runtime move tracking
+- **Quantifiers work everywhere** — `forall`/`exists` desugared to `fold`+`range`, no interpreter-only restrictions
 - **Bootstrap compiler** — lexer, parser, type checker, and IR compiler implemented in AIRL (~2,500 lines), running on Rust runtime
 - **Compiler fixpoint verified** — the AIRL compiler produces identical IR whether run interpreted or compiled
 - **Zero external dependencies** for core crates by default (Cranelift behind `jit` feature; Z3 in `airl-solver`)
+- **GPU support available** — `cargo build --features mlir` for MLIR/GPU compilation (requires LLVM 19+, Dockerfile provided)
 
 ## Specification
 
