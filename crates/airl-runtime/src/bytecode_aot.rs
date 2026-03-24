@@ -134,6 +134,9 @@ pub struct RuntimeImports {
     pub int_to_string: FuncId,
     pub float_to_string: FuncId,
     pub string_to_int: FuncId,
+    pub string_to_float: FuncId,
+    pub char_code: FuncId,
+    pub char_from_code: FuncId,
 
     // Timing
     pub time_now: FuncId,
@@ -442,6 +445,9 @@ impl BytecodeAot {
         let int_to_string = declare_import(m, "airl_int_to_string", s1.clone());
         let float_to_string = declare_import(m, "airl_float_to_string", s1.clone());
         let string_to_int = declare_import(m, "airl_string_to_int", s1.clone());
+        let string_to_float = declare_import(m, "airl_string_to_float", s1.clone());
+        let char_code = declare_import(m, "airl_char_code", s1.clone());
+        let char_from_code = declare_import(m, "airl_char_from_code", s1.clone());
 
         // Timing
         let time_now = declare_import(m, "airl_time_now", sig_0_ptr(m));
@@ -487,7 +493,8 @@ impl BytecodeAot {
             append_file, delete_file, delete_dir, rename_file,
             read_dir, create_dir, file_size, is_dir,
             get_args, run_bytecode, compile_to_exe,
-            int_to_string, float_to_string, string_to_int,
+            int_to_string, float_to_string, string_to_int, string_to_float,
+            char_code, char_from_code,
             time_now, getenv, http_post, http_request, json_parse, json_stringify, shell_exec,
             contract_fail,
         }
@@ -576,6 +583,9 @@ impl BytecodeAot {
         m.insert("int-to-string".into(),   rt.int_to_string);
         m.insert("float-to-string".into(), rt.float_to_string);
         m.insert("string-to-int".into(),   rt.string_to_int);
+        m.insert("string-to-float".into(), rt.string_to_float);
+        m.insert("char-code".into(),       rt.char_code);
+        m.insert("char-from-code".into(),  rt.char_from_code);
 
         // Timing
         m.insert("time-now".into(), rt.time_now);

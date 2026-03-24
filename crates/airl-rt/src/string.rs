@@ -606,3 +606,61 @@ mod tests {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Character code conversion
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `char-code(s)` — return the Unicode codepoint of the first character as Int.
+#[no_mangle]
+pub extern "C" fn airl_char_code(s: *mut RtValue) -> *mut RtValue {
+    let sv = unsafe { &*s };
+    let str_val = match &sv.data {
+        RtData::Str(s) => s,
+        _ => rt_error("char-code: expected string"),
+    };
+    match str_val.chars().next() {
+        Some(ch) => rt_int(ch as i64),
+        None => rt_error("char-code: empty string"),
+    }
+}
+
+/// `char-from-code(n)` — return a 1-character string from a Unicode codepoint.
+#[no_mangle]
+pub extern "C" fn airl_char_from_code(n: *mut RtValue) -> *mut RtValue {
+    let nv = unsafe { &*n };
+    let code = match &nv.data {
+        RtData::Int(n) => *n as u32,
+        _ => rt_error("char-from-code: expected integer"),
+    };
+    match char::from_u32(code) {
+        Some(ch) => rt_str(ch.to_string()),
+        None => rt_error(&format!("char-from-code: invalid codepoint {}", code)),
+    }
+}
+
+/// `string-to-float(s)` — parse string as f64, return Result.
+#[no_mangle]
+pub extern "C" fn airl_string_to_float(s: *mut RtValue) -> *mut RtValue {
+    let sv = unsafe { &*s };
+    let str_val = match &sv.data {
+        RtData::Str(s) => s.clone(),
+        _ => rt_error("string-to-float: expected string"),
+    };
+    match str_val.parse::<f64>() {
+        Ok(f) => {
+            let tag = rt_str("Ok".to_string());
+            let inner = crate::value::rt_float(f);
+            let result = crate::variant::airl_make_variant(tag, inner);
+            crate::memory::airl_value_release(tag);
+            result
+        }
+        Err(_) => {
+            let tag = rt_str("Err".to_string());
+            let inner = rt_str("invalid float".to_string());
+            let result = crate::variant::airl_make_variant(tag, inner);
+            crate::memory::airl_value_release(tag);
+            result
+        }
+    }
+}
