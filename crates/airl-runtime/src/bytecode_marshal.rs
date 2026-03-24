@@ -171,6 +171,7 @@ pub fn run_bytecode_program(funcs: &[Value]) -> Result<Value, RuntimeError> {
 ///
 /// This allows AOT-compiled native binaries to execute bytecode at runtime
 /// (needed for the self-hosting compiler pipeline).
+#[cfg(feature = "jit")]
 #[no_mangle]
 pub extern "C" fn airl_run_bytecode(prog: *mut airl_rt::value::RtValue) -> *mut airl_rt::value::RtValue {
     use crate::bytecode_jit_full::BytecodeJitFull;

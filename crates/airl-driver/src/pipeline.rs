@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use airl_syntax::*;
 use airl_syntax::parser;
 use airl_syntax::ast::{Expr, ExprKind, Pattern, PatternKind, LitPattern};
@@ -5,7 +6,6 @@ use airl_runtime::eval::Interpreter;
 use airl_runtime::value::Value;
 use airl_runtime::error::RuntimeError;
 use airl_runtime::ir::*;
-use airl_runtime::ir_vm::IrVm;
 use airl_runtime::bytecode_compiler::BytecodeCompiler;
 use airl_runtime::bytecode_vm::BytecodeVm;
 use airl_types::checker::TypeChecker;
@@ -105,12 +105,17 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
     if lin_checker.has_errors() {
         let lin_diags = lin_checker.drain_diagnostics();
         match mode {
-            PipelineMode::Check => {
+            PipelineMode::Check | PipelineMode::Run => {
+                // Linearity errors are fatal — bytecode VM does not enforce ownership at runtime
+                let mut msgs = Vec::new();
                 for d in lin_diags.errors() {
-                    eprintln!("linearity error: {}", d.message);
+                    msgs.push(d.message.clone());
                 }
+                return Err(PipelineError::Runtime(RuntimeError::Custom(
+                    msgs.join("; ")
+                )));
             }
-            PipelineMode::Run | PipelineMode::Repl => {
+            PipelineMode::Repl => {
                 for d in lin_diags.errors() {
                     eprintln!("warning (linearity): {}", d.message);
                 }
@@ -153,14 +158,28 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
         }
     }
 
-    // Evaluate
-    let mut interp = Interpreter::new();
-    eval_prelude(&mut interp);
-    let mut result = Value::Unit;
-    for top in &tops {
-        result = interp.eval_top_level(top).map_err(PipelineError::Runtime)?;
+    // Compile AST → IR → Bytecode with contracts
+    let (ir_nodes, contracts) = compile_tops_with_contracts(&tops);
+    let mut bc_compiler = BytecodeCompiler::with_prefix("user");
+    let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
+
+    // Create VM, load stdlib, execute
+    let mut vm = BytecodeVm::new();
+    for (src, name) in &[
+        (COLLECTIONS_SOURCE, "collections"),
+        (MATH_SOURCE, "math"),
+        (RESULT_SOURCE, "result"),
+        (STRING_SOURCE, "string"),
+        (MAP_SOURCE, "map"),
+    ] {
+        compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
     }
-    Ok(result)
+
+    for func in funcs {
+        vm.load_function(func);
+    }
+    vm.load_function(main_func);
+    vm.exec_main().map_err(PipelineError::Runtime)
 }
 
 pub fn run_source(source: &str) -> Result<Value, PipelineError> {
@@ -353,84 +372,51 @@ fn compile_top_level(top: &airl_syntax::ast::TopLevel) -> IRNode {
     }
 }
 
-// ── Compiled Pipeline ─────────────────────────────────────
+// ── Shared: AST → IR with contracts ───────────────────────
 
-fn compile_and_load_stdlib(vm: &mut IrVm, source: &str, name: &str) -> Result<(), PipelineError> {
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.lex_all().unwrap_or_else(|e| panic!("{} lexing failed: {}", name, e.message));
-    let sexprs = parse_sexpr_all(&tokens).unwrap_or_else(|e| panic!("{} s-expr parsing failed: {}", name, e.message));
-    let mut diags = Diagnostics::new();
+/// Compile a list of top-level AST nodes to IR, extracting contract clauses as IR+source pairs.
+fn compile_tops_with_contracts(
+    tops: &[airl_syntax::ast::TopLevel],
+) -> (Vec<IRNode>, HashMap<String, (Vec<(IRNode, String)>, Vec<(IRNode, String)>, Vec<(IRNode, String)>)>) {
+    let mut ir_nodes = Vec::new();
+    let mut contracts = HashMap::new();
 
-    let mut tops = Vec::new();
-    for sexpr in &sexprs {
-        match parser::parse_top_level(sexpr, &mut diags) {
-            Ok(top) => tops.push(top),
-            Err(d) => panic!("{} parse error: {}", name, d.message),
-        }
-    }
+    for top in tops {
+        match top {
+            airl_syntax::ast::TopLevel::Defn(f) => {
+                let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
+                ir_nodes.push(IRNode::Func(f.name.clone(), param_names, Box::new(compile_expr(&f.body))));
 
-    let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
-    vm.exec_program(&ir_nodes)
-        .unwrap_or_else(|e| panic!("{} stdlib load failed: {}", name, e));
-    Ok(())
-}
-
-/// Run source through the compiled pipeline: parse → compile → IR VM
-pub fn run_source_compiled(source: &str) -> Result<Value, PipelineError> {
-    // Lex + parse (same as interpreted path)
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
-    let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
-    let mut diags = Diagnostics::new();
-
-    let mut tops = Vec::new();
-    for sexpr in &sexprs {
-        match parser::parse_top_level(sexpr, &mut diags) {
-            Ok(top) => tops.push(top),
-            Err(d) => {
-                let mut diags2 = Diagnostics::new();
-                match parser::parse_expr(sexpr, &mut diags2) {
-                    Ok(expr) => tops.push(airl_syntax::ast::TopLevel::Expr(expr)),
-                    Err(_) => return Err(PipelineError::Syntax(d)),
+                let req: Vec<(IRNode, String)> = f.requires.iter()
+                    .map(|e| (compile_expr(e), e.to_airl()))
+                    .collect();
+                let ens: Vec<(IRNode, String)> = f.ensures.iter()
+                    .map(|e| (compile_expr(e), e.to_airl()))
+                    .collect();
+                let inv: Vec<(IRNode, String)> = f.invariants.iter()
+                    .map(|e| (compile_expr(e), e.to_airl()))
+                    .collect();
+                if !req.is_empty() || !ens.is_empty() || !inv.is_empty() {
+                    contracts.insert(f.name.clone(), (req, ens, inv));
                 }
+            }
+            airl_syntax::ast::TopLevel::Expr(e) => {
+                ir_nodes.push(compile_expr(e));
+            }
+            _ => {
+                ir_nodes.push(IRNode::Nil);
             }
         }
     }
-    if diags.has_errors() {
-        return Err(PipelineError::Parse(diags));
-    }
 
-    // Compile to IR
-    let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
-
-    // Create VM, load stdlib, execute
-    let mut vm = IrVm::new();
-
-    for (src, name) in &[
-        (COLLECTIONS_SOURCE, "collections"),
-        (MATH_SOURCE, "math"),
-        (RESULT_SOURCE, "result"),
-        (STRING_SOURCE, "string"),
-        (MAP_SOURCE, "map"),
-    ] {
-        compile_and_load_stdlib(&mut vm, src, name)?;
-    }
-
-    // Execute user code
-    vm.exec_program(&ir_nodes).map_err(PipelineError::Runtime)
-}
-
-pub fn run_file_compiled(path: &str) -> Result<Value, PipelineError> {
-    let source = std::fs::read_to_string(path)
-        .map_err(|e| PipelineError::Io(e.to_string()))?;
-    run_source_compiled(&source)
+    (ir_nodes, contracts)
 }
 
 // ── Bytecode Pipeline ─────────────────────────────────────
 
-/// Run source through bytecode pipeline: parse → IR compile → bytecode compile → bytecode VM
+/// Run source through bytecode pipeline with contracts: parse → IR compile → bytecode compile → bytecode VM
 pub fn run_source_bytecode(source: &str) -> Result<Value, PipelineError> {
-    // Lex + parse (same as other paths)
+    // Lex + parse
     let mut lexer = Lexer::new(source);
     let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
     let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
@@ -453,15 +439,13 @@ pub fn run_source_bytecode(source: &str) -> Result<Value, PipelineError> {
         return Err(PipelineError::Parse(diags));
     }
 
-    // Compile AST → IR → Bytecode
-    let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
+    // Compile AST → IR with contracts
+    let (ir_nodes, contracts) = compile_tops_with_contracts(&tops);
     let mut bc_compiler = BytecodeCompiler::with_prefix("user");
-    let (funcs, main_func) = bc_compiler.compile_program(&ir_nodes);
+    let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
 
     // Create VM, load stdlib, execute
     let mut vm = BytecodeVm::new();
-
-    // Load stdlib through bytecode path
     for (src, name) in &[
         (COLLECTIONS_SOURCE, "collections"),
         (MATH_SOURCE, "math"),
@@ -472,7 +456,6 @@ pub fn run_source_bytecode(source: &str) -> Result<Value, PipelineError> {
         compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
     }
 
-    // Load user functions and execute
     for func in funcs {
         vm.load_function(func);
     }
@@ -518,7 +501,7 @@ pub fn run_file_bytecode(path: &str) -> Result<Value, PipelineError> {
 /// Run source through JIT pipeline: parse → IR compile → bytecode compile → JIT → execute
 #[cfg(feature = "jit")]
 pub fn run_source_jit(source: &str) -> Result<Value, PipelineError> {
-    // Lex + parse (same as other paths)
+    // Lex + parse
     let mut lexer = Lexer::new(source);
     let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
     let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
@@ -541,10 +524,10 @@ pub fn run_source_jit(source: &str) -> Result<Value, PipelineError> {
         return Err(PipelineError::Parse(diags));
     }
 
-    // Compile AST → IR → Bytecode
-    let ir_nodes: Vec<airl_runtime::ir::IRNode> = tops.iter().map(compile_top_level).collect();
+    // Compile AST → IR → Bytecode with contracts
+    let (ir_nodes, contracts) = compile_tops_with_contracts(&tops);
     let mut bc_compiler = BytecodeCompiler::with_prefix("user");
-    let (funcs, main_func) = bc_compiler.compile_program(&ir_nodes);
+    let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
 
     // Create JIT-enabled VM
     let mut vm = airl_runtime::bytecode_vm::BytecodeVm::new_with_jit();
@@ -583,7 +566,7 @@ pub fn run_file_jit(path: &str) -> Result<Value, PipelineError> {
 /// Run source through JIT-full pipeline: parse → IR compile → bytecode compile → full JIT → execute
 #[cfg(feature = "jit")]
 pub fn run_source_jit_full(source: &str) -> Result<Value, PipelineError> {
-    // Lex + parse (same as other paths)
+    // Lex + parse
     let mut lexer = Lexer::new(source);
     let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
     let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
@@ -606,10 +589,10 @@ pub fn run_source_jit_full(source: &str) -> Result<Value, PipelineError> {
         return Err(PipelineError::Parse(diags));
     }
 
-    // Compile AST → IR → Bytecode
-    let ir_nodes: Vec<airl_runtime::ir::IRNode> = tops.iter().map(compile_top_level).collect();
+    // Compile AST → IR → Bytecode with contracts
+    let (ir_nodes, contracts) = compile_tops_with_contracts(&tops);
     let mut bc_compiler = BytecodeCompiler::with_prefix("user");
-    let (funcs, main_func) = bc_compiler.compile_program(&ir_nodes);
+    let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
 
     // Create full-JIT-enabled VM
     let mut vm = airl_runtime::bytecode_vm::BytecodeVm::new_with_full_jit();

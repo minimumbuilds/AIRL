@@ -56,6 +56,11 @@ pub enum Op {
 
     // Error handling
     TryUnwrap,      // dst, src, err_offset    -- unwrap Ok or jump to error
+
+    // Contract assertions
+    AssertRequires, // _, a(bool_reg), b(clause_source_idx) -- error if false
+    AssertEnsures,  // _, a(bool_reg), b(clause_source_idx) -- error if false
+    AssertInvariant,// _, a(bool_reg), b(clause_source_idx) -- error if false
 }
 
 /// A single bytecode instruction — fixed size for cache-friendly execution.

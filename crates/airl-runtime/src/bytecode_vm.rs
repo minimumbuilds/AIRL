@@ -421,6 +421,49 @@ impl BytecodeVm {
                     }
                 }
 
+                // Contract assertions — check a boolean register, error if not true
+                Op::AssertRequires | Op::AssertEnsures | Op::AssertInvariant => {
+                    let frame = self.call_stack.last().unwrap();
+                    let bool_val = frame.registers[instr.a as usize].clone();
+                    let is_true = matches!(&bool_val, Value::Bool(true));
+                    if !is_true {
+                        let f = self.functions.get(&func_name).unwrap();
+                        let fn_name_str = match &f.constants[instr.dst as usize] {
+                            Value::Str(s) => s.clone(),
+                            _ => func_name.clone(),
+                        };
+                        let clause_source = match &f.constants[instr.b as usize] {
+                            Value::Str(s) => s.clone(),
+                            _ => "?".to_string(),
+                        };
+                        let contract_kind = match instr.op {
+                            Op::AssertRequires => airl_contracts::violation::ContractKind::Requires,
+                            Op::AssertEnsures => airl_contracts::violation::ContractKind::Ensures,
+                            _ => airl_contracts::violation::ContractKind::Invariant,
+                        };
+                        // Capture parameter bindings from the current frame
+                        let frame = self.call_stack.last().unwrap();
+                        let arity = f.arity as usize;
+                        let mut bindings = Vec::new();
+                        // We don't have param names in BytecodeFunc, so use positional names
+                        for i in 0..arity {
+                            if i < frame.registers.len() {
+                                bindings.push((format!("arg{}", i), format!("{}", frame.registers[i])));
+                            }
+                        }
+                        return Err(RuntimeError::ContractViolation(
+                            airl_contracts::violation::ContractViolation {
+                                function: fn_name_str,
+                                contract_kind,
+                                clause_source,
+                                bindings,
+                                evaluated: format!("{}", bool_val),
+                                span: airl_syntax::Span::dummy(),
+                            }
+                        ));
+                    }
+                }
+
                 // Function calls — push new frame and let the main loop execute it
                 Op::Call => {
                     let name = {
@@ -449,6 +492,31 @@ impl BytecodeVm {
                     #[cfg(feature = "jit")]
                     if let Some(ref jit) = self.jit {
                         if let Some(result) = jit.try_call_native(&name, &args) {
+                            // Check if a contract violation was signaled via the thread-local error cell
+                            if let Some((kind, fn_name_idx, clause_idx)) = crate::bytecode_jit::take_jit_contract_error() {
+                                let f = self.functions.get(&name);
+                                let fn_name_str = f.and_then(|f| f.constants.get(fn_name_idx as usize))
+                                    .and_then(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
+                                    .unwrap_or_else(|| name.clone());
+                                let clause_source = f.and_then(|f| f.constants.get(clause_idx as usize))
+                                    .and_then(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
+                                    .unwrap_or_else(|| "?".into());
+                                let contract_kind = match kind {
+                                    0 => airl_contracts::violation::ContractKind::Requires,
+                                    1 => airl_contracts::violation::ContractKind::Ensures,
+                                    _ => airl_contracts::violation::ContractKind::Invariant,
+                                };
+                                return Err(RuntimeError::ContractViolation(
+                                    airl_contracts::violation::ContractViolation {
+                                        function: fn_name_str,
+                                        contract_kind,
+                                        clause_source,
+                                        bindings: vec![],
+                                        evaluated: "false".into(),
+                                        span: airl_syntax::Span::dummy(),
+                                    }
+                                ));
+                            }
                             match result {
                                 Ok(val) => {
                                     self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = val;

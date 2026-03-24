@@ -3,7 +3,10 @@
 //!
 //! Compiles eligible BytecodeFunc instructions to native x86-64 via Cranelift.
 //! Eligible = primitive-typed functions with no list/variant/closure/builtin opcodes.
+//! Contract assertions compile to a single conditional branch (happy path) with
+//! a call to airl_jit_contract_fail on the sad path.
 
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use cranelift_codegen::ir::{self, condcodes::{FloatCC, IntCC}, types, AbiParam, InstBuilder, MemFlags};
@@ -14,6 +17,31 @@ use cranelift_module::{Linkage, Module};
 use crate::bytecode::*;
 use crate::value::Value;
 use crate::error::RuntimeError;
+
+// ── Contract violation signaling from JIT to VM ──────────────────────────────
+
+/// Thread-local error cell for JIT contract violations.
+/// JIT-compiled code calls airl_jit_contract_fail which stores (kind, fn_name_idx, clause_idx).
+/// The VM checks this after a JIT call returns.
+thread_local! {
+    static JIT_CONTRACT_ERROR: RefCell<Option<(u8, u16, u16)>> = const { RefCell::new(None) };
+}
+
+/// C-ABI function called by JIT-compiled code when a contract assertion fails.
+/// Stores error info in thread-local cell and returns a sentinel value.
+/// kind: 0=Requires, 1=Ensures, 2=Invariant
+#[no_mangle]
+pub extern "C" fn airl_jit_contract_fail(kind: u64, fn_name_idx: u64, clause_idx: u64) -> u64 {
+    JIT_CONTRACT_ERROR.with(|cell| {
+        *cell.borrow_mut() = Some((kind as u8, fn_name_idx as u16, clause_idx as u16));
+    });
+    u64::MAX // sentinel — VM checks error cell when it sees this
+}
+
+/// Check if a JIT contract error was signaled and extract it.
+pub fn take_jit_contract_error() -> Option<(u8, u16, u16)> {
+    JIT_CONTRACT_ERROR.with(|cell| cell.borrow_mut().take())
+}
 
 /// Type hint for marshaling native results back to Value.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -31,8 +59,10 @@ pub struct BytecodeJit {
 
 impl BytecodeJit {
     pub fn new() -> Result<Self, String> {
-        let builder = cranelift_jit::JITBuilder::new(cranelift_module::default_libcall_names())
+        let mut builder = cranelift_jit::JITBuilder::new(cranelift_module::default_libcall_names())
             .map_err(|e| format!("JIT builder error: {}", e))?;
+        // Register the contract fail helper so Cranelift can resolve it at link time
+        builder.symbol("airl_jit_contract_fail", airl_jit_contract_fail as *const u8);
         let module = JITModule::new(builder);
         Ok(Self {
             module,
@@ -52,6 +82,8 @@ impl BytecodeJit {
                 Op::MatchWild | Op::TryUnwrap | Op::CallBuiltin | Op::CallReg => {
                     return false;
                 }
+                // Contract assertions are JIT-compilable (one conditional branch)
+                Op::AssertRequires | Op::AssertEnsures | Op::AssertInvariant => {}
                 Op::Call => {
                     // Check if the call target is JIT-eligible
                     let name = match &func.constants[instr.a as usize] {
@@ -196,6 +228,18 @@ impl BytecodeJit {
                 }
             }
         }
+
+        // Declare contract fail helper (3 I64 params → 1 I64 return)
+        let contract_fail_id = {
+            let mut fail_sig = self.module.make_signature();
+            fail_sig.params.push(AbiParam::new(types::I64)); // kind
+            fail_sig.params.push(AbiParam::new(types::I64)); // fn_name_idx
+            fail_sig.params.push(AbiParam::new(types::I64)); // clause_idx
+            fail_sig.returns.push(AbiParam::new(types::I64)); // sentinel
+            self.module
+                .declare_function("airl_jit_contract_fail", Linkage::Import, &fail_sig)
+                .map_err(|e| format!("contract_fail declare: {}", e))?
+        };
 
         // Type hints per register — used to decide int vs float ops.
         let reg_count = func.register_count as usize;
@@ -557,6 +601,38 @@ impl BytecodeJit {
                     // as block params and cannot be re-entered with an empty-arg jump).
                     builder.ins().jump(loop_block, &[]);
                     last_was_terminator = true;
+                }
+
+                // ── Contract assertions ──────────────────────────────────
+                // Happy path: one conditional branch (predicted taken).
+                // Sad path: call runtime helper, return sentinel.
+                Op::AssertRequires | Op::AssertEnsures | Op::AssertInvariant => {
+                    let bool_reg = instr.a as usize;
+                    let bool_val = builder.use_var(vars[bool_reg]);
+
+                    let fail_block = builder.create_block();
+                    let cont_block = builder.create_block();
+
+                    // if bool_val != 0 (true) → continue; else → fail
+                    builder.ins().brif(bool_val, cont_block, &[], fail_block, &[]);
+
+                    // Fail block: call airl_jit_contract_fail(kind, fn_name_idx, clause_idx)
+                    builder.switch_to_block(fail_block);
+                    let kind_val = builder.ins().iconst(types::I64, match instr.op {
+                        Op::AssertRequires => 0,
+                        Op::AssertEnsures => 1,
+                        _ => 2, // Invariant
+                    });
+                    let fn_idx_val = builder.ins().iconst(types::I64, instr.dst as i64);
+                    let clause_val = builder.ins().iconst(types::I64, instr.b as i64);
+                    let fail_ref = self.module.declare_func_in_func(contract_fail_id, builder.func);
+                    let call = builder.ins().call(fail_ref, &[kind_val, fn_idx_val, clause_val]);
+                    let sentinel = builder.inst_results(call)[0];
+                    builder.ins().return_(&[sentinel]);
+
+                    // Continue block: contract passed
+                    builder.switch_to_block(cont_block);
+                    last_was_terminator = false;
                 }
 
                 // Any other opcode should have been caught by is_eligible.
