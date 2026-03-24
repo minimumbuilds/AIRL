@@ -1,0 +1,22 @@
+CC ?= cc
+CFLAGS = -O2 -Wall -Wextra -std=c99 -D_POSIX_C_SOURCE=200809L
+
+SRCS = airl_rt.c airl_rt_list.c airl_rt_string.c airl_rt_map.c airl_rt_variant.c
+OBJS = $(SRCS:.c=.o)
+
+libairl_rt_c.a: $(OBJS)
+	ar rcs $@ $^
+
+%.o: %.c airl_rt.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+test: test_rt
+	./test_rt
+
+test_rt: test_rt.c $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ -lm
+
+clean:
+	rm -f *.o libairl_rt_c.a test_rt
+
+.PHONY: clean test
