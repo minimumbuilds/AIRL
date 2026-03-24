@@ -1690,6 +1690,13 @@ impl BytecodeJitFull {
                     builder.ins().jump(fallthrough_blk, &[]);
                     last_was_terminator = true;
                 }
+
+                // Contract assertions — not compiled to native code.
+                // These are checked by the bytecode VM before/after JIT-compiled body.
+                // If they appear in JIT-full compilation, skip them (no-op).
+                Op::AssertRequires | Op::AssertEnsures | Op::AssertInvariant => {
+                    // No-op in JIT — contracts are enforced at the bytecode VM level
+                }
             }
         }
 

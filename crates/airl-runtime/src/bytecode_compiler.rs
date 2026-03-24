@@ -766,6 +766,123 @@ impl BytecodeCompiler {
         functions.extend(self.compiled_lambdas.drain(..));
         (functions, main_func)
     }
+
+    /// Compile a function with contract checking (requires/ensures/invariants).
+    /// Contract clauses are compiled as IR expressions and become assertion opcodes.
+    /// `fn_name_for_error` is used in ContractViolation error messages.
+    /// `param_names_for_bindings` maps register indices to param names for error reporting.
+    pub fn compile_function_with_contracts(
+        &mut self,
+        name: &str,
+        params: &[String],
+        body: &IRNode,
+        requires: &[(IRNode, String)],   // (clause_ir, clause_source_text)
+        ensures: &[(IRNode, String)],
+        invariants: &[(IRNode, String)],
+    ) -> BytecodeFunc {
+        let mut compiler = BytecodeCompiler::new();
+        compiler.lambda_counter = self.lambda_counter;
+        compiler.lambda_prefix = self.lambda_prefix.clone();
+
+        // Bind params to first N registers
+        for (i, param) in params.iter().enumerate() {
+            compiler.locals.insert(param.clone(), i as u16);
+            compiler.next_reg = (i as u16) + 1;
+            compiler.max_reg = compiler.next_reg;
+        }
+
+        // Store function name as a constant for error messages
+        let fn_name_idx = compiler.add_constant(Value::Str(name.to_string()));
+
+        // Compile :requires — check preconditions before body
+        for (clause_ir, clause_source) in requires {
+            let clause_src_idx = compiler.add_constant(Value::Str(clause_source.clone()));
+            let bool_reg = compiler.alloc_reg();
+            compiler.compile_expr(clause_ir, bool_reg);
+            // Pack fn_name_idx into dst field for error reporting
+            compiler.emit(Op::AssertRequires, fn_name_idx, bool_reg, clause_src_idx);
+            compiler.free_reg_to(bool_reg);
+        }
+
+        // Compile body
+        let dst = compiler.alloc_reg();
+        compiler.compile_expr_tail(body, dst, name);
+
+        // Bind "result" for ensures/invariant clauses
+        compiler.locals.insert("result".to_string(), dst);
+
+        // Compile :invariant — check after body, before ensures
+        for (clause_ir, clause_source) in invariants {
+            let clause_src_idx = compiler.add_constant(Value::Str(clause_source.clone()));
+            let bool_reg = compiler.alloc_reg();
+            compiler.compile_expr(clause_ir, bool_reg);
+            compiler.emit(Op::AssertInvariant, fn_name_idx, bool_reg, clause_src_idx);
+            compiler.free_reg_to(bool_reg);
+        }
+
+        // Compile :ensures — check postconditions
+        for (clause_ir, clause_source) in ensures {
+            let clause_src_idx = compiler.add_constant(Value::Str(clause_source.clone()));
+            let bool_reg = compiler.alloc_reg();
+            compiler.compile_expr(clause_ir, bool_reg);
+            compiler.emit(Op::AssertEnsures, fn_name_idx, bool_reg, clause_src_idx);
+            compiler.free_reg_to(bool_reg);
+        }
+
+        compiler.locals.remove("result");
+
+        compiler.emit(Op::Return, 0, dst, 0);
+
+        self.lambda_counter = compiler.lambda_counter;
+        self.compiled_lambdas.extend(compiler.compiled_lambdas.drain(..));
+
+        BytecodeFunc {
+            name: name.to_string(),
+            arity: params.len() as u16,
+            register_count: compiler.max_reg,
+            capture_count: 0,
+            instructions: compiler.instructions,
+            constants: compiler.constants,
+        }
+    }
+
+    /// Compile a program with contract support. `contracts` maps function names to their
+    /// (requires, ensures, invariants) clauses as (IR, source_text) pairs.
+    pub fn compile_program_with_contracts(
+        &mut self,
+        nodes: &[IRNode],
+        contracts: &HashMap<String, (Vec<(IRNode, String)>, Vec<(IRNode, String)>, Vec<(IRNode, String)>)>,
+    ) -> (Vec<BytecodeFunc>, BytecodeFunc) {
+        let mut functions = Vec::new();
+        let mut main_nodes = Vec::new();
+
+        for node in nodes {
+            match node {
+                IRNode::Func(name, params, body) => {
+                    if let Some((req, ens, inv)) = contracts.get(name) {
+                        let func = self.compile_function_with_contracts(name, params, body, req, ens, inv);
+                        functions.push(func);
+                    } else {
+                        let func = self.compile_function(name, params, body);
+                        functions.push(func);
+                    }
+                }
+                _ => main_nodes.push(node.clone()),
+            }
+        }
+
+        let main_body = if main_nodes.is_empty() {
+            IRNode::Nil
+        } else if main_nodes.len() == 1 {
+            main_nodes.into_iter().next().unwrap()
+        } else {
+            IRNode::Do(main_nodes)
+        };
+
+        let main_func = self.compile_function("__main__", &[], &main_body);
+        functions.extend(self.compiled_lambdas.drain(..));
+        (functions, main_func)
+    }
 }
 
 #[cfg(test)]

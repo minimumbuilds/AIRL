@@ -1,8 +1,6 @@
-use airl_driver::pipeline::{run_file, run_file_compiled, run_file_bytecode, check_file, format_diagnostic_with_source, PipelineError};
+use airl_driver::pipeline::{run_file, run_file_bytecode, check_file, format_diagnostic_with_source, PipelineError};
 #[cfg(feature = "jit")]
 use airl_driver::pipeline::run_file_jit;
-#[cfg(feature = "jit")]
-use airl_driver::pipeline::run_file_jit_full;
 use airl_driver::fmt::format_source;
 use airl_agent::transport::Transport;
 
@@ -24,7 +22,7 @@ fn main() {
             Some("agent") => cmd_agent(&args[2..]),
             Some("call") => cmd_call(&args[2..]),
             Some("fmt") => cmd_fmt(&args[2..]),
-            Some("--version") | Some("-V") => println!("airl 0.1.0"),
+            Some("--version") | Some("-V") => println!("airl 0.2.0"),
             _ => print_usage(),
         }
     }).expect("failed to spawn main thread");
@@ -33,52 +31,32 @@ fn main() {
 
 fn cmd_run(args: &[String]) {
     if args.is_empty() {
-        eprintln!("Usage: airl run [--compiled|--bytecode|--jit|--jit-full] <file.airl>");
+        eprintln!("Usage: airl run [--jit|--jit-full|--interpreted] <file.airl>");
         std::process::exit(1);
     }
 
     let (mode, path) = match args[0].as_str() {
-        "--compiled" => {
-            if args.len() < 2 { eprintln!("Usage: airl run --compiled <file.airl>"); std::process::exit(1); }
-            ("compiled", &args[1])
+        "--interpreted" => {
+            if args.len() < 2 { eprintln!("Usage: airl run --interpreted <file.airl>"); std::process::exit(1); }
+            ("interpreted", &args[1])
         }
         "--bytecode" => {
             if args.len() < 2 { eprintln!("Usage: airl run --bytecode <file.airl>"); std::process::exit(1); }
             ("bytecode", &args[1])
         }
-        "--jit" => {
-            if args.len() < 2 { eprintln!("Usage: airl run --jit <file.airl>"); std::process::exit(1); }
-            ("jit", &args[1])
-        }
-        "--jit-full" => {
-            if args.len() < 2 { eprintln!("Usage: airl run --jit-full <file.airl>"); std::process::exit(1); }
-            ("jit-full", &args[1])
-        }
-        _ => ("interpreted", &args[0]),
+        _ => ("default", &args[0]),
     };
 
     let result = match mode {
-        "compiled" => run_file_compiled(path),
+        "interpreted" => run_file(path),
         "bytecode" => run_file_bytecode(path),
-        "jit" => {
+        _ => {
+            // Default: JIT with automatic bytecode fallback for ineligible functions
             #[cfg(feature = "jit")]
             { run_file_jit(path) }
             #[cfg(not(feature = "jit"))]
-            {
-                eprintln!("JIT not available: rebuild with --features jit");
-                std::process::exit(1);
-            }
+            { run_file_bytecode(path) }
         }
-        "jit-full" => {
-            #[cfg(feature = "jit")]
-            { run_file_jit_full(path) }
-            #[cfg(not(feature = "jit"))]
-            {
-                eprintln!("JIT not available: rebuild with --features jit");
-                std::process::exit(1);
-            }
-        }
-        _ => run_file(path),
     };
 
     match result {
@@ -438,12 +416,12 @@ fn print_pipeline_error(err: &PipelineError, path: &str) {
 
 fn print_usage() {
     println!(
-        "airl 0.1.0 — The AIRL Language
+        "airl 0.2.0 — The AIRL Language
 
 Usage: airl <command> [args]
 
 Commands:
-  run <file>       Run an AIRL source file (--compiled for IR VM, --bytecode for register VM, --jit for Cranelift JIT, --jit-full for full Cranelift JIT)
+  run <file>       Run an AIRL source file (JIT-compiled with contracts)
   check <file>     Parse and check a file without running
   repl             Start the interactive REPL
   agent <file>     Run an agent worker (--listen <endpoint>)

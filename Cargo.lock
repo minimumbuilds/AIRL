@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "adler2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "airl-agent"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "airl-contracts",
  "airl-runtime",
@@ -23,7 +29,7 @@ dependencies = [
 
 [[package]]
 name = "airl-codegen"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "airl-syntax",
  "airl-types",
@@ -36,7 +42,7 @@ dependencies = [
 
 [[package]]
 name = "airl-contracts"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "airl-syntax",
  "airl-types",
@@ -44,7 +50,7 @@ dependencies = [
 
 [[package]]
 name = "airl-driver"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "airl-agent",
  "airl-contracts",
@@ -56,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "airl-mlir"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cudarc",
  "melior",
@@ -64,11 +70,11 @@ dependencies = [
 
 [[package]]
 name = "airl-rt"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "airl-runtime"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "airl-codegen",
  "airl-contracts",
@@ -80,12 +86,14 @@ dependencies = [
  "cranelift-frontend",
  "cranelift-jit",
  "cranelift-module",
+ "cranelift-object",
+ "object 0.36.7",
  "target-lexicon",
 ]
 
 [[package]]
 name = "airl-solver"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "airl-syntax",
  "z3",
@@ -93,11 +101,11 @@ dependencies = [
 
 [[package]]
 name = "airl-syntax"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "airl-types"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "airl-syntax",
 ]
@@ -471,10 +479,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "cranelift-object"
+version = "0.130.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9809d2d419cd18f17377f4ce64a7ad22eeda0d042c08833d3796657f1ddebc82"
+dependencies = [
+ "anyhow",
+ "cranelift-codegen",
+ "cranelift-control",
+ "cranelift-module",
+ "log",
+ "object 0.38.1",
+ "target-lexicon",
+]
+
+[[package]]
 name = "cranelift-srcgen"
 version = "0.130.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8594dc6bb4860fa8292f1814c76459dbfb933e1978d8222de6380efce45c7cee"
+
+[[package]]
+name = "crc32fast"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
+dependencies = [
+ "cfg-if",
+]
 
 [[package]]
 name = "cudarc"
@@ -558,6 +590,16 @@ name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
+
+[[package]]
+name = "flate2"
+version = "1.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
+dependencies = [
+ "crc32fast",
+ "miniz_oxide",
+]
 
 [[package]]
 name = "fnv"
@@ -757,6 +799,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
+name = "miniz_oxide"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+dependencies = [
+ "adler2",
+ "simd-adler32",
+]
+
+[[package]]
 name = "mlir-sys"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -773,6 +825,29 @@ checksum = "d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a"
 dependencies = [
  "memchr",
  "minimal-lexical",
+]
+
+[[package]]
+name = "object"
+version = "0.36.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62948e14d923ea95ea2c7c86c71013138b66525b86bdc08d2dcc262bdb497b87"
+dependencies = [
+ "flate2",
+ "memchr",
+ "ruzstd",
+]
+
+[[package]]
+name = "object"
+version = "0.38.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "271638cd5fa9cca89c4c304675ca658efc4e64a66c716b7cfe1afb4b9611dbbc"
+dependencies = [
+ "crc32fast",
+ "hashbrown 0.16.1",
+ "indexmap",
+ "memchr",
 ]
 
 [[package]]
@@ -908,6 +983,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
+name = "ruzstd"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fad02996bfc73da3e301efe90b1837be9ed8f4a462b6ed410aa35d00381de89f"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "serde"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -943,6 +1027,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
+name = "simd-adler32"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e320a6c5ad31d271ad523dcf3ad13e2767ad8b1cb8f047f75a8aeaf8da139da2"
+
+[[package]]
 name = "slug"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -963,6 +1053,12 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "static_assertions"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "strsim"
@@ -1033,6 +1129,16 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
+
+[[package]]
+name = "twox-hash"
+version = "1.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
+dependencies = [
+ "cfg-if",
+ "static_assertions",
+]
 
 [[package]]
 name = "typed-arena"
