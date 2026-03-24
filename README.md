@@ -60,7 +60,7 @@ block2:
 
 **3. The abstraction gap determines the defect rate.** The further generated code is from intent, the more places bugs hide. "Divide safely, return Err on zero" → AIRL is a small step. The same intent → register allocation + SSA + calling conventions is a large step with many more failure modes. Current LLMs are trained on high-level code and generate it with far lower error rates than low-level IR.
 
-**4. AIRL already compiles to native code — the AI doesn't need to.** The runtime transparently JIT-compiles eligible functions to native x86-64 via Cranelift. AI generates high-level, verified AIRL once; the toolchain picks the fastest execution strategy automatically.
+**4. AIRL already compiles to native code — the AI doesn't need to.** The toolchain transparently compiles all functions to native x86-64 via Cranelift (JIT at load time, or AOT to standalone executables). Eligible pure-arithmetic functions compile to raw CPU instructions — 42x faster than Python. AI generates high-level, verified AIRL once; the toolchain picks the fastest execution strategy automatically.
 
 ## How Does AIRL's Safety Compare to Rust?
 
@@ -153,24 +153,33 @@ This is why AIRL makes contracts **grammar-level mandatory** — the parser lite
 
 ### Compilation & Execution
 
-AIRL v0.2 uses a single execution pipeline. There are no mode flags — `airl run` always picks the fastest strategy:
+AIRL v0.2 supports two execution modes:
 
+**`airl run` (JIT)** — All functions compiled to native x86-64 via Cranelift at load time, using the `airl-rt` C-ABI runtime library for value operations.
+
+**`airl compile` (AOT)** — Produces standalone native executables with a two-tier compilation strategy:
+- **Unboxed tier:** Eligible functions (pure arithmetic, no lists/closures/builtins) compile to raw `i64`/`f64` register operations — single CPU instructions, no heap allocation. fib(35): 56ms (42x faster than Python).
+- **Boxed tier:** Functions using lists, variants, closures, or builtins compile with `*mut RtValue` heap-allocated values via `airl-rt` runtime calls.
+- **Boundary marshaling:** When boxed code calls unboxed code, values are automatically extracted/reboxed at the call boundary.
+
+Both modes share the same frontend pipeline:
 1. **Source → AST** — Hand-written recursive descent parser (LL(1))
 2. **Static analysis** — Type checking, linearity checking, Z3 contract verification
 3. **AST → IR → Bytecode** — Contracts compiled as assertion opcodes, ownership annotations compiled as move-tracking opcodes
-4. **JIT-full compilation** — **All** functions compiled to native x86-64 via Cranelift, using the `airl-rt` C-ABI runtime library for value operations. Contract assertions and ownership checks become native conditional branches. Quantifier expressions (`forall`/`exists`) are desugared to stdlib `fold`+`range` loops.
+4. **Cranelift compilation** — JIT (in-memory) or AOT (object file → link → native executable)
 
-Contracts are **always enforced** — in JIT-compiled native code, every contract assertion is a single conditional branch (essentially free on the happy path). Ownership is enforced both statically (linearity checker) and at runtime (move-tracking opcodes). There is no "fast but unsafe" mode.
+Contracts are **always enforced** — in both JIT and AOT compiled native code, every contract assertion is a single conditional branch (essentially free on the happy path). Ownership is enforced both statically (linearity checker) and at runtime (move-tracking opcodes). There is no "fast but unsafe" mode.
 
 ### Performance
 
 | Benchmark | AIRL v0.2 | Python | Ratio |
 |-----------|-----------|--------|-------|
-| 25 trivial tasks (avg) | 7ms | 57ms | **8x faster** |
-| fib(30) | 13ms | 250ms | **19x faster** |
+| fib(35) AOT native | 56ms | 2,335ms | **42x faster** |
+| fact(20) x 100K AOT | 6ms | 248ms | **41x faster** |
+| 21/25 trivial tasks (AOT) | 1ms | 40ms | **40x faster** |
 | Code size (25 tasks) | 10,519 chars | 18,342 chars | **43% smaller** |
 
-AIRL is faster than Python on both startup-dominated (native binary vs CPython import overhead) and compute-heavy (JIT-compiled native code vs CPython bytecode) workloads, while enforcing contracts on every function call.
+AIRL v0.2 AOT uses a two-tier compilation strategy: eligible pure-arithmetic functions compile to raw CPU instructions (no heap allocation), while functions using lists, closures, or builtins compile with boxed runtime calls. The unboxed fast path achieves C-like performance on compute-heavy workloads, while enforcing contracts on every function call.
 
 ### Bootstrap Compiler (Self-Compiling)
 
@@ -185,7 +194,7 @@ AIRL includes a self-compiling bootstrap compiler — the compiler's front-end p
 
 **Fixpoint verified:** The compiled compiler produces identical IR to the interpreted compiler — the compiler can compile itself and the output is self-consistent.
 
-**Runtime dependency:** The compiled output runs on the Rust runtime, which provides ~48 primitive builtins (`+`, `head`, `char-at`, `map-get`, `print`, etc.) as `extern "C"` functions in the `airl-rt` crate. This is analogous to a C compiler that needs `libc` — the compiler is self-compiling, the output just needs a runtime library to execute. With jit-full already linking against `airl-rt` at JIT time, an AOT mode emitting object files would produce standalone native binaries.
+**Runtime dependency:** The compiled output links against `libairl_rt.a`, which provides ~48 primitive builtins (`+`, `head`, `char-at`, `map-get`, `print`, etc.) as `extern "C"` functions. This is analogous to a C compiler that needs `libc` — the compiler is self-compiling, the output just needs a runtime library to execute. The AOT mode emits object files via Cranelift `ObjectModule` and links with `libairl_rt.a` to produce standalone native executables.
 
 To build and run the bootstrap compiler tests:
 
@@ -225,6 +234,7 @@ cargo run --release --features jit -- run bootstrap/fixpoint_test.airl
 ### CLI
 ```
 airl run <file>              Run an AIRL source file (JIT-compiled with contracts)
+airl compile <file> -o <out> AOT compile to standalone native executable
 airl check <file>            Type-check and verify contracts
 airl repl                    Interactive REPL with :env introspection
 airl agent <file>            Run as an agent worker (--listen tcp:HOST:PORT | stdio)
@@ -238,12 +248,12 @@ airl fmt <file>              Pretty-print an AIRL source file
 
 ```bash
 git clone <repo-url> && cd AIRL
-cargo build --release --features jit
+cargo build --release --features jit,aot
 ```
 
 Requirements: Rust 1.85+, CMake, C++ compiler, Python 3 (for Z3 compilation on first build, ~5-15 min).
 
-Building without `--features jit` produces a bytecode-only binary (no Cranelift dependency, no native code compilation). All features work, but compute-heavy functions will be slower.
+Building without `--features jit,aot` produces a bytecode-only binary (no Cranelift dependency, no native code compilation). All features work, but compute-heavy functions will be slower.
 
 ### Hello World
 
@@ -279,6 +289,13 @@ cargo run --release --features jit -- run examples/02-functions-and-contracts/fu
 
 # Formally verify contracts with Z3
 cargo run --release --features jit -- check examples/03-verified-arithmetic/verified_arithmetic.airl
+```
+
+### Compile to Native Binary
+
+```bash
+cargo run --release --features jit,aot -- compile examples/02-functions-and-contracts/functions_and_contracts.airl -o my_program
+./my_program   # standalone native executable — no AIRL toolchain needed
 ```
 
 ### Type Check
@@ -375,14 +392,17 @@ AIRL Source
 [IR Compiler]         AST → IR (intermediate representation)
     │
     ▼
-[Bytecode Compiler]   IR → register-based bytecode (contracts compiled as assertion opcodes)
+[Bytecode Compiler]   IR → register-based bytecode (contracts as assertion opcodes)
     │
-    ▼
-[Cranelift JIT-Full]  ALL functions → native x86-64 via airl-rt runtime
-    │                 Contract assertions → native conditional branches
-    │                 Ownership checks → native move tracking
-    ▼
-[Execution]           Native code (all functions JIT-compiled)
+    ├──── airl run ────► [Cranelift JIT-Full]  ALL functions → native x86-64
+    │                     Contract assertions → native conditional branches
+    │                     Ownership checks → native move tracking
+    │
+    └──── airl compile ► [Cranelift AOT]  Two-tier native compilation
+                          Eligible (pure arithmetic) → raw i64/f64 register ops
+                          Ineligible (lists/closures) → boxed *mut RtValue calls
+                          Boundary marshaling at cross-tier call sites
+                          Links with libairl_rt.a → standalone native executable
 ```
 
 ### Crate Structure
@@ -457,25 +477,40 @@ Tensor builtins: `tensor.zeros`, `tensor.ones`, `tensor.rand`, `tensor.identity`
 
 `tensor.add`, `tensor.mul`, and `tensor.matmul` are JIT-compiled to native loops via Cranelift.
 
-## JIT Compilation
+## JIT & AOT Compilation
 
-AIRL's JIT-full compiler compiles **every function** to native x86-64 via Cranelift at load time, before execution starts. No flags or annotations are needed — the runtime compiles all functions automatically.
+AIRL has two native compilation backends, both using Cranelift:
 
-**How it works:** Every AIRL value is represented as a `*mut RtValue` pointer — a boxed, ref-counted heap allocation. All operations (arithmetic, list manipulation, string processing, closures) go through C-ABI runtime helper calls in the `airl-rt` crate. This means every function is JIT-compilable, regardless of what operations it uses.
+### JIT (`airl run`)
 
-**Contract-aware compilation:** Contract assertions (`AssertRequires`, `AssertEnsures`, `AssertInvariant`) compile to native conditional branches. The happy path is a single branch instruction — essentially free with branch prediction. On failure, the runtime stores the error in a thread-local cell and the VM propagates it as a `ContractViolation`.
+Compiles **every function** to native x86-64 at load time. Every AIRL value is a `*mut RtValue` pointer — a boxed, ref-counted heap allocation. All operations go through C-ABI runtime helper calls in `airl-rt`.
+
+### AOT (`airl compile`)
+
+Produces **standalone native executables** with a two-tier compilation strategy:
+
+- **Unboxed tier:** Eligible functions (pure arithmetic, no lists/variants/closures/builtins, arity ≤ 8) compile to raw `i64`/`f64` register operations. Arithmetic is a single CPU instruction — no malloc, no function calls. fib(35): **56ms** (42x faster than Python, ~290x faster than boxed).
+- **Boxed tier:** Everything else compiles with `*mut RtValue` runtime calls, same as JIT.
+- **Boundary marshaling:** When boxed code calls an unboxed function, args are extracted via `airl_as_int_raw`, the unboxed function is called with raw values, and the result is reboxed using the callee's return type hint.
+
+**Contract-aware compilation:** Contract assertions compile to native conditional branches in both tiers. The happy path is a single branch instruction — essentially free with branch prediction. On failure, the runtime signals a `ContractViolation`.
 
 **Ownership-aware compilation:** Move-tracking opcodes (`MarkMoved`, `CheckNotMoved`) enforce use-after-move detection at runtime for `own`-annotated parameters, complementing the static linearity checker.
 
 ```bash
-# Build with JIT support (recommended)
-cargo build --release --features jit
+# Build with JIT + AOT support
+cargo build --release --features jit,aot
 
-# Run — JIT-full is automatic, all functions compile to native code
+# JIT — all functions compile to native code at load time
 cargo run --release --features jit -- run program.airl
 
-# Debug output shows what gets JIT-compiled
+# AOT — produce standalone native executable
+cargo run --release --features jit,aot -- compile program.airl -o program
+./program   # runs without cargo or the AIRL toolchain
+
+# Debug output
 AIRL_JIT_DEBUG=1 cargo run --release --features jit -- run program.airl
+AIRL_AOT_DEBUG=1 cargo run --release --features jit,aot -- compile program.airl -o program
 ```
 
 ## Project Stats
@@ -483,12 +518,14 @@ AIRL_JIT_DEBUG=1 cargo run --release --features jit -- run program.airl
 - **~508 tests** across 8 crates
 - **~19,000 lines** of Rust + **~21,000 lines** of AIRL (bootstrap compiler + tests)
 - **All functions JIT-compiled** — every function compiles to native x86-64 via Cranelift (jit-full)
-- **Contracts always enforced** — native conditional branches in JIT, assertion opcodes in bytecode
+- **AOT produces standalone native executables** — `airl compile` with two-tier unboxed/boxed compilation
+- **Unboxed AOT: 42x faster than Python** — eligible pure-arithmetic functions compile to raw CPU instructions
+- **Contracts always enforced** — native conditional branches in both JIT and AOT, assertion opcodes in bytecode
 - **Ownership enforced** — static linearity analysis + runtime move tracking
 - **Quantifiers work everywhere** — `forall`/`exists` desugared to `fold`+`range`, no interpreter-only restrictions
 - **Bootstrap compiler** — lexer, parser, type checker, and IR compiler implemented in AIRL (~2,500 lines), running on Rust runtime
 - **Compiler fixpoint verified** — the AIRL compiler produces identical IR whether run interpreted or compiled
-- **Zero external dependencies** for core crates by default (Cranelift behind `jit` feature; Z3 in `airl-solver`)
+- **Zero external dependencies** for core crates by default (Cranelift behind `jit`/`aot` features; Z3 in `airl-solver`)
 - **GPU support available** — `cargo build --features mlir` for MLIR/GPU compilation (requires LLVM 19+, Dockerfile provided)
 
 ## Specification
