@@ -8,5 +8,6 @@ pub mod list;
 pub mod string;
 pub mod map;
 pub mod io;
+pub mod math;
 pub mod variant;
 pub mod closure;

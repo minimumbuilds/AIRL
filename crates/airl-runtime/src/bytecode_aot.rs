@@ -138,6 +138,23 @@ pub struct RuntimeImports {
     pub char_code: FuncId,
     pub char_from_code: FuncId,
 
+    // Float math
+    pub sqrt: FuncId,
+    pub sin: FuncId,
+    pub cos: FuncId,
+    pub tan: FuncId,
+    pub log: FuncId,
+    pub exp: FuncId,
+    pub floor: FuncId,
+    pub ceil: FuncId,
+    pub round: FuncId,
+    pub float_to_int: FuncId,
+    pub int_to_float: FuncId,
+    pub infinity: FuncId,
+    pub nan_ctor: FuncId,
+    pub is_nan: FuncId,
+    pub is_infinite: FuncId,
+
     // Timing
     pub time_now: FuncId,
 
@@ -449,6 +466,23 @@ impl BytecodeAot {
         let char_code = declare_import(m, "airl_char_code", s1.clone());
         let char_from_code = declare_import(m, "airl_char_from_code", s1.clone());
 
+        // Float math
+        let sqrt = declare_import(m, "airl_sqrt", s1.clone());
+        let sin = declare_import(m, "airl_sin", s1.clone());
+        let cos = declare_import(m, "airl_cos", s1.clone());
+        let tan = declare_import(m, "airl_tan", s1.clone());
+        let log = declare_import(m, "airl_log", s1.clone());
+        let exp = declare_import(m, "airl_exp", s1.clone());
+        let floor = declare_import(m, "airl_floor", s1.clone());
+        let ceil = declare_import(m, "airl_ceil", s1.clone());
+        let round = declare_import(m, "airl_round", s1.clone());
+        let float_to_int = declare_import(m, "airl_float_to_int", s1.clone());
+        let int_to_float = declare_import(m, "airl_int_to_float", s1.clone());
+        let infinity = declare_import(m, "airl_infinity", sig_0_ptr(m));
+        let nan_ctor = declare_import(m, "airl_nan", sig_0_ptr(m));
+        let is_nan = declare_import(m, "airl_is_nan", s1.clone());
+        let is_infinite = declare_import(m, "airl_is_infinite", s1.clone());
+
         // Timing
         let time_now = declare_import(m, "airl_time_now", sig_0_ptr(m));
 
@@ -495,6 +529,8 @@ impl BytecodeAot {
             get_args, run_bytecode, compile_to_exe,
             int_to_string, float_to_string, string_to_int, string_to_float,
             char_code, char_from_code,
+            sqrt, sin, cos, tan, log, exp, floor, ceil, round,
+            float_to_int, int_to_float, infinity, nan_ctor, is_nan, is_infinite,
             time_now, getenv, http_post, http_request, json_parse, json_stringify, shell_exec,
             contract_fail,
         }
@@ -586,6 +622,23 @@ impl BytecodeAot {
         m.insert("string-to-float".into(), rt.string_to_float);
         m.insert("char-code".into(),       rt.char_code);
         m.insert("char-from-code".into(),  rt.char_from_code);
+
+        // Float math
+        m.insert("sqrt".into(),         rt.sqrt);
+        m.insert("sin".into(),          rt.sin);
+        m.insert("cos".into(),          rt.cos);
+        m.insert("tan".into(),          rt.tan);
+        m.insert("log".into(),          rt.log);
+        m.insert("exp".into(),          rt.exp);
+        m.insert("floor".into(),        rt.floor);
+        m.insert("ceil".into(),         rt.ceil);
+        m.insert("round".into(),        rt.round);
+        m.insert("float-to-int".into(), rt.float_to_int);
+        m.insert("int-to-float".into(), rt.int_to_float);
+        m.insert("infinity".into(),     rt.infinity);
+        m.insert("nan".into(),          rt.nan_ctor);
+        m.insert("is-nan?".into(),      rt.is_nan);
+        m.insert("is-infinite?".into(), rt.is_infinite);
 
         // Timing
         m.insert("time-now".into(), rt.time_now);
