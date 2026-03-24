@@ -99,7 +99,12 @@ impl TypeChecker {
             "map-entries", "map-from-entries", "map-merge", "map-map-values",
             "map-filter", "map-update", "map-update-or", "map-count",
             // File I/O
-            "read-file", "write-file", "file-exists?",
+            "read-file", "write-file", "file-exists?", "get-args",
+            // System builtins
+            "str", "int-to-string", "float-to-string", "string-to-int",
+            "json-parse", "json-stringify", "http-post",
+            "shell-exec", "time-now", "getenv",
+            "run-bytecode", "compile-to-executable",
         ] {
             self.env.bind(name.to_string(), Ty::TypeVar("builtin".to_string()));
         }
