@@ -336,8 +336,58 @@ fn compile_expr(expr: &Expr) -> IRNode {
             IRNode::Variant(name.clone(), vec![IRNode::List(items)])
         }
 
-        // Quantifiers and other unsupported forms → Nil stub
-        ExprKind::Forall(..) | ExprKind::Exists(..) => IRNode::Nil,
+        // Quantifiers: desugar to fold over range using stdlib functions.
+        // forall [i : T] (where guard) body → (fold (fn [acc i] (if (not acc) false body)) true (range 0 bound))
+        // exists [i : T] (where guard) body → (fold (fn [acc i] (if acc true body)) false (range 0 bound))
+        // The where clause (< i N) extracts N as the upper bound; default is 10000.
+        ExprKind::Forall(..) | ExprKind::Exists(..) => {
+            let is_forall = matches!(&expr.kind, ExprKind::Forall(..));
+
+            let (param, where_clause, body) = match &expr.kind {
+                ExprKind::Forall(p, w, b) | ExprKind::Exists(p, w, b) => (p, w, b),
+                _ => unreachable!(),
+            };
+
+            let var_name = param.name.clone();
+            let acc_name = "__quant_acc".to_string();
+
+            // Extract upper bound from where clause, or default to 10000
+            let upper_bound = match where_clause {
+                Some(w) => extract_upper_bound(w, &var_name).unwrap_or_else(|| compile_expr(w)),
+                None => IRNode::Int(10000),
+            };
+
+            let compiled_body = compile_expr(body);
+
+            // Build the fold callback: (fn [acc var] ...)
+            let fold_body = if is_forall {
+                // (if (not acc) false body)  — short-circuit on first failure
+                IRNode::If(
+                    Box::new(IRNode::Call("not".to_string(), vec![IRNode::Load(acc_name.clone())])),
+                    Box::new(IRNode::Bool(false)),
+                    Box::new(compiled_body),
+                )
+            } else {
+                // (if acc true body)  — short-circuit on first success
+                IRNode::If(
+                    Box::new(IRNode::Load(acc_name.clone())),
+                    Box::new(IRNode::Bool(true)),
+                    Box::new(compiled_body),
+                )
+            };
+
+            let callback = IRNode::Lambda(
+                vec![acc_name.clone(), var_name.clone()],
+                Box::new(fold_body),
+            );
+
+            let init = if is_forall { IRNode::Bool(true) } else { IRNode::Bool(false) };
+
+            let range_expr = IRNode::Call("range".to_string(), vec![IRNode::Int(0), upper_bound]);
+
+            // (fold callback init (range 0 bound))
+            IRNode::Call("fold".to_string(), vec![callback, init, range_expr])
+        }
     }
 }
 
@@ -359,6 +409,32 @@ fn compile_pattern(pat: &Pattern) -> IRPattern {
             IRPattern::Variant(name.clone(), sub_pats.iter().map(compile_pattern).collect())
         }
     }
+}
+
+/// Extract upper bound from a where clause of the form `(< var N)` or `(<= var N)`.
+/// Returns `Some(IRNode)` for the bound (exclusive for `<`, N+1 for `<=`), or `None` if
+/// the clause doesn't match this pattern.
+fn extract_upper_bound(where_expr: &Expr, var_name: &str) -> Option<IRNode> {
+    if let ExprKind::FnCall(callee, args) = &where_expr.kind {
+        if let ExprKind::SymbolRef(op) = &callee.kind {
+            if args.len() == 2 {
+                if let ExprKind::SymbolRef(ref name) = &args[0].kind {
+                    if name == var_name {
+                        if op == "<" {
+                            return Some(compile_expr(&args[1]));
+                        } else if op == "<=" {
+                            // (<= i N) means range 0..(N+1)
+                            return Some(IRNode::Call("+".to_string(), vec![
+                                compile_expr(&args[1]),
+                                IRNode::Int(1),
+                            ]));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 fn compile_top_level(top: &airl_syntax::ast::TopLevel) -> IRNode {
