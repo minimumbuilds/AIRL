@@ -14,8 +14,6 @@ pub mod bytecode_marshal;
 #[cfg(feature = "jit")]
 pub mod jit_contract;
 #[cfg(feature = "jit")]
-pub mod bytecode_jit;
-#[cfg(feature = "jit")]
 pub mod bytecode_jit_full;
 #[cfg(feature = "aot")]
 pub mod bytecode_aot;

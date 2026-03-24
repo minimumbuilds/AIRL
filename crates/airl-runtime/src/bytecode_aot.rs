@@ -775,7 +775,7 @@ impl BytecodeAot {
     // ──────────────────────────────────────────────────────────────────────
 
     /// Compile a single eligible `BytecodeFunc` using raw I64 values (no boxing).
-    /// This is the AOT equivalent of `bytecode_jit.rs::compile_func()`.
+    /// AOT unboxed compilation for primitive-typed functions.
     fn compile_func_unboxed(
         &mut self,
         func: &BytecodeFunc,
