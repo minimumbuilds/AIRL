@@ -701,6 +701,18 @@ impl BytecodeVm {
         }
     }
 
+    /// Call a named function with the given argument values.
+    /// The function must already be loaded in the VM.
+    /// This pushes a fresh call frame and runs the VM until the function returns.
+    pub fn call_by_name(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        // Verify function exists before pushing frame
+        if !self.functions.contains_key(name) {
+            return Err(RuntimeError::UndefinedSymbol(name.to_string()));
+        }
+        self.push_frame(name, &args, 0)?;
+        self.run()
+    }
+
     /// Load functions and execute __main__
     pub fn exec_program(&mut self, functions: Vec<BytecodeFunc>, main_func: BytecodeFunc) -> Result<Value, RuntimeError> {
         for func in functions {

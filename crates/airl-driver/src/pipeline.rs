@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use airl_syntax::*;
 use airl_syntax::parser;
 use airl_syntax::ast::{Expr, ExprKind, Pattern, PatternKind, LitPattern};
-use airl_runtime::eval::Interpreter;
 use airl_runtime::value::Value;
 use airl_runtime::error::RuntimeError;
 use airl_runtime::ir::*;
@@ -22,34 +21,6 @@ pub enum PipelineMode {
     Check,  // type errors block execution
     Run,    // type errors warn to stderr, execution proceeds
     Repl,   // type errors warn to stderr, execution proceeds
-}
-
-/// Load a single stdlib source into the interpreter.
-/// Panics on parse/eval errors since stdlib is trusted code.
-fn eval_stdlib_source(interp: &mut Interpreter, source: &str, name: &str) {
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.lex_all().unwrap_or_else(|e| panic!("{} lexing failed: {}", name, e.message));
-    let sexprs = parse_sexpr_all(&tokens).unwrap_or_else(|e| panic!("{} s-expr parsing failed: {}", name, e.message));
-    let mut diags = Diagnostics::new();
-
-    for sexpr in &sexprs {
-        match parser::parse_top_level(sexpr, &mut diags) {
-            Ok(top) => {
-                interp.eval_top_level(&top).unwrap_or_else(|e| panic!("{} eval failed: {}", name, e));
-            }
-            Err(d) => panic!("{} parse error: {}", name, d.message),
-        }
-    }
-}
-
-/// Load the standard library into an interpreter.
-/// Order matters: collections first (provides fold), then math, then result.
-pub fn eval_prelude(interp: &mut Interpreter) {
-    eval_stdlib_source(interp, COLLECTIONS_SOURCE, "stdlib/collections");
-    eval_stdlib_source(interp, MATH_SOURCE, "stdlib/math");
-    eval_stdlib_source(interp, RESULT_SOURCE, "stdlib/result");
-    eval_stdlib_source(interp, STRING_SOURCE, "stdlib/string");
-    eval_stdlib_source(interp, MAP_SOURCE, "stdlib/map");
 }
 
 pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, PipelineError> {
@@ -876,6 +847,58 @@ pub fn format_diagnostic_with_source(diag: &Diagnostic, source: &str, filename: 
     }
 
     output
+}
+
+// ── REPL helpers ────────────────────────────────────────────
+
+/// Load stdlib into a bytecode VM for use by the REPL.
+/// Panics on stdlib errors since stdlib is trusted code.
+pub fn compile_and_load_stdlib_bytecode_repl(vm: &mut BytecodeVm) {
+    for (src, name) in &[
+        (COLLECTIONS_SOURCE, "collections"),
+        (MATH_SOURCE, "math"),
+        (RESULT_SOURCE, "result"),
+        (STRING_SOURCE, "string"),
+        (MAP_SOURCE, "map"),
+    ] {
+        compile_and_load_stdlib_bytecode(vm, src, name)
+            .unwrap_or_else(|e| panic!("stdlib {} load failed: {}", name, e));
+    }
+}
+
+/// Compile AIRL source and run it in an existing bytecode VM (for incremental REPL use).
+/// Functions defined in previous calls persist in the VM's function table.
+pub fn compile_and_run_repl_input(source: &str, vm: &mut BytecodeVm) -> Result<Value, String> {
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.lex_all().map_err(|d| d.message)?;
+    let sexprs = parse_sexpr_all(&tokens).map_err(|d| d.message)?;
+    let mut diags = Diagnostics::new();
+
+    let mut tops = Vec::new();
+    for sexpr in &sexprs {
+        match parser::parse_top_level(sexpr, &mut diags) {
+            Ok(top) => tops.push(top),
+            Err(_) => {
+                let mut diags2 = Diagnostics::new();
+                match parser::parse_expr(sexpr, &mut diags2) {
+                    Ok(expr) => tops.push(airl_syntax::ast::TopLevel::Expr(expr)),
+                    Err(d) => return Err(d.message),
+                }
+            }
+        }
+    }
+
+    let ownership_map = build_ownership_map(&tops);
+    let (ir_nodes, contracts) = compile_tops_with_contracts(&tops);
+    let mut bc_compiler = BytecodeCompiler::with_prefix("repl");
+    bc_compiler.set_ownership_map(ownership_map);
+    let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
+
+    for func in funcs {
+        vm.load_function(func);
+    }
+    vm.load_function(main_func);
+    vm.exec_main().map_err(|e| format!("{}", e))
 }
 
 #[cfg(test)]

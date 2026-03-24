@@ -8,7 +8,11 @@ use crate::registry::AgentRegistry;
 use crate::task::TaskStatus;
 use crate::tcp_transport::TcpTransport;
 use crate::transport::{Transport, TransportError};
-use airl_runtime::eval::Interpreter;
+use airl_runtime::bytecode_vm::BytecodeVm;
+use airl_runtime::bytecode_compiler::BytecodeCompiler;
+use airl_runtime::ir::{IRNode, IRPattern, IRBinding, IRArm};
+use airl_runtime::value::Value;
+use airl_syntax::ast::{ExprKind, PatternKind, LitPattern};
 
 /// Errors from the agent runtime.
 #[derive(Debug)]
@@ -37,9 +41,6 @@ impl From<TransportError> for AgentError {
 }
 
 /// The agent runtime manages identity, peer registry, and pending tasks.
-///
-/// Phase 1 keeps this deliberately simple — the full message loop and
-/// task execution pipeline will be wired up when the driver is ready.
 pub struct AgentRuntime {
     pub identity: AgentId,
     pub registry: AgentRegistry,
@@ -110,14 +111,170 @@ pub fn parse_endpoint(s: &str) -> Result<Endpoint, String> {
     }
 }
 
+// ── Compile helpers (mirrors pipeline.rs but local to agent) ─────────────
+
+fn compile_expr(expr: &airl_syntax::ast::Expr) -> IRNode {
+    match &expr.kind {
+        ExprKind::IntLit(v) => IRNode::Int(*v),
+        ExprKind::FloatLit(v) => IRNode::Float(*v),
+        ExprKind::StrLit(s) => IRNode::Str(s.clone()),
+        ExprKind::BoolLit(b) => IRNode::Bool(*b),
+        ExprKind::NilLit => IRNode::Nil,
+        ExprKind::SymbolRef(name) => IRNode::Load(name.clone()),
+        ExprKind::KeywordLit(k) => IRNode::Str(format!(":{}", k)),
+
+        ExprKind::If(cond, then_, else_) => IRNode::If(
+            Box::new(compile_expr(cond)),
+            Box::new(compile_expr(then_)),
+            Box::new(compile_expr(else_)),
+        ),
+
+        ExprKind::Let(bindings, body) => {
+            let ir_bindings: Vec<IRBinding> = bindings.iter().map(|b| {
+                IRBinding { name: b.name.clone(), expr: compile_expr(&b.value) }
+            }).collect();
+            IRNode::Let(ir_bindings, Box::new(compile_expr(body)))
+        }
+
+        ExprKind::Do(exprs) => IRNode::Do(exprs.iter().map(compile_expr).collect()),
+
+        ExprKind::FnCall(callee, args) => {
+            let ir_args: Vec<IRNode> = args.iter().map(compile_expr).collect();
+            if let ExprKind::SymbolRef(name) = &callee.kind {
+                IRNode::Call(name.clone(), ir_args)
+            } else {
+                IRNode::CallExpr(Box::new(compile_expr(callee)), ir_args)
+            }
+        }
+
+        ExprKind::Lambda(params, body) => {
+            let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+            IRNode::Lambda(param_names, Box::new(compile_expr(body)))
+        }
+
+        ExprKind::Match(scrutinee, arms) => {
+            let ir_arms: Vec<IRArm> = arms.iter().map(|arm| {
+                IRArm {
+                    pattern: compile_pattern(&arm.pattern),
+                    body: compile_expr(&arm.body),
+                }
+            }).collect();
+            IRNode::Match(Box::new(compile_expr(scrutinee)), ir_arms)
+        }
+
+        ExprKind::ListLit(items) => IRNode::List(items.iter().map(compile_expr).collect()),
+
+        ExprKind::VariantCtor(name, args) => {
+            IRNode::Variant(name.clone(), args.iter().map(compile_expr).collect())
+        }
+
+        ExprKind::Try(inner) => IRNode::Try(Box::new(compile_expr(inner))),
+
+        ExprKind::StructLit(name, fields) => {
+            let mut items = Vec::new();
+            for (key, val) in fields {
+                items.push(IRNode::List(vec![
+                    IRNode::Str(key.clone()),
+                    compile_expr(val),
+                ]));
+            }
+            IRNode::Variant(name.clone(), vec![IRNode::List(items)])
+        }
+
+        ExprKind::Forall(..) | ExprKind::Exists(..) => IRNode::Nil,
+    }
+}
+
+fn compile_pattern(pat: &airl_syntax::ast::Pattern) -> IRPattern {
+    match &pat.kind {
+        PatternKind::Wildcard => IRPattern::Wild,
+        PatternKind::Binding(name) => IRPattern::Bind(name.clone()),
+        PatternKind::Literal(lit) => {
+            let val = match lit {
+                LitPattern::Int(v) => Value::Int(*v),
+                LitPattern::Float(v) => Value::Float(*v),
+                LitPattern::Str(s) => Value::Str(s.clone()),
+                LitPattern::Bool(b) => Value::Bool(*b),
+                LitPattern::Nil => Value::Nil,
+            };
+            IRPattern::Lit(val)
+        }
+        PatternKind::Variant(name, sub_pats) => {
+            IRPattern::Variant(name.clone(), sub_pats.iter().map(compile_pattern).collect())
+        }
+    }
+}
+
+fn compile_top_level(top: &airl_syntax::ast::TopLevel) -> IRNode {
+    match top {
+        airl_syntax::ast::TopLevel::Defn(f) => {
+            let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
+            IRNode::Func(f.name.clone(), param_names, Box::new(compile_expr(&f.body)))
+        }
+        airl_syntax::ast::TopLevel::Expr(e) => compile_expr(e),
+        _ => IRNode::Nil,
+    }
+}
+
+fn create_stdlib_vm() -> BytecodeVm {
+    const COLLECTIONS_SOURCE: &str = include_str!("../../../stdlib/prelude.airl");
+    const MATH_SOURCE: &str = include_str!("../../../stdlib/math.airl");
+    const RESULT_SOURCE: &str = include_str!("../../../stdlib/result.airl");
+    const STRING_SOURCE: &str = include_str!("../../../stdlib/string.airl");
+    const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
+
+    let mut vm = BytecodeVm::new();
+    for (src, name) in &[
+        (COLLECTIONS_SOURCE, "collections"),
+        (MATH_SOURCE, "math"),
+        (RESULT_SOURCE, "result"),
+        (STRING_SOURCE, "string"),
+        (MAP_SOURCE, "map"),
+    ] {
+        load_source_into_vm(&mut vm, src, name)
+            .unwrap_or_else(|e| panic!("stdlib {} load failed: {}", name, e));
+    }
+    vm
+}
+
+fn load_source_into_vm(vm: &mut BytecodeVm, source: &str, name: &str) -> Result<(), AgentError> {
+    let mut lexer = airl_syntax::Lexer::new(source);
+    let tokens = lexer.lex_all()
+        .map_err(|d| AgentError::Protocol(format!("{} lex error: {}", name, d.message)))?;
+    let sexprs = airl_syntax::parse_sexpr_all(&tokens)
+        .map_err(|d| AgentError::Protocol(format!("{} parse error: {}", name, d.message)))?;
+    let mut diags = airl_syntax::Diagnostics::new();
+
+    let mut tops = Vec::new();
+    for sexpr in &sexprs {
+        match airl_syntax::parser::parse_top_level(sexpr, &mut diags) {
+            Ok(top) => tops.push(top),
+            Err(_) => {}
+        }
+    }
+
+    let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
+    let mut bc_compiler = BytecodeCompiler::with_prefix(name);
+    let (funcs, main_func) = bc_compiler.compile_program(&ir_nodes);
+
+    for func in funcs {
+        vm.load_function(func);
+    }
+    vm.load_function(main_func);
+    vm.exec_main()
+        .map_err(|e| AgentError::Protocol(format!("{} exec error: {}", name, e)))?;
+
+    Ok(())
+}
+
 /// Load an AIRL module file and start listening for tasks.
 pub fn run_agent_loop(module_path: &str, endpoint: &Endpoint) -> Result<(), AgentError> {
     // 1. Load module
     let source = std::fs::read_to_string(module_path)
         .map_err(|e| AgentError::Protocol(format!("cannot read {}: {}", module_path, e)))?;
 
-    let mut interp = Interpreter::new();
-    load_module(&source, &mut interp)?;
+    let mut vm = create_stdlib_vm();
+    load_module(&source, &mut vm)?;
 
     eprintln!("Agent loaded: {}", module_path);
 
@@ -135,7 +292,7 @@ pub fn run_agent_loop(module_path: &str, endpoint: &Endpoint) -> Result<(), Agen
                 eprintln!("Connection from {}", peer);
 
                 let mut transport = TcpTransport::from_stream(stream);
-                handle_connection(&mut transport, &mut interp);
+                handle_connection(&mut transport, &mut vm);
                 eprintln!("Connection closed from {}", peer);
             }
         }
@@ -150,36 +307,20 @@ pub fn run_agent_loop(module_path: &str, endpoint: &Endpoint) -> Result<(), Agen
             crate::transport::write_frame(&mut writer, "ready")
                 .map_err(|e| AgentError::Protocol(format!("cannot send ready: {}", e)))?;
 
-            handle_stdio_connection(&mut reader, &mut writer, &mut interp);
+            handle_stdio_connection(&mut reader, &mut writer, &mut vm);
             Ok(())
         }
         _ => Err(AgentError::Protocol("unsupported endpoint type".into())),
     }
 }
 
-/// Parse AIRL source, evaluate top-level forms to register functions.
-pub fn load_module(source: &str, interp: &mut Interpreter) -> Result<(), AgentError> {
-    let mut lexer = airl_syntax::Lexer::new(source);
-    let tokens = lexer.lex_all()
-        .map_err(|d| AgentError::Protocol(format!("parse error: {}", d.message)))?;
-    let sexprs = airl_syntax::parse_sexpr_all(&tokens)
-        .map_err(|d| AgentError::Protocol(format!("parse error: {}", d.message)))?;
-    let mut diags = airl_syntax::Diagnostics::new();
-
-    for sexpr in &sexprs {
-        match airl_syntax::parser::parse_top_level(sexpr, &mut diags) {
-            Ok(top) => {
-                interp.eval_top_level(&top)
-                    .map_err(|e| AgentError::Protocol(format!("module error: {}", e)))?;
-            }
-            Err(_) => {} // skip unparseable forms
-        }
-    }
-    Ok(())
+/// Parse AIRL source, compile to bytecode, and load functions into the VM.
+pub fn load_module(source: &str, vm: &mut BytecodeVm) -> Result<(), AgentError> {
+    load_source_into_vm(vm, source, "module")
 }
 
 /// Read-eval-respond loop on a single connection.
-pub fn handle_connection(transport: &mut dyn Transport, interp: &mut Interpreter) {
+pub fn handle_connection(transport: &mut dyn Transport, vm: &mut BytecodeVm) {
     loop {
         let frame = match transport.recv_message() {
             Ok(f) => f,
@@ -189,7 +330,7 @@ pub fn handle_connection(transport: &mut dyn Transport, interp: &mut Interpreter
         let result_msg = match parse_task(&frame) {
             Ok(task) => {
                 eprintln!("Task {}: calling {}({:?})", task.id, task.call, task.args);
-                match interp.call_by_name(&task.call, task.args) {
+                match vm.call_by_name(&task.call, task.args) {
                     Ok(value) => ResultMessage {
                         id: task.id,
                         success: true,
@@ -223,7 +364,7 @@ pub fn handle_connection(transport: &mut dyn Transport, interp: &mut Interpreter
 fn handle_stdio_connection(
     reader: &mut dyn std::io::Read,
     writer: &mut dyn std::io::Write,
-    interp: &mut Interpreter,
+    vm: &mut BytecodeVm,
 ) {
     use crate::transport::{read_frame, write_frame};
 
@@ -236,7 +377,7 @@ fn handle_stdio_connection(
         let result_msg = match parse_task(&frame) {
             Ok(task) => {
                 eprintln!("Task {}: calling {}({:?})", task.id, task.call, task.args);
-                match interp.call_by_name(&task.call, task.args) {
+                match vm.call_by_name(&task.call, task.args) {
                     Ok(value) => ResultMessage {
                         id: task.id,
                         success: true,
@@ -270,7 +411,6 @@ fn handle_stdio_connection(
 mod tests {
     use super::*;
     use crate::identity::*;
-    use airl_runtime::value::Value;
 
     fn test_identity() -> AgentId {
         AgentId {
@@ -416,9 +556,9 @@ mod tests {
               :ensures [(valid result)]
               :body (* x 2))
         "#;
-        let mut interp = Interpreter::new();
-        load_module(source, &mut interp).unwrap();
-        let result = interp.call_by_name("double", vec![Value::Int(21)]).unwrap();
+        let mut vm = create_stdlib_vm();
+        load_module(source, &mut vm).unwrap();
+        let result = vm.call_by_name("double", vec![Value::Int(21)]).unwrap();
         assert_eq!(result, Value::Int(42));
     }
 }
