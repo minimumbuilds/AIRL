@@ -1,4 +1,4 @@
-use airl_driver::pipeline::{run_file, run_file_bytecode, check_file, format_diagnostic_with_source, PipelineError};
+use airl_driver::pipeline::{run_file, check_file, format_diagnostic_with_source, PipelineError};
 #[cfg(feature = "jit")]
 use airl_driver::pipeline::run_file_jit_full;
 use airl_driver::fmt::format_source;
@@ -31,13 +31,13 @@ fn main() {
 
 fn cmd_run(args: &[String]) {
     if args.is_empty() {
-        eprintln!("Usage: airl run [--load module.airl ...] [--bytecode|--jit-full] <file.airl>");
+        eprintln!("Usage: airl run [--load module.airl ...] [--jit-full] <file.airl>");
         std::process::exit(1);
     }
 
-    // Parse flags: --load, --bytecode, --jit-full, then the main file
+    // Parse flags: --load, --jit-full, then the main file
     let mut preloads: Vec<String> = Vec::new();
-    let mut mode = "default";
+    let mut jit_full = false;
     let mut main_file: Option<&str> = None;
     let mut i = 0;
     while i < args.len() {
@@ -47,13 +47,11 @@ fn cmd_run(args: &[String]) {
                 preloads.push(args[i + 1].clone());
                 i += 2;
             }
-            "--bytecode" => { mode = "bytecode"; i += 1; }
-            "--jit-full" => { mode = "jit-full"; i += 1; }
-            "--interpreted" => { mode = "default"; i += 1; }
+            "--jit-full" => { jit_full = true; i += 1; }
+            "--bytecode" => { i += 1; } // accepted for compatibility, bytecode is now default
             "--" => break, // rest are user args, handled by get-args
             _ => {
                 main_file = Some(&args[i]);
-                i += 1;
                 break; // everything after main file is user args
             }
         }
@@ -65,11 +63,16 @@ fn cmd_run(args: &[String]) {
     };
 
     let result = if preloads.is_empty() {
-        match mode {
-            "bytecode" => run_file_bytecode(path),
-            #[cfg(feature = "jit")]
-            "jit-full" => run_file_jit_full(path),
-            _ => run_file(path),
+        #[cfg(feature = "jit")]
+        if jit_full {
+            run_file_jit_full(path)
+        } else {
+            run_file(path)
+        }
+        #[cfg(not(feature = "jit"))]
+        {
+            let _ = jit_full;
+            run_file(path)
         }
     } else {
         airl_driver::pipeline::run_file_with_preloads(path, &preloads)

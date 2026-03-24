@@ -24,7 +24,6 @@ impl Builtins {
         b.register_string();
         b.register_map();
         b.register_file_io();
-        b.register_ir();
         b.register_bytecode();
         b
     }
@@ -151,12 +150,6 @@ impl Builtins {
         self.register("write-file", builtin_write_file);
         self.register("file-exists?", builtin_file_exists);
         self.register("get-args", builtin_get_args);
-    }
-
-    // ── IR VM ────────────────────────────────────────────
-
-    fn register_ir(&mut self) {
-        self.register("run-ir", builtin_run_ir);
     }
 
     // ── Bytecode VM ──────────────────────────────────────
@@ -1103,22 +1096,6 @@ fn builtin_get_args(args: &[Value]) -> Result<Value, RuntimeError> {
     expect_arity("get-args", args, 0)?;
     let argv: Vec<Value> = std::env::args().map(Value::Str).collect();
     Ok(Value::List(argv))
-}
-
-// ── IR VM implementation ─────────────────────────────────
-
-fn builtin_run_ir(args: &[Value]) -> Result<Value, RuntimeError> {
-    expect_arity("run-ir", args, 1)?;
-    let ir_list = match &args[0] {
-        Value::List(items) => items.clone(),
-        _ => return Err(RuntimeError::TypeError("run-ir: expected list of IR nodes".into())),
-    };
-    let ir_nodes: Vec<crate::ir::IRNode> = ir_list
-        .iter()
-        .map(crate::ir_marshal::value_to_ir)
-        .collect::<Result<_, _>>()?;
-    let mut vm = crate::ir_vm::IrVm::new();
-    vm.exec_program(&ir_nodes)
 }
 
 // ── Bytecode VM implementation ───────────────────────────
