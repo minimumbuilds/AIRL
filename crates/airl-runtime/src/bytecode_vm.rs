@@ -23,8 +23,6 @@ pub struct BytecodeVm {
     call_stack: Vec<CallFrame>,
     recursion_depth: usize,
     #[cfg(feature = "jit")]
-    jit: Option<crate::bytecode_jit::BytecodeJit>,
-    #[cfg(feature = "jit")]
     jit_full: Option<crate::bytecode_jit_full::BytecodeJitFull>,
 }
 
@@ -36,20 +34,6 @@ impl BytecodeVm {
             call_stack: Vec::new(),
             recursion_depth: 0,
             #[cfg(feature = "jit")]
-            jit: None,
-            #[cfg(feature = "jit")]
-            jit_full: None,
-        }
-    }
-
-    #[cfg(feature = "jit")]
-    pub fn new_with_jit() -> Self {
-        BytecodeVm {
-            functions: HashMap::new(),
-            builtins: Builtins::new(),
-            call_stack: Vec::new(),
-            recursion_depth: 0,
-            jit: crate::bytecode_jit::BytecodeJit::new().ok(),
             jit_full: None,
         }
     }
@@ -61,20 +45,7 @@ impl BytecodeVm {
             builtins: Builtins::new(),
             call_stack: Vec::new(),
             recursion_depth: 0,
-            jit: None,
             jit_full: crate::bytecode_jit_full::BytecodeJitFull::new().ok(),
-        }
-    }
-
-    #[cfg(feature = "jit")]
-    pub fn jit_compile_all(&mut self) {
-        if let Some(ref mut jit) = self.jit {
-            let names: Vec<String> = self.functions.keys().cloned().collect();
-            for name in &names {
-                if let Some(func) = self.functions.get(name) {
-                    jit.try_compile(func, &self.functions);
-                }
-            }
         }
     }
 
@@ -520,7 +491,7 @@ impl BytecodeVm {
                     if let Some(ref jit_full) = self.jit_full {
                         if let Some(val) = jit_full.try_call_native(&name, &args) {
                             // Check if a contract violation was signaled via the thread-local error cell
-                            if let Some((kind, fn_name_idx, clause_idx)) = crate::bytecode_jit::take_jit_contract_error() {
+                            if let Some((kind, fn_name_idx, clause_idx)) = crate::jit_contract::take_jit_contract_error() {
                                 let f = self.functions.get(&name);
                                 let fn_name_str = f.and_then(|f| f.constants.get(fn_name_idx as usize))
                                     .and_then(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
@@ -546,45 +517,6 @@ impl BytecodeVm {
                             }
                             self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = val;
                             continue;
-                        }
-                    }
-
-                    // Try JIT (primitive) next
-                    #[cfg(feature = "jit")]
-                    if let Some(ref jit) = self.jit {
-                        if let Some(result) = jit.try_call_native(&name, &args) {
-                            // Check if a contract violation was signaled via the thread-local error cell
-                            if let Some((kind, fn_name_idx, clause_idx)) = crate::bytecode_jit::take_jit_contract_error() {
-                                let f = self.functions.get(&name);
-                                let fn_name_str = f.and_then(|f| f.constants.get(fn_name_idx as usize))
-                                    .and_then(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
-                                    .unwrap_or_else(|| name.clone());
-                                let clause_source = f.and_then(|f| f.constants.get(clause_idx as usize))
-                                    .and_then(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
-                                    .unwrap_or_else(|| "?".into());
-                                let contract_kind = match kind {
-                                    0 => airl_contracts::violation::ContractKind::Requires,
-                                    1 => airl_contracts::violation::ContractKind::Ensures,
-                                    _ => airl_contracts::violation::ContractKind::Invariant,
-                                };
-                                return Err(RuntimeError::ContractViolation(
-                                    airl_contracts::violation::ContractViolation {
-                                        function: fn_name_str,
-                                        contract_kind,
-                                        clause_source,
-                                        bindings: vec![],
-                                        evaluated: "false".into(),
-                                        span: airl_syntax::Span::dummy(),
-                                    }
-                                ));
-                            }
-                            match result {
-                                Ok(val) => {
-                                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = val;
-                                    continue; // skip bytecode dispatch
-                                }
-                                Err(e) => return Err(e),
-                            }
                         }
                     }
 
