@@ -1697,6 +1697,9 @@ impl BytecodeJitFull {
                 Op::AssertRequires | Op::AssertEnsures | Op::AssertInvariant => {
                     // No-op in JIT — contracts are enforced at the bytecode VM level
                 }
+                Op::MarkMoved | Op::CheckNotMoved => {
+                    // No-op in JIT-full — ownership is enforced at the bytecode VM level
+                }
             }
         }
 

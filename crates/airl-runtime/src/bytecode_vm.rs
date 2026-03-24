@@ -13,6 +13,8 @@ struct CallFrame {
     /// Ignored for the bottom-most frame (returns via Ok(result)).
     return_reg: u16,
     match_flag: bool,
+    /// Tracks which registers have been moved (ownership consumed).
+    moved: Vec<bool>,
 }
 
 pub struct BytecodeVm {
@@ -110,7 +112,8 @@ impl BytecodeVm {
             return Err(RuntimeError::Custom("stack overflow".into()));
         }
 
-        let mut registers = vec![Value::Nil; func.register_count as usize];
+        let reg_count = func.register_count as usize;
+        let mut registers = vec![Value::Nil; reg_count];
         for (i, arg) in args.iter().enumerate() {
             if i < registers.len() {
                 registers[i] = arg.clone();
@@ -123,6 +126,7 @@ impl BytecodeVm {
             ip: 0,
             return_reg,
             match_flag: false,
+            moved: vec![false; reg_count],
         });
         Ok(())
     }
@@ -464,6 +468,38 @@ impl BytecodeVm {
                     }
                 }
 
+                // Ownership tracking
+                Op::MarkMoved => {
+                    let reg = instr.a as usize;
+                    let frame = self.call_stack.last_mut().unwrap();
+                    if reg < frame.moved.len() {
+                        frame.moved[reg] = true;
+                    }
+                }
+                Op::CheckNotMoved => {
+                    let reg = instr.a as usize;
+                    let frame = self.call_stack.last().unwrap();
+                    if reg < frame.moved.len() && frame.moved[reg] {
+                        let f = self.functions.get(&func_name).unwrap();
+                        let msg = if (instr.b as usize) < f.constants.len() {
+                            let name_val = &f.constants[instr.b as usize];
+                            if let Value::Str(s) = name_val {
+                                if s.contains(' ') {
+                                    // Full error message (e.g., borrow+move conflict)
+                                    s.clone()
+                                } else {
+                                    format!("use of moved value: `{}` was already moved", s)
+                                }
+                            } else {
+                                format!("use of moved value: `{}` was already moved", name_val)
+                            }
+                        } else {
+                            format!("use of moved value: register {} was already moved", reg)
+                        };
+                        return Err(RuntimeError::Custom(msg));
+                    }
+                }
+
                 // Function calls — push new frame and let the main loop execute it
                 Op::Call => {
                     let name = {
@@ -596,6 +632,8 @@ impl BytecodeVm {
                     // Reset ip to 0 for self-recursion (args already rebound by compiler)
                     let frame = self.call_stack.last_mut().unwrap();
                     frame.ip = 0;
+                    // Reset moved flags for the new iteration
+                    for m in frame.moved.iter_mut() { *m = false; }
                 }
 
                 Op::Return => {

@@ -61,6 +61,10 @@ pub enum Op {
     AssertRequires, // _, a(bool_reg), b(clause_source_idx) -- error if false
     AssertEnsures,  // _, a(bool_reg), b(clause_source_idx) -- error if false
     AssertInvariant,// _, a(bool_reg), b(clause_source_idx) -- error if false
+
+    // Ownership tracking
+    MarkMoved,      // _, a(src_reg), _           -- mark register as moved
+    CheckNotMoved,  // _, a(src_reg), b(name_idx) -- error if register was moved (name for error msg)
 }
 
 /// A single bytecode instruction — fixed size for cache-friendly execution.

@@ -13,6 +13,10 @@ pub struct BytecodeCompiler {
     lambda_counter: usize,              // unique lambda name counter
     lambda_prefix: String,              // prefix for lambda names (avoids cross-module collisions)
     compiled_lambdas: Vec<BytecodeFunc>, // lambdas compiled during expression compilation
+    /// Maps function names to per-parameter ownership flags (true = Own, needs move tracking).
+    ownership_map: HashMap<String, Vec<bool>>,
+    /// Registers that have been marked as moved (need CheckNotMoved on subsequent loads).
+    moved_regs: std::collections::HashSet<u16>,
 }
 
 impl BytecodeCompiler {
@@ -26,6 +30,8 @@ impl BytecodeCompiler {
             lambda_counter: 0,
             lambda_prefix: String::new(),
             compiled_lambdas: Vec::new(),
+            ownership_map: HashMap::new(),
+            moved_regs: std::collections::HashSet::new(),
         }
     }
 
@@ -33,6 +39,11 @@ impl BytecodeCompiler {
         let mut c = Self::new();
         c.lambda_prefix = format!("{}_", prefix);
         c
+    }
+
+    /// Set the ownership map for move tracking during call compilation.
+    pub fn set_ownership_map(&mut self, map: HashMap<String, Vec<bool>>) {
+        self.ownership_map = map;
     }
 
     fn alloc_reg(&mut self) -> u16 {
@@ -248,6 +259,11 @@ impl BytecodeCompiler {
 
             IRNode::Load(name) => {
                 if let Some(&slot) = self.locals.get(name) {
+                    // If this register was marked as moved, emit a check
+                    if self.moved_regs.contains(&slot) {
+                        let name_idx = self.add_constant(Value::Str(name.clone()));
+                        self.emit(Op::CheckNotMoved, 0, slot, name_idx);
+                    }
                     if slot != dst {
                         self.emit(Op::Move, dst, slot, 0);
                     }
@@ -367,6 +383,19 @@ impl BytecodeCompiler {
                         None
                     };
 
+                    // Resolve ownership info for the callee
+                    let ownership = self.ownership_map.get(name).cloned();
+
+                    // Collect source registers for args that are variable loads
+                    // (needed for ownership tracking after args are compiled)
+                    let arg_source_regs: Vec<Option<u16>> = args.iter().map(|arg| {
+                        if let IRNode::Load(var_name) = arg {
+                            self.locals.get(var_name).copied()
+                        } else {
+                            None
+                        }
+                    }).collect();
+
                     // 1. Compile args to temp registers (safe, above all locals)
                     let save = self.next_reg;
                     let mut tmp_regs = Vec::new();
@@ -401,13 +430,76 @@ impl BytecodeCompiler {
                         }
                     }
 
-                    // 4. Emit call
+                    // 4a. Ownership: check for borrow+move conflicts and emit CheckNotMoved
+                    if let Some(ref own_flags) = ownership {
+                        // Detect borrow+move conflict: same source register used for
+                        // both an Own param and a non-Own (Ref/Mut) param
+                        let mut own_regs = std::collections::HashSet::new();
+                        let mut non_own_regs = std::collections::HashSet::new();
+                        for (i, is_own) in own_flags.iter().enumerate() {
+                            if let Some(Some(src_reg)) = arg_source_regs.get(i) {
+                                if *is_own {
+                                    own_regs.insert(*src_reg);
+                                } else {
+                                    non_own_regs.insert(*src_reg);
+                                }
+                            }
+                        }
+                        // If any register appears in both sets, emit a runtime error
+                        // for the borrow+move conflict
+                        for conflict_reg in own_regs.intersection(&non_own_regs) {
+                            // Find the variable name for the error message
+                            let var_name = args.iter().find_map(|arg| {
+                                if let IRNode::Load(vn) = arg {
+                                    if self.locals.get(vn) == Some(conflict_reg) {
+                                        Some(vn.clone())
+                                    } else { None }
+                                } else { None }
+                            }).unwrap_or_else(|| format!("register {}", conflict_reg));
+                            // Emit error message constant that includes "borrowed"
+                            let err_msg = format!("cannot move `{}` while it is borrowed in the same call", var_name);
+                            let err_idx = self.add_constant(Value::Str(err_msg));
+                            // Mark then check — guarantees the check will fail
+                            self.emit(Op::MarkMoved, 0, *conflict_reg, 0);
+                            self.emit(Op::CheckNotMoved, 0, *conflict_reg, err_idx);
+                        }
+
+                        // Emit CheckNotMoved for each Own param's source register
+                        if own_regs.intersection(&non_own_regs).next().is_none() {
+                            for (i, is_own) in own_flags.iter().enumerate() {
+                                if *is_own {
+                                    if let Some(Some(src_reg)) = arg_source_regs.get(i) {
+                                        let var_name = args.get(i).and_then(|arg| {
+                                            if let IRNode::Load(vn) = arg { Some(vn.clone()) } else { None }
+                                        }).unwrap_or_else(|| format!("register {}", src_reg));
+                                        let name_idx = self.add_constant(Value::Str(var_name));
+                                        self.emit(Op::CheckNotMoved, 0, *src_reg, name_idx);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 4b. Emit call
                     if is_local_call {
                         self.emit(Op::CallReg, dst, safe_callee, args.len() as u16);
                     } else {
                         let name_idx = self.add_constant(Value::Str(name.clone()));
                         self.emit(Op::Call, dst, name_idx, args.len() as u16);
                     }
+
+                    // 4c. Ownership: mark Own param source registers as moved
+                    if let Some(ref own_flags) = ownership {
+                        for (i, is_own) in own_flags.iter().enumerate() {
+                            if *is_own {
+                                if let Some(Some(src_reg)) = arg_source_regs.get(i) {
+                                    self.emit(Op::MarkMoved, 0, *src_reg, 0);
+                                    self.moved_regs.insert(*src_reg);
+                                }
+                            }
+                        }
+                    }
+
                     self.free_reg_to(save.max(dst + 1));
                 }
             }
@@ -713,6 +805,7 @@ impl BytecodeCompiler {
         // Inherit lambda counter and prefix to avoid name collisions
         compiler.lambda_counter = self.lambda_counter;
         compiler.lambda_prefix = self.lambda_prefix.clone();
+        compiler.ownership_map = self.ownership_map.clone();
         // Bind params to first N registers
         for (i, param) in params.iter().enumerate() {
             compiler.locals.insert(param.clone(), i as u16);
@@ -783,6 +876,7 @@ impl BytecodeCompiler {
         let mut compiler = BytecodeCompiler::new();
         compiler.lambda_counter = self.lambda_counter;
         compiler.lambda_prefix = self.lambda_prefix.clone();
+        compiler.ownership_map = self.ownership_map.clone();
 
         // Bind params to first N registers
         for (i, param) in params.iter().enumerate() {
