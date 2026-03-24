@@ -105,8 +105,8 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
     if lin_checker.has_errors() {
         let lin_diags = lin_checker.drain_diagnostics();
         match mode {
-            PipelineMode::Check | PipelineMode::Run => {
-                // Linearity errors are fatal — bytecode VM does not enforce ownership at runtime
+            PipelineMode::Check => {
+                // Linearity errors are fatal in Check mode
                 let mut msgs = Vec::new();
                 for d in lin_diags.errors() {
                     msgs.push(d.message.clone());
@@ -115,7 +115,8 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
                     msgs.join("; ")
                 )));
             }
-            PipelineMode::Repl => {
+            PipelineMode::Run | PipelineMode::Repl => {
+                // Warn only — runtime ownership tracking enforces moves via MarkMoved/CheckNotMoved
                 for d in lin_diags.errors() {
                     eprintln!("warning (linearity): {}", d.message);
                 }
@@ -158,9 +159,13 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
         }
     }
 
+    // Build ownership map: function name → per-param "is Own" flags
+    let ownership_map = build_ownership_map(&tops);
+
     // Compile AST → IR → Bytecode with contracts
     let (ir_nodes, contracts) = compile_tops_with_contracts(&tops);
     let mut bc_compiler = BytecodeCompiler::with_prefix("user");
+    bc_compiler.set_ownership_map(ownership_map);
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
 
     // Create VM, load stdlib, execute
@@ -448,6 +453,25 @@ fn compile_top_level(top: &airl_syntax::ast::TopLevel) -> IRNode {
     }
 }
 
+// ── Shared: ownership map builder ──────────────────────────
+
+/// Build a map from function names to per-parameter ownership flags.
+/// Only includes functions that have at least one explicitly `Own`-annotated parameter.
+fn build_ownership_map(tops: &[airl_syntax::ast::TopLevel]) -> HashMap<String, Vec<bool>> {
+    let mut map = HashMap::new();
+    for top in tops {
+        if let airl_syntax::ast::TopLevel::Defn(f) = top {
+            let own_flags: Vec<bool> = f.params.iter().map(|p| {
+                matches!(p.ownership, airl_syntax::ast::Ownership::Own)
+            }).collect();
+            if own_flags.iter().any(|&o| o) {
+                map.insert(f.name.clone(), own_flags);
+            }
+        }
+    }
+    map
+}
+
 // ── Shared: AST → IR with contracts ───────────────────────
 
 /// Compile a list of top-level AST nodes to IR, extracting contract clauses as IR+source pairs.
@@ -515,9 +539,11 @@ pub fn run_source_bytecode(source: &str) -> Result<Value, PipelineError> {
         return Err(PipelineError::Parse(diags));
     }
 
-    // Compile AST → IR with contracts
+    // Build ownership map and compile AST → IR with contracts
+    let ownership_map = build_ownership_map(&tops);
     let (ir_nodes, contracts) = compile_tops_with_contracts(&tops);
     let mut bc_compiler = BytecodeCompiler::with_prefix("user");
+    bc_compiler.set_ownership_map(ownership_map);
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
 
     // Create VM, load stdlib, execute
@@ -600,9 +626,11 @@ pub fn run_source_jit(source: &str) -> Result<Value, PipelineError> {
         return Err(PipelineError::Parse(diags));
     }
 
-    // Compile AST → IR → Bytecode with contracts
+    // Build ownership map and compile AST → IR → Bytecode with contracts
+    let ownership_map = build_ownership_map(&tops);
     let (ir_nodes, contracts) = compile_tops_with_contracts(&tops);
     let mut bc_compiler = BytecodeCompiler::with_prefix("user");
+    bc_compiler.set_ownership_map(ownership_map);
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
 
     // Create JIT-enabled VM
@@ -665,9 +693,11 @@ pub fn run_source_jit_full(source: &str) -> Result<Value, PipelineError> {
         return Err(PipelineError::Parse(diags));
     }
 
-    // Compile AST → IR → Bytecode with contracts
+    // Build ownership map and compile AST → IR → Bytecode with contracts
+    let ownership_map = build_ownership_map(&tops);
     let (ir_nodes, contracts) = compile_tops_with_contracts(&tops);
     let mut bc_compiler = BytecodeCompiler::with_prefix("user");
+    bc_compiler.set_ownership_map(ownership_map);
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
 
     // Create full-JIT-enabled VM

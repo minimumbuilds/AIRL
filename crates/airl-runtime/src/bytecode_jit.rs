@@ -84,6 +84,10 @@ impl BytecodeJit {
                 }
                 // Contract assertions are JIT-compilable (one conditional branch)
                 Op::AssertRequires | Op::AssertEnsures | Op::AssertInvariant => {}
+                // Ownership tracking — disqualify from JIT (fall back to bytecode VM)
+                Op::MarkMoved | Op::CheckNotMoved => {
+                    return false;
+                }
                 Op::Call => {
                     // Check if the call target is JIT-eligible
                     let name = match &func.constants[instr.a as usize] {

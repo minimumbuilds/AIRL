@@ -1,0 +1,9 @@
+;; ERROR: moved
+;; Passing with own should move the value
+(defn consume
+  :sig [(own x : i32) -> i32]
+  :intent "consume"
+  :requires [(>= x 0)]
+  :ensures [(>= result 0)]
+  :body x)
+(let (v : i32 42) (do (consume v) v))
