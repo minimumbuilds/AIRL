@@ -737,6 +737,150 @@ TEST(test_replace_empty_pattern) {
     airl_value_release(new_s);
 }
 
+/* ---- Task 5: Map Operations ---- */
+
+TEST(test_map_new) {
+    RtValue* m = airl_map_new();
+    assert(m->tag == RT_MAP);
+    assert(m->data.map.count == 0);
+    display_to_string(m);
+    assert(strcmp(display_buf, "{}") == 0);
+    airl_value_release(m);
+}
+
+TEST(test_map_set_get) {
+    RtValue* m = airl_map_new();
+    RtValue* m2 = airl_map_set(m, airl_str("name", 4), airl_str("AIRL", 4));
+    RtValue* v = airl_map_get(m2, airl_str("name", 4));
+    assert(v->tag == RT_STR);
+    assert(memcmp(v->data.s.ptr, "AIRL", 4) == 0);
+    airl_value_release(v);
+    airl_value_release(m2);
+    airl_value_release(m);
+}
+
+TEST(test_map_get_missing) {
+    RtValue* m = airl_map_new();
+    RtValue* v = airl_map_get(m, airl_str("nope", 4));
+    assert(v->tag == RT_NIL);
+    airl_value_release(v);
+    airl_value_release(m);
+}
+
+TEST(test_map_has) {
+    RtValue* m = airl_map_set(airl_map_new(), airl_str("x", 1), airl_int(1));
+    assert(airl_as_bool_raw(airl_map_has(m, airl_str("x", 1))) == 1);
+    assert(airl_as_bool_raw(airl_map_has(m, airl_str("y", 1))) == 0);
+    airl_value_release(m);
+}
+
+TEST(test_map_size) {
+    RtValue* m = airl_map_set(airl_map_set(airl_map_new(), airl_str("a", 1), airl_int(1)), airl_str("b", 1), airl_int(2));
+    RtValue* s = airl_map_size(m);
+    assert(s->data.i == 2);
+    airl_value_release(s);
+    airl_value_release(m);
+}
+
+TEST(test_map_keys_sorted) {
+    RtValue* m = airl_map_set(airl_map_set(airl_map_set(airl_map_new(),
+        airl_str("c", 1), airl_int(3)),
+        airl_str("a", 1), airl_int(1)),
+        airl_str("b", 1), airl_int(2));
+    RtValue* keys = airl_map_keys(m);
+    assert(keys->data.list.len == 3);
+    /* Must be sorted: a, b, c */
+    RtValue* k0 = keys->data.list.items[0];
+    RtValue* k1 = keys->data.list.items[1];
+    RtValue* k2 = keys->data.list.items[2];
+    assert(memcmp(k0->data.s.ptr, "a", 1) == 0);
+    assert(memcmp(k1->data.s.ptr, "b", 1) == 0);
+    assert(memcmp(k2->data.s.ptr, "c", 1) == 0);
+    airl_value_release(keys);
+    airl_value_release(m);
+}
+
+TEST(test_map_from) {
+    RtValue* items[] = {
+        airl_str("x", 1), airl_int(10),
+        airl_str("y", 1), airl_int(20)
+    };
+    RtValue* pairs = airl_list_new(items, 4);
+    RtValue* m = airl_map_from(pairs);
+    assert(m->data.map.count == 2);
+    RtValue* v = airl_map_get(m, airl_str("x", 1));
+    assert(v->data.i == 10);
+    airl_value_release(v);
+    airl_value_release(m);
+    airl_value_release(pairs);
+    for (int i = 0; i < 4; i++) airl_value_release(items[i]);
+}
+
+TEST(test_map_remove) {
+    RtValue* m = airl_map_set(airl_map_set(airl_map_new(),
+        airl_str("a", 1), airl_int(1)),
+        airl_str("b", 1), airl_int(2));
+    RtValue* m2 = airl_map_remove(m, airl_str("a", 1));
+    assert(m2->data.map.count == 1);
+    assert(airl_as_bool_raw(airl_map_has(m2, airl_str("a", 1))) == 0);
+    assert(airl_as_bool_raw(airl_map_has(m2, airl_str("b", 1))) == 1);
+    airl_value_release(m2);
+    airl_value_release(m);
+}
+
+TEST(test_map_display) {
+    RtValue* m = airl_map_set(airl_map_set(airl_map_new(),
+        airl_str("b", 1), airl_int(2)),
+        airl_str("a", 1), airl_int(1));
+    display_to_string(m);
+    /* Must be sorted by key: {a: 1 b: 2} */
+    assert(strcmp(display_buf, "{a: 1 b: 2}") == 0);
+    airl_value_release(m);
+}
+
+TEST(test_map_get_or) {
+    RtValue* m = airl_map_set(airl_map_new(), airl_str("x", 1), airl_int(42));
+    RtValue* v1 = airl_map_get_or(m, airl_str("x", 1), airl_int(0));
+    assert(v1->data.i == 42);
+    airl_value_release(v1);
+    RtValue* def = airl_int(99);
+    RtValue* v2 = airl_map_get_or(m, airl_str("missing", 7), def);
+    assert(v2->data.i == 99);
+    airl_value_release(v2);
+    airl_value_release(def);
+    airl_value_release(m);
+}
+
+TEST(test_map_values_sorted) {
+    RtValue* m = airl_map_set(airl_map_set(airl_map_set(airl_map_new(),
+        airl_str("c", 1), airl_int(30)),
+        airl_str("a", 1), airl_int(10)),
+        airl_str("b", 1), airl_int(20));
+    RtValue* vals = airl_map_values(m);
+    assert(vals->data.list.len == 3);
+    /* Values in key-sorted order: a->10, b->20, c->30 */
+    assert(vals->data.list.items[0]->data.i == 10);
+    assert(vals->data.list.items[1]->data.i == 20);
+    assert(vals->data.list.items[2]->data.i == 30);
+    airl_value_release(vals);
+    airl_value_release(m);
+}
+
+TEST(test_map_overwrite) {
+    RtValue* m = airl_map_set(airl_map_new(), airl_str("x", 1), airl_int(1));
+    RtValue* m2 = airl_map_set(m, airl_str("x", 1), airl_int(99));
+    assert(m2->data.map.count == 1);
+    RtValue* v = airl_map_get(m2, airl_str("x", 1));
+    assert(v->data.i == 99);
+    /* Original unchanged */
+    RtValue* v_orig = airl_map_get(m, airl_str("x", 1));
+    assert(v_orig->data.i == 1);
+    airl_value_release(v);
+    airl_value_release(v_orig);
+    airl_value_release(m2);
+    airl_value_release(m);
+}
+
 int main(void) {
     printf("C Runtime Tests (Task 1):\n");
     RUN(test_int);
@@ -823,6 +967,19 @@ int main(void) {
     RUN(test_replace);
     RUN(test_replace_multiple);
     RUN(test_replace_empty_pattern);
+    printf("\nC Runtime Tests (Task 5):\n");
+    RUN(test_map_new);
+    RUN(test_map_set_get);
+    RUN(test_map_get_missing);
+    RUN(test_map_has);
+    RUN(test_map_size);
+    RUN(test_map_keys_sorted);
+    RUN(test_map_from);
+    RUN(test_map_remove);
+    RUN(test_map_display);
+    RUN(test_map_get_or);
+    RUN(test_map_values_sorted);
+    RUN(test_map_overwrite);
     printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;
 }
