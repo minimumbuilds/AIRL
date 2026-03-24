@@ -41,6 +41,19 @@ pub extern "C" fn airl_as_bool_raw(v: *mut crate::value::RtValue) -> i64 {
     }
 }
 
+/// Extract raw i64 from an RtValue (Int → value, Float → bits, Bool → 0/1).
+/// Used for marshaling boxed values to unboxed function parameters.
+#[no_mangle]
+pub extern "C" fn airl_as_int_raw(v: *mut crate::value::RtValue) -> i64 {
+    let val = unsafe { &*v };
+    match &val.data {
+        crate::value::RtData::Int(n) => *n,
+        crate::value::RtData::Float(f) => f.to_bits() as i64,
+        crate::value::RtData::Bool(b) => *b as i64,
+        _ => 0, // Nil or other — shouldn't reach here for eligible functions
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
