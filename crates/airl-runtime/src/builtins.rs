@@ -26,6 +26,7 @@ impl Builtins {
         b.register_file_io();
         b.register_bytecode();
         b.register_system();
+        b.register_float_math();
         b
     }
 
@@ -1314,6 +1315,30 @@ impl Builtins {
         self.register("json-stringify", builtin_json_stringify);
         self.register("shell-exec", builtin_shell_exec);
     }
+
+    // ── Float Math ──────────────────────────────────────
+
+    fn register_float_math(&mut self) {
+        // Transcendentals
+        self.register("sqrt", builtin_sqrt);
+        self.register("sin", builtin_sin);
+        self.register("cos", builtin_cos);
+        self.register("tan", builtin_tan);
+        self.register("log", builtin_log);
+        self.register("exp", builtin_exp);
+        // Rounding
+        self.register("floor", builtin_floor);
+        self.register("ceil", builtin_ceil);
+        self.register("round", builtin_round);
+        // Conversion
+        self.register("float-to-int", builtin_float_to_int);
+        self.register("int-to-float", builtin_int_to_float);
+        // IEEE 754 special values
+        self.register("infinity", builtin_infinity);
+        self.register("nan", builtin_nan);
+        self.register("is-nan?", builtin_is_nan);
+        self.register("is-infinite?", builtin_is_infinite);
+    }
 }
 
 fn builtin_int_to_string(args: &[Value]) -> Result<Value, RuntimeError> {
@@ -1593,6 +1618,101 @@ fn builtin_shell_exec(args: &[Value]) -> Result<Value, RuntimeError> {
             Ok(Value::Variant("Ok".into(), Box::new(Value::Map(result_map))))
         }
         Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(e.to_string())))),
+    }
+}
+
+// ── Float math builtins ─────────────────────────────────────────────────────
+
+fn as_float(name: &str, v: &Value) -> Result<f64, RuntimeError> {
+    match v {
+        Value::Float(f) => Ok(*f),
+        Value::Int(n) => Ok(*n as f64),
+        _ => Err(RuntimeError::TypeError(format!("{}: expected number", name))),
+    }
+}
+
+fn builtin_sqrt(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("sqrt", args, 1)?;
+    Ok(Value::Float(as_float("sqrt", &args[0])?.sqrt()))
+}
+
+fn builtin_sin(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("sin", args, 1)?;
+    Ok(Value::Float(as_float("sin", &args[0])?.sin()))
+}
+
+fn builtin_cos(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("cos", args, 1)?;
+    Ok(Value::Float(as_float("cos", &args[0])?.cos()))
+}
+
+fn builtin_tan(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("tan", args, 1)?;
+    Ok(Value::Float(as_float("tan", &args[0])?.tan()))
+}
+
+fn builtin_log(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("log", args, 1)?;
+    Ok(Value::Float(as_float("log", &args[0])?.ln()))
+}
+
+fn builtin_exp(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("exp", args, 1)?;
+    Ok(Value::Float(as_float("exp", &args[0])?.exp()))
+}
+
+fn builtin_floor(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("floor", args, 1)?;
+    Ok(Value::Int(as_float("floor", &args[0])?.floor() as i64))
+}
+
+fn builtin_ceil(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("ceil", args, 1)?;
+    Ok(Value::Int(as_float("ceil", &args[0])?.ceil() as i64))
+}
+
+fn builtin_round(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("round", args, 1)?;
+    Ok(Value::Int(as_float("round", &args[0])?.round() as i64))
+}
+
+fn builtin_float_to_int(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("float-to-int", args, 1)?;
+    Ok(Value::Int(as_float("float-to-int", &args[0])?.trunc() as i64))
+}
+
+fn builtin_int_to_float(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("int-to-float", args, 1)?;
+    match &args[0] {
+        Value::Int(n) => Ok(Value::Float(*n as f64)),
+        Value::Float(f) => Ok(Value::Float(*f)),
+        _ => Err(RuntimeError::TypeError("int-to-float: expected integer".into())),
+    }
+}
+
+fn builtin_infinity(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("infinity", args, 0)?;
+    Ok(Value::Float(f64::INFINITY))
+}
+
+fn builtin_nan(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("nan", args, 0)?;
+    Ok(Value::Float(f64::NAN))
+}
+
+fn builtin_is_nan(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("is-nan?", args, 1)?;
+    match &args[0] {
+        Value::Float(f) => Ok(Value::Bool(f.is_nan())),
+        _ => Ok(Value::Bool(false)),
+    }
+}
+
+fn builtin_is_infinite(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("is-infinite?", args, 1)?;
+    match &args[0] {
+        Value::Float(f) => Ok(Value::Bool(f.is_infinite())),
+        _ => Ok(Value::Bool(false)),
     }
 }
 

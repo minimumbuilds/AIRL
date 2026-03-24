@@ -105,6 +105,10 @@ impl TypeChecker {
             // System builtins
             "str", "int-to-string", "float-to-string", "string-to-int", "string-to-float",
             "char-code", "char-from-code",
+            // Float math
+            "sqrt", "sin", "cos", "tan", "log", "exp",
+            "floor", "ceil", "round", "float-to-int", "int-to-float",
+            "infinity", "nan", "is-nan?", "is-infinite?",
             "json-parse", "json-stringify", "http-post", "http-request",
             "shell-exec", "time-now", "getenv",
             "run-bytecode", "compile-to-executable",
