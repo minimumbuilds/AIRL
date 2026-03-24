@@ -28,6 +28,42 @@ Run with `cargo run -- run hello.airl`. Type-check and verify with `cargo run --
 
 ---
 
+## CRITICAL: What AIRL Does NOT Have
+
+**AIRL is a purely functional language. The following constructs DO NOT EXIST and will cause parse or runtime errors if used:**
+
+| Do NOT write | AIRL has no... | Instead use |
+|---|---|---|
+| `while`, `for`, `loop` | Loops of any kind | `fold`, `map`, `filter`, or recursion |
+| `set!`, `var`, `mut x =` | Variable mutation/reassignment | New `let` bindings (immutable) |
+| `return` | Early return | The body expression IS the return value |
+| `class`, `def`, `import` | OOP or Python-style definitions | `defn` for functions, `deftype` for types |
+| `char-code`, `ord`, `chr` | Character-to-integer conversion | `chars` to split string, then string comparison |
+| `begin`, `progn` | Other sequencing forms | `do` for sequencing |
+| `+=`, `-=`, `++`, `--` | Compound assignment | Compute new value in `let` or `fold` |
+
+**If you find yourself wanting a loop, STOP and use one of these patterns:**
+
+```lisp
+;; Accumulate a value over a range → fold
+(fold (fn [acc _] (* acc base)) 1 (range 0 exponent))
+
+;; Transform each element → map
+(map (fn [x] (* x 2)) [1 2 3])
+
+;; Keep matching elements → filter
+(filter (fn [x] (> x 3)) [1 2 3 4 5])
+
+;; Conditional recursion → defn that calls itself
+(defn factorial
+  :sig [(n : i64) -> i64]
+  :requires [(>= n 0)]
+  :ensures [(> result 0)]
+  :body (if (= n 0) 1 (* n (factorial (- n 1)))))
+```
+
+---
+
 ## 2. Core Syntax
 
 ### S-Expressions
@@ -57,6 +93,38 @@ Everything is an S-expression: `(operator arg1 arg2 ...)`. Parentheses delimit c
 ### Symbols
 
 Symbols are identifiers: `x`, `my-function`, `tensor.add`. Hyphens are allowed in names. Symbols starting with an uppercase letter are variant constructors: `Ok`, `Err`, `Some`, `None`.
+
+### S-Expression Nesting and Parenthesis Counting
+
+Each `let` opens one parenthesis. The body of a `let` is the **last expression before its closing paren**. N nested `let` bindings require N closing parens:
+
+```lisp
+;; 3 nested lets → 3 closing parens
+(let (a : i64 1)                  ;; let #1 opens
+  (let (b : i64 2)                ;; let #2 opens
+    (let (c : i64 (+ a b))        ;; let #3 opens
+      (print c))))                ;; body, then ))) closes #3, #2, #1
+```
+
+**Common mistake — closing `let` before its body:**
+```lisp
+;; WRONG — the let is closed before the body
+(let (x : i64 (+ a b)))    ;; ← extra ) closes the let with no body
+  (print x))                ;; ← this is NOT inside the let
+
+;; CORRECT
+(let (x : i64 (+ a b))     ;; ← no extra ), body follows
+  (print x))                ;; ← this IS the let body
+```
+
+**`if` has exactly 3 subforms** — condition, then-branch, else-branch:
+```lisp
+;; WRONG — 4 subforms (let after else looks like a 4th form)
+(if (= n 0) [] (let (x : i64 5)) x)
+
+;; CORRECT — wrap in do if you need multiple expressions
+(if (= n 0) [] (let (x : i64 5) x))
+```
 
 ---
 
@@ -275,10 +343,20 @@ All take 2 arguments, return `Bool`. Work on Int, UInt, Float, and String.
 
 | Operator | Arity | Description |
 |----------|-------|-------------|
-| `and` | 2 | Logical AND (both must be Bool) |
-| `or` | 2 | Logical OR |
+| `and` | **2 only** | Logical AND (both must be Bool) |
+| `or` | **2 only** | Logical OR |
 | `not` | 1 | Logical NOT |
 | `xor` | 2 | Logical XOR |
+
+**`and` and `or` take exactly 2 arguments.** They are NOT variadic. To combine multiple conditions, nest them:
+
+```lisp
+;; WRONG — or takes 2 args, not 5
+(or (= x 1) (= x 2) (= x 3) (= x 4) (= x 5))
+
+;; CORRECT — nest binary or calls
+(or (= x 1) (or (= x 2) (or (= x 3) (or (= x 4) (= x 5)))))
+```
 
 ### Collections
 
@@ -289,7 +367,7 @@ All take 2 arguments, return `Bool`. Work on Int, UInt, Float, and String.
 | `append` | `(append list element)` → List | Return new list with element added at end |
 | `head` | `(head list)` → element | First element of list. Errors on empty list |
 | `tail` | `(tail list)` → List | All elements except the first. Errors on empty list |
-| `empty?` | `(empty? list)` → Bool | Returns `true` if list is empty |
+| `empty?` | `(empty? list)` → Bool | **List only.** Returns `true` if list is empty. For strings use `(= s "")` |
 | `cons` | `(cons element list)` → List | Prepend element to front of list |
 
 ```lisp
@@ -300,12 +378,20 @@ All take 2 arguments, return `Bool`. Work on Int, UInt, Float, and String.
 (tail [10 20 30])     ;; → [20 30]
 (empty? [])           ;; → true
 (cons 0 [1 2 3])      ;; → [0 1 2 3]
+(= "" "")             ;; → true (check empty string this way, NOT with empty?)
 ```
+
+**Functions that do NOT exist in AIRL** — do not use these:
+
+`nil?`, `null?`, `take`, `drop`, `list`, `try`, `catch`, `throw`, `concat`, `char-code`, `ord`, `chr`, `char-from-code`, `char-at-int`, `string-ref`, `number->string`, `string->number`, `typeof`, `instanceof`, `require`, `import`
+
+If you need key-value associations, use `Map` (not lists of pairs). If you need to parse a number from a string, use `string-to-int`. If you need to check string emptiness, use `(= s "")`.
 
 ### Utility
 
 | Function | Arity | Description |
 |----------|-------|-------------|
+| `str` | variadic | Concatenate all arguments into one String. Strings are included as-is (no quotes); all other types are auto-coerced via Display. `(str "count: " 42 " done")` → `"count: 42 done"` |
 | `print` | variadic | Print all arguments to stdout, returns Unit |
 | `type-of` | 1 | Returns type name as String (e.g., `"Int"`, `"Bool"`) |
 | `shape` | 1 | Returns tensor shape as List of Int |
@@ -1043,6 +1129,85 @@ Since `let` returns the body expression, chain computations with nested `let`:
           (print "Done:" results))))))
 ```
 
+### Imperative → Functional Translations
+
+If you are tempted to use a loop, here is how to translate common imperative patterns:
+
+**Power / exponentiation (loop with accumulator → fold):**
+```lisp
+;; WRONG — AIRL has no while or set!
+;; (let (result 1) (while (< i n) (set! result (* result base))))
+
+;; CORRECT — fold over a range
+(defn power
+  :sig [(base : i64) (exp : i64) -> i64]
+  :requires [(>= exp 0)]
+  :ensures [(valid result)]
+  :body (fold (fn [acc _] (* acc base)) 1 (range 0 exp)))
+```
+
+**Build a list from indices (loop appending → map with range):**
+```lisp
+;; WRONG — no while/set!/append-in-loop
+;; (let (acc []) (while (< i n) (set! acc (append acc (f i)))))
+
+;; CORRECT — map over a range
+(map (fn [i] (* i i)) (range 0 5))    ;; → [0 1 4 9 16]
+```
+
+**Running sum (loop with running total → fold building a list):**
+```lisp
+(defn running-sum
+  :sig [(xs : List) -> List]
+  :requires [(valid xs)]
+  :ensures [(= (length result) (length xs))]
+  :body (if (empty? xs)
+          []
+          (let (first-val : i64 (head xs))
+            (fold (fn [acc x]
+                    (append acc (+ (at acc (- (length acc) 1)) x)))
+                  [first-val]
+                  (tail xs)))))
+```
+
+**Counting occurrences (loop with counter → fold):**
+```lisp
+(defn count-vowels
+  :sig [(s : String) -> i64]
+  :requires [(valid s)]
+  :ensures [(>= result 0)]
+  :body (let (chars-list : List (chars s))
+          (fold (fn [count c]
+                  (if (or (= c "a") (or (= c "e") (or (= c "i") (or (= c "o") (= c "u")))))
+                    (+ count 1)
+                    count))
+                0 chars-list)))
+                0 chars-list)))
+```
+
+**Zip two lists (indexed loop → fold with range):**
+```lisp
+(defn zip-lists
+  :sig [(xs : List) (ys : List) -> List]
+  :requires [(valid xs) (valid ys)]
+  :ensures [(valid result)]
+  :body (let (len : i64 (min (length xs) (length ys)))
+          (map (fn [i] [(at xs i) (at ys i)]) (range 0 len))))
+```
+
+**Merge sorted lists (while with two pointers → recursion):**
+```lisp
+(defn merge-sorted
+  :sig [(xs : List) (ys : List) -> List]
+  :requires [(valid xs) (valid ys)]
+  :ensures [(valid result)]
+  :body (if (empty? xs) ys
+          (if (empty? ys) xs
+            (if (<= (head xs) (head ys))
+              (cons (head xs) (merge-sorted (tail xs) ys))
+              (cons (head ys) (merge-sorted xs (tail ys)))))))
+```
+
 ---
 
 ## 19. Gotchas and Common Mistakes
@@ -1074,3 +1239,13 @@ Since `let` returns the body expression, chain computations with nested `let`:
 13. **Division of integers is integer division.** `(/ 10 3)` returns `3`, not `3.333...`. For float division use `(/ 10.0 3.0)`.
 
 14. **Let bindings require type annotations.** Write `(let (x : i64 5) ...)`, **not** `(let (x 5) ...)`.
+
+15. **No loops or mutation.** AIRL has no `while`, `for`, `set!`, or variable reassignment. Use `fold`, `map`, `filter`, or recursion. See the "Imperative → Functional Translations" section above.
+
+16. **`empty?` is for lists only.** To check if a string is empty, use `(= s "")` or `(= (length s) 0)`. `(empty? some-string)` is a runtime error.
+
+17. **`let` must have a body expression.** `(let (x : i64 5))` is invalid — there's no body. Write `(let (x : i64 5) (+ x 1))`. The body is the expression after the binding, before the closing paren.
+
+18. **`if` has exactly 3 subforms.** `(if cond then else)` — condition, then-branch, else-branch. No more, no less. If you need multiple statements in a branch, wrap them in `do`: `(if cond (do a b c) else-expr)`.
+
+19. **No `char-code`/`ord`/`chr`.** AIRL has no character-to-integer conversion builtins. For character-level operations, use `(chars s)` to split a string into single-character strings, then compare with string equality: `(= c "a")`.

@@ -1,14 +1,25 @@
 # AIRL Standard Library: String
 
-> Source: `stdlib/string.airl` + 13 Rust builtins | 23 functions total | Auto-loaded
+> Source: `stdlib/string.airl` + 14 Rust builtins | 24 functions total | Auto-loaded
 
-String manipulation functions. The 13 core operations are Rust builtins (character-level access requires native code). The 10 higher-level helpers are pure AIRL built on top. All functions are available automatically — no imports needed.
+String manipulation functions. The 14 core operations are Rust builtins (character-level access requires native code). The 10 higher-level helpers are pure AIRL built on top. All functions are available automatically — no imports needed.
 
 ## Dependencies
 
 Higher-level functions depend on Collections (`filter`, `reverse`) and string builtins (`chars`, `join`, `split`, `trim`).
 
 ## Builtin Functions (Rust)
+
+### String Construction
+
+```lisp
+(str "hello" " " "world")           ;; → "hello world"
+(str "count: " 42)                   ;; → "count: 42"    (auto-coerces Int)
+(str "result: " true " val: " 7)    ;; → "result: true val: 7"
+(str)                                ;; → ""              (zero args = empty string)
+```
+
+`str` is variadic — takes any number of arguments. Strings are included as-is (no quotes). All other types (Int, Float, Bool, List, etc.) are auto-coerced to their string representation. This is the preferred way to build strings — use `str` instead of nested `(+ ...)` calls.
 
 ### Character Access
 

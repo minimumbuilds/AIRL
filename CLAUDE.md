@@ -81,7 +81,8 @@ The stdlib is 4 modules (46 functions total) — mostly pure AIRL, with Rust bui
 - `empty?` — is list empty? → Bool
 - `cons` — prepend element to front of list → List
 
-**String builtins** (13) in `crates/airl-runtime/src/builtins.rs`:
+**String builtins** (14) in `crates/airl-runtime/src/builtins.rs`:
+- `str` — **variadic string concatenation with auto-coercion**. `(str "count: " 42 " done")` → `"count: 42 done"`. Strings included as-is (no quotes); all other types auto-coerced via Display.
 - `char-at`, `substring`, `chars` — character access (Unicode-safe)
 - `split`, `join` — split/join strings
 - `contains`, `starts-with`, `ends-with`, `index-of` — search

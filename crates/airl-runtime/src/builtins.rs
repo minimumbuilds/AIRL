@@ -25,6 +25,7 @@ impl Builtins {
         b.register_map();
         b.register_file_io();
         b.register_bytecode();
+        b.register_system();
         b
     }
 
@@ -103,6 +104,7 @@ impl Builtins {
     // ── String ──────────────────────────────────────────
 
     fn register_string(&mut self) {
+        self.register("str", builtin_str);
         self.register("char-at", builtin_char_at);
         self.register("substring", builtin_substring);
         self.register("split", builtin_split);
@@ -657,6 +659,20 @@ fn builtin_valid(args: &[Value]) -> Result<Value, RuntimeError> {
 
 // ── String implementations ──────────────────────────────
 
+/// Variadic string concatenation with auto-coercion.
+/// (str "hello" " " 42 " " true) → "hello 42 true"
+/// Strings are included without quotes; all other types use Display.
+fn builtin_str(args: &[Value]) -> Result<Value, RuntimeError> {
+    let mut buf = String::new();
+    for arg in args {
+        match arg {
+            Value::Str(s) => buf.push_str(s),
+            other => buf.push_str(&format!("{}", other)),
+        }
+    }
+    Ok(Value::Str(buf))
+}
+
 fn builtin_char_at(args: &[Value]) -> Result<Value, RuntimeError> {
     expect_arity("char-at", args, 2)?;
     match (&args[0], &args[1]) {
@@ -1129,6 +1145,204 @@ fn builtin_run_bytecode(args: &[Value]) -> Result<Value, RuntimeError> {
         _ => return Err(RuntimeError::TypeError("run-bytecode: expected list of BCFunc".into())),
     };
     crate::bytecode_marshal::run_bytecode_program(&func_list)
+}
+
+// ── System builtins (type conversions, timing, env, http, json, shell) ──────
+
+impl Builtins {
+    fn register_system(&mut self) {
+        self.register("int-to-string", builtin_int_to_string);
+        self.register("float-to-string", builtin_float_to_string);
+        self.register("string-to-int", builtin_string_to_int);
+        self.register("time-now", builtin_time_now);
+        self.register("getenv", builtin_getenv);
+        self.register("http-post", builtin_http_post);
+        self.register("json-parse", builtin_json_parse);
+        self.register("json-stringify", builtin_json_stringify);
+        self.register("shell-exec", builtin_shell_exec);
+    }
+}
+
+fn builtin_int_to_string(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("int-to-string", args, 1)?;
+    match &args[0] {
+        Value::Int(n) => Ok(Value::Str(n.to_string())),
+        _ => Err(RuntimeError::TypeError("int-to-string: expected integer".into())),
+    }
+}
+
+fn builtin_float_to_string(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("float-to-string", args, 1)?;
+    match &args[0] {
+        Value::Float(f) => Ok(Value::Str(f.to_string())),
+        _ => Err(RuntimeError::TypeError("float-to-string: expected float".into())),
+    }
+}
+
+fn builtin_string_to_int(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("string-to-int", args, 1)?;
+    match &args[0] {
+        Value::Str(s) => match s.parse::<i64>() {
+            Ok(n) => Ok(Value::Variant("Ok".into(), Box::new(Value::Int(n)))),
+            Err(_) => Ok(Value::Variant("Err".into(), Box::new(Value::Str("invalid integer".into())))),
+        },
+        _ => Err(RuntimeError::TypeError("string-to-int: expected string".into())),
+    }
+}
+
+fn builtin_time_now(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("time-now", args, 0)?;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    Ok(Value::Int(millis))
+}
+
+fn builtin_getenv(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("getenv", args, 1)?;
+    match &args[0] {
+        Value::Str(name) => match std::env::var(name) {
+            Ok(val) => Ok(Value::Variant("Ok".into(), Box::new(Value::Str(val)))),
+            Err(_) => Ok(Value::Variant("Err".into(), Box::new(Value::Str("not set".into())))),
+        },
+        _ => Err(RuntimeError::TypeError("getenv: expected string".into())),
+    }
+}
+
+fn builtin_http_post(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("http-post", args, 3)?;
+    let url = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("http-post: url must be string".into())),
+    };
+    let body = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("http-post: body must be string".into())),
+    };
+    let headers = match &args[2] {
+        Value::Map(m) => m.clone(),
+        _ => return Err(RuntimeError::TypeError("http-post: headers must be map".into())),
+    };
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(300))
+        .build();
+
+    let mut req = agent.post(&url);
+    for (k, v) in &headers {
+        if let Value::Str(val) = v {
+            req = req.set(k, val);
+        }
+    }
+
+    match req.send_string(&body) {
+        Ok(response) => {
+            match response.into_string() {
+                Ok(text) => Ok(Value::Variant("Ok".into(), Box::new(Value::Str(text)))),
+                Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(e.to_string())))),
+            }
+        }
+        Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(e.to_string())))),
+    }
+}
+
+fn builtin_json_parse(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("json-parse", args, 1)?;
+    let text = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("json-parse: expected string".into())),
+    };
+    match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(json) => Ok(Value::Variant("Ok".into(), Box::new(json_to_value(json)))),
+        Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(e.to_string())))),
+    }
+}
+
+fn json_to_value(json: serde_json::Value) -> Value {
+    match json {
+        serde_json::Value::Null => Value::Nil,
+        serde_json::Value::Bool(b) => Value::Bool(b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else {
+                Value::Float(n.as_f64().unwrap_or(0.0))
+            }
+        }
+        serde_json::Value::String(s) => Value::Str(s),
+        serde_json::Value::Array(arr) => {
+            Value::List(arr.into_iter().map(json_to_value).collect())
+        }
+        serde_json::Value::Object(obj) => {
+            let mut map = std::collections::HashMap::new();
+            for (k, v) in obj {
+                map.insert(k, json_to_value(v));
+            }
+            Value::Map(map)
+        }
+    }
+}
+
+fn builtin_json_stringify(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("json-stringify", args, 1)?;
+    let json = value_to_json(&args[0]);
+    Ok(Value::Str(json.to_string()))
+}
+
+fn value_to_json(v: &Value) -> serde_json::Value {
+    match v {
+        Value::Nil => serde_json::Value::Null,
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::Int(n) => serde_json::Value::Number((*n).into()),
+        Value::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        Value::Str(s) => serde_json::Value::String(s.clone()),
+        Value::List(items) => serde_json::Value::Array(items.iter().map(value_to_json).collect()),
+        Value::Map(map) => {
+            let obj: serde_json::Map<String, serde_json::Value> =
+                map.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect();
+            serde_json::Value::Object(obj)
+        }
+        Value::Variant(tag, inner) => {
+            let mut obj = serde_json::Map::new();
+            obj.insert("tag".into(), serde_json::Value::String(tag.clone()));
+            obj.insert("value".into(), value_to_json(inner));
+            serde_json::Value::Object(obj)
+        }
+        _ => serde_json::Value::Null,
+    }
+}
+
+fn builtin_shell_exec(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("shell-exec", args, 2)?;
+    let command = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("shell-exec: command must be string".into())),
+    };
+    let cmd_args: Vec<String> = match &args[1] {
+        Value::List(items) => items.iter().map(|v| match v {
+            Value::Str(s) => Ok(s.clone()),
+            _ => Err(RuntimeError::TypeError("shell-exec: args must be list of strings".into())),
+        }).collect::<Result<Vec<_>, _>>()?,
+        _ => return Err(RuntimeError::TypeError("shell-exec: args must be list".into())),
+    };
+
+    match std::process::Command::new(&command)
+        .args(&cmd_args)
+        .output()
+    {
+        Ok(output) => {
+            let mut result_map = std::collections::HashMap::new();
+            result_map.insert("stdout".into(), Value::Str(String::from_utf8_lossy(&output.stdout).into_owned()));
+            result_map.insert("stderr".into(), Value::Str(String::from_utf8_lossy(&output.stderr).into_owned()));
+            result_map.insert("exit-code".into(), Value::Int(output.status.code().unwrap_or(-1) as i64));
+            Ok(Value::Variant("Ok".into(), Box::new(Value::Map(result_map))))
+        }
+        Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(e.to_string())))),
+    }
 }
 
 #[cfg(test)]
