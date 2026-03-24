@@ -103,8 +103,21 @@ RtValue* airl_length(RtValue* v) {
     switch (v->tag) {
         case RT_LIST:
             return airl_int((int64_t)v->data.list.len);
-        case RT_STR:
-            return airl_int((int64_t)v->data.s.len);
+        case RT_STR: {
+            /* Return character count (Unicode codepoints), not byte length */
+            size_t count = 0;
+            size_t i = 0;
+            while (i < v->data.s.len) {
+                unsigned char byte = (unsigned char)v->data.s.ptr[i];
+                if (byte < 0x80) i += 1;
+                else if ((byte & 0xE0) == 0xC0) i += 2;
+                else if ((byte & 0xF0) == 0xE0) i += 3;
+                else if ((byte & 0xF8) == 0xF0) i += 4;
+                else i += 1;
+                count++;
+            }
+            return airl_int((int64_t)count);
+        }
         case RT_MAP:
             return airl_int((int64_t)v->data.map.count);
         default:

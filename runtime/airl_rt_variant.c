@@ -366,3 +366,14 @@ int64_t airl_jit_contract_fail(int64_t kind, int64_t fn_idx, int64_t clause_idx)
             (long long)kind, (long long)fn_idx, (long long)clause_idx);
     return 0;
 }
+
+/* ---- Flush / Error ---- */
+
+void airl_flush_stdout(void) {
+    fflush(stdout);
+}
+
+void airl_runtime_error(const char* msg, size_t len) {
+    fprintf(stderr, "Runtime error: %.*s\n", (int)len, msg);
+    exit(1);
+}
