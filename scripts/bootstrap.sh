@@ -40,19 +40,16 @@ echo "  Built: $RUNTIME_DIR/libairl_rt_c.a"
 
 echo ""
 echo "=== Stage 1: Compile AIRL → C via bootstrap compiler ==="
-# Concatenate all bootstrap modules + driver
-cat "$BOOTSTRAP_DIR/lexer.airl" \
-    "$BOOTSTRAP_DIR/parser.airl" \
-    "$BOOTSTRAP_DIR/compiler.airl" \
-    "$BOOTSTRAP_DIR/codegen_c.airl" \
-    "$BOOTSTRAP_DIR/driver.airl" \
-    > "$BUILD_DIR/airl_cc.airl"
-
-echo "  Bootstrap compiler: $(wc -l < "$BUILD_DIR/airl_cc.airl") lines"
 echo "  Input: $INPUT"
 
-# Run the bootstrap compiler (uses --bytecode to avoid JIT issues with large files)
-cargo run --release --features jit -- run --bytecode "$BUILD_DIR/airl_cc.airl" -- "$INPUT" 2>/dev/null \
+# Run the bootstrap compiler using --load to pre-load modules separately
+# (avoids concatenation + JIT issues with large single files)
+RUST_MIN_STACK=67108864 cargo run --release --features jit -- run \
+    --load "$BOOTSTRAP_DIR/lexer.airl" \
+    --load "$BOOTSTRAP_DIR/parser.airl" \
+    --load "$BOOTSTRAP_DIR/compiler.airl" \
+    --load "$BOOTSTRAP_DIR/codegen_c.airl" \
+    "$BOOTSTRAP_DIR/driver.airl" -- "$INPUT" 2>/dev/null \
     | sed '1s/^"//; /^nil$/d; /^"$/d' \
     > "$BUILD_DIR/output.c"
 
