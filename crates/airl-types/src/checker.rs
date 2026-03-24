@@ -100,6 +100,8 @@ impl TypeChecker {
             "map-filter", "map-update", "map-update-or", "map-count",
             // File I/O
             "read-file", "write-file", "file-exists?", "get-args",
+            "append-file", "delete-file", "delete-dir", "rename-file",
+            "read-dir", "create-dir", "file-size", "is-dir?",
             // System builtins
             "str", "int-to-string", "float-to-string", "string-to-int",
             "json-parse", "json-stringify", "http-post",

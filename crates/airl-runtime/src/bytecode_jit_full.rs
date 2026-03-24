@@ -124,8 +124,18 @@ pub struct RuntimeImports {
     pub map_size:   FuncId,   // (map) -> int
 
     // File I/O
-    pub read_file: FuncId,      // (path_str) -> str
-    pub get_args:  FuncId,      // () -> list
+    pub read_file:   FuncId,      // (path_str) -> str
+    pub write_file:  FuncId,      // (path, content) -> result
+    pub file_exists: FuncId,      // (path) -> bool
+    pub append_file: FuncId,      // (path, content) -> result
+    pub delete_file: FuncId,      // (path) -> result
+    pub delete_dir:  FuncId,      // (path) -> result
+    pub rename_file: FuncId,      // (old, new) -> result
+    pub read_dir:    FuncId,      // (path) -> list
+    pub create_dir:  FuncId,      // (path) -> result
+    pub file_size:   FuncId,      // (path) -> int
+    pub is_dir:      FuncId,      // (path) -> bool
+    pub get_args:    FuncId,      // () -> list
     pub run_bytecode: FuncId,   // (list_of_bcfuncs) -> result
 
     // Contract failure
@@ -368,6 +378,16 @@ impl BytecodeJitFull {
         builder.symbol("airl_type_of",      io::airl_type_of      as *const u8);
         builder.symbol("airl_valid",        io::airl_valid        as *const u8);
         builder.symbol("airl_read_file",    io::airl_read_file    as *const u8);
+        builder.symbol("airl_write_file",   io::airl_write_file   as *const u8);
+        builder.symbol("airl_file_exists",  io::airl_file_exists  as *const u8);
+        builder.symbol("airl_append_file",  io::airl_append_file  as *const u8);
+        builder.symbol("airl_delete_file",  io::airl_delete_file  as *const u8);
+        builder.symbol("airl_delete_dir",   io::airl_delete_dir   as *const u8);
+        builder.symbol("airl_rename_file",  io::airl_rename_file  as *const u8);
+        builder.symbol("airl_read_dir",     io::airl_read_dir     as *const u8);
+        builder.symbol("airl_create_dir",   io::airl_create_dir   as *const u8);
+        builder.symbol("airl_file_size",    io::airl_file_size    as *const u8);
+        builder.symbol("airl_is_dir",       io::airl_is_dir       as *const u8);
         builder.symbol("airl_get_args",     io::airl_get_args     as *const u8);
         builder.symbol("airl_run_bytecode", crate::bytecode_marshal::airl_run_bytecode as *const u8);
         #[cfg(feature = "aot")]
@@ -507,8 +527,18 @@ impl BytecodeJitFull {
         let map_size   = declare_import(m, "airl_map_size",   s1.clone());
 
         // File I/O
-        let read_file = declare_import(m, "airl_read_file", s1.clone());
-        let get_args  = declare_import(m, "airl_get_args",  sig_0_ptr(m));
+        let read_file   = declare_import(m, "airl_read_file",   s1.clone());
+        let write_file  = declare_import(m, "airl_write_file",  s2.clone());
+        let file_exists = declare_import(m, "airl_file_exists", s1.clone());
+        let append_file = declare_import(m, "airl_append_file", s2.clone());
+        let delete_file = declare_import(m, "airl_delete_file", s1.clone());
+        let delete_dir  = declare_import(m, "airl_delete_dir",  s1.clone());
+        let rename_file = declare_import(m, "airl_rename_file", s2.clone());
+        let read_dir    = declare_import(m, "airl_read_dir",    s1.clone());
+        let create_dir  = declare_import(m, "airl_create_dir",  s1.clone());
+        let file_size   = declare_import(m, "airl_file_size",   s1.clone());
+        let is_dir      = declare_import(m, "airl_is_dir",      s1.clone());
+        let get_args    = declare_import(m, "airl_get_args",    sig_0_ptr(m));
         let run_bytecode = declare_import(m, "airl_run_bytecode", s1.clone());
 
         // Contract failure: (i64, i64, i64) -> i64
@@ -534,7 +564,10 @@ impl BytecodeJitFull {
             ends_with, index_of, trim, to_upper, to_lower, replace,
             map_new, map_from, map_get, map_get_or, map_set, map_has,
             map_remove, map_keys, map_values, map_size,
-            read_file, get_args, run_bytecode,
+            read_file, write_file, file_exists,
+            append_file, delete_file, delete_dir, rename_file,
+            read_dir, create_dir, file_size, is_dir,
+            get_args, run_bytecode,
             contract_fail,
         }
     }
@@ -611,6 +644,16 @@ impl BytecodeJitFull {
 
         // File I/O
         m.insert("read-file".into(),    rt.read_file);
+        m.insert("write-file".into(),   rt.write_file);
+        m.insert("file-exists?".into(), rt.file_exists);
+        m.insert("append-file".into(),  rt.append_file);
+        m.insert("delete-file".into(),  rt.delete_file);
+        m.insert("delete-dir".into(),   rt.delete_dir);
+        m.insert("rename-file".into(),  rt.rename_file);
+        m.insert("read-dir".into(),     rt.read_dir);
+        m.insert("create-dir".into(),   rt.create_dir);
+        m.insert("file-size".into(),    rt.file_size);
+        m.insert("is-dir?".into(),      rt.is_dir);
         m.insert("get-args".into(),     rt.get_args);
         m.insert("run-bytecode".into(), rt.run_bytecode);
 

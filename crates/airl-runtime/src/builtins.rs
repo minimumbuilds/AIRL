@@ -152,6 +152,14 @@ impl Builtins {
         self.register("write-file", builtin_write_file);
         self.register("file-exists?", builtin_file_exists);
         self.register("get-args", builtin_get_args);
+        self.register("append-file", builtin_append_file);
+        self.register("delete-file", builtin_delete_file);
+        self.register("delete-dir", builtin_delete_dir);
+        self.register("rename-file", builtin_rename_file);
+        self.register("create-dir", builtin_create_dir);
+        self.register("read-dir", builtin_read_dir);
+        self.register("file-size", builtin_file_size);
+        self.register("is-dir?", builtin_is_dir);
         #[cfg(feature = "aot")]
         self.register("compile-to-executable", builtin_compile_to_executable);
     }
@@ -1110,6 +1118,147 @@ fn builtin_file_exists(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Bool(validated.exists()))
 }
 
+fn builtin_append_file(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("append-file", args, 2)?;
+    let path = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("append-file: first argument must be a string path".into())),
+    };
+    let content = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("append-file: second argument must be a string".into())),
+    };
+    let validated = validate_sandboxed_path("append-file", &path)?;
+    // Create parent directories if needed
+    if let Some(parent) = validated.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                RuntimeError::Custom(format!("append-file: cannot create directory: {}", e))
+            })?;
+        }
+    }
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&validated)
+        .map_err(|e| RuntimeError::Custom(format!("append-file: {}: {}", path, e)))?;
+    file.write_all(content.as_bytes())
+        .map_err(|e| RuntimeError::Custom(format!("append-file: {}: {}", path, e)))?;
+    Ok(Value::Bool(true))
+}
+
+fn builtin_delete_file(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("delete-file", args, 1)?;
+    let path = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("delete-file: argument must be a string".into())),
+    };
+    let validated = validate_sandboxed_path("delete-file", &path)?;
+    if validated.is_dir() {
+        return Err(RuntimeError::Custom(format!(
+            "delete-file: '{}' is a directory, use delete-dir", path
+        )));
+    }
+    std::fs::remove_file(&validated)
+        .map_err(|e| RuntimeError::Custom(format!("delete-file: {}: {}", path, e)))?;
+    Ok(Value::Bool(true))
+}
+
+fn builtin_delete_dir(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("delete-dir", args, 1)?;
+    let path = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("delete-dir: argument must be a string".into())),
+    };
+    let validated = validate_sandboxed_path("delete-dir", &path)?;
+    if validated.exists() && !validated.is_dir() {
+        return Err(RuntimeError::Custom(format!(
+            "delete-dir: '{}' is not a directory", path
+        )));
+    }
+    std::fs::remove_dir_all(&validated)
+        .map_err(|e| RuntimeError::Custom(format!("delete-dir: {}: {}", path, e)))?;
+    Ok(Value::Bool(true))
+}
+
+fn builtin_rename_file(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("rename-file", args, 2)?;
+    let old_path = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("rename-file: first argument must be a string path".into())),
+    };
+    let new_path = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("rename-file: second argument must be a string path".into())),
+    };
+    let validated_old = validate_sandboxed_path("rename-file", &old_path)?;
+    let validated_new = validate_sandboxed_path("rename-file", &new_path)?;
+    std::fs::rename(&validated_old, &validated_new)
+        .map_err(|e| RuntimeError::Custom(format!("rename-file: {}: {}", old_path, e)))?;
+    Ok(Value::Bool(true))
+}
+
+fn builtin_create_dir(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("create-dir", args, 1)?;
+    let path = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("create-dir: argument must be a string".into())),
+    };
+    let validated = validate_sandboxed_path("create-dir", &path)?;
+    std::fs::create_dir_all(&validated)
+        .map_err(|e| RuntimeError::Custom(format!("create-dir: {}: {}", path, e)))?;
+    Ok(Value::Bool(true))
+}
+
+fn builtin_read_dir(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("read-dir", args, 1)?;
+    let path = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("read-dir: argument must be a string".into())),
+    };
+    let validated = validate_sandboxed_path("read-dir", &path)?;
+    if !validated.is_dir() {
+        return Err(RuntimeError::Custom(format!(
+            "read-dir: '{}' is not a directory", path
+        )));
+    }
+    let mut entries: Vec<String> = std::fs::read_dir(&validated)
+        .map_err(|e| RuntimeError::Custom(format!("read-dir: {}: {}", path, e)))?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect();
+    entries.sort();
+    Ok(Value::List(entries.into_iter().map(Value::Str).collect()))
+}
+
+fn builtin_file_size(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("file-size", args, 1)?;
+    let path = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("file-size: argument must be a string".into())),
+    };
+    let validated = validate_sandboxed_path("file-size", &path)?;
+    if validated.is_dir() {
+        return Err(RuntimeError::Custom(format!(
+            "file-size: '{}' is a directory", path
+        )));
+    }
+    let meta = std::fs::metadata(&validated)
+        .map_err(|e| RuntimeError::Custom(format!("file-size: {}: {}", path, e)))?;
+    Ok(Value::Int(meta.len() as i64))
+}
+
+fn builtin_is_dir(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("is-dir?", args, 1)?;
+    let path = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("is-dir?: argument must be a string".into())),
+    };
+    let validated = validate_sandboxed_path("is-dir?", &path)?;
+    Ok(Value::Bool(validated.is_dir()))
+}
+
 fn builtin_get_args(args: &[Value]) -> Result<Value, RuntimeError> {
     expect_arity("get-args", args, 0)?;
     let argv: Vec<Value> = std::env::args().map(Value::Str).collect();
@@ -1834,5 +1983,117 @@ mod tests {
             Value::Str("nope".into()),
         ]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn append_file_creates_and_appends() {
+        let b = builtins();
+        let tmp = format!("test_append_{}.tmp", std::process::id());
+        // Initial write via append
+        call(&b, "append-file", &[Value::Str(tmp.clone()), Value::Str("hello".into())]).unwrap();
+        // Append more
+        call(&b, "append-file", &[Value::Str(tmp.clone()), Value::Str(" world".into())]).unwrap();
+        // Verify combined content
+        let content = call(&b, "read-file", &[Value::Str(tmp.clone())]).unwrap();
+        assert_eq!(content, Value::Str("hello world".into()));
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn delete_file_removes_file() {
+        let b = builtins();
+        let tmp = format!("test_delete_{}.tmp", std::process::id());
+        std::fs::write(&tmp, "to delete").unwrap();
+        let result = call(&b, "delete-file", &[Value::Str(tmp.clone())]).unwrap();
+        assert_eq!(result, Value::Bool(true));
+        assert!(!std::path::Path::new(&tmp).exists());
+    }
+
+    #[test]
+    fn delete_file_rejects_directory() {
+        let b = builtins();
+        let tmp = format!("test_delfile_dir_{}", std::process::id());
+        std::fs::create_dir_all(&tmp).unwrap();
+        let result = call(&b, "delete-file", &[Value::Str(tmp.clone())]);
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("is a directory"), "error: {}", err);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn create_and_delete_dir() {
+        let b = builtins();
+        let tmp = format!("test_mkdir_{}", std::process::id());
+        // Create
+        let result = call(&b, "create-dir", &[Value::Str(tmp.clone())]).unwrap();
+        assert_eq!(result, Value::Bool(true));
+        assert!(std::path::Path::new(&tmp).is_dir());
+        // Idempotent create
+        let result2 = call(&b, "create-dir", &[Value::Str(tmp.clone())]).unwrap();
+        assert_eq!(result2, Value::Bool(true));
+        // Delete
+        let result3 = call(&b, "delete-dir", &[Value::Str(tmp.clone())]).unwrap();
+        assert_eq!(result3, Value::Bool(true));
+        assert!(!std::path::Path::new(&tmp).exists());
+    }
+
+    #[test]
+    fn rename_file_works() {
+        let b = builtins();
+        let old = format!("test_rename_old_{}.tmp", std::process::id());
+        let new = format!("test_rename_new_{}.tmp", std::process::id());
+        std::fs::write(&old, "rename me").unwrap();
+        let result = call(&b, "rename-file", &[Value::Str(old.clone()), Value::Str(new.clone())]).unwrap();
+        assert_eq!(result, Value::Bool(true));
+        assert!(!std::path::Path::new(&old).exists());
+        let content = std::fs::read_to_string(&new).unwrap();
+        assert_eq!(content, "rename me");
+        std::fs::remove_file(&new).ok();
+    }
+
+    #[test]
+    fn read_dir_lists_entries() {
+        let b = builtins();
+        let tmp = format!("test_readdir_{}", std::process::id());
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(format!("{}/beta.txt", tmp), "b").unwrap();
+        std::fs::write(format!("{}/alpha.txt", tmp), "a").unwrap();
+        let result = call(&b, "read-dir", &[Value::Str(tmp.clone())]).unwrap();
+        assert_eq!(result, Value::List(vec![
+            Value::Str("alpha.txt".into()),
+            Value::Str("beta.txt".into()),
+        ]));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn file_size_returns_bytes() {
+        let b = builtins();
+        let tmp = format!("test_fsize_{}.tmp", std::process::id());
+        std::fs::write(&tmp, "hello").unwrap();
+        let result = call(&b, "file-size", &[Value::Str(tmp.clone())]).unwrap();
+        assert_eq!(result, Value::Int(5));
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn is_dir_on_directory() {
+        let b = builtins();
+        let tmp = format!("test_isdir_{}", std::process::id());
+        std::fs::create_dir_all(&tmp).unwrap();
+        let result = call(&b, "is-dir?", &[Value::Str(tmp.clone())]).unwrap();
+        assert_eq!(result, Value::Bool(true));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn is_dir_on_file() {
+        let b = builtins();
+        let tmp = format!("test_isdir_file_{}.tmp", std::process::id());
+        std::fs::write(&tmp, "not a dir").unwrap();
+        let result = call(&b, "is-dir?", &[Value::Str(tmp.clone())]).unwrap();
+        assert_eq!(result, Value::Bool(false));
+        std::fs::remove_file(&tmp).ok();
     }
 }

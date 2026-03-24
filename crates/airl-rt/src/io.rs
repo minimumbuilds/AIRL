@@ -63,6 +63,190 @@ pub extern "C" fn airl_read_file(path: *mut RtValue) -> *mut RtValue {
     }
 }
 
+/// Write a string to a file, creating parent directories if needed.
+#[no_mangle]
+pub extern "C" fn airl_write_file(path: *mut RtValue, content: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("write-file: expected string path"),
+        }
+    };
+    let content_str = unsafe {
+        match &(*content).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("write-file: expected string content"),
+        }
+    };
+    if let Some(parent) = std::path::Path::new(&path_str).parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                crate::error::rt_error(&format!("write-file: create dirs: {}: {}", path_str, e));
+            }
+        }
+    }
+    match std::fs::write(&path_str, &content_str) {
+        Ok(()) => rt_bool(true),
+        Err(e) => crate::error::rt_error(&format!("write-file: {}: {}", path_str, e)),
+    }
+}
+
+/// Append a string to a file, creating it if it doesn't exist.
+#[no_mangle]
+pub extern "C" fn airl_append_file(path: *mut RtValue, content: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("append-file: expected string path"),
+        }
+    };
+    let content_str = unsafe {
+        match &(*content).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("append-file: expected string content"),
+        }
+    };
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path_str)
+    {
+        Ok(mut f) => match f.write_all(content_str.as_bytes()) {
+            Ok(()) => rt_bool(true),
+            Err(e) => crate::error::rt_error(&format!("append-file: write: {}: {}", path_str, e)),
+        },
+        Err(e) => crate::error::rt_error(&format!("append-file: open: {}: {}", path_str, e)),
+    }
+}
+
+/// Delete a file.
+#[no_mangle]
+pub extern "C" fn airl_delete_file(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("delete-file: expected string path"),
+        }
+    };
+    match std::fs::remove_file(&path_str) {
+        Ok(()) => rt_bool(true),
+        Err(e) => crate::error::rt_error(&format!("delete-file: {}: {}", path_str, e)),
+    }
+}
+
+/// Delete a directory and all its contents.
+#[no_mangle]
+pub extern "C" fn airl_delete_dir(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("delete-dir: expected string path"),
+        }
+    };
+    match std::fs::remove_dir_all(&path_str) {
+        Ok(()) => rt_bool(true),
+        Err(e) => crate::error::rt_error(&format!("delete-dir: {}: {}", path_str, e)),
+    }
+}
+
+/// List directory contents as a sorted list of filenames.
+#[no_mangle]
+pub extern "C" fn airl_read_dir(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("read-dir: expected string path"),
+        }
+    };
+    match std::fs::read_dir(&path_str) {
+        Ok(entries) => {
+            let mut names: Vec<String> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            let items: Vec<*mut RtValue> = names.into_iter().map(|n| rt_str(n)).collect();
+            crate::value::rt_list(items)
+        }
+        Err(e) => crate::error::rt_error(&format!("read-dir: {}: {}", path_str, e)),
+    }
+}
+
+/// Create a directory and all parent directories.
+#[no_mangle]
+pub extern "C" fn airl_create_dir(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("create-dir: expected string path"),
+        }
+    };
+    match std::fs::create_dir_all(&path_str) {
+        Ok(()) => rt_bool(true),
+        Err(e) => crate::error::rt_error(&format!("create-dir: {}: {}", path_str, e)),
+    }
+}
+
+/// Get the size of a file in bytes.
+#[no_mangle]
+pub extern "C" fn airl_file_size(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("file-size: expected string path"),
+        }
+    };
+    match std::fs::metadata(&path_str) {
+        Ok(meta) => crate::value::rt_int(meta.len() as i64),
+        Err(e) => crate::error::rt_error(&format!("file-size: {}: {}", path_str, e)),
+    }
+}
+
+/// Check if a path is a directory.
+#[no_mangle]
+pub extern "C" fn airl_is_dir(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("is-dir: expected string path"),
+        }
+    };
+    rt_bool(std::path::Path::new(&path_str).is_dir())
+}
+
+/// Check if a path exists.
+#[no_mangle]
+pub extern "C" fn airl_file_exists(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("file-exists?: expected string path"),
+        }
+    };
+    rt_bool(std::path::Path::new(&path_str).exists())
+}
+
+/// Rename a file or directory.
+#[no_mangle]
+pub extern "C" fn airl_rename_file(old: *mut RtValue, new: *mut RtValue) -> *mut RtValue {
+    let old_str = unsafe {
+        match &(*old).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("rename-file: expected string path (old)"),
+        }
+    };
+    let new_str = unsafe {
+        match &(*new).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("rename-file: expected string path (new)"),
+        }
+    };
+    match std::fs::rename(&old_str, &new_str) {
+        Ok(()) => rt_bool(true),
+        Err(e) => crate::error::rt_error(&format!("rename-file: {} -> {}: {}", old_str, new_str, e)),
+    }
+}
+
 /// Return command-line arguments as a List of Str values.
 #[no_mangle]
 pub extern "C" fn airl_get_args() -> *mut RtValue {

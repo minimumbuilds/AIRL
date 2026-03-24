@@ -1,0 +1,50 @@
+;; EXPECT: append OK size OK isdir OK readdir OK rename OK delete OK ALL PASSED
+;; Test all 8 new file I/O builtins
+
+;; create-dir
+(create-dir "test_fixture_io")
+
+;; write + append
+(write-file "test_fixture_io/log.txt" "line1\n")
+(append-file "test_fixture_io/log.txt" "line2\n")
+
+;; verify append
+(let (content : _ (read-file "test_fixture_io/log.txt"))
+  (if (contains content "line2")
+    (print "append OK ")
+    (print "append FAIL ")))
+
+;; file-size
+(let (sz : _ (file-size "test_fixture_io/log.txt"))
+  (if (> sz 0)
+    (print "size OK ")
+    (print "size FAIL ")))
+
+;; is-dir?
+(if (is-dir? "test_fixture_io")
+  (print "isdir OK ")
+  (print "isdir FAIL "))
+
+;; read-dir
+(let (entries : _ (read-dir "test_fixture_io"))
+  (if (= (length entries) 1)
+    (print "readdir OK ")
+    (print "readdir FAIL ")))
+
+;; rename-file
+(rename-file "test_fixture_io/log.txt" "test_fixture_io/renamed.txt")
+(if (file-exists? "test_fixture_io/renamed.txt")
+  (print "rename OK ")
+  (print "rename FAIL "))
+
+;; delete-file
+(delete-file "test_fixture_io/renamed.txt")
+(if (not (file-exists? "test_fixture_io/renamed.txt"))
+  (print "delete OK ")
+  (print "delete FAIL "))
+
+;; delete-dir
+(delete-dir "test_fixture_io")
+(if (not (file-exists? "test_fixture_io"))
+  (println "ALL PASSED")
+  (println "CLEANUP FAIL"))
