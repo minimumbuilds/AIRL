@@ -154,6 +154,7 @@ RtValue* airl_type_of(RtValue* v);
 RtValue* airl_valid(RtValue* v);
 RtValue* airl_read_file(RtValue* path);
 RtValue* airl_get_args(void);
+void airl_set_args(int argc, char** argv);
 
 /* Contract failure */
 int64_t airl_jit_contract_fail(int64_t kind, int64_t fn_idx, int64_t clause_idx);
