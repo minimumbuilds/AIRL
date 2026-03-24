@@ -2,7 +2,7 @@
 
 **A programming language designed for AI systems, not humans. NSFW. Not meant for human consumption. DO NOT EAT**
 
-> **Note:** AIRL is a thought experiment and exploration of AI-assisted compiler construction — not a production tool. The entire toolchain (~43K lines of Rust and AIRL, 213 commits) was built in 4 days, almost entirely by Claude. It combines known ideas (S-expression syntax, mandatory contracts, Z3 verification, linear types, Cranelift JIT, agent message-passing) without advancing any of them beyond prior art. The problem it targets — AI inter-agent program exchange — is speculative, and mature alternatives (Dafny, WASM, typed Python) exist for every claimed capability. It is an exploration of what an AI can build in a weekend, not something anyone should use. Do not beleive it's claims.
+> **Note:** AIRL is a thought experiment and exploration of AI-assisted compiler construction — not a production tool. The entire toolchain (~43K lines of Rust and AIRL) was built in 4 days, almost entirely by Claude. It combines known ideas (S-expression syntax, mandatory contracts, Z3 verification, linear types, Cranelift JIT, agent message-passing) without advancing any of them beyond prior art. The problem it targets — AI inter-agent program exchange — is speculative, and mature alternatives (Dafny, WASM, typed Python) exist for every claimed capability. It is an exploration of what an AI can build in a weekend, not something anyone should use. Do not believe its claims.
 
 AIRL is a typed, contract-verified programming language for inter-agent communication. AI systems generate AIRL programs, transmit them as messages, execute them with formal guarantees, and verify results against machine-checkable contracts. The syntax is the serialization format. The message is the program.
 
@@ -28,7 +28,7 @@ Every existing programming language optimizes for human readability. AIRL optimi
 - **S-expression syntax** — The AST *is* the syntax. LL(1), zero ambiguity, trivially parseable, maximally token-efficient.
 - **Messages are programs** — Agents exchange AIRL source text as both the message format and the execution format. No protobuf, no gRPC, no separate serialization.
 - **Formal verification** — Z3 SMT solver proves contracts at compile time. What can't be proven is checked at runtime.
-- **Linear ownership** — Rust-style move semantics enforced at runtime. No garbage collector.
+- **Linear ownership** — Rust-style move semantics with static linearity analysis. No garbage collector.
 
 ## Why Not Generate Low-Level IR Directly?
 
@@ -60,7 +60,7 @@ block2:
 
 **3. The abstraction gap determines the defect rate.** The further generated code is from intent, the more places bugs hide. "Divide safely, return Err on zero" → AIRL is a small step. The same intent → register allocation + SSA + calling conventions is a large step with many more failure modes. Current LLMs are trained on high-level code and generate it with far lower error rates than low-level IR.
 
-**4. AIRL already compiles to native code — the AI doesn't need to.** The runtime transparently JIT-compiles eligible functions via Cranelift, compiles to a bytecode VM (`--bytecode`), or lowers to a tree-flattened IR VM (`--compiled`). AI generates high-level, verified AIRL once; the toolchain picks the fastest execution strategy automatically.
+**4. AIRL already compiles to native code — the AI doesn't need to.** The runtime transparently JIT-compiles eligible functions to native x86-64 via Cranelift. AI generates high-level, verified AIRL once; the toolchain picks the fastest execution strategy automatically.
 
 ## How Does AIRL's Safety Compare to Rust?
 
@@ -144,26 +144,76 @@ This is why AIRL makes contracts **grammar-level mandatory** — the parser lite
 ### Language
 - S-expression grammar (hand-written recursive descent parser)
 - Dependent type system with dimension unification for tensors
-- Linear ownership with borrow tracking (own, ref, mut, copy)
+- Linear ownership with static linearity analysis (own, ref, mut, copy)
 - Mandatory contract system (requires, ensures, invariant, intent)
 - Algebraic data types (sum types, product types)
 - Pattern matching with exhaustiveness checking
 - First-class functions and closures
-- **Standard library** — 15 pure AIRL collection functions (map, filter, fold, sort, etc.) auto-loaded as a prelude
+- **Standard library** — 46 pure AIRL functions (collections, math, result combinators, string, map) auto-loaded as a prelude
 
-### Compilation
-- **Tree-walking interpreter** for all AIRL programs
-- **IR VM** — Compiled execution mode (`--compiled`) via tree-flattened IR with self-TCO, 5-10x faster than interpreted
-- **Bytecode VM** — Register-based bytecode compiler and VM (`--bytecode`), ~10x faster than interpreted
-- **Bytecode→Cranelift JIT** — Eligible bytecode functions JIT-compiled to native x86-64 (`--jit`), fib(30) 67x faster than bytecode
-- **Tensor JIT** — `tensor.add`, `tensor.mul`, `tensor.matmul` compile to native loops via Cranelift
-- **Z3 SMT solver** — Formal verification of integer arithmetic contracts
+### Compilation & Execution
 
-### Bootstrap Compiler (not yet self-hosting)
-- **Compiler phases in AIRL** — Lexer, parser, type checker, and IR compiler implemented in AIRL (~2,500 lines), running on the Rust runtime
-- **Self-parse verified** — The bootstrap lexer tokenizes its own source (15,691 chars → 3,400 tokens)
-- **Fixpoint verified** — The AIRL compiler produces identical IR whether run interpreted or via the IR VM
-- **Not self-hosting** — The Rust runtime (builtins, value representation, bytecode VM) is still required. A native code generator backend would be needed to produce a standalone binary.
+AIRL v0.2 uses a single execution pipeline. There are no mode flags — `airl run` always picks the fastest strategy:
+
+1. **Source → AST** — Hand-written recursive descent parser (LL(1))
+2. **Static analysis** — Type checking, linearity checking, Z3 contract verification
+3. **AST → IR → Bytecode** — Contracts compiled as assertion opcodes
+4. **JIT compilation** — Eligible functions compiled to native x86-64 via Cranelift. Contract assertions become conditional branches (one native instruction on the happy path). Ineligible functions (those using lists, closures, variants, or builtins) run on the bytecode VM as fallback.
+
+Contracts are **always enforced** — in both JIT-compiled native code and bytecode. There is no "fast but unsafe" mode.
+
+### Performance
+
+| Benchmark | AIRL v0.2 | Python | Ratio |
+|-----------|-----------|--------|-------|
+| 25 trivial tasks (avg) | 7ms | 57ms | **8x faster** |
+| fib(30) | 13ms | 250ms | **19x faster** |
+| Code size (25 tasks) | 10,519 chars | 18,342 chars | **43% smaller** |
+
+AIRL is faster than Python on both startup-dominated (native binary vs CPython import overhead) and compute-heavy (JIT-compiled native code vs CPython bytecode) workloads, while enforcing contracts on every function call.
+
+### Bootstrap Compiler
+
+AIRL includes a bootstrap compiler — the compiler's front-end phases (lexer, parser, evaluator, type checker, IR compiler) are themselves implemented in AIRL, running on the Rust runtime. This is ~2,500 lines of AIRL that can lex, parse, type-check, and compile AIRL source code.
+
+**What it does:**
+- **Lexer** (`bootstrap/lexer.airl`, ~365 lines) — Tokenizes AIRL source strings. Self-parse verified: lexes its own source (15,691 chars → 3,400 tokens).
+- **Parser** (`bootstrap/parser.airl`, ~930 lines) — Converts token streams to typed AST nodes, including `deftype` sum/product type declarations.
+- **Evaluator** (`bootstrap/eval.airl`, ~616 lines) — Interprets AST nodes using tagged value variants and a map-based environment frame stack.
+- **Type Checker** (`bootstrap/types.airl` + `bootstrap/typecheck.airl`, ~715 lines) — Two-pass architecture: registration then checking. All bootstrap modules pass cleanly.
+- **IR Compiler** (`bootstrap/compiler.airl`, ~400 lines) — Compiles AST to a tree-flattened IR format.
+
+**Fixpoint verified:** The compiled compiler produces identical IR to the interpreted compiler — proving the compiler is self-consistent.
+
+**Not self-hosting:** The Rust runtime (~48 builtins for arithmetic, string ops, map ops, list primitives, I/O) is still required. True self-hosting would require a native code generator that can emit standalone binaries.
+
+To build and run the bootstrap compiler tests:
+
+```bash
+# Build the AIRL binary with JIT support (recommended)
+cargo build --release --features jit
+
+# Lexer tests
+cargo run --release --features jit -- run bootstrap/lexer_test.airl
+
+# Parser tests
+cargo run --release --features jit -- run bootstrap/parser_test.airl
+
+# Full lex→parse→eval pipeline
+cargo run --release --features jit -- run bootstrap/pipeline_test.airl
+
+# Type checker tests (slow, use --release)
+cargo run --release --features jit -- run bootstrap/typecheck_test.airl
+
+# IR compiler tests
+cargo run --release --features jit -- run bootstrap/compiler_test.airl
+
+# Equivalence: interpreted vs compiled produce identical results (32 tests)
+cargo run --release --features jit -- run bootstrap/equivalence_test.airl
+
+# Compiler fixpoint: compiled compiler reproduces itself (slow, ~60min)
+cargo run --release --features jit -- run bootstrap/fixpoint_test.airl
+```
 
 ### Agent Communication
 - Inter-agent task exchange over TCP and Unix sockets
@@ -174,10 +224,7 @@ This is why AIRL makes contracts **grammar-level mandatory** — the parser lite
 
 ### CLI
 ```
-airl run <file>              Run an AIRL source file (interpreted)
-airl run --compiled <file>   Run via IR VM (faster, no contracts)
-airl run --bytecode <file>   Run via bytecode VM (~10x faster than interpreted)
-airl run --jit <file>        Run via bytecode VM + Cranelift JIT (requires --features jit)
+airl run <file>              Run an AIRL source file (JIT-compiled with contracts)
 airl check <file>            Type-check and verify contracts
 airl repl                    Interactive REPL with :env introspection
 airl agent <file>            Run as an agent worker (--listen tcp:HOST:PORT | stdio)
@@ -191,10 +238,12 @@ airl fmt <file>              Pretty-print an AIRL source file
 
 ```bash
 git clone <repo-url> && cd AIRL
-cargo build
+cargo build --release --features jit
 ```
 
-Requirements: Rust 1.85+, CMake, C++ compiler, Python 3 (for Z3 compilation on first build).
+Requirements: Rust 1.85+, CMake, C++ compiler, Python 3 (for Z3 compilation on first build, ~5-15 min).
+
+Building without `--features jit` produces a bytecode-only binary (no Cranelift dependency, no native code compilation). All features work, but compute-heavy functions will be slower.
 
 ### Hello World
 
@@ -216,7 +265,7 @@ Requirements: Rust 1.85+, CMake, C++ compiler, Python 3 (for Z3 compilation on f
 ```
 
 ```bash
-cargo run -- run examples/01-hello-world/hello_world.airl
+cargo run --release --features jit -- run examples/01-hello-world/hello_world.airl
 # Hello, World!
 # Greetings from AIRL,
 # fellow AI
@@ -226,23 +275,23 @@ cargo run -- run examples/01-hello-world/hello_world.airl
 
 ```bash
 # Function with contracts
-cargo run -- run examples/02-functions-and-contracts/functions_and_contracts.airl
+cargo run --release --features jit -- run examples/02-functions-and-contracts/functions_and_contracts.airl
 
 # Formally verify contracts with Z3
-cargo run -- check examples/03-verified-arithmetic/verified_arithmetic.airl
+cargo run --release --features jit -- check examples/03-verified-arithmetic/verified_arithmetic.airl
 ```
 
 ### Type Check
 
 ```bash
-cargo run -- check math.airl
+cargo run --release --features jit -- check math.airl
 # OK: math.airl
 ```
 
 ### Interactive REPL
 
 ```bash
-cargo run -- repl
+cargo run --release --features jit -- repl
 airl> (+ 1 2)
 3
 airl> (defn sq :sig [(x : i64) -> i64] :intent "square" :requires [(valid x)] :ensures [(valid result)] :body (* x x))
@@ -259,14 +308,14 @@ airl> :quit
 
 Terminal 1 — start a worker:
 ```bash
-cargo run -- agent worker.airl --listen tcp:127.0.0.1:9001
+cargo run --release --features jit -- agent worker.airl --listen tcp:127.0.0.1:9001
 ```
 
 Terminal 2 — send tasks:
 ```bash
-cargo run -- call tcp:127.0.0.1:9001 add 3 4
+cargo run --release --features jit -- call tcp:127.0.0.1:9001 add 3 4
 # → 7
-cargo run -- call tcp:127.0.0.1:9001 multiply 6 7
+cargo run --release --features jit -- call tcp:127.0.0.1:9001 multiply 6 7
 # → 42
 ```
 
@@ -282,7 +331,7 @@ cargo run -- call tcp:127.0.0.1:9001 multiply 6 7
 ```
 
 ```bash
-cargo run -- run orchestrator.airl
+cargo run --release --features jit -- run orchestrator.airl
 ```
 
 ## Examples
@@ -302,7 +351,7 @@ The `examples/` directory contains progressive examples showcasing AIRL's capabi
 
 Run any example:
 ```bash
-cargo run -- run examples/01-hello-world/hello_world.airl
+cargo run --release --features jit -- run examples/01-hello-world/hello_world.airl
 ```
 
 ## Architecture
@@ -317,25 +366,23 @@ AIRL Source
 [Type Checker]        Dependent types, dimension unification
     │
     ▼
+[Linearity Checker]   Static ownership analysis (use-after-move, borrow conflicts)
+    │
+    ▼
 [Z3 Verifier]         Prove contracts via SMT (negation + UNSAT)
     │
-    ├─ Interpreted ──► [Evaluator]     Tree-walking interpreter
-    │                     │
-    │                     ├─ Tensor JIT ────► Cranelift (matmul loops)
-    │                     └─ Agent Ops ─────► spawn-agent, send (TCP/stdio)
+    ▼
+[IR Compiler]         AST → IR (intermediate representation)
     │
-    ├─ Compiled ─────► [IR Compiler]   AST → IR nodes (no contracts/spans)
-    │                     │
-    │                     ▼
-    │                  [IR VM]         Self-TCO, pattern matching, closures
+    ▼
+[Bytecode Compiler]   IR → register-based bytecode (contracts compiled as assertion opcodes)
     │
-    └─ Bytecode ─────► [IR Compiler]   AST → IR → flat bytecode
-                          │
-                          ▼
-                       [Bytecode VM]   Register-based, self-TCO
-                          │
-                          ▼ (--jit)
-                       [Cranelift JIT] Eligible functions → native x86-64
+    ▼
+[Cranelift JIT]       Eligible functions → native x86-64
+    │                 Contract assertions → conditional branches
+    │                 Ineligible functions → bytecode VM fallback
+    ▼
+[Execution]           Native code + bytecode VM (transparent dispatch)
 ```
 
 ### Crate Structure
@@ -344,8 +391,8 @@ AIRL Source
 |-------|---------|-------------|
 | `airl-syntax` | Lexer, parser, AST, diagnostics | None |
 | `airl-types` | Type checker, linearity, exhaustiveness | airl-syntax |
-| `airl-contracts` | Contract evaluation, stub prover | airl-syntax, airl-types |
-| `airl-runtime` | Interpreter, IR VM, bytecode VM, bytecode JIT, values, builtins, tensor ops | airl-syntax, airl-types, airl-contracts, airl-codegen, cranelift (optional, `jit` feature) |
+| `airl-contracts` | Contract violation types | airl-syntax, airl-types |
+| `airl-runtime` | Bytecode VM, bytecode JIT, values, builtins, tensor ops | airl-syntax, airl-types, airl-contracts, airl-codegen, cranelift (optional, `jit` feature) |
 | `airl-codegen` | Cranelift JIT (scalar + tensor) | airl-syntax, airl-types, cranelift |
 | `airl-solver` | Z3 SMT formal verification | airl-syntax, z3 |
 | `airl-agent` | Transport, protocol, agent runtime | airl-syntax, airl-runtime |
@@ -364,6 +411,8 @@ Every function must have contracts. The compiler rejects functions without them.
   :body (if (< x lo) lo (if (> x hi) hi x)))
 ```
 
+Contracts are compiled to bytecode assertion opcodes and, for JIT-eligible functions, to native conditional branches. The happy path (contract passes) is a single branch instruction — essentially free on modern CPUs with branch prediction. Contract violations halt execution immediately with a diagnostic showing the function name, failed clause, and argument values.
+
 **Three verification levels:**
 
 | Level | Behavior |
@@ -374,7 +423,7 @@ Every function must have contracts. The compiler rejects functions without them.
 
 ## Ownership Model
 
-AIRL uses linear ownership with explicit annotations:
+AIRL uses linear ownership with explicit annotations, enforced by static analysis before execution:
 
 ```clojure
 (defn consume
@@ -386,7 +435,7 @@ AIRL uses linear ownership with explicit annotations:
 
 (let (v : i32 42)
   (do (consume v)
-      v))  ;; ERROR: UseAfterMove — v was moved
+      v))  ;; ERROR: use-after-move — v was moved
 ```
 
 | Annotation | Meaning |
@@ -410,61 +459,32 @@ Tensor builtins: `tensor.zeros`, `tensor.ones`, `tensor.rand`, `tensor.identity`
 
 ## JIT Compilation
 
-AIRL has two JIT paths:
+AIRL's JIT compiler transparently compiles eligible functions to native x86-64 via Cranelift at load time, before execution starts. No flags or annotations are needed — the runtime decides automatically.
 
-### Bytecode→Cranelift JIT (`--jit`)
+**What gets JIT-compiled:** Functions using only primitive operations (arithmetic, comparisons, control flow, contract assertions, calls to other eligible functions). Contract assertions compile to a single conditional branch on the happy path, with a call to a runtime error helper on the failure path.
 
-The bytecode VM can JIT-compile eligible functions to native x86-64 via Cranelift. A function is eligible if it uses only primitive operations (arithmetic, comparisons, control flow, calls to other eligible functions) — no lists, closures, variants, or builtins.
+**What falls back to bytecode:** Functions using lists, closures, pattern matching on variants, or builtin calls. These run on the register-based bytecode VM, which is slower but fully functional.
 
 ```bash
-# Build with JIT support
+# Build with JIT support (recommended)
 cargo build --release --features jit
 
-# Run with JIT
-cargo run --features jit -- run --jit program.airl
+# Run — JIT is automatic
+cargo run --release --features jit -- run program.airl
 
-# Debug output shows what gets JIT'd
-AIRL_JIT_DEBUG=1 cargo run --features jit -- run --jit program.airl
+# Debug output shows what gets JIT-compiled
+AIRL_JIT_DEBUG=1 cargo run --release --features jit -- run program.airl
 ```
-
-**Performance:**
-
-| Benchmark | Bytecode | JIT | Speedup |
-|-----------|----------|-----|---------|
-| fib(30) | 4,559ms | 68ms | **67x** |
-| fact(12)x10K | 158ms | 68ms | **2.3x** |
 
 Ineligible functions fall back to bytecode transparently — all existing programs work unchanged.
 
-### Tensor JIT
-
-Tensor operations (`tensor.add`, `tensor.mul`, `tensor.matmul`) are JIT-compiled to native loops via Cranelift in the interpreter path. No feature flag required.
-
-### Scalar JIT (interpreter path)
-
-The tree-walking interpreter also detects functions with primitive signatures and JIT-compiles them via the `airl-codegen` crate:
-
-```clojure
-(defn compute
-  :sig [(x : i64) -> i64]
-  :intent "polynomial"
-  :requires [(valid x)]
-  :ensures [(valid result)]
-  :body (+ (+ (* x x) (* 3 x)) 7))
-
-(compute 5)  ;; JIT-compiled on first call, native on subsequent calls
-;; → 47
-```
-
-No annotation needed — the interpreter detects eligible functions automatically. Contracts are still checked before and after the native call.
-
 ## Project Stats
 
-- **517 tests** across 8 crates
+- **~479 tests** across 8 crates
 - **~19,000 lines** of Rust + **~21,000 lines** of AIRL (bootstrap compiler + tests)
-- **Bootstrap compiler** — lexer, parser, type checker, and IR compiler implemented in AIRL (runs on Rust runtime, not yet self-hosting)
-- **Compiler fixpoint verified** — the AIRL compiler produces identical IR whether run interpreted or via the IR VM
-- **Zero external dependencies** for core crates by default (Cranelift in `airl-codegen` and optionally `airl-runtime` behind `jit` feature; Z3 in `airl-solver`)
+- **Bootstrap compiler** — lexer, parser, type checker, and IR compiler implemented in AIRL (~2,500 lines), running on Rust runtime
+- **Compiler fixpoint verified** — the AIRL compiler produces identical IR whether run interpreted or compiled
+- **Zero external dependencies** for core crates by default (Cranelift behind `jit` feature; Z3 in `airl-solver`)
 
 ## Specification
 

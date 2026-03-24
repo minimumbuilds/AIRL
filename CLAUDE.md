@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 8 crates, 517 tests, ~19K lines of Rust + ~21K lines of AIRL.
+AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~479 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.2.0.
 
 **Language spec:** `AIRL-Language-Specification-v0.1.0.md`
 **LLM guide:** `AIRL-LLM-Guide.md` — **MUST read this file before writing any AIRL code.** It contains critical language idioms, pitfalls, and patterns that prevent common mistakes.
@@ -26,14 +26,15 @@ AIRL (AI Intermediate Representation Language) is a programming language designe
 ## Build & Test
 
 ```bash
-cargo build                             # Build all crates
-cargo test --workspace                  # Run all 517 tests
-cargo run -- run <file.airl>            # Execute an AIRL program
-cargo run -- check <file.airl>          # Type-check and verify
-cargo run -- repl                       # Interactive REPL
-cargo run -- run --bytecode <file.airl> # Bytecode VM execution
-cargo run --features jit -- run --jit <file.airl>  # Bytecode + Cranelift JIT
+cargo build --features jit              # Build all crates with JIT (recommended)
+cargo build                             # Build without JIT (bytecode-only, no Cranelift)
+cargo test -p airl-syntax -p airl-types -p airl-contracts -p airl-runtime -p airl-agent -p airl-driver  # Run all ~479 tests
+cargo run --features jit -- run <file.airl>   # Execute an AIRL program (JIT default)
+cargo run --features jit -- check <file.airl> # Type-check and verify
+cargo run --features jit -- repl              # Interactive REPL
 ```
+
+**v0.2 execution model:** `airl run` JIT-compiles eligible functions to native x86-64 via Cranelift with contract assertions as conditional branches. Ineligible functions (using lists, closures, variants, builtins) fall back to the bytecode VM automatically. No mode flags needed.
 
 **First build note:** Z3 (in `airl-solver`) compiles from C++ source on first build (~5-15 min). Requires CMake, C++ compiler, Python 3.
 
@@ -59,9 +60,10 @@ airl-driver ← airl-solver (Z3)
 
 - **Zero external deps for core crates.** Only `airl-codegen` (Cranelift) and `airl-solver` (Z3) have external deps.
 - **Tests are inline** `#[cfg(test)]` modules in each source file, plus fixture-based E2E tests in `crates/airl-driver/tests/fixtures.rs`.
-- **Fixtures live in** `tests/fixtures/valid/`, `tests/fixtures/type_errors/`, `tests/fixtures/contract_errors/`, `tests/fixtures/linearity_errors/`, `tests/fixtures/agent/`.
+- **Fixtures live in** `tests/fixtures/valid/`, `tests/fixtures/type_errors/`, `tests/fixtures/contract_errors/`, `tests/fixtures/linearity_errors/`, `tests/fixtures/agent/`, `tests/fixtures/interpreter_only/`.
+- **`interpreter_only/` fixtures** require the tree-walking interpreter (quantifier expressions, runtime ownership enforcement). These don't run in the default bytecode/JIT path.
 - **The `orchestrator.airl` fixture** requires the built binary (uses `spawn-agent`) — it's in `tests/fixtures/agent/`, NOT `tests/fixtures/valid/`, so the fixture runner doesn't try to run it.
-- **Builtin dispatch pattern:** Builtins that need `&mut self` (spawn-agent, send, tensor JIT) are handled directly in the `FnCall` arm of `eval.rs` BEFORE the generic builtin registry dispatch. The `Option::take()` trick is used for tensor_jit to work around the borrow checker.
+- **Builtin dispatch pattern:** Builtins are dispatched via `CallBuiltin` opcode in the bytecode VM, which calls into `Builtins::get()` registry. The tree-walking interpreter (`eval.rs`) is kept for the REPL and agent runtime but is not the default execution path.
 
 ## Standard Library
 
@@ -176,10 +178,10 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 ### Prelude Loading
 
 - Embedded via `include_str!()` in `crates/airl-driver/src/pipeline.rs`
-- `eval_prelude()` parses and evaluates all five modules in order: collections → math → result → string → map
-- Called in both `run_source_with_mode()` and REPL startup
+- Stdlib is compiled to bytecode and loaded via `compile_and_load_stdlib_bytecode()` before user code
+- Called in `run_source_with_mode()`, `run_source_bytecode()`, JIT pipelines, and REPL startup
 - **Load order matters:** math depends on collections (`fold`), string depends on collections (`filter`, `reverse`)
-- **Recursion depth limit:** 50,000 (in `Interpreter.recursion_depth`) to prevent stack overflow on large lists
+- **Recursion depth limit:** 50,000 (in `BytecodeVm.recursion_depth`) to prevent stack overflow on large lists
 - **Known issue:** Type checker warns "undefined symbol" for stdlib functions because they are loaded at runtime, not registered in the type checker. Cosmetic only — functions work correctly.
 
 ---
@@ -207,7 +209,9 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **IR VM** — Tree-flattened IR format (`crates/airl-runtime/src/ir.rs`), Rust VM (`ir_vm.rs`) with self-TCO, value-to-IR marshalling (`ir_marshal.rs`), `run-ir` builtin. Bootstrap AIRL compiler (`bootstrap/compiler.airl`) transforms AST to IR. Rust-side compiler in `pipeline.rs` for native-speed compilation. `--compiled` flag on `cargo run -- run` for compiled execution mode. `IRClosure`/`IRFuncRef` value variants for first-class functions in compiled code.
 - **Bootstrap Fixpoint Verification** — Functional equivalence test (`bootstrap/equivalence_test.airl`, 32 tests) proves interpreted eval and compiled run-ir produce identical results across literals, arithmetic, control flow, functions, recursion, pattern matching, closures, higher-order functions, and lists. Compiler fixpoint test (`bootstrap/fixpoint_test.airl`) proves the compiled compiler produces identical IR to the interpreted compiler — Tier 1 (small program) and Tier 2 (compiler self-compilation). IR serializer (`ir-to-string`) for deterministic comparison. The compiler has reached fixpoint: compiler₁ compiling compiler.airl = compiler₂ compiling compiler.airl.
 - **Register-Based Bytecode VM** — Flat bytecode instruction set (~34 opcodes), register-based compiler (`bytecode_compiler.rs`) with linear register allocation, bytecode VM (`bytecode_vm.rs`) with tight execution loop and self-TCO. `--bytecode` flag on `cargo run -- run`. Pipeline integration in `pipeline.rs` with `run_source_bytecode()`.
-- **Bytecode→Cranelift JIT** — JIT compilation of eligible bytecode functions to native x86-64 via Cranelift (`bytecode_jit.rs`). Primitive-typed functions (no lists/variants/closures) are compiled eagerly at load time. `--jit` flag on `cargo run --features jit -- run`. Transparent fallback to bytecode for ineligible functions. fib(30) 67x faster than bytecode (68ms vs 4,559ms). Behind `#[cfg(feature = "jit")]` — zero overhead when disabled.
+- **Bytecode→Cranelift JIT** — JIT compilation of eligible bytecode functions to native x86-64 via Cranelift (`bytecode_jit.rs`). Primitive-typed functions (no lists/variants/closures) are compiled eagerly at load time. Transparent fallback to bytecode for ineligible functions. Behind `#[cfg(feature = "jit")]` — zero overhead when disabled.
+- **v0.2 Execution Consolidation** — Bytecode VM is now the default execution path (was tree-walking interpreter). Contracts (`:requires`/`:ensures`/`:invariant`) compiled to bytecode assertion opcodes (`AssertRequires`/`AssertEnsures`/`AssertInvariant`) — always enforced, no opt-out. IR VM and `--compiled` flag removed. `--bytecode` flag removed (bytecode is the default). JIT is the default when built with `--features jit`.
+- **Contract-Aware JIT** — Contract assertion opcodes compile to native conditional branches via Cranelift. Happy path: one branch instruction (predicted taken, ~free). Sad path: calls `airl_jit_contract_fail` runtime helper, stores error in thread-local cell, VM propagates as `ContractViolation`. fib(30) with contracts: 13ms (19x faster than Python). Linearity errors now fatal in Run mode (bytecode VM doesn't enforce ownership at runtime).
 
 ---
 
@@ -233,18 +237,18 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 The bootstrap compiler (AIRL compiler phases implemented in AIRL, running on the Rust runtime) lives in `bootstrap/`. Run tests with:
 ```bash
-cargo run -- run bootstrap/lexer_test.airl       # Lexer tests
-cargo run -- run bootstrap/parser_test.airl      # Parser unit tests
-cargo run -- run bootstrap/integration_test.airl # Parser integration tests
-cargo run -- run bootstrap/eval_test.airl        # Evaluator unit tests
-cargo run -- run bootstrap/pipeline_test.airl    # Full lex→parse→eval pipeline tests
-cargo run -- run bootstrap/deftype_test.airl     # Deftype parsing tests
-cargo run -- run bootstrap/types_test.airl       # Type representation tests
-cargo run --release -- run bootstrap/typecheck_test.airl  # Type checker tests (use --release, slow in debug)
-cargo run -- run bootstrap/compiler_test.airl              # IR compiler unit tests
-cargo run -- run bootstrap/compiler_integration_test.airl  # IR compiler integration tests
-cargo run -- run bootstrap/equivalence_test.airl           # Interpreted vs compiled equivalence (32 tests)
-cargo run --release -- run bootstrap/fixpoint_test.airl    # Compiler fixpoint test (slow, ~60min release)
+cargo run --release --features jit -- run bootstrap/lexer_test.airl       # Lexer tests
+cargo run --release --features jit -- run bootstrap/parser_test.airl      # Parser unit tests
+cargo run --release --features jit -- run bootstrap/integration_test.airl # Parser integration tests
+cargo run --release --features jit -- run bootstrap/eval_test.airl        # Evaluator unit tests
+cargo run --release --features jit -- run bootstrap/pipeline_test.airl    # Full lex→parse→eval pipeline tests
+cargo run --release --features jit -- run bootstrap/deftype_test.airl     # Deftype parsing tests
+cargo run --release --features jit -- run bootstrap/types_test.airl       # Type representation tests
+cargo run --release --features jit -- run bootstrap/typecheck_test.airl   # Type checker tests (slow)
+cargo run --release --features jit -- run bootstrap/compiler_test.airl    # IR compiler unit tests
+cargo run --release --features jit -- run bootstrap/compiler_integration_test.airl  # IR compiler integration tests
+cargo run --release --features jit -- run bootstrap/equivalence_test.airl           # Interpreted vs compiled equivalence (32 tests)
+cargo run --release --features jit -- run bootstrap/fixpoint_test.airl              # Compiler fixpoint test (slow, ~60min release)
 ```
 
 **Important AIRL constraints for bootstrap code:**
@@ -258,4 +262,7 @@ cargo run --release -- run bootstrap/fixpoint_test.airl    # Compiler fixpoint t
 ## Known Issues
 
 1. **`airl-mlir` requires system libraries:** `melior-macro` needs `libzstd-dev` and LLVM 19+ installed. Use `cargo test --workspace --exclude airl-mlir` if not available. See comment in workspace `Cargo.toml`.
+2. **Quantifier expressions (`forall`/`exists`) are interpreter-only.** The bytecode compiler maps them to `nil`. Z3 verification of quantifier contracts still works at check time; runtime evaluation requires `--interpreted` flag.
+3. **Runtime ownership enforcement is static-only in v0.2.** The linearity checker catches use-after-move at compile time, but the bytecode VM does not track ownership at runtime. Linearity errors are fatal in Run mode to compensate.
+4. **JIT ineligibility for non-primitive functions.** Functions using lists, closures, variants, or builtin calls fall back to the bytecode VM. This is transparent but significantly slower for compute-heavy code (~23x slower than Python on fib(30) scale).
 
