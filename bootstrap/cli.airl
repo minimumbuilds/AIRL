@@ -12,7 +12,12 @@
     (let (filename : String (at args 1))
       (let (source : String (read-file filename))
         (match (run-compiled-bc source)
-          (Ok result) result
+          (Ok result)
+            ;; Print non-nil/non-unit results (matching driver behavior)
+            (if (valid result)
+              (if (= (type-of result) "unit") nil
+                (println result))
+              nil)
           (Err e) (do (print "Error: ")
                       (print e)
                       (print "\n")

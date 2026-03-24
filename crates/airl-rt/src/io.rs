@@ -11,6 +11,15 @@ pub extern "C" fn airl_print(v: *mut RtValue) -> *mut RtValue {
     rt_nil()
 }
 
+/// Display a value using its Display impl (strings are quoted) with trailing newline.
+/// Matches the Rust driver's `println!("{}", val)` behavior for program results.
+#[no_mangle]
+pub extern "C" fn airl_println(v: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*v };
+    println!("{}", val);
+    rt_nil()
+}
+
 /// Variadic print: takes a pointer to an array of `*mut RtValue` and a count.
 /// Prints all values space-separated with a trailing newline (matching
 /// the interpreter's `builtin_print` semantics).
