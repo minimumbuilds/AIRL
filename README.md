@@ -172,9 +172,9 @@ Contracts are **always enforced** — in JIT-compiled native code, every contrac
 
 AIRL is faster than Python on both startup-dominated (native binary vs CPython import overhead) and compute-heavy (JIT-compiled native code vs CPython bytecode) workloads, while enforcing contracts on every function call.
 
-### Bootstrap Compiler
+### Bootstrap Compiler (Self-Compiling)
 
-AIRL includes a bootstrap compiler — the compiler's front-end phases (lexer, parser, evaluator, type checker, IR compiler) are themselves implemented in AIRL, running on the Rust runtime. This is ~2,500 lines of AIRL that can lex, parse, type-check, and compile AIRL source code.
+AIRL includes a self-compiling bootstrap compiler — the compiler's front-end phases (lexer, parser, evaluator, type checker, IR compiler) are themselves implemented in AIRL. This is ~2,500 lines of AIRL that can lex, parse, type-check, and compile AIRL source code — including itself.
 
 **What it does:**
 - **Lexer** (`bootstrap/lexer.airl`, ~365 lines) — Tokenizes AIRL source strings. Self-parse verified: lexes its own source (15,691 chars → 3,400 tokens).
@@ -183,9 +183,9 @@ AIRL includes a bootstrap compiler — the compiler's front-end phases (lexer, p
 - **Type Checker** (`bootstrap/types.airl` + `bootstrap/typecheck.airl`, ~715 lines) — Two-pass architecture: registration then checking. All bootstrap modules pass cleanly.
 - **IR Compiler** (`bootstrap/compiler.airl`, ~400 lines) — Compiles AST to a tree-flattened IR format.
 
-**Fixpoint verified:** The compiled compiler produces identical IR to the interpreted compiler — proving the compiler is self-consistent.
+**Fixpoint verified:** The compiled compiler produces identical IR to the interpreted compiler — the compiler can compile itself and the output is self-consistent.
 
-**Not self-hosting:** The Rust runtime (~48 builtins for arithmetic, string ops, map ops, list primitives, I/O) is still required. True self-hosting would require a native code generator that can emit standalone binaries.
+**Runtime dependency:** The compiled output runs on the Rust runtime, which provides ~48 primitive builtins (`+`, `head`, `char-at`, `map-get`, `print`, etc.) as `extern "C"` functions in the `airl-rt` crate. This is analogous to a C compiler that needs `libc` — the compiler is self-compiling, the output just needs a runtime library to execute. With jit-full already linking against `airl-rt` at JIT time, an AOT mode emitting object files would produce standalone native binaries.
 
 To build and run the bootstrap compiler tests:
 
