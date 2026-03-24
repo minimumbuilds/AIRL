@@ -527,6 +527,19 @@ impl BytecodeAot {
                     ineligible_cache.insert(func.name.clone());
                     return false;
                 }
+                // LoadConst — only int/float/bool constants are valid
+                Op::LoadConst => {
+                    let idx = instr.a as usize;
+                    if idx < func.constants.len() {
+                        match &func.constants[idx] {
+                            Value::Int(_) | Value::Float(_) | Value::Bool(_) => {}
+                            _ => {
+                                ineligible_cache.insert(func.name.clone());
+                                return false;
+                            }
+                        }
+                    }
+                }
                 // Contract assertions are compilable (one conditional branch)
                 Op::AssertRequires | Op::AssertEnsures | Op::AssertInvariant => {}
                 Op::Call => {
@@ -1084,15 +1097,19 @@ impl BytecodeAot {
         }
 
         // ── Record return type hint for boundary marshaling ─────────────
-        // Find the first Return instruction and use its source register's type hint.
+        // Scan ALL Return instructions: use Float if any return is Float, else Int.
         let mut return_hint = TypeHint::Int; // default
         for instr in &func.instructions {
             if instr.op == Op::Return {
                 let src = instr.a as usize;
                 if src < type_hints.len() {
-                    return_hint = type_hints[src];
+                    let hint = type_hints[src];
+                    if matches!(hint, TypeHint::Float) {
+                        return_hint = TypeHint::Float;
+                        break; // Float takes priority
+                    }
+                    return_hint = hint;
                 }
-                break;
             }
         }
         self.eligible_return_hints.insert(func.name.clone(), return_hint);
