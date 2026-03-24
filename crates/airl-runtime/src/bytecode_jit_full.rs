@@ -1,7 +1,7 @@
 // crates/airl-runtime/src/bytecode_jit_full.rs
 //! Full Cranelift JIT compiler that calls into the `airl-rt` runtime for all
-//! value operations.  Unlike `bytecode_jit.rs` (primitive-only, unboxed), every
-//! value here is a `*mut RtValue` pointer — a boxed, ref-counted heap allocation.
+//! value operations.  Every value here is a `*mut RtValue` pointer — a boxed,
+//! ref-counted heap allocation.
 //!
 //! This module is responsible for:
 //!   1. Registering all `airl_*` runtime symbols with the JIT linker so that
@@ -393,8 +393,8 @@ impl BytecodeJitFull {
         #[cfg(feature = "aot")]
         builder.symbol("airl_compile_to_executable", crate::bytecode_aot::airl_compile_to_executable as *const u8);
 
-        // Contract failure signaling (reuses the same thread-local as primitive JIT)
-        builder.symbol("airl_jit_contract_fail", crate::bytecode_jit::airl_jit_contract_fail as *const u8);
+        // Contract failure signaling (shared module)
+        builder.symbol("airl_jit_contract_fail", crate::jit_contract::airl_jit_contract_fail as *const u8);
 
         // String
         builder.symbol("airl_char_at",     string::airl_char_at     as *const u8);
@@ -887,8 +887,8 @@ impl BytecodeJitFull {
     // ──────────────────────────────────────────────────────────────────────
 
     /// Try to compile a function (and its call dependencies) to native code.
-    /// Unlike `bytecode_jit.rs`, there is no eligibility check — every function
-    /// is compilable because all value operations go through runtime calls.
+    /// There is no eligibility check — every function is compilable because
+    /// all value operations go through runtime calls.
     /// Collect dependency-ordered compilation list (iterative, no recursion).
     fn collect_compile_order(
         &self,
