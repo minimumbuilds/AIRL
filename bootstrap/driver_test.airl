@@ -1,0 +1,71 @@
+;; bootstrap/driver_test.airl — Tests for the bootstrap driver pipeline
+;; Must be concatenated with all bootstrap modules before running:
+;;   cat bootstrap/lexer.airl bootstrap/parser.airl bootstrap/compiler.airl \
+;;       bootstrap/codegen_c.airl bootstrap/driver_test.airl > /tmp/driver_test_full.airl
+;;   cargo run --release -- run /tmp/driver_test_full.airl
+
+;; Test 1: Simple print expression
+(let (r1 : _ (compile-to-c "(print 42)"))
+  (match r1
+    (Ok code) (if (contains code "airl_print")
+                (print "PASS: simple print")
+                (print "FAIL: simple print — missing airl_print"))
+    (Err e) (print (+ "FAIL: simple print — " e))))
+
+;; Test 2: Function definition and call
+(let (r2 : _ (compile-to-c "(defn f :sig [(x : i64) -> i64] :requires [(valid x)] :ensures [(valid result)] :body (+ x 1)) (print (f 5))"))
+  (match r2
+    (Ok code) (if (contains code "RtValue* f(")
+                (print "PASS: function definition")
+                (print "FAIL: function definition — missing RtValue* f("))
+    (Err e) (print (+ "FAIL: function definition — " e))))
+
+;; Test 3: Lambda with closure capture
+(let (r3 : _ (compile-to-c "(let (n : _ 10) (let (add-n : _ (fn [x] (+ x n))) (print (add-n 5))))"))
+  (match r3
+    (Ok code) (if (contains code "__cap_n")
+                (print "PASS: closure capture")
+                (print "FAIL: closure capture — missing __cap_n"))
+    (Err e) (print (+ "FAIL: closure capture — " e))))
+
+;; Test 4: Pattern matching
+(let (r4 : _ (compile-to-c "(match (Ok 42) (Ok v) (print v) (Err e) (print e))"))
+  (match r4
+    (Ok code) (if (contains code "airl_match_tag")
+                (print "PASS: pattern matching")
+                (print "FAIL: pattern matching — missing airl_match_tag"))
+    (Err e) (print (+ "FAIL: pattern matching — " e))))
+
+;; Test 5: List literal
+(let (r5 : _ (compile-to-c "(print [1 2 3])"))
+  (match r5
+    (Ok code) (if (contains code "airl_list_new")
+                (print "PASS: list literal")
+                (print "FAIL: list literal — missing airl_list_new"))
+    (Err e) (print (+ "FAIL: list literal — " e))))
+
+;; Test 6: Full program structure (has #include, main, etc.)
+(let (r6 : _ (compile-to-c "(print 1)"))
+  (match r6
+    (Ok code) (if (contains code "#include")
+                (if (contains code "int main(")
+                  (print "PASS: program structure")
+                  (print "FAIL: program structure — missing int main("))
+                (print "FAIL: program structure — missing #include"))
+    (Err e) (print (+ "FAIL: program structure — " e))))
+
+;; Test 7: Arithmetic expression
+(let (r7 : _ (compile-to-c "(print (+ 1 2))"))
+  (match r7
+    (Ok code) (if (contains code "airl_add")
+                (print "PASS: arithmetic")
+                (print "FAIL: arithmetic — missing airl_add"))
+    (Err e) (print (+ "FAIL: arithmetic — " e))))
+
+;; Test 8: Error case — malformed input
+(let (r8 : _ (compile-to-c "(defn"))
+  (match r8
+    (Ok code) (print "FAIL: malformed input — should have returned Err")
+    (Err e) (print "PASS: malformed input returns error")))
+
+(print "driver_test complete")

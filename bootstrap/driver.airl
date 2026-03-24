@@ -1,0 +1,16 @@
+;; bootstrap/driver.airl — AIRL-to-C compiler driver
+;; Usage: concatenate with all bootstrap modules and run:
+;;   cat bootstrap/lexer.airl bootstrap/parser.airl bootstrap/compiler.airl \
+;;       bootstrap/codegen_c.airl bootstrap/driver.airl > /tmp/airl_cc.airl
+;;   cargo run --release -- run /tmp/airl_cc.airl -- input.airl
+
+;; Get input file from command-line args (last argument after --)
+(let (args : List (get-args))
+  (let (argc : i64 (length args))
+    (if (<= argc 1)
+      (do (print "Usage: airl-cc <input.airl>") nil)
+      (let (input-path : String (at args (- argc 1)))
+        (let (source : String (read-file input-path))
+          (match (compile-to-c source)
+            (Ok c-code) (do (print c-code) nil)
+            (Err e) (do (print (+ "Compilation error: " e)) nil)))))))
