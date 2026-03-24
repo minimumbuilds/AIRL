@@ -115,10 +115,18 @@ pub struct RuntimeImports {
     pub map_size:   FuncId,
 
     // File I/O
-    pub read_file: FuncId,
-    pub write_file: FuncId,
+    pub read_file:   FuncId,
+    pub write_file:  FuncId,
     pub file_exists: FuncId,
-    pub get_args:  FuncId,
+    pub append_file: FuncId,
+    pub delete_file: FuncId,
+    pub delete_dir:  FuncId,
+    pub rename_file: FuncId,
+    pub read_dir:    FuncId,
+    pub create_dir:  FuncId,
+    pub file_size:   FuncId,
+    pub is_dir:      FuncId,
+    pub get_args:    FuncId,
     pub run_bytecode: FuncId,
     pub compile_to_exe: FuncId,
 
@@ -404,10 +412,18 @@ impl BytecodeAot {
         let map_size   = declare_import(m, "airl_map_size",   s1.clone());
 
         // File I/O
-        let read_file = declare_import(m, "airl_read_file", s1.clone());
-        let write_file = declare_import(m, "airl_write_file", s2.clone());
+        let read_file   = declare_import(m, "airl_read_file",   s1.clone());
+        let write_file  = declare_import(m, "airl_write_file",  s2.clone());
         let file_exists = declare_import(m, "airl_file_exists", s1.clone());
-        let get_args  = declare_import(m, "airl_get_args",  sig_0_ptr(m));
+        let append_file = declare_import(m, "airl_append_file", s2.clone());
+        let delete_file = declare_import(m, "airl_delete_file", s1.clone());
+        let delete_dir  = declare_import(m, "airl_delete_dir",  s1.clone());
+        let rename_file = declare_import(m, "airl_rename_file", s2.clone());
+        let read_dir    = declare_import(m, "airl_read_dir",    s1.clone());
+        let create_dir  = declare_import(m, "airl_create_dir",  s1.clone());
+        let file_size   = declare_import(m, "airl_file_size",   s1.clone());
+        let is_dir      = declare_import(m, "airl_is_dir",      s1.clone());
+        let get_args    = declare_import(m, "airl_get_args",    sig_0_ptr(m));
         let run_bytecode = declare_import(m, "airl_run_bytecode", s1.clone());
         let compile_to_exe = declare_import(m, "airl_compile_to_executable", s2.clone());
 
@@ -455,7 +471,10 @@ impl BytecodeAot {
             ends_with, index_of, trim, to_upper, to_lower, replace,
             map_new, map_from, map_get, map_get_or, map_set, map_has,
             map_remove, map_keys, map_values, map_size,
-            read_file, write_file, file_exists, get_args, run_bytecode, compile_to_exe,
+            read_file, write_file, file_exists,
+            append_file, delete_file, delete_dir, rename_file,
+            read_dir, create_dir, file_size, is_dir,
+            get_args, run_bytecode, compile_to_exe,
             int_to_string, float_to_string, string_to_int,
             time_now, getenv, http_post, json_parse, json_stringify, shell_exec,
             contract_fail,
@@ -529,6 +548,14 @@ impl BytecodeAot {
         m.insert("read-file".into(),    rt.read_file);
         m.insert("write-file".into(),   rt.write_file);
         m.insert("file-exists?".into(), rt.file_exists);
+        m.insert("append-file".into(),  rt.append_file);
+        m.insert("delete-file".into(),  rt.delete_file);
+        m.insert("delete-dir".into(),   rt.delete_dir);
+        m.insert("rename-file".into(),  rt.rename_file);
+        m.insert("read-dir".into(),     rt.read_dir);
+        m.insert("create-dir".into(),   rt.create_dir);
+        m.insert("file-size".into(),    rt.file_size);
+        m.insert("is-dir?".into(),      rt.is_dir);
         m.insert("get-args".into(),     rt.get_args);
         m.insert("run-bytecode".into(), rt.run_bytecode);
         m.insert("compile-to-executable".into(), rt.compile_to_exe);
