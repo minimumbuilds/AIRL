@@ -1305,7 +1305,8 @@ impl Builtins {
         self.register("string-to-int", builtin_string_to_int);
         self.register("time-now", builtin_time_now);
         self.register("getenv", builtin_getenv);
-        self.register("http-post", builtin_http_post);
+        self.register("http-request", builtin_http_request);
+        self.register("http-post", builtin_http_post); // deprecated: use http-request
         self.register("json-parse", builtin_json_parse);
         self.register("json-stringify", builtin_json_stringify);
         self.register("shell-exec", builtin_shell_exec);
@@ -1360,6 +1361,65 @@ fn builtin_getenv(args: &[Value]) -> Result<Value, RuntimeError> {
     }
 }
 
+/// Generic HTTP request: (http-request method url body headers) → Result[Str, Str]
+fn builtin_http_request(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("http-request", args, 4)?;
+    let method = match &args[0] {
+        Value::Str(s) => s.to_uppercase(),
+        _ => return Err(RuntimeError::TypeError("http-request: method must be string".into())),
+    };
+    let url = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("http-request: url must be string".into())),
+    };
+    let body = match &args[2] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("http-request: body must be string".into())),
+    };
+    let headers = match &args[3] {
+        Value::Map(m) => m.clone(),
+        _ => return Err(RuntimeError::TypeError("http-request: headers must be map".into())),
+    };
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(300))
+        .build();
+
+    let mut req = match method.as_str() {
+        "GET" => agent.get(&url),
+        "POST" => agent.post(&url),
+        "PUT" => agent.put(&url),
+        "DELETE" => agent.delete(&url),
+        "PATCH" => agent.patch(&url),
+        "HEAD" => agent.head(&url),
+        _ => return Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+            format!("http-request: unsupported method '{}'", method)
+        )))),
+    };
+    for (k, v) in &headers {
+        if let Value::Str(val) = v {
+            req = req.set(k, val);
+        }
+    }
+
+    let response = if method == "GET" || method == "HEAD" || method == "DELETE" {
+        req.call()
+    } else {
+        req.send_string(&body)
+    };
+
+    match response {
+        Ok(resp) => {
+            match resp.into_string() {
+                Ok(text) => Ok(Value::Variant("Ok".into(), Box::new(Value::Str(text)))),
+                Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(e.to_string())))),
+            }
+        }
+        Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(e.to_string())))),
+    }
+}
+
+/// Deprecated: use (http-request "POST" url body headers) instead.
 fn builtin_http_post(args: &[Value]) -> Result<Value, RuntimeError> {
     expect_arity("http-post", args, 3)?;
     let url = match &args[0] {

@@ -104,7 +104,7 @@ impl TypeChecker {
             "read-dir", "create-dir", "file-size", "is-dir?",
             // System builtins
             "str", "int-to-string", "float-to-string", "string-to-int",
-            "json-parse", "json-stringify", "http-post",
+            "json-parse", "json-stringify", "http-post", "http-request",
             "shell-exec", "time-now", "getenv",
             "run-bytecode", "compile-to-executable",
         ] {
