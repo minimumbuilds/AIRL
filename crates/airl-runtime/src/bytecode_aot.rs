@@ -116,9 +116,32 @@ pub struct RuntimeImports {
 
     // File I/O
     pub read_file: FuncId,
+    pub write_file: FuncId,
+    pub file_exists: FuncId,
     pub get_args:  FuncId,
     pub run_bytecode: FuncId,
     pub compile_to_exe: FuncId,
+
+    // Type conversions
+    pub int_to_string: FuncId,
+    pub float_to_string: FuncId,
+    pub string_to_int: FuncId,
+
+    // Timing
+    pub time_now: FuncId,
+
+    // Environment
+    pub getenv: FuncId,
+
+    // HTTP
+    pub http_post: FuncId,
+
+    // JSON
+    pub json_parse: FuncId,
+    pub json_stringify: FuncId,
+
+    // Process
+    pub shell_exec: FuncId,
 
     // Contract failure
     pub contract_fail: FuncId,
@@ -382,9 +405,32 @@ impl BytecodeAot {
 
         // File I/O
         let read_file = declare_import(m, "airl_read_file", s1.clone());
+        let write_file = declare_import(m, "airl_write_file", s2.clone());
+        let file_exists = declare_import(m, "airl_file_exists", s1.clone());
         let get_args  = declare_import(m, "airl_get_args",  sig_0_ptr(m));
         let run_bytecode = declare_import(m, "airl_run_bytecode", s1.clone());
         let compile_to_exe = declare_import(m, "airl_compile_to_executable", s2.clone());
+
+        // Type conversions
+        let int_to_string = declare_import(m, "airl_int_to_string", s1.clone());
+        let float_to_string = declare_import(m, "airl_float_to_string", s1.clone());
+        let string_to_int = declare_import(m, "airl_string_to_int", s1.clone());
+
+        // Timing
+        let time_now = declare_import(m, "airl_time_now", sig_0_ptr(m));
+
+        // Environment
+        let getenv = declare_import(m, "airl_getenv", s1.clone());
+
+        // HTTP
+        let http_post = declare_import(m, "airl_http_post", sig_3_ptr(m));
+
+        // JSON
+        let json_parse = declare_import(m, "airl_json_parse", s1.clone());
+        let json_stringify = declare_import(m, "airl_json_stringify", s1.clone());
+
+        // Process
+        let shell_exec = declare_import(m, "airl_shell_exec", s2.clone());
 
         // Contract failure: (kind: i64, fn_name_idx: i64, clause_idx: i64) -> i64
         let mut cf_sig = m.make_signature();
@@ -409,7 +455,9 @@ impl BytecodeAot {
             ends_with, index_of, trim, to_upper, to_lower, replace,
             map_new, map_from, map_get, map_get_or, map_set, map_has,
             map_remove, map_keys, map_values, map_size,
-            read_file, get_args, run_bytecode, compile_to_exe,
+            read_file, write_file, file_exists, get_args, run_bytecode, compile_to_exe,
+            int_to_string, float_to_string, string_to_int,
+            time_now, getenv, http_post, json_parse, json_stringify, shell_exec,
             contract_fail,
         }
     }
@@ -479,9 +527,32 @@ impl BytecodeAot {
 
         // File I/O
         m.insert("read-file".into(),    rt.read_file);
+        m.insert("write-file".into(),   rt.write_file);
+        m.insert("file-exists?".into(), rt.file_exists);
         m.insert("get-args".into(),     rt.get_args);
         m.insert("run-bytecode".into(), rt.run_bytecode);
         m.insert("compile-to-executable".into(), rt.compile_to_exe);
+
+        // Type conversions
+        m.insert("int-to-string".into(),   rt.int_to_string);
+        m.insert("float-to-string".into(), rt.float_to_string);
+        m.insert("string-to-int".into(),   rt.string_to_int);
+
+        // Timing
+        m.insert("time-now".into(), rt.time_now);
+
+        // Environment
+        m.insert("getenv".into(), rt.getenv);
+
+        // HTTP
+        m.insert("http-post".into(), rt.http_post);
+
+        // JSON
+        m.insert("json-parse".into(),     rt.json_parse);
+        m.insert("json-stringify".into(), rt.json_stringify);
+
+        // Process
+        m.insert("shell-exec".into(), rt.shell_exec);
 
         m
     }

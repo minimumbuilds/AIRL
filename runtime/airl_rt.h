@@ -156,6 +156,31 @@ RtValue* airl_read_file(RtValue* path);
 RtValue* airl_get_args(void);
 void airl_set_args(int argc, char** argv);
 
+/* Type conversions */
+RtValue* airl_int_to_string(RtValue* n);
+RtValue* airl_float_to_string(RtValue* n);
+RtValue* airl_string_to_int(RtValue* s);
+
+/* Timing */
+RtValue* airl_time_now(void);
+
+/* Environment */
+RtValue* airl_getenv(RtValue* name);
+
+/* File I/O (extended) */
+RtValue* airl_write_file(RtValue* path, RtValue* content);
+RtValue* airl_file_exists(RtValue* path);
+
+/* HTTP */
+RtValue* airl_http_post(RtValue* url, RtValue* body, RtValue* headers);
+
+/* JSON */
+RtValue* airl_json_parse(RtValue* text);
+RtValue* airl_json_stringify(RtValue* value);
+
+/* Process */
+RtValue* airl_shell_exec(RtValue* command, RtValue* args);
+
 /* Contract failure */
 int64_t airl_jit_contract_fail(int64_t kind, int64_t fn_idx, int64_t clause_idx);
 

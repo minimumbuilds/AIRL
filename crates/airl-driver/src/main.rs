@@ -176,6 +176,7 @@ fn cmd_compile(args: &[String]) {
             .arg("-lm")
             .arg("-lpthread")
             .arg("-ldl")
+            .arg("-lcurl")
             .status();
 
         // Clean up object file

@@ -1,5 +1,6 @@
 #include "airl_rt.h"
 #include <ctype.h>
+#include <errno.h>
 
 /* ---- UTF-8 helpers ---- */
 
@@ -253,5 +254,46 @@ RtValue* airl_replace(RtValue* s, RtValue* old, RtValue* new_str) {
 
     RtValue* result = airl_str(buf, result_len);
     free(buf);
+    return result;
+}
+
+/* ---- Type conversions ---- */
+
+RtValue* airl_int_to_string(RtValue* n) {
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "%lld", (long long)n->data.i);
+    return airl_str(buf, (size_t)len);
+}
+
+RtValue* airl_float_to_string(RtValue* n) {
+    char buf[64];
+    int len = snprintf(buf, sizeof(buf), "%g", n->data.f);
+    return airl_str(buf, (size_t)len);
+}
+
+RtValue* airl_string_to_int(RtValue* s) {
+    /* Null-terminate the string */
+    char* cstr = malloc(s->data.s.len + 1);
+    memcpy(cstr, s->data.s.ptr, s->data.s.len);
+    cstr[s->data.s.len] = '\0';
+
+    char* endptr;
+    errno = 0;
+    long long val = strtoll(cstr, &endptr, 10);
+
+    if (errno != 0 || endptr == cstr || *endptr != '\0') {
+        free(cstr);
+        RtValue* tag = airl_str("Err", 3);
+        RtValue* msg = airl_str("invalid integer", 15);
+        RtValue* result = airl_make_variant(tag, msg);
+        airl_value_release(tag);
+        return result;
+    }
+
+    free(cstr);
+    RtValue* tag = airl_str("Ok", 2);
+    RtValue* ival = airl_int((int64_t)val);
+    RtValue* result = airl_make_variant(tag, ival);
+    airl_value_release(tag);
     return result;
 }

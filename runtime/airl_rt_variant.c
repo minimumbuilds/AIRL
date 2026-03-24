@@ -1,5 +1,7 @@
 #include "airl_rt.h"
 #include <math.h>
+#include <time.h>
+#include <sys/stat.h>
 
 /* ---- Variants ---- */
 
@@ -350,6 +352,70 @@ RtValue* airl_get_args(void) {
     }
     free(items);
     return list;
+}
+
+/* ---- Timing ---- */
+
+RtValue* airl_time_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    int64_t millis = (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
+    return airl_int(millis);
+}
+
+/* ---- Environment variables ---- */
+
+RtValue* airl_getenv(RtValue* name) {
+    /* Null-terminate the name */
+    char* cname = malloc(name->data.s.len + 1);
+    memcpy(cname, name->data.s.ptr, name->data.s.len);
+    cname[name->data.s.len] = '\0';
+
+    const char* val = getenv(cname);
+    free(cname);
+
+    if (val) {
+        RtValue* tag = airl_str("Ok", 2);
+        RtValue* sval = airl_str(val, strlen(val));
+        RtValue* result = airl_make_variant(tag, sval);
+        airl_value_release(tag);
+        return result;
+    } else {
+        RtValue* tag = airl_str("Err", 3);
+        RtValue* msg = airl_str("not set", 7);
+        RtValue* result = airl_make_variant(tag, msg);
+        airl_value_release(tag);
+        return result;
+    }
+}
+
+/* ---- File I/O (write-file, file-exists?) ---- */
+
+RtValue* airl_write_file(RtValue* path, RtValue* content) {
+    /* Null-terminate the path */
+    char* cpath = malloc(path->data.s.len + 1);
+    memcpy(cpath, path->data.s.ptr, path->data.s.len);
+    cpath[path->data.s.len] = '\0';
+
+    FILE* f = fopen(cpath, "wb");
+    free(cpath);
+    if (!f) {
+        return airl_bool(0);
+    }
+    size_t written = fwrite(content->data.s.ptr, 1, content->data.s.len, f);
+    fclose(f);
+    return airl_bool(written == content->data.s.len);
+}
+
+RtValue* airl_file_exists(RtValue* path) {
+    char* cpath = malloc(path->data.s.len + 1);
+    memcpy(cpath, path->data.s.ptr, path->data.s.len);
+    cpath[path->data.s.len] = '\0';
+
+    struct stat st;
+    int exists = (stat(cpath, &st) == 0);
+    free(cpath);
+    return airl_bool(exists);
 }
 
 /* ---- Contract failure ---- */

@@ -1101,6 +1101,184 @@ TEST(test_contract_fail) {
     assert(result == 0);
 }
 
+/* ---- Task 7: New builtins ---- */
+
+TEST(test_int_to_string) {
+    RtValue* n = airl_int(42);
+    RtValue* s = airl_int_to_string(n);
+    assert(s->tag == RT_STR);
+    assert(s->data.s.len == 2);
+    assert(memcmp(s->data.s.ptr, "42", 2) == 0);
+    airl_value_release(s);
+    airl_value_release(n);
+}
+
+TEST(test_int_to_string_negative) {
+    RtValue* n = airl_int(-7);
+    RtValue* s = airl_int_to_string(n);
+    assert(s->tag == RT_STR);
+    assert(memcmp(s->data.s.ptr, "-7", 2) == 0);
+    airl_value_release(s);
+    airl_value_release(n);
+}
+
+TEST(test_float_to_string) {
+    RtValue* n = airl_float(3.14);
+    RtValue* s = airl_float_to_string(n);
+    assert(s->tag == RT_STR);
+    assert(s->data.s.len > 0);
+    airl_value_release(s);
+    airl_value_release(n);
+}
+
+TEST(test_string_to_int_ok) {
+    RtValue* s = airl_str("42", 2);
+    RtValue* r = airl_string_to_int(s);
+    assert(r->tag == RT_VARIANT);
+    assert(strcmp(r->data.variant.tag_name, "Ok") == 0);
+    assert(r->data.variant.inner->tag == RT_INT);
+    assert(r->data.variant.inner->data.i == 42);
+    airl_value_release(r);
+    airl_value_release(s);
+}
+
+TEST(test_string_to_int_err) {
+    RtValue* s = airl_str("abc", 3);
+    RtValue* r = airl_string_to_int(s);
+    assert(r->tag == RT_VARIANT);
+    assert(strcmp(r->data.variant.tag_name, "Err") == 0);
+    airl_value_release(r);
+    airl_value_release(s);
+}
+
+TEST(test_time_now) {
+    RtValue* t = airl_time_now();
+    assert(t->tag == RT_INT);
+    assert(t->data.i > 0);
+    airl_value_release(t);
+}
+
+TEST(test_getenv_path) {
+    RtValue* name = airl_str("PATH", 4);
+    RtValue* r = airl_getenv(name);
+    assert(r->tag == RT_VARIANT);
+    assert(strcmp(r->data.variant.tag_name, "Ok") == 0);
+    assert(r->data.variant.inner->tag == RT_STR);
+    airl_value_release(r);
+    airl_value_release(name);
+}
+
+TEST(test_getenv_missing) {
+    RtValue* name = airl_str("NONEXISTENT_VAR_XYZ_123", 23);
+    RtValue* r = airl_getenv(name);
+    assert(r->tag == RT_VARIANT);
+    assert(strcmp(r->data.variant.tag_name, "Err") == 0);
+    airl_value_release(r);
+    airl_value_release(name);
+}
+
+TEST(test_write_file_and_read) {
+    RtValue* path = airl_str("/tmp/airl_test_write.txt", 23);
+    RtValue* content = airl_str("test content", 12);
+    RtValue* ok = airl_write_file(path, content);
+    assert(ok->tag == RT_BOOL);
+    assert(ok->data.b == 1);
+    /* Read back */
+    RtValue* read = airl_read_file(path);
+    assert(read->tag == RT_STR);
+    assert(read->data.s.len == 12);
+    assert(memcmp(read->data.s.ptr, "test content", 12) == 0);
+    airl_value_release(read);
+    airl_value_release(ok);
+    airl_value_release(content);
+    airl_value_release(path);
+    remove("/tmp/airl_test_write.txt");
+}
+
+TEST(test_file_exists) {
+    /* Write a temp file first */
+    FILE* f = fopen("/tmp/airl_test_exists.txt", "w");
+    fprintf(f, "x");
+    fclose(f);
+    RtValue* path = airl_str("/tmp/airl_test_exists.txt", 25);
+    RtValue* r = airl_file_exists(path);
+    assert(r->tag == RT_BOOL);
+    assert(r->data.b == 1);
+    airl_value_release(r);
+    airl_value_release(path);
+    remove("/tmp/airl_test_exists.txt");
+    /* Now check it doesn't exist */
+    RtValue* path2 = airl_str("/tmp/airl_test_exists.txt", 25);
+    RtValue* r2 = airl_file_exists(path2);
+    assert(r2->tag == RT_BOOL);
+    assert(r2->data.b == 0);
+    airl_value_release(r2);
+    airl_value_release(path2);
+}
+
+TEST(test_json_parse_object) {
+    RtValue* text = airl_str("{\"key\":\"val\",\"num\":42}", 22);
+    RtValue* r = airl_json_parse(text);
+    assert(r->tag == RT_VARIANT);
+    assert(strcmp(r->data.variant.tag_name, "Ok") == 0);
+    RtValue* val = r->data.variant.inner;
+    assert(val->tag == RT_MAP);
+    airl_value_release(r);
+    airl_value_release(text);
+}
+
+TEST(test_json_parse_array) {
+    RtValue* text = airl_str("[1,2,3]", 7);
+    RtValue* r = airl_json_parse(text);
+    assert(r->tag == RT_VARIANT);
+    assert(strcmp(r->data.variant.tag_name, "Ok") == 0);
+    RtValue* val = r->data.variant.inner;
+    assert(val->tag == RT_LIST);
+    assert(val->data.list.len == 3);
+    airl_value_release(r);
+    airl_value_release(text);
+}
+
+TEST(test_json_stringify_roundtrip) {
+    RtValue* text = airl_str("{\"a\":1}", 7);
+    RtValue* parsed = airl_json_parse(text);
+    assert(strcmp(parsed->data.variant.tag_name, "Ok") == 0);
+    RtValue* stringified = airl_json_stringify(parsed->data.variant.inner);
+    assert(stringified->tag == RT_STR);
+    /* Re-parse to verify structure preserved */
+    RtValue* reparsed = airl_json_parse(stringified);
+    assert(strcmp(reparsed->data.variant.tag_name, "Ok") == 0);
+    airl_value_release(reparsed);
+    airl_value_release(stringified);
+    airl_value_release(parsed);
+    airl_value_release(text);
+}
+
+TEST(test_shell_exec_echo) {
+    RtValue* cmd = airl_str("echo", 4);
+    RtValue** items = malloc(sizeof(RtValue*));
+    items[0] = airl_str("hello", 5);
+    RtValue* args = airl_list_new(items, 1);
+    airl_value_release(items[0]);
+    free(items);
+    RtValue* r = airl_shell_exec(cmd, args);
+    assert(r->tag == RT_VARIANT);
+    assert(strcmp(r->data.variant.tag_name, "Ok") == 0);
+    /* Check stdout contains "hello" */
+    RtValue* result_map = r->data.variant.inner;
+    assert(result_map->tag == RT_MAP);
+    RtValue* stdout_key = airl_str("stdout", 6);
+    RtValue* stdout_val = airl_map_get(result_map, stdout_key);
+    assert(stdout_val->tag == RT_STR);
+    assert(stdout_val->data.s.len >= 5);
+    assert(memcmp(stdout_val->data.s.ptr, "hello", 5) == 0);
+    airl_value_release(stdout_val);
+    airl_value_release(stdout_key);
+    airl_value_release(r);
+    airl_value_release(args);
+    airl_value_release(cmd);
+}
+
 int main(void) {
     printf("C Runtime Tests (Task 1):\n");
     RUN(test_int);
@@ -1223,6 +1401,21 @@ int main(void) {
     RUN(test_get_args_empty);
     RUN(test_read_file);
     RUN(test_contract_fail);
+    printf("\nC Runtime Tests (Task 7 - New builtins):\n");
+    RUN(test_int_to_string);
+    RUN(test_int_to_string_negative);
+    RUN(test_float_to_string);
+    RUN(test_string_to_int_ok);
+    RUN(test_string_to_int_err);
+    RUN(test_time_now);
+    RUN(test_getenv_path);
+    RUN(test_getenv_missing);
+    RUN(test_write_file_and_read);
+    RUN(test_file_exists);
+    RUN(test_json_parse_object);
+    RUN(test_json_parse_array);
+    RUN(test_json_stringify_roundtrip);
+    RUN(test_shell_exec_echo);
     printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;
 }
