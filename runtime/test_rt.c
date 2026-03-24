@@ -366,6 +366,133 @@ TEST(test_lt_str) {
     assert(airl_as_bool_raw(airl_lt(airl_str("ab", 2), airl_str("abc", 3))) == 1);
 }
 
+/* ---- Task 3: List Operations ---- */
+
+TEST(test_list_new_empty) {
+    RtValue* l = airl_list_new(NULL, 0);
+    assert(l->tag == RT_LIST);
+    assert(l->data.list.len == 0);
+    airl_value_release(l);
+}
+
+TEST(test_list_new) {
+    RtValue* items[] = { airl_int(1), airl_int(2), airl_int(3) };
+    RtValue* l = airl_list_new(items, 3);
+    assert(l->data.list.len == 3);
+    display_to_string(l);
+    assert(strcmp(display_buf, "[1 2 3]") == 0);
+    airl_value_release(l);
+    for (int i = 0; i < 3; i++) airl_value_release(items[i]);
+}
+
+TEST(test_head_tail) {
+    RtValue* items[] = { airl_int(10), airl_int(20), airl_int(30) };
+    RtValue* l = airl_list_new(items, 3);
+    RtValue* h = airl_head(l);
+    assert(h->data.i == 10);
+    RtValue* t = airl_tail(l);
+    assert(t->data.list.len == 2);
+    airl_value_release(h);
+    airl_value_release(t);
+    airl_value_release(l);
+    for (int i = 0; i < 3; i++) airl_value_release(items[i]);
+}
+
+TEST(test_cons) {
+    RtValue* items[] = { airl_int(2), airl_int(3) };
+    RtValue* l = airl_list_new(items, 2);
+    RtValue* one = airl_int(1);
+    RtValue* l2 = airl_cons(one, l);
+    assert(l2->data.list.len == 3);
+    display_to_string(l2);
+    assert(strcmp(display_buf, "[1 2 3]") == 0);
+    airl_value_release(l2);
+    airl_value_release(l);
+    airl_value_release(one);
+    for (int i = 0; i < 2; i++) airl_value_release(items[i]);
+}
+
+TEST(test_empty) {
+    RtValue* e = airl_list_new(NULL, 0);
+    RtValue* r1 = airl_empty(e);
+    assert(airl_as_bool_raw(r1) == 1);
+    airl_value_release(r1);
+    RtValue* items[] = { airl_int(1) };
+    RtValue* ne = airl_list_new(items, 1);
+    RtValue* r2 = airl_empty(ne);
+    assert(airl_as_bool_raw(r2) == 0);
+    airl_value_release(r2);
+    airl_value_release(e);
+    airl_value_release(ne);
+    airl_value_release(items[0]);
+}
+
+TEST(test_length) {
+    RtValue* items[] = { airl_int(1), airl_int(2), airl_int(3) };
+    RtValue* l = airl_list_new(items, 3);
+    RtValue* len = airl_length(l);
+    assert(len->data.i == 3);
+    airl_value_release(len);
+    airl_value_release(l);
+    for (int i = 0; i < 3; i++) airl_value_release(items[i]);
+}
+
+TEST(test_length_str) {
+    RtValue* s = airl_str("hello", 5);
+    RtValue* len = airl_length(s);
+    assert(len->data.i == 5);
+    airl_value_release(len);
+    airl_value_release(s);
+}
+
+TEST(test_at) {
+    RtValue* items[] = { airl_int(10), airl_int(20), airl_int(30) };
+    RtValue* l = airl_list_new(items, 3);
+    RtValue* idx = airl_int(1);
+    RtValue* v = airl_at(l, idx);
+    assert(v->data.i == 20);
+    airl_value_release(v);
+    airl_value_release(idx);
+    airl_value_release(l);
+    for (int i = 0; i < 3; i++) airl_value_release(items[i]);
+}
+
+TEST(test_append) {
+    RtValue* items[] = { airl_int(1), airl_int(2) };
+    RtValue* l = airl_list_new(items, 2);
+    RtValue* three = airl_int(3);
+    RtValue* l2 = airl_append(l, three);
+    display_to_string(l2);
+    assert(strcmp(display_buf, "[1 2 3]") == 0);
+    airl_value_release(l2);
+    airl_value_release(l);
+    airl_value_release(three);
+    for (int i = 0; i < 2; i++) airl_value_release(items[i]);
+}
+
+TEST(test_tail_single) {
+    RtValue* items[] = { airl_int(42) };
+    RtValue* l = airl_list_new(items, 1);
+    RtValue* t = airl_tail(l);
+    assert(t->tag == RT_LIST);
+    assert(t->data.list.len == 0);
+    airl_value_release(t);
+    airl_value_release(l);
+    airl_value_release(items[0]);
+}
+
+TEST(test_cons_empty) {
+    RtValue* l = airl_list_new(NULL, 0);
+    RtValue* one = airl_int(1);
+    RtValue* l2 = airl_cons(one, l);
+    assert(l2->data.list.len == 1);
+    display_to_string(l2);
+    assert(strcmp(display_buf, "[1]") == 0);
+    airl_value_release(l2);
+    airl_value_release(l);
+    airl_value_release(one);
+}
+
 int main(void) {
     printf("C Runtime Tests (Task 1):\n");
     RUN(test_int);
@@ -416,6 +543,18 @@ int main(void) {
     RUN(test_eq_type_mismatch);
     RUN(test_lt_float);
     RUN(test_lt_str);
+    printf("\nC Runtime Tests (Task 3):\n");
+    RUN(test_list_new_empty);
+    RUN(test_list_new);
+    RUN(test_head_tail);
+    RUN(test_cons);
+    RUN(test_empty);
+    RUN(test_length);
+    RUN(test_length_str);
+    RUN(test_at);
+    RUN(test_append);
+    RUN(test_tail_single);
+    RUN(test_cons_empty);
     printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;
 }
