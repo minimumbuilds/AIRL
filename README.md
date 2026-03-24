@@ -20,6 +20,8 @@ AIRL is a typed, contract-verified programming language for inter-agent communic
 (safe-divide 9 3)  ;; → (Ok 3)
 ```
 
+**[Project Analysis — Milestones, Strengths & Differentiators](docs/PROJECT-ANALYSIS.md)**
+
 ## Why AIRL?
 
 Every existing programming language optimizes for human readability. AIRL optimizes for AI producers and consumers:
