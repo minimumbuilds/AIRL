@@ -41,6 +41,32 @@ pub extern "C" fn airl_as_bool_raw(v: *mut crate::value::RtValue) -> i64 {
     }
 }
 
+/// Extract raw i64 from an RtValue (Int → value, Float → bits, Bool → 0/1).
+/// Used for marshaling boxed values to unboxed function parameters.
+#[no_mangle]
+pub extern "C" fn airl_as_int_raw(v: *mut crate::value::RtValue) -> i64 {
+    let val = unsafe { &*v };
+    match &val.data {
+        crate::value::RtData::Int(n) => *n,
+        crate::value::RtData::Float(f) => f.to_bits() as i64,
+        crate::value::RtData::Bool(b) => *b as i64,
+        _ => 0, // Nil or other — shouldn't reach here for eligible functions
+    }
+}
+
+/// Extract raw f64 bits as i64 from an RtValue (Float → bits, Int → cast, Bool → 0/1).
+/// Used for marshaling boxed values to unboxed function parameters expecting floats.
+#[no_mangle]
+pub extern "C" fn airl_as_float_raw(v: *mut crate::value::RtValue) -> i64 {
+    let val = unsafe { &*v };
+    match &val.data {
+        crate::value::RtData::Float(f) => f.to_bits() as i64,
+        crate::value::RtData::Int(n) => (*n as f64).to_bits() as i64,
+        crate::value::RtData::Bool(b) => (*b as i64 as f64).to_bits() as i64,
+        _ => 0i64,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,6 +120,54 @@ mod tests {
             airl_value_release(a);
             airl_value_release(b);
             airl_value_release(r);
+        }
+    }
+
+    #[test]
+    fn as_int_raw_int() {
+        unsafe {
+            let v = crate::value::rt_int(42);
+            assert_eq!(airl_as_int_raw(v), 42);
+            airl_value_release(v);
+        }
+    }
+
+    #[test]
+    fn as_int_raw_float() {
+        unsafe {
+            let v = crate::value::rt_float(3.14);
+            assert_eq!(airl_as_int_raw(v), 3.14f64.to_bits() as i64);
+            airl_value_release(v);
+        }
+    }
+
+    #[test]
+    fn as_int_raw_bool() {
+        unsafe {
+            let v = rt_bool(true);
+            assert_eq!(airl_as_int_raw(v), 1);
+            airl_value_release(v);
+            let v2 = rt_bool(false);
+            assert_eq!(airl_as_int_raw(v2), 0);
+            airl_value_release(v2);
+        }
+    }
+
+    #[test]
+    fn as_float_raw_float() {
+        unsafe {
+            let v = crate::value::rt_float(2.718);
+            assert_eq!(airl_as_float_raw(v), 2.718f64.to_bits() as i64);
+            airl_value_release(v);
+        }
+    }
+
+    #[test]
+    fn as_float_raw_int() {
+        unsafe {
+            let v = crate::value::rt_int(5);
+            assert_eq!(airl_as_float_raw(v), 5.0f64.to_bits() as i64);
+            airl_value_release(v);
         }
     }
 }
