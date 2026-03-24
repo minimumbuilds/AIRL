@@ -117,6 +117,7 @@ pub struct RuntimeImports {
     pub read_file: FuncId,
     pub get_args:  FuncId,
     pub run_bytecode: FuncId,
+    pub compile_to_exe: FuncId,
 
     // Contract failure
     pub contract_fail: FuncId,
@@ -366,6 +367,7 @@ impl BytecodeAot {
         let read_file = declare_import(m, "airl_read_file", s1.clone());
         let get_args  = declare_import(m, "airl_get_args",  sig_0_ptr(m));
         let run_bytecode = declare_import(m, "airl_run_bytecode", s1.clone());
+        let compile_to_exe = declare_import(m, "airl_compile_to_executable", s2.clone());
 
         // Contract failure: (kind: i64, fn_name_idx: i64, clause_idx: i64) -> i64
         let mut cf_sig = m.make_signature();
@@ -390,7 +392,7 @@ impl BytecodeAot {
             ends_with, index_of, trim, to_upper, to_lower, replace,
             map_new, map_from, map_get, map_get_or, map_set, map_has,
             map_remove, map_keys, map_values, map_size,
-            read_file, get_args, run_bytecode,
+            read_file, get_args, run_bytecode, compile_to_exe,
             contract_fail,
         }
     }
@@ -462,6 +464,7 @@ impl BytecodeAot {
         m.insert("read-file".into(),    rt.read_file);
         m.insert("get-args".into(),     rt.get_args);
         m.insert("run-bytecode".into(), rt.run_bytecode);
+        m.insert("compile-to-executable".into(), rt.compile_to_exe);
 
         m
     }
@@ -1480,6 +1483,187 @@ impl BytecodeAot {
     pub fn finish(self) -> Vec<u8> {
         let product = self.module.finish();
         product.emit().unwrap()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// C-ABI: Full compile-to-executable pipeline
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Embedded stdlib sources
+const COLLECTIONS_SOURCE: &str = include_str!("../../../stdlib/prelude.airl");
+const MATH_SOURCE: &str = include_str!("../../../stdlib/math.airl");
+const RESULT_SOURCE: &str = include_str!("../../../stdlib/result.airl");
+const STRING_SOURCE: &str = include_str!("../../../stdlib/string.airl");
+const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
+
+/// Compile source string to bytecode functions via the Rust-side pipeline.
+fn compile_source_to_bytecode(
+    source: &str,
+    prefix: &str,
+) -> Result<(Vec<BytecodeFunc>, BytecodeFunc), String> {
+    use airl_syntax::*;
+    use crate::bytecode_compiler::BytecodeCompiler;
+
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.lex_all().map_err(|d| format!("lex: {}", d.message))?;
+    let sexprs = parse_sexpr_all(&tokens).map_err(|d| format!("parse: {}", d.message))?;
+    let mut diags = Diagnostics::new();
+
+    let mut tops = Vec::new();
+    for sexpr in &sexprs {
+        match parser::parse_top_level(sexpr, &mut diags) {
+            Ok(top) => tops.push(top),
+            Err(d) => {
+                let mut diags2 = Diagnostics::new();
+                match parser::parse_expr(sexpr, &mut diags2) {
+                    Ok(expr) => tops.push(airl_syntax::ast::TopLevel::Expr(expr)),
+                    Err(_) => return Err(format!("parse: {}", d.message)),
+                }
+            }
+        }
+    }
+
+    let ir_nodes: Vec<crate::ir::IRNode> = tops.iter()
+        .map(crate::ast_to_ir::compile_top_level)
+        .collect();
+    let mut bc_compiler = BytecodeCompiler::with_prefix(prefix);
+    Ok(bc_compiler.compile_program(&ir_nodes))
+}
+
+/// Full pipeline: source files → native executable.
+/// Called from AOT-compiled native binaries (the self-hosting compiler).
+pub fn compile_to_executable_impl(
+    source_paths: &[String],
+    output_path: &str,
+) -> Result<(), String> {
+    let mut all_funcs: Vec<BytecodeFunc> = Vec::new();
+
+    // 1. Compile stdlib
+    for (src, name) in &[
+        (COLLECTIONS_SOURCE, "collections"),
+        (MATH_SOURCE, "math"),
+        (RESULT_SOURCE, "result"),
+        (STRING_SOURCE, "string"),
+        (MAP_SOURCE, "map"),
+    ] {
+        let (funcs, _stdlib_main) = compile_source_to_bytecode(src, name)?;
+        all_funcs.extend(funcs);
+    }
+
+    // 2. Compile user sources
+    let mut all_source = String::new();
+    for path in source_paths {
+        let s = std::fs::read_to_string(path)
+            .map_err(|e| format!("{}: {}", path, e))?;
+        all_source.push_str(&s);
+        all_source.push('\n');
+    }
+    let (funcs, main_func) = compile_source_to_bytecode(&all_source, "user")?;
+    all_funcs.extend(funcs);
+    all_funcs.push(main_func);
+
+    // 3. AOT compile
+    let func_map: HashMap<String, BytecodeFunc> = all_funcs.iter()
+        .map(|f| (f.name.clone(), f.clone()))
+        .collect();
+
+    let mut aot = BytecodeAot::new()?;
+    for func in &all_funcs {
+        let _ = aot.compile_all(std::slice::from_ref(func), &func_map);
+    }
+    aot.emit_entry_point()?;
+    let obj_bytes = aot.finish();
+
+    // 4. Write object file
+    let obj_path = format!("{}.o", output_path);
+    std::fs::write(&obj_path, &obj_bytes)
+        .map_err(|e| format!("write {}: {}", obj_path, e))?;
+
+    // 5. Find libraries and link
+    let rt_lib = find_lib("airl_rt");
+    let runtime_lib = find_lib("airl_runtime");
+
+    let mut cmd = std::process::Command::new("cc");
+    cmd.arg(&obj_path).arg("-o").arg(output_path);
+    if !rt_lib.is_empty() { cmd.arg(&rt_lib); }
+    if !runtime_lib.is_empty() {
+        cmd.arg(&runtime_lib);
+        if !rt_lib.is_empty() { cmd.arg(&rt_lib); } // re-add for symbol order
+    }
+    cmd.arg("-lm").arg("-lpthread").arg("-ldl");
+
+    let status = cmd.status().map_err(|e| format!("linker: {}", e))?;
+    let _ = std::fs::remove_file(&obj_path);
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("linker failed: {:?}", status.code()))
+    }
+}
+
+fn find_lib(name: &str) -> String {
+    let candidates = [
+        format!("target/release/lib{}.a", name),
+        format!("target/debug/lib{}.a", name),
+        format!("../target/release/lib{}.a", name),
+        format!("../target/debug/lib{}.a", name),
+    ];
+    for c in &candidates {
+        if std::path::Path::new(c).exists() {
+            return c.to_string();
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let lib = dir.join(format!("lib{}.a", name));
+            if lib.exists() { return lib.to_string_lossy().to_string(); }
+        }
+    }
+    String::new()
+}
+
+/// C-ABI entry point: compile source files to a native executable.
+/// Takes (List[Str paths], Str output_path) → Nil on success, calls rt_error on failure.
+#[no_mangle]
+pub extern "C" fn airl_compile_to_executable(
+    paths_val: *mut airl_rt::value::RtValue,
+    output_val: *mut airl_rt::value::RtValue,
+) -> *mut airl_rt::value::RtValue {
+    use airl_rt::value::*;
+
+    let paths: Vec<String> = unsafe {
+        match &(*paths_val).data {
+            RtData::List(items) => items.iter().map(|p| {
+                match &(**p).data {
+                    RtData::Str(s) => s.clone(),
+                    _ => String::new(),
+                }
+            }).collect(),
+            _ => {
+                crate::error::RuntimeError::TypeError(
+                    "compile: expected list of paths".into());
+                return rt_nil();
+            }
+        }
+    };
+    let output = unsafe {
+        match &(*output_val).data {
+            RtData::Str(s) => s.clone(),
+            _ => "a.out".to_string(),
+        }
+    };
+
+    match compile_to_executable_impl(&paths, &output) {
+        Ok(()) => {
+            eprintln!("Compiled to {}", output);
+            rt_nil()
+        }
+        Err(e) => {
+            eprintln!("Compilation error: {}", e);
+            std::process::exit(1);
+        }
     }
 }
 

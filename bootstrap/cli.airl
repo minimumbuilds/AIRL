@@ -1,24 +1,65 @@
 ;; bootstrap/cli.airl — CLI entry point for the native AIRL compiler
 ;; Requires: bootstrap/lexer.airl, bootstrap/parser.airl, bootstrap/bc_compiler.airl
 ;;
-;; Usage: ./airl-compiler <file.airl>
-;; Reads the file, compiles to bytecode, executes, prints result.
+;; Usage:
+;;   ./airl-compiler run <file.airl>          — compile and execute
+;;   ./airl-compiler compile <files...> -o out — compile to native executable
+;;   ./airl-compiler <file.airl>              — compile and execute (default)
 
 (let (args : List (get-args))
   (if (< (length args) 2)
-    (do
-      (print "Usage: airl-compiler <file.airl>\n")
-      nil)
-    (let (filename : String (at args 1))
-      (let (source : String (read-file filename))
-        (match (run-compiled-bc source)
-          (Ok result)
-            ;; Print non-nil/non-unit results (matching driver behavior)
-            (if (valid result)
-              (if (= (type-of result) "unit") nil
-                (println result))
-              nil)
-          (Err e) (do (print "Error: ")
-                      (print e)
-                      (print "\n")
-                      nil))))))
+    (do (print "Usage: airl-compiler [run|compile] <file.airl> [-o output]\n") nil)
+    (let (cmd : String (at args 1))
+      (if (= cmd "compile")
+        ;; Compile mode: collect files and -o flag
+        (let (parsed : List (parse-compile-args (drop 2 args)))
+          (match parsed
+            (CompileArgs files output)
+              (compile-to-executable files output)
+            _ (do (print "Usage: airl-compiler compile <file.airl ...> -o <output>\n") nil)))
+        (if (= cmd "run")
+          ;; Run mode: execute file
+          (if (< (length args) 3)
+            (do (print "Usage: airl-compiler run <file.airl>\n") nil)
+            (let (filename : String (at args 2))
+              (let (source : String (read-file filename))
+                (match (run-compiled-bc source)
+                  (Ok result)
+                    (if (valid result)
+                      (if (= (type-of result) "unit") nil
+                        (println result))
+                      nil)
+                  (Err e) (do (print "Error: ") (print e) (print "\n") nil)))))
+          ;; Default: treat first arg as file to run
+          (let (filename : String (at args 1))
+            (let (source : String (read-file filename))
+              (match (run-compiled-bc source)
+                (Ok result)
+                  (if (valid result)
+                    (if (= (type-of result) "unit") nil
+                      (println result))
+                    nil)
+                (Err e) (do (print "Error: ") (print e) (print "\n") nil)))))))))
+
+;; Parse compile args: collect files until -o, then output name
+(defn parse-compile-args
+  :sig [(args : List) -> Any]
+  :intent "Parse file list and -o output from compile args"
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (parse-compile-args-loop args [] "a.out"))
+
+(defn parse-compile-args-loop
+  :sig [(args : List) (files : List) (output : String) -> Any]
+  :intent "Recursive arg parser"
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? args)
+      (CompileArgs files output)
+      (let (arg : String (head args))
+        (if (= arg "-o")
+          (if (empty? (tail args))
+            (CompileArgs files output)
+            (parse-compile-args-loop (tail (tail args)) files (head (tail args))))
+          (parse-compile-args-loop (tail args) (append files arg) output)))))

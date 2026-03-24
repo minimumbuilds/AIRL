@@ -150,6 +150,8 @@ impl Builtins {
         self.register("write-file", builtin_write_file);
         self.register("file-exists?", builtin_file_exists);
         self.register("get-args", builtin_get_args);
+        #[cfg(feature = "aot")]
+        self.register("compile-to-executable", builtin_compile_to_executable);
     }
 
     // ── Bytecode VM ──────────────────────────────────────
@@ -1096,6 +1098,26 @@ fn builtin_get_args(args: &[Value]) -> Result<Value, RuntimeError> {
     expect_arity("get-args", args, 0)?;
     let argv: Vec<Value> = std::env::args().map(Value::Str).collect();
     Ok(Value::List(argv))
+}
+
+#[cfg(feature = "aot")]
+fn builtin_compile_to_executable(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("compile-to-executable", args, 2)?;
+    let paths = match &args[0] {
+        Value::List(items) => items.iter().map(|v| match v {
+            Value::Str(s) => Ok(s.clone()),
+            _ => Err(RuntimeError::TypeError("compile-to-executable: paths must be strings".into())),
+        }).collect::<Result<Vec<_>, _>>()?,
+        _ => return Err(RuntimeError::TypeError("compile-to-executable: first arg must be list of paths".into())),
+    };
+    let output = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("compile-to-executable: second arg must be output path string".into())),
+    };
+    // Delegate to the AOT pipeline
+    crate::bytecode_aot::compile_to_executable_impl(&paths, &output)
+        .map_err(|e| RuntimeError::Custom(e))?;
+    Ok(Value::Unit)
 }
 
 // ── Bytecode VM implementation ───────────────────────────

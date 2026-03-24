@@ -370,6 +370,8 @@ impl BytecodeJitFull {
         builder.symbol("airl_read_file",    io::airl_read_file    as *const u8);
         builder.symbol("airl_get_args",     io::airl_get_args     as *const u8);
         builder.symbol("airl_run_bytecode", crate::bytecode_marshal::airl_run_bytecode as *const u8);
+        #[cfg(feature = "aot")]
+        builder.symbol("airl_compile_to_executable", crate::bytecode_aot::airl_compile_to_executable as *const u8);
 
         // Contract failure signaling (reuses the same thread-local as primitive JIT)
         builder.symbol("airl_jit_contract_fail", crate::bytecode_jit::airl_jit_contract_fail as *const u8);
