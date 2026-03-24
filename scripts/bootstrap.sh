@@ -51,8 +51,8 @@ cat "$BOOTSTRAP_DIR/lexer.airl" \
 echo "  Bootstrap compiler: $(wc -l < "$BUILD_DIR/airl_cc.airl") lines"
 echo "  Input: $INPUT"
 
-# Run the bootstrap compiler (uses --interpreted for large file support)
-cargo run --release -- run --interpreted "$BUILD_DIR/airl_cc.airl" -- "$INPUT" 2>/dev/null \
+# Run the bootstrap compiler (uses --bytecode to avoid JIT issues with large files)
+cargo run --release --features jit -- run --bytecode "$BUILD_DIR/airl_cc.airl" -- "$INPUT" 2>/dev/null \
     | sed '1s/^"//; /^nil$/d; /^"$/d' \
     > "$BUILD_DIR/output.c"
 
