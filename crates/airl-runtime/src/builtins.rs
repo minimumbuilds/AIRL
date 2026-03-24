@@ -123,6 +123,7 @@ impl Builtins {
 
     fn register_utility(&mut self) {
         self.register("print", builtin_print);
+        self.register("println", builtin_println);
         self.register("type-of", builtin_type_of);
         self.register("shape", builtin_shape);
         self.register("valid", builtin_valid);
@@ -624,6 +625,14 @@ fn builtin_print(args: &[Value]) -> Result<Value, RuntimeError> {
         print!("{}", arg);
     }
     println!();
+    Ok(Value::Unit)
+}
+
+/// Display-formatted print (strings quoted, with newline).
+/// Matches the driver's `println!("{}", val)` for program results.
+fn builtin_println(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("println", args, 1)?;
+    println!("{}", args[0]);
     Ok(Value::Unit)
 }
 

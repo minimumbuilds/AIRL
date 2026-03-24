@@ -91,6 +91,7 @@ pub struct RuntimeImports {
 
     // I/O / misc
     pub print:    FuncId,        // (val) -> nil
+    pub println:  FuncId,        // (val) -> nil  (Display-formatted with newline)
     pub print_values: FuncId,    // (args_ptr, count) -> nil  (variadic print)
     pub type_of:  FuncId,   // (val) -> str
     pub valid:    FuncId,   // (val) -> bool
@@ -362,6 +363,7 @@ impl BytecodeJitFull {
 
         // I/O
         builder.symbol("airl_print",        io::airl_print        as *const u8);
+        builder.symbol("airl_println",      io::airl_println      as *const u8);
         builder.symbol("airl_print_values", io::airl_print_values as *const u8);
         builder.symbol("airl_type_of",      io::airl_type_of      as *const u8);
         builder.symbol("airl_valid",        io::airl_valid        as *const u8);
@@ -470,6 +472,7 @@ impl BytecodeJitFull {
 
         // I/O / misc
         let print        = declare_import(m, "airl_print",        s1.clone());
+        let println      = declare_import(m, "airl_println",      s1.clone());
         let print_values = declare_import(m, "airl_print_values", sig_ptr_i64_ret_ptr(m));
         let type_of      = declare_import(m, "airl_type_of",      s1.clone());
         let valid        = declare_import(m, "airl_valid",        s1.clone());
@@ -524,7 +527,7 @@ impl BytecodeJitFull {
             head, tail, cons, empty, length, at, append, list_new,
             make_variant, match_tag,
             make_closure, call_closure,
-            print, print_values, type_of, valid,
+            print, println, print_values, type_of, valid,
             char_at, substring, chars, split, join, contains, starts_with,
             ends_with, index_of, trim, to_upper, to_lower, replace,
             map_new, map_from, map_get, map_get_or, map_set, map_has,
@@ -573,6 +576,7 @@ impl BytecodeJitFull {
 
         // I/O
         m.insert("print".into(),   rt.print);
+        m.insert("println".into(), rt.println);
         m.insert("type-of".into(), rt.type_of);
         m.insert("valid".into(),   rt.valid);
 

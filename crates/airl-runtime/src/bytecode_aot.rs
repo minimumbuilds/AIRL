@@ -81,6 +81,7 @@ pub struct RuntimeImports {
 
     // I/O / misc
     pub print:        FuncId,
+    pub println:      FuncId,
     pub print_values: FuncId,
     pub type_of:      FuncId,
     pub valid:        FuncId,
@@ -331,6 +332,7 @@ impl BytecodeAot {
         let call_closure = declare_import(m, "airl_call_closure", sig_ptr_ptr_i64_ret_ptr(m));
 
         let print        = declare_import(m, "airl_print",        s1.clone());
+        let println      = declare_import(m, "airl_println",      s1.clone());
         let print_values = declare_import(m, "airl_print_values", sig_ptr_i64_ret_ptr(m));
         let type_of      = declare_import(m, "airl_type_of",      s1.clone());
         let valid        = declare_import(m, "airl_valid",        s1.clone());
@@ -383,7 +385,7 @@ impl BytecodeAot {
             head, tail, cons, empty, length, at, append, list_new,
             make_variant, match_tag,
             make_closure, call_closure,
-            print, print_values, type_of, valid,
+            print, println, print_values, type_of, valid,
             char_at, substring, chars, split, join, contains, starts_with,
             ends_with, index_of, trim, to_upper, to_lower, replace,
             map_new, map_from, map_get, map_get_or, map_set, map_has,
@@ -427,6 +429,7 @@ impl BytecodeAot {
         m.insert("append".into(), rt.append);
 
         m.insert("print".into(),   rt.print);
+        m.insert("println".into(), rt.println);
         m.insert("type-of".into(), rt.type_of);
         m.insert("valid".into(),   rt.valid);
 
