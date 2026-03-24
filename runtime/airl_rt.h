@@ -159,6 +159,10 @@ void airl_set_args(int argc, char** argv);
 /* Contract failure */
 int64_t airl_jit_contract_fail(int64_t kind, int64_t fn_idx, int64_t clause_idx);
 
+/* Flush / error */
+void airl_flush_stdout(void);
+void airl_runtime_error(const char* msg, size_t len);
+
 /* Display helper (used by print) */
 void display_value(RtValue* v, FILE* out);
 
