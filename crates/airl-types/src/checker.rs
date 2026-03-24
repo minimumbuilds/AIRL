@@ -103,7 +103,8 @@ impl TypeChecker {
             "append-file", "delete-file", "delete-dir", "rename-file",
             "read-dir", "create-dir", "file-size", "is-dir?",
             // System builtins
-            "str", "int-to-string", "float-to-string", "string-to-int",
+            "str", "int-to-string", "float-to-string", "string-to-int", "string-to-float",
+            "char-code", "char-from-code",
             "json-parse", "json-stringify", "http-post", "http-request",
             "shell-exec", "time-now", "getenv",
             "run-bytecode", "compile-to-executable",

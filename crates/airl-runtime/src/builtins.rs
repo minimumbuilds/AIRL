@@ -1303,6 +1303,9 @@ impl Builtins {
         self.register("int-to-string", builtin_int_to_string);
         self.register("float-to-string", builtin_float_to_string);
         self.register("string-to-int", builtin_string_to_int);
+        self.register("string-to-float", builtin_string_to_float);
+        self.register("char-code", builtin_char_code);
+        self.register("char-from-code", builtin_char_from_code);
         self.register("time-now", builtin_time_now);
         self.register("getenv", builtin_getenv);
         self.register("http-request", builtin_http_request);
@@ -1337,6 +1340,45 @@ fn builtin_string_to_int(args: &[Value]) -> Result<Value, RuntimeError> {
             Err(_) => Ok(Value::Variant("Err".into(), Box::new(Value::Str("invalid integer".into())))),
         },
         _ => Err(RuntimeError::TypeError("string-to-int: expected string".into())),
+    }
+}
+
+fn builtin_string_to_float(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("string-to-float", args, 1)?;
+    match &args[0] {
+        Value::Str(s) => match s.parse::<f64>() {
+            Ok(f) => Ok(Value::Variant("Ok".into(), Box::new(Value::Float(f)))),
+            Err(_) => Ok(Value::Variant("Err".into(), Box::new(Value::Str("invalid float".into())))),
+        },
+        _ => Err(RuntimeError::TypeError("string-to-float: expected string".into())),
+    }
+}
+
+fn builtin_char_code(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("char-code", args, 1)?;
+    match &args[0] {
+        Value::Str(s) => {
+            if let Some(ch) = s.chars().next() {
+                Ok(Value::Int(ch as i64))
+            } else {
+                Err(RuntimeError::Custom("char-code: empty string".into()))
+            }
+        }
+        _ => Err(RuntimeError::TypeError("char-code: expected string".into())),
+    }
+}
+
+fn builtin_char_from_code(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("char-from-code", args, 1)?;
+    match &args[0] {
+        Value::Int(n) => {
+            if let Some(ch) = char::from_u32(*n as u32) {
+                Ok(Value::Str(ch.to_string()))
+            } else {
+                Err(RuntimeError::Custom(format!("char-from-code: invalid codepoint {}", n)))
+            }
+        }
+        _ => Err(RuntimeError::TypeError("char-from-code: expected integer".into())),
     }
 }
 
