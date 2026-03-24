@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~508 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.2.0.
+AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~508 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.2.1.
 
 **Language spec:** `AIRL-Language-Specification-v0.1.0.md`
 **LLM guide:** `AIRL-LLM-Guide.md` — **MUST read this file before writing any AIRL code.** It contains critical language idioms, pitfalls, and patterns that prevent common mistakes.
