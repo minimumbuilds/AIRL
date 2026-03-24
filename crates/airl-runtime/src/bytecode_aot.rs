@@ -116,6 +116,9 @@ pub struct RuntimeImports {
     pub read_file: FuncId,
     pub get_args:  FuncId,
     pub run_bytecode: FuncId,
+
+    // Contract failure
+    pub contract_fail: FuncId,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -362,6 +365,14 @@ impl BytecodeAot {
         let get_args  = declare_import(m, "airl_get_args",  sig_0_ptr(m));
         let run_bytecode = declare_import(m, "airl_run_bytecode", s1.clone());
 
+        // Contract failure: (kind: i64, fn_name_idx: i64, clause_idx: i64) -> i64
+        let mut cf_sig = m.make_signature();
+        cf_sig.params.push(AbiParam::new(types::I64));
+        cf_sig.params.push(AbiParam::new(types::I64));
+        cf_sig.params.push(AbiParam::new(types::I64));
+        cf_sig.returns.push(AbiParam::new(types::I64));
+        let contract_fail = declare_import(m, "airl_jit_contract_fail", cf_sig);
+
         RuntimeImports {
             value_retain, value_release, value_clone,
             int_ctor, float_ctor, bool_ctor, nil_ctor, unit_ctor, str_ctor,
@@ -378,6 +389,7 @@ impl BytecodeAot {
             map_new, map_from, map_get, map_get_or, map_set, map_has,
             map_remove, map_keys, map_values, map_size,
             read_file, get_args, run_bytecode,
+            contract_fail,
         }
     }
 
@@ -1335,6 +1347,49 @@ impl BytecodeAot {
                     builder.def_var(vars[dst], match_result);
                     builder.ins().jump(fallthrough_blk, &[]);
                     last_was_terminator = true;
+                }
+
+                // ── Contract assertions ──────────────────────────────────
+                // Happy path: one conditional branch (predicted taken).
+                // Sad path: call airl_jit_contract_fail, return nil.
+                Op::AssertRequires | Op::AssertEnsures | Op::AssertInvariant => {
+                    let bool_reg = instr.a as usize;
+                    let bool_ptr = builder.use_var(vars[bool_reg]);
+
+                    // Unbox the boolean: airl_as_bool_raw(*mut RtValue) -> i64
+                    let as_bool_ref = self.module.declare_func_in_func(self.rt.as_bool_raw, builder.func);
+                    let call = builder.ins().call(as_bool_ref, &[bool_ptr]);
+                    let raw_bool = builder.inst_results(call)[0];
+
+                    let fail_blk = builder.create_block();
+                    let cont_blk = builder.create_block();
+
+                    // if raw_bool != 0 (true) → continue; else → fail
+                    builder.ins().brif(raw_bool, cont_blk, &[], fail_blk, &[]);
+
+                    // Fail block: call airl_jit_contract_fail(kind, fn_name_idx, clause_idx)
+                    builder.switch_to_block(fail_blk);
+                    let kind_val = builder.ins().iconst(types::I64, match instr.op {
+                        Op::AssertRequires => 0,
+                        Op::AssertEnsures => 1,
+                        _ => 2, // Invariant
+                    });
+                    let fn_idx_val = builder.ins().iconst(types::I64, instr.dst as i64);
+                    let clause_val = builder.ins().iconst(types::I64, instr.b as i64);
+                    let fail_ref = self.module.declare_func_in_func(self.rt.contract_fail, builder.func);
+                    builder.ins().call(fail_ref, &[kind_val, fn_idx_val, clause_val]);
+                    // Return nil to signal failure
+                    let nil_ref = self.module.declare_func_in_func(self.rt.nil_ctor, builder.func);
+                    let nil_call = builder.ins().call(nil_ref, &[]);
+                    let nil_val = builder.inst_results(nil_call)[0];
+                    builder.ins().return_(&[nil_val]);
+
+                    // Continue block: contract passed
+                    builder.switch_to_block(cont_blk);
+                    last_was_terminator = false;
+                }
+                Op::MarkMoved | Op::CheckNotMoved => {
+                    // No-op in AOT — ownership is enforced at the bytecode VM level
                 }
             }
         }
