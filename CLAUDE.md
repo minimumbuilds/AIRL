@@ -220,17 +220,23 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 ### Tier 1 — Long-term
 
-#### 1. Bootstrap Compiler (not yet self-hosting)
+#### 1. Bootstrap Compiler → Standalone Native Binaries
 
-**Status:** Compiler front-end phases implemented in AIRL, running on the Rust runtime. The bootstrap lexer (`bootstrap/lexer.airl`, ~365 lines) tokenizes AIRL source strings. The bootstrap parser (`bootstrap/parser.airl`, ~930 lines) converts token streams to typed AST nodes, including `deftype` declarations. The bootstrap evaluator (`bootstrap/eval.airl`, ~616 lines) interprets AST nodes using tagged value variants (`ValInt`, `ValStr`, etc.), a map-based environment frame stack, and builtin delegation to the Rust runtime. The bootstrap type checker (`bootstrap/types.airl` + `bootstrap/typecheck.airl`, ~715 lines) enforces the type system with a two-pass architecture. The full lex→parse→eval pipeline is tested by `bootstrap/pipeline_test.airl`.
+**Status: Self-compiling, fixpoint verified.** The bootstrap compiler (lexer, parser, evaluator, type checker, IR compiler — ~2,500 lines of AIRL) can compile itself and produce identical output whether run interpreted or compiled (fixpoint). It is a working, self-compiling AIRL compiler written in AIRL.
 
-**Self-parse verified:** The bootstrap lexer successfully lexes its own source (15,691 chars → 3,400 tokens, ~56s release). TCO through `match`/`let` arms is required for this to work — without it, `lex-loop`'s recursion overflows the stack.
+**What's achieved:**
+- **Lexer** (`bootstrap/lexer.airl`, ~365 lines) — tokenizes AIRL source. Self-parse verified (15,691 chars → 3,400 tokens).
+- **Parser** (`bootstrap/parser.airl`, ~930 lines) — converts tokens to typed AST, including `deftype` declarations.
+- **Evaluator** (`bootstrap/eval.airl`, ~616 lines) — interprets AST using tagged value variants and map-based environment frames.
+- **Type Checker** (`bootstrap/types.airl` + `bootstrap/typecheck.airl`, ~715 lines) — two-pass architecture. All bootstrap modules type-check cleanly.
+- **IR Compiler** (`bootstrap/compiler.airl`, ~400 lines) — compiles AST to tree-flattened IR.
+- **Fixpoint** — compiled compiler produces identical IR to interpreted compiler.
 
-**Type-check verified:** All three bootstrap modules (lexer, parser, eval) pass the bootstrap type checker cleanly. All `Any` annotations have been eliminated from the bootstrap codebase (~120 replacements). The integration tests parse each module through the bootstrap parser and type-check the AST — slow (~5-10 min total in release mode) but comprehensive.
+**What "not standalone" means:** The compiled output (IR/bytecode) still needs the Rust runtime to execute. The ~48 primitive builtins (`+`, `-`, `head`, `tail`, `char-at`, `map-get`, `print`, etc.) are Rust functions that the AIRL code calls but doesn't implement. This is analogous to a C compiler that produces object files but needs `libc` to link and run them.
 
-**Not self-hosting:** The Rust runtime is still required — ~48 builtins (arithmetic, string ops, map ops, list primitives, I/O) are implemented in Rust and called by the bootstrap code. True self-hosting would require a native code generator backend that can emit machine code or link against a minimal runtime.
+**Gap is small with jit-full + airl-rt:** The `airl-rt` crate already implements all builtins as `extern "C"` functions, and jit-full already compiles all AIRL functions to native x86-64 that links against `airl-rt` at JIT time. An AOT mode that emits an object file and statically links with `libairl_rt.a` would produce standalone native binaries — closing the self-hosting loop.
 
-**Next steps:** Potential future work includes a native code generator (e.g., extending the bytecode→Cranelift JIT to AOT compilation with runtime helper calls for non-primitive operations).
+**Next step:** AOT compilation mode — extend jit-full to emit object files (Cranelift already supports this via `ObjectModule`) and link with `airl-rt` to produce native executables.
 
 ---
 
