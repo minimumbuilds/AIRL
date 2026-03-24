@@ -65,6 +65,9 @@ pub extern "C" fn airl_empty(list: *mut RtValue) -> *mut RtValue {
 
 #[no_mangle]
 pub extern "C" fn airl_list_new(items: *const *mut RtValue, count: usize) -> *mut RtValue {
+    if count == 0 {
+        return rt_list(Vec::new());
+    }
     let slice = unsafe { std::slice::from_raw_parts(items, count) };
     let mut vec = Vec::with_capacity(count);
     for &item in slice {

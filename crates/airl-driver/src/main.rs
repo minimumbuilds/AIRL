@@ -1,6 +1,6 @@
 use airl_driver::pipeline::{run_file, run_file_bytecode, check_file, format_diagnostic_with_source, PipelineError};
 #[cfg(feature = "jit")]
-use airl_driver::pipeline::run_file_jit;
+use airl_driver::pipeline::run_file_jit_full;
 use airl_driver::fmt::format_source;
 use airl_agent::transport::Transport;
 
@@ -44,18 +44,23 @@ fn cmd_run(args: &[String]) {
             if args.len() < 2 { eprintln!("Usage: airl run --bytecode <file.airl>"); std::process::exit(1); }
             ("bytecode", &args[1])
         }
+        "--jit-full" => {
+            if args.len() < 2 { eprintln!("Usage: airl run --jit-full <file.airl>"); std::process::exit(1); }
+            ("jit-full", &args[1])
+        }
         _ => ("default", &args[0]),
     };
 
     let result = match mode {
         "interpreted" => run_file(path),
         "bytecode" => run_file_bytecode(path),
+        #[cfg(feature = "jit")]
+        "jit-full" => run_file_jit_full(path),
         _ => {
-            // Default: JIT with automatic bytecode fallback for ineligible functions
-            #[cfg(feature = "jit")]
-            { run_file_jit(path) }
-            #[cfg(not(feature = "jit"))]
-            { run_file_bytecode(path) }
+            // Default: run_file uses jit-full when JIT feature is enabled
+            // (with full type checking, linearity analysis, and Z3 verification).
+            // Falls back to pure bytecode when JIT feature is not enabled.
+            run_file(path)
         }
     };
 

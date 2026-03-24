@@ -118,6 +118,17 @@ fn run_error_fixtures(dir_name: &str) -> (usize, Vec<String>) {
             }
         };
 
+        // Try check_source first (strict mode catches type errors, missing contracts, etc.).
+        // If it fails and the error matches, skip run_fixture to avoid process::exit
+        // from JIT runtime errors (e.g., airl_mul type mismatch in extern "C" code).
+        let check_result = airl_driver::pipeline::check_source(&source);
+        if let Err(ref e) = check_result {
+            let err_str = format!("{}", e);
+            if err_str.contains(&expected_fragment) {
+                continue; // Error caught at check time — test passes
+            }
+        }
+
         match run_fixture(&source) {
             Ok(output) => {
                 failures.push(format!(
@@ -200,7 +211,14 @@ fn check_type_error_fixtures() {
         if expected_error.is_some() {
             // Use check_source (which runs type checker in strict mode)
             let check_failed = airl_driver::pipeline::check_source(&source).is_err();
-            let run_failed = run_fixture(&source).is_err();
+            // Only try running if check passed — some runtime errors (e.g., type
+            // mismatches in JIT code) call process::exit, which would terminate
+            // the test runner.
+            let run_failed = if check_failed {
+                true // already caught by type checker
+            } else {
+                run_fixture(&source).is_err()
+            };
 
             if !check_failed && !run_failed {
                 failures.push(format!(

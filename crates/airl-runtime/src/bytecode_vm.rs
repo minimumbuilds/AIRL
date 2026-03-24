@@ -519,6 +519,31 @@ impl BytecodeVm {
                     #[cfg(feature = "jit")]
                     if let Some(ref jit_full) = self.jit_full {
                         if let Some(val) = jit_full.try_call_native(&name, &args) {
+                            // Check if a contract violation was signaled via the thread-local error cell
+                            if let Some((kind, fn_name_idx, clause_idx)) = crate::bytecode_jit::take_jit_contract_error() {
+                                let f = self.functions.get(&name);
+                                let fn_name_str = f.and_then(|f| f.constants.get(fn_name_idx as usize))
+                                    .and_then(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
+                                    .unwrap_or_else(|| name.clone());
+                                let clause_source = f.and_then(|f| f.constants.get(clause_idx as usize))
+                                    .and_then(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
+                                    .unwrap_or_else(|| "?".into());
+                                let contract_kind = match kind {
+                                    0 => airl_contracts::violation::ContractKind::Requires,
+                                    1 => airl_contracts::violation::ContractKind::Ensures,
+                                    _ => airl_contracts::violation::ContractKind::Invariant,
+                                };
+                                return Err(RuntimeError::ContractViolation(
+                                    airl_contracts::violation::ContractViolation {
+                                        function: fn_name_str,
+                                        contract_kind,
+                                        clause_source,
+                                        bindings: vec![],
+                                        evaluated: "false".into(),
+                                        span: airl_syntax::Span::dummy(),
+                                    }
+                                ));
+                            }
                             self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = val;
                             continue;
                         }

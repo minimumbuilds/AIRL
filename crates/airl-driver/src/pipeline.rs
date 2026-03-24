@@ -169,6 +169,11 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
 
     // Create VM, load stdlib, execute
+    // When JIT feature is enabled, use jit-full (compiles ALL functions to native x86-64).
+    // Bytecode VM still executes __main__ and dispatches to native code for each call.
+    #[cfg(feature = "jit")]
+    let mut vm = BytecodeVm::new_with_full_jit();
+    #[cfg(not(feature = "jit"))]
     let mut vm = BytecodeVm::new();
     for (src, name) in &[
         (COLLECTIONS_SOURCE, "collections"),
@@ -184,6 +189,9 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
         vm.load_function(func);
     }
     vm.load_function(main_func);
+    // JIT-full: compile all loaded functions to native code before execution
+    #[cfg(feature = "jit")]
+    vm.jit_full_compile_all();
     vm.exec_main().map_err(PipelineError::Runtime)
 }
 
