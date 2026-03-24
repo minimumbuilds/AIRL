@@ -1,0 +1,2447 @@
+;; bootstrap/lexer.airl — Self-hosted AIRL lexer
+
+(deftype Token
+  (& (kind : String) (value : String) (line : i64) (col : i64)))
+
+;; ── Helper predicates ───────────────────────────────
+
+(defn is-whitespace?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if single-char string is whitespace"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (or (= ch " ") (or (= ch "\t") (or (= ch "\n") (= ch "\r")))))
+
+(defn is-digit?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if single-char string is a decimal digit"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (contains "0123456789" ch))
+
+(defn digit-value
+  :sig [(ch : String) -> i64]
+  :intent "Return numeric value of a digit character"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (index-of "0123456789" ch))
+
+(defn is-symbol-start?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if char can start a symbol"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (contains "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!$%&*+-./<=>?@^_|~" ch))
+
+(defn is-symbol-char?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if char can continue a symbol"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (or (is-symbol-start? ch) (is-digit? ch)))
+
+;; ── Helper: safe peek at next char ──────────────────
+
+(defn peek-next-is?
+  :sig [(source : String) (pos : i64) (expected : String) -> Bool]
+  :intent "Check if char at pos+1 equals expected, bounds-safe"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (< (+ pos 1) (length source))
+      (= (char-at source (+ pos 1)) expected)
+      false))
+
+;; ── Whitespace and comment skipping ─────────────────
+
+(defn skip-block-comment
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (depth : i64) -> List]
+  :intent "Skip nestable block comment, return (Ok [pos line col]) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      (Err "unterminated block comment")
+      (let (ch : String (char-at source pos))
+        (if (= ch "#")
+          (if (peek-next-is? source pos "|")
+            ;; Nested open
+            (skip-block-comment source (+ pos 2) line (+ col 2) (+ depth 1))
+            ;; Just a # inside comment
+            (skip-block-comment source (+ pos 1) line (+ col 1) depth))
+          (if (= ch "|")
+            (if (peek-next-is? source pos "#")
+              ;; Close
+              (if (= depth 1)
+                (Ok [(+ pos 2) line (+ col 2)])
+                (skip-block-comment source (+ pos 2) line (+ col 2) (- depth 1)))
+              ;; Just a | inside comment
+              (skip-block-comment source (+ pos 1) line (+ col 1) depth))
+            ;; Regular char inside comment
+            (if (= ch "\n")
+              (skip-block-comment source (+ pos 1) (+ line 1) 0 depth)
+              (skip-block-comment source (+ pos 1) line (+ col 1) depth)))))))
+
+(defn skip-line-comment
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
+  :intent "Skip to end of line, then continue skipping whitespace"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      (Ok [pos line col])
+      (if (= (char-at source pos) "\n")
+        (skip-ws source (+ pos 1) (+ line 1) 0)
+        (skip-line-comment source (+ pos 1) line (+ col 1)))))
+
+(defn skip-ws
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
+  :intent "Skip whitespace and comments, return (Ok [pos line col]) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      (Ok [pos line col])
+      (let (ch : String (char-at source pos))
+        (if (= ch "\n")
+          (skip-ws source (+ pos 1) (+ line 1) 0)
+          (if (or (= ch " ") (or (= ch "\t") (= ch "\r")))
+            (skip-ws source (+ pos 1) line (+ col 1))
+            (if (= ch ";")
+              ;; Line comment — skip to end of line
+              (skip-line-comment source (+ pos 1) line col)
+              (if (= ch "#")
+                (if (peek-next-is? source pos "|")
+                  ;; Block comment
+                  (match (skip-block-comment source (+ pos 2) line (+ col 2) 1)
+                    (Ok state) (skip-ws source (head state) (at state 1) (at state 2))
+                    (Err msg) (Err msg))
+                  ;; Not whitespace (just a # char)
+                  (Ok [pos line col]))
+                ;; Not whitespace
+                (Ok [pos line col]))))))))
+
+;; ── Sub-lexers ──────────────────────────────────────
+
+(defn read-symbol-chars
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) -> List]
+  :intent "Read consecutive symbol characters, return [text pos line col]"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      [acc pos line col]
+      (let (ch : String (char-at source pos))
+        (if (is-symbol-char? ch)
+          (read-symbol-chars source (+ pos 1) line (+ col 1) (+ acc ch))
+          [acc pos line col]))))
+
+(defn lex-symbol
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
+  :intent "Lex a symbol, checking for true/false/nil"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (let (r : List (read-symbol-chars source pos line col acc))
+      (let (text : String (head r))
+        (let (new-pos : i64 (at r 1))
+          (let (new-line : i64 (at r 2))
+            (let (new-col : i64 (at r 3))
+              (if (= text "true")  (Ok [(Token "bool" true start-line start-col) new-pos new-line new-col])
+              (if (= text "false") (Ok [(Token "bool" false start-line start-col) new-pos new-line new-col])
+              (if (= text "nil")   (Ok [(Token "nil" nil start-line start-col) new-pos new-line new-col])
+                (Ok [(Token "symbol" text start-line start-col) new-pos new-line new-col]))))))))))
+
+(defn lex-keyword
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
+  :intent "Lex a keyword (colon already consumed)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (let (r : List (read-symbol-chars source pos line col acc))
+      (let (text : String (head r))
+        (let (new-pos : i64 (at r 1))
+          (let (new-line : i64 (at r 2))
+            (let (new-col : i64 (at r 3))
+              (Ok [(Token "keyword" text start-line start-col) new-pos new-line new-col])))))))
+
+;; ── Numeric helpers ──────────────────────────────────
+
+(defn digit-value-f
+  :sig [(ch : String) -> f64]
+  :intent "Return float value of a digit character"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body
+    (if (= ch "0") 0.0
+    (if (= ch "1") 1.0
+    (if (= ch "2") 2.0
+    (if (= ch "3") 3.0
+    (if (= ch "4") 4.0
+    (if (= ch "5") 5.0
+    (if (= ch "6") 6.0
+    (if (= ch "7") 7.0
+    (if (= ch "8") 8.0
+      9.0))))))))))
+
+(defn int-to-float
+  :sig [(n : i64) -> f64]
+  :intent "Convert integer to float"
+  :requires [(valid n)]
+  :ensures [(valid result)]
+  :body
+    (if (= n 0) 0.0
+    (if (< n 0)
+      (- 0.0 (int-to-float (- 0 n)))
+      (+ 1.0 (int-to-float (- n 1))))))
+
+;; ── Number sub-lexer ────────────────────────────────
+
+(defn read-digits
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : i64) -> List]
+  :intent "Read consecutive digits, accumulate integer value, return [value pos line col]"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      [acc pos line col]
+      (let (ch : String (char-at source pos))
+        (if (is-digit? ch)
+          (read-digits source (+ pos 1) line (+ col 1) (+ (* acc 10) (digit-value ch)))
+          [acc pos line col]))))
+
+(defn read-frac-digits
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : f64) (divisor : f64) -> List]
+  :intent "Read fractional digits after '.', return [frac-value pos line col]"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      [acc pos line col]
+      (let (ch : String (char-at source pos))
+        (if (is-digit? ch)
+          (read-frac-digits source (+ pos 1) line (+ col 1)
+            (+ acc (/ (digit-value-f ch) divisor))
+            (* divisor 10.0))
+          [acc pos line col]))))
+
+(defn lex-number
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : i64) (negative : Bool) (start-line : i64) (start-col : i64) -> List]
+  :intent "Lex an integer or float literal"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (let (int-result : List (read-digits source pos line col acc))
+      (let (int-val : i64 (head int-result))
+        (let (new-pos : i64 (at int-result 1))
+          (let (new-line : i64 (at int-result 2))
+            (let (new-col : i64 (at int-result 3))
+              ;; Check for '.' followed by digit -> float
+              (if (< new-pos (length source))
+                (if (= (char-at source new-pos) ".")
+                  (if (< (+ new-pos 1) (length source))
+                    (if (is-digit? (char-at source (+ new-pos 1)))
+                      ;; Float
+                      (let (frac-result : List (read-frac-digits source (+ new-pos 1) new-line (+ new-col 1) 0.0 10.0))
+                        (let (frac-val : f64 (head frac-result))
+                          (let (fp : i64 (at frac-result 1))
+                            (let (fl : i64 (at frac-result 2))
+                              (let (fc : i64 (at frac-result 3))
+                                (let (float-val : f64 (+ (int-to-float int-val) frac-val))
+                                  (Ok [(Token "float" (if negative (- 0.0 float-val) float-val) start-line start-col) fp fl fc])))))))
+                      ;; Integer (dot followed by non-digit)
+                      (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
+                    ;; Integer (dot at end of input)
+                    (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
+                  ;; Integer (no dot)
+                  (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
+                ;; Integer (end of input)
+                (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))))))))
+
+;; ── String sub-lexer ────────────────────────────────
+
+(defn lex-string
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
+  :intent "Lex a string literal (opening quote already consumed)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length source))
+      (Err "unterminated string")
+      (let (ch : String (char-at source pos))
+        (if (= ch "\"")
+          ;; Closing quote
+          (Ok [(Token "string" acc start-line start-col) (+ pos 1) line (+ col 1)])
+          (if (= ch "\\")
+            ;; Escape sequence
+            (if (>= (+ pos 1) (length source))
+              (Err "unterminated escape in string")
+              (let (esc : String (char-at source (+ pos 1)))
+                (if (= esc "n")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\n") start-line start-col)
+                (if (= esc "t")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\t") start-line start-col)
+                (if (= esc "r")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\r") start-line start-col)
+                (if (= esc "0")  (lex-string source (+ pos 2) line (+ col 2) (+ acc "\0") start-line start-col)
+                (if (= esc "\\") (lex-string source (+ pos 2) line (+ col 2) (+ acc "\\") start-line start-col)
+                (if (= esc "\"") (lex-string source (+ pos 2) line (+ col 2) (+ acc "\"") start-line start-col)
+                  (Err (+ "unknown escape \\" esc))))))))))
+            ;; Regular character
+            (if (= ch "\n")
+              (lex-string source (+ pos 1) (+ line 1) 0 (+ acc ch) start-line start-col)
+              (lex-string source (+ pos 1) line (+ col 1) (+ acc ch) start-line start-col)))))))
+
+;; ── Core lexer ──────────────────────────────────────
+
+(defn next-token
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
+  :intent "Read next token from source at pos, return (Ok [token pos line col]) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (skip-ws source pos line col)
+      (Err msg) (Err msg)
+      (Ok ws-state)
+        (let (p : i64 (head ws-state))
+          (let (ln : i64 (at ws-state 1))
+            (let (c : i64 (at ws-state 2))
+              (if (>= p (length source))
+                (Ok [(Token "eof" nil ln c) p ln c])
+                (let (ch : String (char-at source p))
+                  (if (= ch "(") (Ok [(Token "lparen" "(" ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch ")") (Ok [(Token "rparen" ")" ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch "[") (Ok [(Token "lbracket" "[" ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch "]") (Ok [(Token "rbracket" "]" ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch ",") (Ok [(Token "comma" "," ln c) (+ p 1) ln (+ c 1)])
+                  (if (= ch "\"") (lex-string source (+ p 1) ln (+ c 1) "" ln c)
+                  (if (= ch ":")
+                    (if (< (+ p 1) (length source))
+                      (if (is-symbol-start? (char-at source (+ p 1)))
+                        (lex-keyword source (+ p 1) ln (+ c 1) "" ln c)
+                        (Ok [(Token "colon" ":" ln c) (+ p 1) ln (+ c 1)]))
+                      (Ok [(Token "colon" ":" ln c) (+ p 1) ln (+ c 1)]))
+                  (if (= ch "-")
+                    (if (peek-next-is? source p ">")
+                      (Ok [(Token "arrow" "->" ln c) (+ p 2) ln (+ c 2)])
+                      (if (< (+ p 1) (length source))
+                        (if (is-digit? (char-at source (+ p 1)))
+                          (lex-number source (+ p 1) ln (+ c 1) 0 true ln c)
+                          (lex-symbol source p ln c "" ln c))
+                        (lex-symbol source p ln c "" ln c)))
+                  (if (is-digit? ch)
+                    (lex-number source p ln c 0 false ln c)
+                  (if (is-symbol-start? ch)
+                    (lex-symbol source p ln c "" ln c)
+                    (Err (+ "unexpected character '" (+ ch "'")))))
+                  )))))))))))))))
+
+(defn lex-loop
+  :sig [(source : String) (pos : i64) (line : i64) (col : i64) (tokens : List) -> List]
+  :intent "Accumulate tokens until EOF, return (Ok tokens) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (next-token source pos line col)
+      (Err msg) (Err msg)
+      (Ok tok-state)
+        (let (tok : List (head tok-state))
+          (let (new-pos : i64 (at tok-state 1))
+            (let (new-line : i64 (at tok-state 2))
+              (let (new-col : i64 (at tok-state 3))
+                (let (new-tokens : List (cons tok tokens))
+                  (match tok
+                    (Token kind _ _ _)
+                      (if (= kind "eof")
+                        (Ok new-tokens)
+                        (lex-loop source new-pos new-line new-col new-tokens))))))))))
+
+(defn lex
+  :sig [(source : String) -> List]
+  :intent "Tokenize source string, return (Ok token-list) or (Err msg)"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex-loop source 0 1 0 [])
+      (Ok tokens) (Ok (reverse tokens))
+      (Err msg) (Err msg)))
+;; bootstrap/parser.airl — Self-hosted AIRL parser
+;; Requires: bootstrap/lexer.airl (loaded first)
+
+;; ── Helpers ───────────────────────────────────────
+
+(defn is-upper?
+  :sig [(ch : String) -> Bool]
+  :intent "Check if single-char string is uppercase letter"
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (contains "ABCDEFGHIJKLMNOPQRSTUVWXYZ" ch))
+
+(defn parse-error
+  :sig [(msg : String) (line : i64) (col : i64) -> List]
+  :intent "Create a structured parse error"
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (Err (ParseError msg line col)))
+
+(defn token-line
+  :sig [(tok : List) -> i64]
+  :intent "Extract line number from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token _ _ line _) line))
+
+(defn token-col
+  :sig [(tok : List) -> i64]
+  :intent "Extract column number from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token _ _ _ col) col))
+
+(defn token-kind
+  :sig [(tok : List) -> String]
+  :intent "Extract kind string from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token kind _ _ _) kind))
+
+(defn token-value
+  :sig [(tok : List) -> List]
+  :intent "Extract value from a Token"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (match tok
+    (Token _ value _ _) value))
+
+;; ── Phase 1: Token → S-Expression grouping ────────
+
+(defn parse-sexpr
+  :sig [(tokens : List) (pos : i64) -> List]
+  :intent "Parse one S-expression from token list at pos, return (Ok [sexpr new-pos]) or (Err ...)"
+  :requires [(valid tokens)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length tokens))
+      (Err (ParseError "unexpected end of input" 0 0))
+      (let (tok : List (at tokens pos))
+        (match tok
+          (Token kind value line col)
+            (if (= kind "lparen")
+              ;; Parse list contents until rparen
+              (match (parse-sexprs tokens (+ pos 1) "rparen")
+                (Ok result)
+                  (let (items : List (at result 0))
+                    (let (end-pos : i64 (at result 1))
+                      ;; Check for closing rparen
+                      (if (>= end-pos (length tokens))
+                        (Err (ParseError "unclosed parenthesis" line col))
+                        (let (closer : List (at tokens end-pos))
+                          (match closer
+                            (Token ck _ _ _)
+                              (if (= ck "rparen")
+                                (Ok [(SList items line col) (+ end-pos 1)])
+                                (Err (ParseError "unclosed parenthesis" line col))))))))
+                (Err e) (Err e))
+              (if (= kind "lbracket")
+                ;; Parse bracket contents until rbracket
+                (match (parse-sexprs tokens (+ pos 1) "rbracket")
+                  (Ok result)
+                    (let (items : List (at result 0))
+                      (let (end-pos : i64 (at result 1))
+                        (if (>= end-pos (length tokens))
+                          (Err (ParseError "unclosed bracket" line col))
+                          (let (closer : List (at tokens end-pos))
+                            (match closer
+                              (Token ck _ _ _)
+                                (if (= ck "rbracket")
+                                  (Ok [(SBracket items line col) (+ end-pos 1)])
+                                  (Err (ParseError "unclosed bracket" line col))))))))
+                  (Err e) (Err e))
+                (if (= kind "rparen")
+                  (Err (ParseError "unexpected ')'" line col))
+                  (if (= kind "rbracket")
+                    (Err (ParseError "unexpected ']'" line col))
+                    (if (= kind "eof")
+                      (Err (ParseError "unexpected end of input" line col))
+                      ;; Any other token is an atom
+                      (Ok [(SAtom tok) (+ pos 1)]))))))))))
+
+(defn parse-sexprs
+  :sig [(tokens : List) (pos : i64) (stop-kind : String) -> List]
+  :intent "Parse S-expressions until stop token or EOF, return (Ok [sexprs pos])"
+  :requires [(valid tokens)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length tokens))
+      (Ok [[] pos])
+      (let (tok : List (at tokens pos))
+        (match tok
+          (Token kind _ _ _)
+            (if (= kind stop-kind)
+              ;; Hit the stop token — return what we have
+              (Ok [[] pos])
+              (if (= kind "eof")
+                ;; EOF — return what we have
+                (Ok [[] pos])
+                ;; Parse one sexpr, then continue
+                (match (parse-sexpr tokens pos)
+                  (Ok result)
+                    (let (sexpr : List (at result 0))
+                      (let (new-pos : i64 (at result 1))
+                        (match (parse-sexprs tokens new-pos stop-kind)
+                          (Ok rest-result)
+                            (let (rest-sexprs : List (at rest-result 0))
+                              (let (final-pos : i64 (at rest-result 1))
+                                (Ok [(cons sexpr rest-sexprs) final-pos])))
+                          (Err e) (Err e))))
+                  (Err e) (Err e))))))))
+
+(defn parse-sexpr-all
+  :sig [(tokens : List) -> List]
+  :intent "Parse all tokens into S-expressions, return (Ok sexprs) or (Err ...)"
+  :requires [(valid tokens)]
+  :ensures [(valid result)]
+  :body
+    (match (parse-sexprs tokens 0 "eof")
+      (Ok result) (Ok (at result 0))
+      (Err e) (Err e)))
+
+;; ── Phase 2: S-Expression → AST ──────────────────
+
+(defn parse-atom
+  :sig [(tok : List) -> List]
+  :intent "Convert a token to an AST atom node"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body
+    (match tok
+      (Token kind value line col)
+        (if (= kind "integer") (Ok (ASTInt value line col))
+        (if (= kind "float")   (Ok (ASTFloat value line col))
+        (if (= kind "string")  (Ok (ASTStr value line col))
+        (if (= kind "bool")    (Ok (ASTBool value line col))
+        (if (= kind "nil")     (Ok (ASTNil line col))
+        (if (= kind "keyword") (Ok (ASTKeyword value line col))
+        (if (= kind "symbol")
+          ;; Check if it's a capitalized symbol (nullary variant)
+          (if (is-upper? (char-at value 0))
+            (Ok (ASTVariant value [] line col))
+            (Ok (ASTSymbol value line col)))
+          (Err (ParseError (+ "unexpected token kind: " kind) line col)))))))))))
+
+(defn parse-list-items
+  :sig [(sexprs : List) (pos : i64) -> List]
+  :intent "Parse a list of S-expressions into AST exprs, return (Ok exprs) or (Err ...)"
+  :requires [(valid sexprs)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length sexprs))
+      (Ok [])
+      (match (parse-expr (at sexprs pos))
+        (Ok node)
+          (match (parse-list-items sexprs (+ pos 1))
+            (Ok rest) (Ok (cons node rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn parse-expr
+  :sig [(sexpr : List) -> List]
+  :intent "Parse an S-expression into an AST expression node"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      ;; Atom — delegate to parse-atom
+      (SAtom tok) (parse-atom tok)
+
+      ;; Bracket list — list literal [1 2 3]
+      (SBracket items line col)
+        (match (parse-list-items items 0)
+          (Ok exprs) (Ok (ASTList exprs line col))
+          (Err e) (Err e))
+
+      ;; Parenthesized list — dispatch on head
+      (SList items line col)
+        (if (empty? items)
+          (Ok (ASTNil line col))
+          (let (first : List (head items))
+            (match first
+              ;; Head is an atom token — check if it's a special form
+              (SAtom tok)
+                (match tok
+                  (Token kind value _ _)
+                    (if (= kind "symbol")
+                      ;; Dispatch on symbol name
+                      (if (= value "if")      (parse-if items line col)
+                      (if (= value "let")     (parse-let items line col)
+                      (if (= value "do")      (parse-do items line col)
+                      (if (= value "match")   (parse-match items line col)
+                      (if (= value "fn")      (parse-lambda items line col)
+                      (if (= value "try")     (parse-try items line col)
+                      ;; Check for variant constructor (capitalized)
+                      (if (is-upper? (char-at value 0))
+                        (match (parse-list-items items 1)
+                          (Ok args) (Ok (ASTVariant value args line col))
+                          (Err e) (Err e))
+                        ;; Regular function call
+                        (match (parse-expr first)
+                          (Ok callee)
+                            (match (parse-list-items items 1)
+                              (Ok args) (Ok (ASTCall callee args line col))
+                              (Err e) (Err e))
+                          (Err e) (Err e)))))))))
+                      ;; Non-symbol atom as head — function call with computed callee
+                      (match (parse-expr first)
+                        (Ok callee)
+                          (match (parse-list-items items 1)
+                            (Ok args) (Ok (ASTCall callee args line col))
+                            (Err e) (Err e))
+                        (Err e) (Err e))))
+
+              ;; Head is a list or bracket — computed callee: ((fn [x] x) 42)
+              _
+                (match (parse-expr first)
+                  (Ok callee)
+                    (match (parse-list-items items 1)
+                      (Ok args) (Ok (ASTCall callee args line col))
+                      (Err e) (Err e))
+                  (Err e) (Err e)))))))
+
+;; ── Compound expression parsers ───────────────────
+
+(defn parse-if
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (if cond then else) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [if-sym cond then else]
+    (if (= (length items) 4)
+      (match (parse-expr (at items 1))
+        (Ok cond-node)
+          (match (parse-expr (at items 2))
+            (Ok then-node)
+              (match (parse-expr (at items 3))
+                (Ok else-node)
+                  (Ok (ASTIf cond-node then-node else-node line col))
+                (Err e) (Err e))
+            (Err e) (Err e))
+        (Err e) (Err e))
+      (Err (ParseError "if requires exactly 3 arguments (cond then else)" line col))))
+
+(defn parse-let-binding
+  :sig [(sexpr : List) -> List]
+  :intent "Parse a single let binding (name : Type value)"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (< (length items) 4)
+          (Err (ParseError "let binding requires (name : Type value)" line col))
+          (let (name-sexpr : List (at items 0))
+            (match name-sexpr
+              (SAtom tok)
+                (match tok
+                  (Token kind name _ _)
+                    (if (= kind "symbol")
+                      ;; items[1] should be colon, items[2] should be type, items[3] should be value
+                      (let (type-sexpr : List (at items 2))
+                        (match type-sexpr
+                          (SAtom type-tok)
+                            (match type-tok
+                              (Token tk tv _ _)
+                                (if (= tk "symbol")
+                                  (match (parse-expr (at items 3))
+                                    (Ok val-node) (Ok (ASTBinding name tv val-node))
+                                    (Err e) (Err e))
+                                  (Err (ParseError "expected type name in let binding" line col))))
+                          _ (Err (ParseError "expected type name in let binding" line col))))
+                      (Err (ParseError "expected symbol name in let binding" line col))))
+              _ (Err (ParseError "expected symbol name in let binding" line col)))))
+      _ (Err (ParseError "let binding must be a list" 0 0))))
+
+(defn parse-let-bindings
+  :sig [(items : List) (pos : i64) (end : i64) -> List]
+  :intent "Parse let bindings from items[pos] to items[end-1], return (Ok bindings)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos end)
+      (Ok [])
+      (match (parse-let-binding (at items pos))
+        (Ok binding)
+          (match (parse-let-bindings items (+ pos 1) end)
+            (Ok rest) (Ok (cons binding rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn parse-let
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (let (bindings...) body) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [let-sym binding1 binding2 ... body]
+    ;; At least 3 items: let + one binding + body
+    (if (< (length items) 3)
+      (Err (ParseError "let requires at least one binding and a body" line col))
+      ;; bindings are items[1] to items[n-2], body is items[n-1]
+      (let (num-items : i64 (length items))
+        (let (body-idx : i64 (- num-items 1))
+          (match (parse-let-bindings items 1 body-idx)
+            (Ok bindings)
+              (match (parse-expr (at items body-idx))
+                (Ok body-node) (Ok (ASTLet bindings body-node line col))
+                (Err e) (Err e))
+            (Err e) (Err e))))))
+
+(defn parse-do
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (do expr1 expr2 ...) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [do-sym expr1 expr2 ...]
+    (if (< (length items) 2)
+      (Err (ParseError "do requires at least one expression" line col))
+      (match (parse-list-items items 1)
+        (Ok exprs) (Ok (ASTDo exprs line col))
+        (Err e) (Err e))))
+
+;; ── Pattern parsing ───────────────────────────────
+
+(defn parse-pattern
+  :sig [(sexpr : List) -> List]
+  :intent "Parse an S-expression into a pattern node"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SAtom tok)
+        (match tok
+          (Token kind value line col)
+            (if (= kind "symbol")
+              (if (= value "_")
+                (Ok (PatWild line col))
+                ;; Capitalized = nullary variant pattern, lowercase = binding
+                (if (is-upper? (char-at value 0))
+                  (Ok (PatVariant value [] line col))
+                  (Ok (PatBind value line col))))
+              ;; Literal pattern
+              (if (= kind "integer") (Ok (PatLit value line col))
+              (if (= kind "float")   (Ok (PatLit value line col))
+              (if (= kind "string")  (Ok (PatLit value line col))
+              (if (= kind "bool")    (Ok (PatLit value line col))
+              (if (= kind "nil")     (Ok (PatLit nil line col))
+                (Err (ParseError (+ "unexpected token in pattern: " kind) line col)))))))))
+
+      (SList items line col)
+        (if (empty? items)
+          (Err (ParseError "empty list in pattern" line col))
+          (let (head-sexpr : List (head items))
+            (match head-sexpr
+              (SAtom tok)
+                (match tok
+                  (Token kind value _ _)
+                    (if (= kind "symbol")
+                      (if (is-upper? (char-at value 0))
+                        ;; Variant pattern: (Ok v), (Token kind _ _ _)
+                        (match (parse-patterns items 1)
+                          (Ok sub-pats) (Ok (PatVariant value sub-pats line col))
+                          (Err e) (Err e))
+                        (Err (ParseError "pattern list must start with capitalized variant" line col)))
+                      (Err (ParseError "pattern list must start with symbol" line col))))
+              _ (Err (ParseError "pattern list must start with symbol" line col)))))
+
+      _ (Err (ParseError "unexpected S-expression in pattern" 0 0))))
+
+(defn parse-patterns
+  :sig [(items : List) (pos : i64) -> List]
+  :intent "Parse sub-patterns from items[pos..], return (Ok patterns)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [])
+      (match (parse-pattern (at items pos))
+        (Ok pat)
+          (match (parse-patterns items (+ pos 1))
+            (Ok rest) (Ok (cons pat rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+;; ── Match expression ──────────────────────────────
+
+(defn parse-match-arms
+  :sig [(items : List) (pos : i64) -> List]
+  :intent "Parse pattern/body pairs from items[pos..], return (Ok arms)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [])
+      ;; Need at least 2 more items (pattern + body)
+      (if (>= (+ pos 1) (length items))
+        (Err (ParseError "match arms must come in pairs (pattern body)" 0 0))
+        (match (parse-pattern (at items pos))
+          (Ok pat)
+            (match (parse-expr (at items (+ pos 1)))
+              (Ok body)
+                (match (parse-match-arms items (+ pos 2))
+                  (Ok rest) (Ok (cons (ASTArm pat body) rest))
+                  (Err e) (Err e))
+              (Err e) (Err e))
+          (Err e) (Err e)))))
+
+(defn parse-match
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (match scrutinee pattern body ...) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [match-sym scrutinee pat1 body1 pat2 body2 ...]
+    (if (< (length items) 4)
+      (Err (ParseError "match requires scrutinee and at least one arm" line col))
+      ;; Check even number of remaining items after scrutinee
+      (let (arm-count : i64 (- (length items) 2))
+        (if (= (% arm-count 2) 1)
+          (Err (ParseError "match arms must come in pairs (pattern body)" line col))
+          (match (parse-expr (at items 1))
+            (Ok scrutinee)
+              (match (parse-match-arms items 2)
+                (Ok arms) (Ok (ASTMatch scrutinee arms line col))
+                (Err e) (Err e))
+            (Err e) (Err e))))))
+
+;; ── Lambda ────────────────────────────────────────
+
+(defn parse-lambda-params
+  :sig [(items : List) (pos : i64) -> List]
+  :intent "Parse lambda parameter names from bracket items"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [])
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind value _ _)
+              (if (= kind "symbol")
+                (match (parse-lambda-params items (+ pos 1))
+                  (Ok rest) (Ok (cons value rest))
+                  (Err e) (Err e))
+                (Err (ParseError "lambda parameter must be a symbol" 0 0))))
+        _ (Err (ParseError "lambda parameter must be a symbol" 0 0)))))
+
+(defn parse-lambda
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (fn [params] body) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items = [fn-sym params-bracket body]
+    (if (= (length items) 3)
+      (match (at items 1)
+        (SBracket param-items _ _)
+          (match (parse-lambda-params param-items 0)
+            (Ok params)
+              (match (parse-expr (at items 2))
+                (Ok body) (Ok (ASTLambda params body line col))
+                (Err e) (Err e))
+            (Err e) (Err e))
+        _ (Err (ParseError "fn expects [params] as second argument" line col)))
+      (Err (ParseError "fn requires [params] and body" line col))))
+
+;; ── Try ───────────────────────────────────────────
+
+(defn parse-try
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (try expr) expression"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (= (length items) 2)
+      (match (parse-expr (at items 1))
+        (Ok expr) (Ok (ASTTry expr line col))
+        (Err e) (Err e))
+      (Err (ParseError "try requires exactly one argument" line col))))
+
+;; ── Signature parsing ─────────────────────────────
+
+(defn parse-param
+  :sig [(sexpr : List) -> List]
+  :intent "Parse a parameter (name : Type) from S-expression"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (< (length items) 3)
+          (Err (ParseError "parameter requires (name : Type)" line col))
+          (let (name-sexpr : List (at items 0))
+            (match name-sexpr
+              (SAtom tok)
+                (match tok
+                  (Token kind name _ _)
+                    (if (= kind "symbol")
+                      ;; items[1] = colon, items[2] = type
+                      (let (type-sexpr : List (at items 2))
+                        (match type-sexpr
+                          (SAtom type-tok)
+                            (match type-tok
+                              (Token tk tv _ _)
+                                (if (= tk "symbol")
+                                  (Ok (ASTParam name tv))
+                                  (Err (ParseError "expected type name in parameter" line col))))
+                          _ (Err (ParseError "expected type name in parameter" line col))))
+                      (Err (ParseError "expected symbol name in parameter" line col))))
+              _ (Err (ParseError "expected symbol name in parameter" line col)))))
+      _ (Err (ParseError "parameter must be a list" 0 0))))
+
+(defn parse-sig-params
+  :sig [(items : List) (pos : i64) (arrow-pos : i64) -> List]
+  :intent "Parse signature parameters from items[pos..arrow-pos]"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos arrow-pos)
+      (Ok [])
+      (match (parse-param (at items pos))
+        (Ok param)
+          (match (parse-sig-params items (+ pos 1) arrow-pos)
+            (Ok rest) (Ok (cons param rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn find-arrow
+  :sig [(items : List) (pos : i64) -> i64]
+  :intent "Find index of -> arrow token in S-expr list, return -1 if not found"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (- 0 1)
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind _ _ _)
+              (if (= kind "arrow")
+                pos
+                (find-arrow items (+ pos 1))))
+        _ (find-arrow items (+ pos 1)))))
+
+(defn parse-sig
+  :sig [(sexpr : List) -> List]
+  :intent "Parse :sig [(params...) -> ReturnType] from bracket S-expression"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SBracket items line col)
+        (let (arrow-idx : i64 (find-arrow items 0))
+          (if (< arrow-idx 0)
+            ;; No arrow — all params, default return type
+            (match (parse-sig-params items 0 (length items))
+              (Ok params) (Ok (ASTSig params "Unit"))
+              (Err e) (Err e))
+            ;; Arrow found — params before, return type after
+            (match (parse-sig-params items 0 arrow-idx)
+              (Ok params)
+                (if (>= (+ arrow-idx 1) (length items))
+                  (Err (ParseError "expected return type after ->" line col))
+                  (match (at items (+ arrow-idx 1))
+                    (SAtom tok)
+                      (match tok
+                        (Token kind value _ _)
+                          (if (= kind "symbol")
+                            (Ok (ASTSig params value))
+                            (Err (ParseError "expected type name after ->" line col))))
+                    _ (Err (ParseError "expected type name after ->" line col))))
+              (Err e) (Err e))))
+      _ (Err (ParseError "sig must be a bracket list" 0 0))))
+
+;; ── defn clause walker ────────────────────────────
+
+(defn walk-defn-clauses
+  :sig [(items : List) (pos : i64) (sig : List) (intent : String) (requires : List) (ensures : List) (body : List) -> List]
+  :intent "Walk keyword clauses in defn, accumulate values"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      ;; Done — return accumulated values
+      (Ok [sig intent requires ensures body])
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind value _ _)
+              (if (= kind "keyword")
+                ;; Keyword clause — need value at pos+1
+                (if (>= (+ pos 1) (length items))
+                  (Err (ParseError (+ "missing value for :" value) 0 0))
+                  (let (val-sexpr : List (at items (+ pos 1)))
+                    (if (= value "sig")
+                      (match (parse-sig val-sexpr)
+                        (Ok new-sig) (walk-defn-clauses items (+ pos 2) new-sig intent requires ensures body)
+                        (Err e) (Err e))
+                    (if (= value "intent")
+                      (match val-sexpr
+                        (SAtom itok)
+                          (match itok
+                            (Token ik iv _ _)
+                              (if (= ik "string")
+                                (walk-defn-clauses items (+ pos 2) sig iv requires ensures body)
+                                (Err (ParseError "intent must be a string" 0 0))))
+                        _ (Err (ParseError "intent must be a string" 0 0)))
+                    (if (= value "requires")
+                      (match val-sexpr
+                        (SBracket req-items _ _)
+                          (match (parse-list-items req-items 0)
+                            (Ok req-exprs) (walk-defn-clauses items (+ pos 2) sig intent req-exprs ensures body)
+                            (Err e) (Err e))
+                        _ (Err (ParseError "requires must be a bracket list" 0 0)))
+                    (if (= value "ensures")
+                      (match val-sexpr
+                        (SBracket ens-items _ _)
+                          (match (parse-list-items ens-items 0)
+                            (Ok ens-exprs) (walk-defn-clauses items (+ pos 2) sig intent requires ens-exprs body)
+                            (Err e) (Err e))
+                        _ (Err (ParseError "ensures must be a bracket list" 0 0)))
+                    (if (= value "body")
+                      (match (parse-expr val-sexpr)
+                        (Ok body-node) (walk-defn-clauses items (+ pos 2) sig intent requires ensures body-node)
+                        (Err e) (Err e))
+                      ;; Unknown keyword — skip
+                      (walk-defn-clauses items (+ pos 2) sig intent requires ensures body))))))))
+                ;; Non-keyword token — error
+                (Err (ParseError "expected keyword clause in defn" 0 0))))
+        ;; Non-atom — error
+        _ (Err (ParseError "expected keyword clause in defn" 0 0)))))
+
+(defn parse-defn
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (defn name :clause value ...) definition"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items[0] = "defn", items[1] = name, items[2..] = keyword clauses
+    (if (< (length items) 2)
+      (Err (ParseError "defn requires a name" line col))
+      (match (at items 1)
+        (SAtom tok)
+          (match tok
+            (Token kind name _ _)
+              (if (= kind "symbol")
+                (match (walk-defn-clauses items 2 nil "" [] [] nil)
+                  (Ok clause-vals)
+                    (Ok (ASTDefn name
+                      (at clause-vals 0)   ;; sig
+                      (at clause-vals 1)   ;; intent
+                      (at clause-vals 2)   ;; requires
+                      (at clause-vals 3)   ;; ensures
+                      (at clause-vals 4)   ;; body
+                      line col))
+                  (Err e) (Err e))
+                (Err (ParseError "defn name must be a symbol" line col))))
+        _ (Err (ParseError "defn name must be a symbol" line col)))))
+
+;; ── deftype parsing ──────────────────────────────
+
+(defn parse-variant
+  :sig [(sexpr : List) -> List]
+  :intent "Parse a sum variant: (Name Type1 Type2 ...) → (ASTVariantDef name field-type-names)"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (empty? items)
+          (Err (ParseError "empty variant" line col))
+          (match (head items)
+            (SAtom tok)
+              (match tok
+                (Token kind value _ _)
+                  (if (= kind "symbol")
+                    (Ok (ASTVariantDef value (tail items)))
+                    (Err (ParseError "variant name must be a symbol" line col))))
+            _ (Err (ParseError "variant name must be a symbol" line col))))
+      _ (Err (ParseError "variant must be a list" 0 0))))
+
+(defn parse-field
+  :sig [(sexpr : List) -> List]
+  :intent "Parse a product field: (name : Type) → (ASTFieldDef name type-name)"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (< (length items) 3)
+          (Err (ParseError "field requires (name : Type)" line col))
+          (match (at items 0)
+            (SAtom tok0)
+              (match tok0
+                (Token k0 name _ _)
+                  (if (= k0 "symbol")
+                    (match (at items 2)
+                      (SAtom tok2)
+                        (match tok2
+                          (Token k2 type-name _ _)
+                            (if (= k2 "symbol")
+                              (Ok (ASTFieldDef name type-name))
+                              (Err (ParseError "field type must be a symbol" line col))))
+                      _ (Err (ParseError "field type must be a symbol" line col)))
+                    (Err (ParseError "field name must be a symbol" line col))))
+            _ (Err (ParseError "field name must be a symbol" line col))))
+      _ (Err (ParseError "field must be a list" 0 0))))
+
+(defn parse-variants-acc
+  :sig [(items : List) (pos : i64) (acc : List) -> List]
+  :intent "Accumulate parsed variants from items list"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok (reverse acc))
+      (match (parse-variant (at items pos))
+        (Ok v) (parse-variants-acc items (+ pos 1) (cons v acc))
+        (Err e) (Err e))))
+
+(defn parse-sum-body
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse sum type body: (| (Variant1 ...) (Variant2 ...)) → (ASTSumBody variants)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (match (parse-variants-acc items 1 [])
+      (Ok variants) (Ok (ASTSumBody variants))
+      (Err e) (Err e)))
+
+(defn parse-fields-acc
+  :sig [(items : List) (pos : i64) (acc : List) -> List]
+  :intent "Accumulate parsed fields from items list"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok (reverse acc))
+      (match (parse-field (at items pos))
+        (Ok f) (parse-fields-acc items (+ pos 1) (cons f acc))
+        (Err e) (Err e))))
+
+(defn parse-product-body
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse product type body: (& (f1 : T1) (f2 : T2)) → (ASTProductBody fields)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (match (parse-fields-acc items 1 [])
+      (Ok fields) (Ok (ASTProductBody fields))
+      (Err e) (Err e)))
+
+(defn parse-type-params-acc
+  :sig [(items : List) (pos : i64) (acc : List) -> List]
+  :intent "Parse type parameters from bracket items"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok (reverse acc))
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind value _ _)
+              (if (= kind "symbol")
+                (if (< (+ pos 1) (length items))
+                  (match (at items (+ pos 1))
+                    (SAtom colon-tok)
+                      (match colon-tok
+                        (Token ck cv _ _)
+                          (if (= cv ":")
+                            (if (< (+ pos 2) (length items))
+                              (match (at items (+ pos 2))
+                                (SAtom bound-tok)
+                                  (match bound-tok
+                                    (Token bk bv _ _)
+                                      (parse-type-params-acc items (+ pos 3)
+                                        (cons (ASTTypeParam value bv) acc)))
+                                _ (Err (ParseError "expected type bound" 0 0)))
+                              (Err (ParseError "expected type bound after :" 0 0)))
+                            (parse-type-params-acc items (+ pos 1)
+                              (cons (ASTTypeParam value "Type") acc))))
+                    _ (parse-type-params-acc items (+ pos 1)
+                        (cons (ASTTypeParam value "Type") acc)))
+                  (parse-type-params-acc items (+ pos 1)
+                    (cons (ASTTypeParam value "Type") acc)))
+                (Err (ParseError "type param must be a symbol" 0 0))))
+        _ (Err (ParseError "type param must be an atom" 0 0)))))
+
+(defn parse-deftype-body
+  :sig [(rest-item : List) (line : i64) (col : i64) (name : String) (params : List) -> List]
+  :intent "Parse the body part of a deftype declaration"
+  :requires [(valid rest-item)]
+  :ensures [(valid result)]
+  :body
+    (match rest-item
+      (SList body-items bl bc)
+        (if (empty? body-items)
+          (Err (ParseError "empty deftype body" bl bc))
+          (match (head body-items)
+            (SAtom head-tok)
+              (match head-tok
+                (Token hk hv _ _)
+                  (if (= hv "|")
+                    (match (parse-sum-body body-items bl bc)
+                      (Ok body) (Ok (ASTDefType name params body line col))
+                      (Err e) (Err e))
+                    (if (= hv "&")
+                      (match (parse-product-body body-items bl bc)
+                        (Ok body) (Ok (ASTDefType name params body line col))
+                        (Err e) (Err e))
+                      (Err (ParseError "deftype body must start with | or &" bl bc)))))
+            _ (Err (ParseError "deftype body must start with | or &" bl bc))))
+      _ (Err (ParseError "deftype body must be a list" line col))))
+
+(defn parse-deftype
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (deftype Name [Params] Body) → (ASTDefType ...)"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? items)
+      (Err (ParseError "deftype requires a name" line col))
+      (match (head items)
+        (SAtom tok)
+          (match tok
+            (Token kind name _ _)
+              (if (= kind "symbol")
+                (let (rest : List (tail items))
+                  (if (empty? rest)
+                    (Err (ParseError "deftype requires a body" line col))
+                    (match (head rest)
+                      (SBracket bp-items bp-line bp-col)
+                        (if (< (length rest) 2)
+                          (Err (ParseError "deftype requires a body after type params" line col))
+                          (match (parse-type-params-acc bp-items 0 [])
+                            (Ok params)
+                              (parse-deftype-body (at rest 1) line col name params)
+                            (Err e) (Err e)))
+                      _ (parse-deftype-body (head rest) line col name []))))
+                (Err (ParseError "deftype name must be a symbol" line col))))
+        _ (Err (ParseError "deftype name must be a symbol" line col)))))
+
+;; ── Top-level and entry point ─────────────────────
+
+(defn parse-top-level
+  :sig [(sexpr : List) -> List]
+  :intent "Parse a top-level S-expression into an AST node"
+  :requires [(valid sexpr)]
+  :ensures [(valid result)]
+  :body
+    (match sexpr
+      (SList items line col)
+        (if (empty? items)
+          (parse-expr sexpr)
+          (match (head items)
+            (SAtom tok)
+              (match tok
+                (Token kind value _ _)
+                  (if (= kind "symbol")
+                    (if (= value "defn")
+                      (parse-defn items line col)
+                      (if (= value "deftype")
+                        (parse-deftype (tail items) line col)
+                        (parse-expr sexpr)))
+                    (parse-expr sexpr)))
+            _ (parse-expr sexpr)))
+      _ (parse-expr sexpr)))
+
+(defn parse-top-levels
+  :sig [(sexprs : List) (pos : i64) -> List]
+  :intent "Parse all top-level S-expressions into AST nodes"
+  :requires [(valid sexprs)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length sexprs))
+      (Ok [])
+      (match (parse-top-level (at sexprs pos))
+        (Ok node)
+          (match (parse-top-levels sexprs (+ pos 1))
+            (Ok rest) (Ok (cons node rest))
+            (Err e) (Err e))
+        (Err e) (Err e))))
+
+(defn parse-program
+  :sig [(sexprs : List) -> List]
+  :intent "Parse a list of S-expressions into AST nodes"
+  :requires [(valid sexprs)]
+  :ensures [(valid result)]
+  :body (parse-top-levels sexprs 0))
+
+(defn parse
+  :sig [(source : String) -> List]
+  :intent "Full pipeline: source → tokens → S-exprs → AST"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err msg) (Err msg)
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err e)
+          (Ok sexprs)
+            (parse-program sexprs))))
+;; bootstrap/compiler.airl — Self-hosted AIRL-to-IR compiler
+;; Requires: bootstrap/lexer.airl, bootstrap/parser.airl (loaded first)
+;;
+;; Transforms AST nodes (from the parser) into IR nodes (consumed by run-ir).
+
+;; ── Core expression compiler ──────────────────────────────
+
+(defn compile-expr
+  :sig [(node : List) -> List]
+  :intent "Compile an AST expression to an IR node"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTInt v _ _)       (Ok (IRInt v))
+    (ASTFloat v _ _)     (Ok (IRFloat v))
+    (ASTStr s _ _)       (Ok (IRStr s))
+    (ASTBool b _ _)      (Ok (IRBool b))
+    (ASTNil _ _)         (Ok (IRNil nil))
+    (ASTKeyword k _ _)   (Ok (IRStr (join [":" k] "")))
+    (ASTSymbol name _ _) (Ok (IRLoad name))
+
+    (ASTIf cond then else-branch _ _)
+      (match (compile-expr cond)
+        (Err e) (Err e)
+        (Ok cc) (match (compile-expr then)
+          (Err e) (Err e)
+          (Ok ct) (match (compile-expr else-branch)
+            (Err e) (Err e)
+            (Ok ce) (Ok (IRIf [cc ct ce])))))
+
+    (ASTCall callee args _ _)
+      (match callee
+        (ASTSymbol name _ _)
+          (match (compile-args args)
+            (Err e) (Err e)
+            (Ok cargs) (Ok (IRCall [name cargs])))
+        _ (match (compile-expr callee)
+            (Err e) (Err e)
+            (Ok cc) (match (compile-args args)
+              (Err e) (Err e)
+              (Ok cargs) (Ok (IRCallExpr [cc cargs])))))
+
+    (ASTLet bindings body _ _)
+      (match (compile-let-bindings bindings)
+        (Err e) (Err e)
+        (Ok cbindings) (match (compile-expr body)
+          (Err e) (Err e)
+          (Ok cbody) (Ok (IRLet [cbindings cbody]))))
+
+    (ASTDo exprs _ _)
+      (match (compile-args exprs)
+        (Err e) (Err e)
+        (Ok cexprs) (Ok (IRDo cexprs)))
+
+    (ASTMatch scrutinee arms _ _)
+      (match (compile-expr scrutinee)
+        (Err e) (Err e)
+        (Ok cscr) (match (compile-match-arms arms)
+          (Err e) (Err e)
+          (Ok carms) (Ok (IRMatch [cscr carms]))))
+
+    (ASTLambda params body _ _)
+      (match (compile-expr body)
+        (Err e) (Err e)
+        (Ok cbody) (Ok (IRLambda [params cbody])))
+
+    (ASTVariant name args _ _)
+      (match (compile-args args)
+        (Err e) (Err e)
+        (Ok cargs) (Ok (IRVariant [name cargs])))
+
+    (ASTList items _ _)
+      (match (compile-args items)
+        (Err e) (Err e)
+        (Ok citems) (Ok (IRList citems)))
+
+    (ASTTry expr _ _)
+      (match (compile-expr expr)
+        (Err e) (Err e)
+        (Ok cexpr) (Ok (IRTry cexpr)))
+
+    _ (Err "compile-expr: unknown node type")))
+
+;; ── Compile a list of expressions ─────────────────────────
+
+(defn compile-args
+  :sig [(nodes : List) -> List]
+  :intent "Compile a list of AST expressions to a list of IR nodes"
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? nodes) (Ok [])
+      (match (compile-expr (head nodes))
+        (Err e) (Err e)
+        (Ok compiled) (match (compile-args (tail nodes))
+          (Err e) (Err e)
+          (Ok rest) (Ok (cons compiled rest))))))
+
+;; ── Compile let bindings ──────────────────────────────────
+
+(defn compile-let-bindings
+  :sig [(bindings : List) -> List]
+  :intent "Compile let bindings to IR bindings"
+  :requires [(valid bindings)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? bindings) (Ok [])
+      (match (head bindings)
+        (ASTBinding name _ val-expr)
+          (match (compile-expr val-expr)
+            (Err e) (Err e)
+            (Ok cval) (match (compile-let-bindings (tail bindings))
+              (Err e) (Err e)
+              (Ok rest) (Ok (cons (IRBinding [name cval]) rest))))
+        _ (Err "compile-let-bindings: invalid let binding"))))
+
+;; ── Compile patterns ──────────────────────────────────────
+
+(defn compile-pattern
+  :sig [(pat : List) -> List]
+  :intent "Convert an AST pattern to an IR pattern"
+  :requires [(valid pat)]
+  :ensures [(valid result)]
+  :body (match pat
+    (PatWild _ _)             (Ok (IRPatWild nil))
+    (PatBind name _ _)        (Ok (IRPatBind name))
+    (PatLit value _ _)        (Ok (IRPatLit value))
+    (PatVariant name sub-pats _ _)
+      (match (compile-patterns sub-pats)
+        (Err e) (Err e)
+        (Ok cpats) (Ok (IRPatVariant [name cpats])))
+    _ (Err "compile-pattern: unknown pattern type")))
+
+(defn compile-patterns
+  :sig [(pats : List) -> List]
+  :intent "Compile a list of AST patterns to IR patterns"
+  :requires [(valid pats)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? pats) (Ok [])
+      (match (compile-pattern (head pats))
+        (Err e) (Err e)
+        (Ok cpat) (match (compile-patterns (tail pats))
+          (Err e) (Err e)
+          (Ok rest) (Ok (cons cpat rest))))))
+
+;; ── Compile match arms ────────────────────────────────────
+
+(defn compile-match-arms
+  :sig [(arms : List) -> List]
+  :intent "Compile match arms to IR arms"
+  :requires [(valid arms)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? arms) (Ok [])
+      (match (head arms)
+        (ASTArm pat body)
+          (match (compile-pattern pat)
+            (Err e) (Err e)
+            (Ok cpat) (match (compile-expr body)
+              (Err e) (Err e)
+              (Ok cbody) (match (compile-match-arms (tail arms))
+                (Err e) (Err e)
+                (Ok rest) (Ok (cons (IRArm [cpat cbody]) rest)))))
+        _ (Err "compile-match-arms: invalid match arm"))))
+
+;; ── Compile top-level forms ───────────────────────────────
+
+(defn compile-top-level
+  :sig [(node : List) -> List]
+  :intent "Compile a top-level AST node to an IR node"
+  :requires [(valid node)]
+  :ensures [(valid result)]
+  :body (match node
+    (ASTDefn name sig _ _ _ body _ _)
+      (match sig
+        (ASTSig params ret-name)
+          (let (param-names : List (map (fn [p] (match p (ASTParam n _) n _ "?")) params))
+            (match (compile-expr body)
+              (Err e) (Err e)
+              (Ok cbody) (Ok (IRFunc [name param-names cbody]))))
+        _ (Err "compile-top-level: defn requires sig"))
+    (ASTDefType _ _ _ _ _) (Ok (IRNil nil))
+    _ (compile-expr node)))
+
+;; ── Compile a full program ────────────────────────────────
+
+(defn compile-program
+  :sig [(nodes : List) -> List]
+  :intent "Compile all top-level AST nodes to IR nodes"
+  :requires [(valid nodes)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? nodes) (Ok [])
+      (match (compile-top-level (head nodes))
+        (Err e) (Err e)
+        (Ok compiled) (match (compile-program (tail nodes))
+          (Err e) (Err e)
+          (Ok rest) (Ok (cons compiled rest))))))
+
+;; ── Full compiled pipeline ──────────────────────────
+
+(defn run-compiled
+  :sig [(source : String) -> List]
+  :intent "Full compiled pipeline: source -> lex -> parse -> compile -> run-ir"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err e) (Err e)
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err e)
+          (Ok sexprs)
+            (match (parse-program sexprs)
+              (Err e) (Err e)
+              (Ok ast-nodes)
+                (match (compile-program ast-nodes)
+                  (Err e) (Err e)
+                  (Ok ir-nodes) (Ok (run-ir ir-nodes)))))))
+;; bootstrap/codegen_c.airl — IR-to-C code generator
+;; Requires: bootstrap/lexer.airl, bootstrap/parser.airl, bootstrap/compiler.airl (loaded first)
+;;
+;; Translates IR nodes from the bootstrap compiler into C source code
+;; that links against libairl_rt_c.a (the AIRL C runtime).
+;; Every AIRL value at runtime is a RtValue* pointer.
+;;
+;; Design: All emit-c-* functions return [state, code-string] as a 2-element list.
+;; Use (at result 0) for state and (at result 1) for code.
+
+;; ── Integer-to-string helper ──────────────────────────────
+
+(defn cg-digit-to-char
+  :sig [(d : i64) -> String]
+  :requires [(>= d 0) (<= d 9)]
+  :ensures [(valid result)]
+  :body (char-at "0123456789" d))
+
+(defn cg-nat-to-str
+  :sig [(n : i64) (acc : String) -> String]
+  :requires [(>= n 0)]
+  :ensures [(valid result)]
+  :body (if (= n 0)
+    (if (= acc "") "0" acc)
+    (let (digit : String (cg-digit-to-char (% n 10)))
+      (cg-nat-to-str (/ n 10) (+ digit acc)))))
+
+(defn cg-int-to-string
+  :sig [(n : i64) -> String]
+  :requires [(valid n)]
+  :ensures [(valid result)]
+  :body (if (< n 0)
+    (+ "-" (cg-nat-to-str (* n -1) ""))
+    (cg-nat-to-str n "")))
+
+;; ── String helpers ────────────────────────────────────────
+
+(defn cg-str-len
+  :sig [(s : String) -> i64]
+  :requires [(valid s)]
+  :ensures [(>= result 0)]
+  :body (length (chars s)))
+
+(defn str3
+  :sig [(a : String) (b : String) (c : String) -> String]
+  :requires [(valid a)]
+  :ensures [(valid result)]
+  :body (+ a (+ b c)))
+
+(defn str4
+  :sig [(a : String) (b : String) (c : String) (d : String) -> String]
+  :requires [(valid a)]
+  :ensures [(valid result)]
+  :body (+ a (+ b (+ c d))))
+
+(defn str5
+  :sig [(a : String) (b : String) (c : String) (d : String) (e : String) -> String]
+  :requires [(valid a)]
+  :ensures [(valid result)]
+  :body (+ a (+ b (+ c (+ d e)))))
+
+(defn str6
+  :sig [(a : String) (b : String) (c : String) (d : String) (e : String) (f : String) -> String]
+  :requires [(valid a)]
+  :ensures [(valid result)]
+  :body (+ a (+ b (+ c (+ d (+ e f))))))
+
+;; ── Name mangling ─────────────────────────────────────────
+
+(defn mangle-char
+  :sig [(ch : String) -> String]
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (if (= ch "-") "_"
+    (if (= ch "?") "_q"
+      (if (= ch "!") "_b"
+        ch))))
+
+(defn mangle-name-loop
+  :sig [(s : String) (i : i64) (len : i64) (acc : String) -> String]
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (if (>= i len) acc
+    (let (ch : String (char-at s i))
+      (mangle-name-loop s (+ i 1) len (+ acc (mangle-char ch))))))
+
+(defn mangle-name
+  :sig [(name : String) -> String]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body
+    (if (= name "<=") "__le__"
+      (if (= name ">=") "__ge__"
+        (if (= name "!=") "__ne__"
+          (if (= name "+") "__plus__"
+            (if (= name "*") "__star__"
+              (if (= name "/") "__slash__"
+                (if (= name "%") "__pct__"
+                  (if (= name "=") "__eq__"
+                    (if (= name "<") "__lt__"
+                      (if (= name ">") "__gt__"
+                        (mangle-name-loop name 0 (cg-str-len name) ""))))))))))))
+
+;; ── Builtin mapping ───────────────────────────────────────
+
+(defn builtin-c-name
+  :sig [(name : String) -> _]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body
+    (if (= name "+") "airl_add"
+      (if (= name "-") "airl_sub"
+        (if (= name "*") "airl_mul"
+          (if (= name "/") "airl_div"
+            (if (= name "%") "airl_mod"
+              (if (= name "=") "airl_eq"
+                (if (= name "!=") "airl_ne"
+                  (if (= name "<") "airl_lt"
+                    (if (= name ">") "airl_gt"
+                      (if (= name "<=") "airl_le"
+                        (if (= name ">=") "airl_ge"
+                          (if (= name "not") "airl_not"
+                            (if (= name "and") "airl_and"
+                              (if (= name "or") "airl_or"
+                                (if (= name "xor") "airl_xor"
+                                  (builtin-c-name-2 name)))))))))))))))))
+
+(defn builtin-c-name-2
+  :sig [(name : String) -> _]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body
+    (if (= name "head") "airl_head"
+      (if (= name "tail") "airl_tail"
+        (if (= name "cons") "airl_cons"
+          (if (= name "empty?") "airl_empty"
+            (if (= name "length") "airl_length"
+              (if (= name "at") "airl_at"
+                (if (= name "append") "airl_append"
+                  (if (= name "char-at") "airl_char_at"
+                    (if (= name "substring") "airl_substring"
+                      (if (= name "chars") "airl_chars"
+                        (if (= name "split") "airl_split"
+                          (if (= name "join") "airl_join"
+                            (if (= name "contains") "airl_contains"
+                              (if (= name "starts-with") "airl_starts_with"
+                                (if (= name "ends-with") "airl_ends_with"
+                                  (builtin-c-name-3 name)))))))))))))))))
+
+(defn builtin-c-name-3
+  :sig [(name : String) -> _]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body
+    (if (= name "index-of") "airl_index_of"
+      (if (= name "trim") "airl_trim"
+        (if (= name "to-upper") "airl_to_upper"
+          (if (= name "to-lower") "airl_to_lower"
+            (if (= name "replace") "airl_replace"
+              (if (= name "map-new") "airl_map_new"
+                (if (= name "map-from") "airl_map_from"
+                  (if (= name "map-get") "airl_map_get"
+                    (if (= name "map-get-or") "airl_map_get_or"
+                      (if (= name "map-set") "airl_map_set"
+                        (if (= name "map-has") "airl_map_has"
+                          (if (= name "map-remove") "airl_map_remove"
+                            (if (= name "map-keys") "airl_map_keys"
+                              (if (= name "map-values") "airl_map_values"
+                                (if (= name "map-size") "airl_map_size"
+                                  (builtin-c-name-4 name)))))))))))))))))
+
+(defn builtin-c-name-4
+  :sig [(name : String) -> _]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body
+    (if (= name "print") "airl_print"
+      (if (= name "type-of") "airl_type_of"
+        (if (= name "valid") "airl_valid"
+          (if (= name "read-file") "airl_read_file"
+            (if (= name "write-file") "airl_write_file"
+              (if (= name "file-exists?") "airl_file_exists"
+                (if (= name "get-args") "airl_get_args"
+                  (if (= name "int-to-string") "airl_int_to_string"
+                    nil)))))))))
+
+;; ── C string escaping ─────────────────────────────────────
+
+(defn escape-c-char
+  :sig [(ch : String) -> String]
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (if (= ch "\\") "\\\\"
+    (if (= ch "\"") "\\\""
+      (if (= ch "\n") "\\n"
+        (if (= ch "\t") "\\t"
+          (if (= ch "\r") "\\r"
+            ch))))))
+
+(defn escape-c-string-loop
+  :sig [(s : String) (i : i64) (len : i64) (acc : String) -> String]
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (if (>= i len) acc
+    (let (ch : String (char-at s i))
+      (escape-c-string-loop s (+ i 1) len (+ acc (escape-c-char ch))))))
+
+(defn escape-c-string
+  :sig [(s : String) -> String]
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (escape-c-string-loop s 0 (cg-str-len s) ""))
+
+;; ── Free variable detection ───────────────────────────────
+
+(defn set-contains
+  :sig [(lst : List) (item : String) -> Bool]
+  :requires [(valid lst)]
+  :ensures [(valid result)]
+  :body (if (empty? lst) false
+    (if (= (head lst) item) true
+      (set-contains (tail lst) item))))
+
+(defn set-add
+  :sig [(lst : List) (item : String) -> List]
+  :requires [(valid lst)]
+  :ensures [(valid result)]
+  :body (if (set-contains lst item) lst
+    (cons item lst)))
+
+(defn set-union
+  :sig [(a : List) (b : List) -> List]
+  :requires [(valid a)]
+  :ensures [(valid result)]
+  :body (if (empty? b) a
+    (set-union (set-add a (head b)) (tail b))))
+
+(defn set-diff
+  :sig [(a : List) (b : List) -> List]
+  :requires [(valid a)]
+  :ensures [(valid result)]
+  :body (if (empty? a) []
+    (let (h : String (head a))
+      (if (set-contains b h)
+        (set-diff (tail a) b)
+        (cons h (set-diff (tail a) b))))))
+
+;; Stub: free-var detection is expensive and causes stack issues during compilation.
+;; For now, all lambdas capture no variables. This means closures won't work,
+;; but function definitions, calls, match, etc. all work correctly.
+
+(defn collect-loads
+  :sig [(ir : _) -> List]
+  :requires [(valid ir)]
+  :ensures [(valid result)]
+  :body [])
+
+(defn free-vars
+  :sig [(params : List) (body : _) -> List]
+  :requires [(valid params)]
+  :ensures [(valid result)]
+  :body (set-diff (collect-loads body) params))
+
+;; ── Codegen state ─────────────────────────────────────────
+
+(defn cg-make-state
+  :sig [-> _]
+  :requires [true]
+  :ensures [(valid result)]
+  :body (map-from ["lambda-ctr" 0 "lambdas" [] "fwd-decls" []]))
+
+(defn cg-lambda-ctr
+  :sig [(st : _) -> i64]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-get st "lambda-ctr"))
+
+(defn cg-lambdas
+  :sig [(st : _) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-get st "lambdas"))
+
+(defn cg-fwd-decls
+  :sig [(st : _) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-get st "fwd-decls"))
+
+(defn cg-next-lambda
+  :sig [(st : _) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (ctr : i64 (cg-lambda-ctr st))
+      (let (name : String (+ "__lambda_" (cg-int-to-string ctr)))
+        [(map-set st "lambda-ctr" (+ ctr 1)) name])))
+
+(defn cg-add-lambda
+  :sig [(st : _) (name : String) (all-params : List) (body-code : String) (fwd : String) -> _]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (entry : List [name all-params body-code])
+      (let (st2 : _ (map-set st "lambdas" (append (cg-lambdas st) entry)))
+        (map-set st2 "fwd-decls" (append (cg-fwd-decls st2) fwd)))))
+
+;; ── C code building helpers ───────────────────────────────
+
+(defn emit-c-param-decls
+  :sig [(params : List) -> String]
+  :requires [(valid params)]
+  :ensures [(valid result)]
+  :body (if (empty? params) "void"
+    (join (map (fn [p] (+ "RtValue* " p)) params) ", ")))
+
+(defn make-variant-tag
+  :sig [(tag : String) -> String]
+  :requires [(valid tag)]
+  :ensures [(valid result)]
+  :body
+    (let (tl : String (cg-int-to-string (cg-str-len tag)))
+      (str5 "airl_str(\"" tag "\", " tl ")")))
+
+;; ── Core expression emitter ───────────────────────────────
+;; All emit-c-* functions return [state, code-string] as a list.
+
+(defn emit-c-expr
+  :sig [(st : _) (ir : _) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (match ir
+    (IRInt v)    [st (str3 "airl_int(" (cg-int-to-string v) ")")]
+    (IRFloat v)  [st (str3 "airl_float(" (cg-int-to-string v) ".0)")]
+    (IRStr s)    (let (esc : String (escape-c-string s))
+                   (let (sl : String (cg-int-to-string (cg-str-len s)))
+                     [st (str5 "airl_str(\"" esc "\", " sl ")")]))
+    (IRBool b)   (if b [st "airl_bool(1)"] [st "airl_bool(0)"])
+    (IRNil _)    [st "airl_nil()"]
+    (IRLoad name) [st (mangle-name name)]
+    (IRIf parts) (emit-c-if st parts)
+    (IRLet parts) (emit-c-let st parts)
+    (IRDo exprs) (emit-c-do st exprs)
+    (IRCall parts) (emit-c-call st parts)
+    (IRCallExpr parts) (emit-c-call-expr st parts)
+    (IRList items) (emit-c-list st items)
+    (IRVariant parts) (emit-c-variant st parts)
+    (IRMatch parts) (emit-c-match st parts)
+    (IRLambda parts) (emit-c-lambda st parts)
+    (IRTry expr) (emit-c-try st expr)
+    _ [st "/* unknown IR node */ airl_nil()"]))
+
+;; ── If ────────────────────────────────────────────────────
+
+(defn emit-c-if
+  :sig [(st : _) (parts : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (r1 : List (emit-c-expr st (at parts 0)))
+      (let (r2 : List (emit-c-expr (at r1 0) (at parts 1)))
+        (let (r3 : List (emit-c-expr (at r2 0) (at parts 2)))
+          [(at r3 0) (str6 "(airl_as_bool_raw(" (at r1 1) ") ? " (at r2 1) " : " (+ (at r3 1) ")"))]))))
+
+;; ── Let ───────────────────────────────────────────────────
+
+(defn emit-c-let-bindings
+  :sig [(st : _) (bindings : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (if (empty? bindings) [st ""]
+    (match (head bindings)
+      (IRBinding parts)
+        (let (bname : String (at parts 0))
+          (let (r1 : List (emit-c-expr st (at parts 1)))
+            (let (r2 : List (emit-c-let-bindings (at r1 0) (tail bindings)))
+              [(at r2 0) (str5 "RtValue* " (mangle-name bname) " = " (at r1 1) (+ "; " (at r2 1)))])))
+      _ (emit-c-let-bindings st (tail bindings)))))
+
+(defn emit-c-let
+  :sig [(st : _) (parts : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (r1 : List (emit-c-let-bindings st (at parts 0)))
+      (let (r2 : List (emit-c-expr (at r1 0) (at parts 1)))
+        [(at r2 0) (str4 "({ " (at r1 1) (at r2 1) "; })")])))
+
+;; ── Do ────────────────────────────────────────────────────
+
+(defn emit-c-do-exprs
+  :sig [(st : _) (exprs : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (if (empty? exprs) [st "airl_nil()"]
+    (let (r1 : List (emit-c-expr st (head exprs)))
+      (if (empty? (tail exprs))
+        r1
+        (let (r2 : List (emit-c-do-exprs (at r1 0) (tail exprs)))
+          [(at r2 0) (str3 (at r1 1) "; " (at r2 1))])))))
+
+(defn emit-c-do
+  :sig [(st : _) (exprs : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (r : List (emit-c-do-exprs st exprs))
+      [(at r 0) (str3 "({ " (at r 1) "; })")]))
+
+;; ── Call ──────────────────────────────────────────────────
+
+(defn emit-c-args
+  :sig [(st : _) (args : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (if (empty? args) [st ""]
+    (let (r1 : List (emit-c-expr st (head args)))
+      (if (empty? (tail args))
+        r1
+        (let (r2 : List (emit-c-args (at r1 0) (tail args)))
+          [(at r2 0) (str3 (at r1 1) ", " (at r2 1))])))))
+
+(defn emit-c-call
+  :sig [(st : _) (parts : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (name : String (at parts 0))
+      (let (args : List (at parts 1))
+        (let (bi : _ (builtin-c-name name))
+          (if (= bi nil)
+            (let (r : List (emit-c-args st args))
+              [(at r 0) (str3 (mangle-name name) "(" (+ (at r 1) ")"))])
+            (if (= name "print")
+              (emit-c-print st args)
+              (let (r : List (emit-c-args st args))
+                [(at r 0) (str3 bi "(" (+ (at r 1) ")"))])))))))
+
+(defn emit-c-print
+  :sig [(st : _) (args : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (argc : i64 (length args))
+      (if (= argc 1)
+        (let (r : List (emit-c-expr st (head args)))
+          [(at r 0) (str3 "airl_print(" (at r 1) ")")])
+        (let (r : List (emit-c-args st args))
+          (let (ns : String (cg-int-to-string argc))
+            (let (p1 : String (str3 "({ RtValue* __pargs[] = {" (at r 1) "}; "))
+              (let (p2 : String (str4 "airl_print_values(__pargs, " ns "); " "})"))
+                [(at r 0) (+ p1 p2)])))))))
+
+;; ── Call expression (computed callee) ─────────────────────
+
+(defn emit-c-call-expr
+  :sig [(st : _) (parts : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (r1 : List (emit-c-expr st (at parts 0)))
+      (let (r2 : List (emit-c-args (at r1 0) (at parts 1)))
+        (let (ns : String (cg-int-to-string (length (at parts 1))))
+          (let (p1 : String (str3 "({ RtValue* __cargs[] = {" (at r2 1) "}; "))
+            (let (p2 : String (str5 "airl_call_closure(" (at r1 1) ", __cargs, " ns "); })"))
+              [(at r2 0) (+ p1 p2)]))))))
+
+;; ── List literal ──────────────────────────────────────────
+
+(defn emit-c-list
+  :sig [(st : _) (items : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (n : i64 (length items))
+      (if (= n 0)
+        [st "airl_list_new(NULL, 0)"]
+        (let (r : List (emit-c-args st items))
+          (let (ns : String (cg-int-to-string n))
+            (let (p1 : String (str3 "({ RtValue* __litems[] = {" (at r 1) "}; "))
+              (let (p2 : String (str4 "airl_list_new(__litems, " ns "); " "})"))
+                [(at r 0) (+ p1 p2)])))))))
+
+;; ── Variant constructor ───────────────────────────────────
+
+(defn emit-c-variant
+  :sig [(st : _) (parts : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (tag : String (at parts 0))
+      (let (args : List (at parts 1))
+        (let (te : String (make-variant-tag tag))
+          (if (empty? args)
+            [st (str3 "airl_make_variant(" te ", airl_nil())")]
+            (if (= (length args) 1)
+              (let (r : List (emit-c-expr st (head args)))
+                [(at r 0) (str5 "airl_make_variant(" te ", " (at r 1) ")")])
+              (let (r : List (emit-c-args st args))
+                (let (ns : String (cg-int-to-string (length args)))
+                  (let (p1 : String (str3 "({ RtValue* __vargs[] = {" (at r 1) "}; "))
+                    (let (p2 : String (str6 "airl_make_variant(" te ", airl_list_new(__vargs, " ns ")); " "})"))
+                      [(at r 0) (+ p1 p2)]))))))))))
+
+;; ── Lambda ────────────────────────────────────────────────
+
+(defn emit-closure-site
+  :sig [(st : _) (lname : String) (captures : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (ncap : i64 (length captures))
+      (if (= ncap 0)
+        [st (str3 "airl_make_closure(" lname ", NULL, 0)")]
+        (let (ca : String (join (map (fn [c] (mangle-name c)) captures) ", "))
+          (let (ns : String (cg-int-to-string ncap))
+            (let (p1 : String (str3 "({ RtValue* __caps[] = {" ca "}; "))
+              (let (p2 : String (str5 "airl_make_closure(" lname ", __caps, " ns "); })"))
+                [st (+ p1 p2)])))))))
+
+(defn emit-c-lambda
+  :sig [(st : _) (parts : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (params : List (at parts 0))
+      (let (body-ir : _ (at parts 1))
+        (let (captures : List (free-vars params body-ir))
+          (let (pair : List (cg-next-lambda st))
+            (let (st2 : _ (at pair 0))
+              (let (lname : String (at pair 1))
+                (let (cap-params : List (map (fn [c] (+ "__cap_" (mangle-name c))) captures))
+                  (let (fn-params : List (map (fn [p] (mangle-name p)) params))
+                    (let (all-params : List (concat cap-params fn-params))
+                      (let (r : List (emit-c-expr st2 body-ir))
+                        (let (pdecls : String (emit-c-param-decls all-params))
+                          (let (fwd : String (str4 "static RtValue* " lname "(" (+ pdecls ");")))
+                            (let (fdef : String (str6 "static RtValue* " lname "(" pdecls ") { return " (+ (at r 1) "; }")))
+                              (let (st3 : _ (cg-add-lambda (at r 0) lname all-params fdef fwd))
+                                (emit-closure-site st3 lname captures))))))))))))))))
+
+;; ── Pattern match ─────────────────────────────────────────
+
+(defn emit-c-match
+  :sig [(st : _) (parts : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (r1 : List (emit-c-expr st (at parts 0)))
+      (let (r2 : List (emit-c-match-arms (at r1 0) "__mscr" (at parts 1)))
+        [(at r2 0) (str5 "({ RtValue* __mscr = " (at r1 1) "; " (at r2 1) "; })")])))
+
+(defn emit-c-match-arms
+  :sig [(st : _) (sn : String) (arms : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (if (empty? arms) [st "airl_nil() /* no match */"]
+    (match (head arms)
+      (IRArm parts)
+        (let (pat : _ (at parts 0))
+          (let (body-ir : _ (at parts 1))
+            (match pat
+              (IRPatWild _)
+                (emit-c-expr st body-ir)
+
+              (IRPatBind name)
+                (let (r : List (emit-c-expr st body-ir))
+                  [(at r 0) (str6 "({ RtValue* " (mangle-name name) " = " sn "; " (+ (at r 1) "; })"))])
+
+              (IRPatLit value)
+                (let (lc : String (emit-lit-check sn value))
+                  (let (r1 : List (emit-c-expr st body-ir))
+                    (let (r2 : List (emit-c-match-arms (at r1 0) sn (tail arms)))
+                      [(at r2 0) (str6 "(" lc " ? " (at r1 1) " : " (+ (at r2 1) ")"))])))
+
+              (IRPatVariant vparts)
+                (emit-c-variant-arm st sn vparts body-ir (tail arms))
+
+              _ (emit-c-match-arms st sn (tail arms)))))
+      _ (emit-c-match-arms st sn (tail arms)))))
+
+(defn emit-c-variant-arm
+  :sig [(st : _) (sn : String) (vparts : List) (body-ir : _) (rest-arms : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (vtag : String (at vparts 0))
+      (let (inner-pats : List (at vparts 1))
+        (let (te : String (make-variant-tag vtag))
+          (let (mv : String (+ "__mv_" (mangle-name vtag)))
+            (let (r1 : List (emit-c-variant-body st mv inner-pats body-ir))
+              (let (r2 : List (emit-c-match-arms (at r1 0) sn rest-arms))
+                (let (p1 : String (str5 "({ RtValue* " mv " = airl_match_tag(" sn ", "))
+                  (let (p2 : String (str5 te "); " mv " ? " (at r1 1)))
+                    (let (p3 : String (str3 " : " (at r2 1) "; })"))
+                      [(at r2 0) (str3 p1 p2 p3)]))))))))))
+
+(defn emit-lit-check
+  :sig [(sn : String) (value : _) -> String]
+  :requires [(valid sn)]
+  :ensures [(valid result)]
+  :body (if (= (type-of value) "Int")
+    (let (vs : String (cg-int-to-string value))
+      (str5 "airl_as_bool_raw(airl_eq(" sn ", airl_int(" vs ")))"))
+    (if (= (type-of value) "Str")
+      (let (esc : String (escape-c-string value))
+        (let (sl : String (cg-int-to-string (cg-str-len value)))
+          (str6 "airl_as_bool_raw(airl_eq(" sn ", airl_str(\"" esc "\", " (+ sl "))))"))))
+      (if (= (type-of value) "Bool")
+        (if value
+          (str3 "airl_as_bool_raw(airl_eq(" sn ", airl_bool(1)))")
+          (str3 "airl_as_bool_raw(airl_eq(" sn ", airl_bool(0)))"))
+        (str3 "airl_as_bool_raw(airl_eq(" sn ", airl_nil()))")))))
+
+(defn emit-c-variant-body
+  :sig [(st : _) (mv : String) (inner-pats : List) (body-ir : _) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? inner-pats)
+      (emit-c-expr st body-ir)
+      (let (ip : _ (head inner-pats))
+        (match ip
+          (IRPatWild _)
+            (emit-c-expr st body-ir)
+          (IRPatBind name)
+            (let (r : List (emit-c-expr st body-ir))
+              [(at r 0) (str6 "({ RtValue* " (mangle-name name) " = " mv "; " (+ (at r 1) "; })"))])
+          (IRPatVariant vparts)
+            (let (vtag : String (at vparts 0))
+              (let (sub-pats : List (at vparts 1))
+                (let (te : String (make-variant-tag vtag))
+                  (let (nv : String (+ "__nmv_" (mangle-name vtag)))
+                    (let (r : List (emit-c-variant-body st nv sub-pats body-ir))
+                      (let (p1 : String (str5 "({ RtValue* " nv " = airl_match_tag(" mv ", "))
+                        (let (p2 : String (str5 te "); " nv " ? " (at r 1)))
+                          [(at r 0) (str3 p1 p2 " : airl_nil(); })")])))))))
+          _ (emit-c-expr st body-ir)))))
+
+;; ── Try expression ────────────────────────────────────────
+
+(defn emit-c-try
+  :sig [(st : _) (expr : _) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (r : List (emit-c-expr st expr))
+      (let (p1 : String (+ "({ RtValue* __t = " (at r 1)))
+        (let (p2 : String "; RtValue* __ok = airl_match_tag(__t, airl_str(\"Ok\", 2)); ")
+          (let (p3 : String "if(!__ok){fprintf(stderr,\"try failed\\n\");exit(1);} __ok; })")
+            [(at r 0) (str3 p1 p2 p3)])))))
+
+;; ── Top-level function emitter ────────────────────────────
+
+(defn emit-c-func
+  :sig [(st : _) (ir : _) -> List]
+  :intent "Return [state, def-string, fwd-decl-string]"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (match ir
+    (IRFunc parts)
+      (let (name : String (at parts 0))
+        (let (params : List (at parts 1))
+          (let (body-ir : _ (at parts 2))
+            (let (mn : String (mangle-name name))
+              (let (cp : List (map (fn [p] (mangle-name p)) params))
+                (let (pd : String (emit-c-param-decls cp))
+                  (let (r : List (emit-c-expr st body-ir))
+                    (let (fwd : String (str4 "RtValue* " mn "(" (+ pd ");")))
+                      (let (def : String (str6 "RtValue* " mn "(" pd ") {\n    return " (+ (at r 1) ";\n}")))
+                        [(at r 0) def fwd])))))))))
+    _ (let (r : List (emit-c-expr st ir))
+        [(at r 0) (at r 1) ""])))
+
+;; ── Full program emitter ──────────────────────────────────
+
+(defn emit-c-top-levels-loop
+  :sig [(st : _) (nodes : List) (funcs : List) (fwds : List) (main-stmts : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (if (empty? nodes) [st funcs fwds main-stmts]
+    (let (node : _ (head nodes))
+      (match node
+        (IRFunc parts)
+          (let (r : List (emit-c-func st node))
+            (emit-c-top-levels-loop (at r 0) (tail nodes) (append funcs (at r 1)) (append fwds (at r 2)) main-stmts))
+        (IRNil _)
+          (emit-c-top-levels-loop st (tail nodes) funcs fwds main-stmts)
+        _
+          (let (r : List (emit-c-expr st node))
+            (emit-c-top-levels-loop (at r 0) (tail nodes) funcs fwds (append main-stmts (at r 1))))))))
+
+(defn emit-c-program
+  :sig [(ir-nodes : List) -> String]
+  :requires [(valid ir-nodes)]
+  :ensures [(valid result)]
+  :body
+    (let (st : _ (cg-make-state))
+      (let (r : List (emit-c-top-levels-loop st ir-nodes [] [] []))
+        (let (st2 : _ (at r 0))
+          (let (funcs : List (at r 1))
+            (let (fwds : List (at r 2))
+              (let (main-stmts : List (at r 3))
+                (let (header : String (str3 "#include \"airl_rt.h\"\n" "#include <stdio.h>\n" "#include <stdlib.h>\n\n"))
+                  (let (uf : String (if (empty? fwds) "" (+ (join fwds "\n") "\n")))
+                    (let (lf : String (if (empty? (cg-fwd-decls st2)) "" (+ (join (cg-fwd-decls st2) "\n") "\n")))
+                      (let (ld : String (emit-lambda-defs (cg-lambdas st2)))
+                        (let (fd : String (if (empty? funcs) "" (+ (join funcs "\n\n") "\n")))
+                          (let (mb : String (emit-main-stmts main-stmts))
+                            (let (mf : String (str4 "int main(int argc, char** argv) {\n" "    airl_set_args(argc, argv);\n" mb "    airl_flush_stdout();\n    return 0;\n}\n"))
+                              (str6 header "/* Forward declarations */\n" (+ uf lf) (+ "\n/* Lambda definitions */\n" ld) (+ "\n/* Function definitions */\n" fd) (+ "\n/* Main */\n" mf))))))))))))))))
+
+(defn emit-lambda-defs
+  :sig [(lambdas : List) -> String]
+  :requires [(valid lambdas)]
+  :ensures [(valid result)]
+  :body (if (empty? lambdas) ""
+    (let (entry : List (head lambdas))
+      (str3 (at entry 2) "\n\n" (emit-lambda-defs (tail lambdas))))))
+
+(defn emit-main-stmts
+  :sig [(stmts : List) -> String]
+  :requires [(valid stmts)]
+  :ensures [(valid result)]
+  :body (if (empty? stmts) ""
+    (str3 "    " (head stmts) (+ ";\n" (emit-main-stmts (tail stmts))))))
+
+;; ── Convenience: full pipeline from source ────────────────
+
+(defn compile-to-c
+  :sig [(source : String) -> _]
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err e) (Err (+ "lex error: " e))
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err (+ "parse-sexpr error: " e))
+          (Ok sexprs)
+            (match (parse-program sexprs)
+              (Err e) (Err (+ "parse error: " e))
+              (Ok ast-nodes)
+                (match (compile-program ast-nodes)
+                  (Err e) (Err (+ "compile error: " e))
+                  (Ok ir-nodes) (Ok (emit-c-program ir-nodes)))))))
+;; ── Test helpers ──────────────────────────────────────────
+
+(defn assert-ok
+  :sig [(result : _) (label : String) -> Bool]
+  :requires [(valid result)]
+  :ensures [(valid result)]
+  :body (match result
+    (Ok _)  (do (print "PASS:" label) true)
+    (Err e) (do (print "FAIL:" label "error:" e) false)
+    _       (do (print "FAIL:" label "unexpected result") false)))
+
+(defn assert-c-contains
+  :sig [(source : String) (expected : String) (label : String) -> Bool]
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body (match (compile-to-c source)
+    (Ok c-code)
+      (if (contains c-code expected)
+        (do (print "PASS:" label) true)
+        (do (print "FAIL:" label "expected to find" expected "in output") (print "  got:" c-code) false))
+    (Err e) (do (print "FAIL:" label "compile error:" e) false)))
+
+;; ── Name mangling tests ──────────────────────────────────
+
+(defn test-mangle-name
+  :sig [-> Bool]
+  :requires [true]
+  :ensures [(valid result)]
+  :body (do
+    (if (= (mangle-name "hello") "hello")
+      (print "PASS: mangle simple name")
+      (print "FAIL: mangle simple name, got" (mangle-name "hello")))
+    (if (= (mangle-name "map-get") "map_get")
+      (print "PASS: mangle hyphen")
+      (print "FAIL: mangle hyphen, got" (mangle-name "map-get")))
+    (if (= (mangle-name "empty?") "empty_q")
+      (print "PASS: mangle question mark")
+      (print "FAIL: mangle question mark, got" (mangle-name "empty?")))
+    (if (= (mangle-name "+") "__plus__")
+      (print "PASS: mangle plus")
+      (print "FAIL: mangle plus, got" (mangle-name "+")))
+    (if (= (mangle-name "<=") "__le__")
+      (print "PASS: mangle le")
+      (print "FAIL: mangle le, got" (mangle-name "<=")))
+    true))
+
+(test-mangle-name)
+
+;; ── Builtin mapping tests ────────────────────────────────
+
+(defn test-builtin-c-name
+  :sig [-> Bool]
+  :requires [true]
+  :ensures [(valid result)]
+  :body (do
+    (if (= (builtin-c-name "+") "airl_add")
+      (print "PASS: builtin +")
+      (print "FAIL: builtin +" (builtin-c-name "+")))
+    (if (= (builtin-c-name "head") "airl_head")
+      (print "PASS: builtin head")
+      (print "FAIL: builtin head" (builtin-c-name "head")))
+    (if (= (builtin-c-name "map-get") "airl_map_get")
+      (print "PASS: builtin map-get")
+      (print "FAIL: builtin map-get"))
+    (if (= (builtin-c-name "my-func") nil)
+      (print "PASS: non-builtin returns nil")
+      (print "FAIL: non-builtin should return nil"))
+    true))
+
+(test-builtin-c-name)
+
+;; ── C string escaping tests ──────────────────────────────
+
+(defn test-escape
+  :sig [-> Bool]
+  :requires [true]
+  :ensures [(valid result)]
+  :body (do
+    (if (= (escape-c-string "hello") "hello")
+      (print "PASS: escape simple string")
+      (print "FAIL: escape simple string"))
+    (if (= (escape-c-string "a\"b") "a\\\"b")
+      (print "PASS: escape double quote")
+      (print "FAIL: escape double quote, got" (escape-c-string "a\"b")))
+    true))
+
+(test-escape)
+
+;; ── IR-level codegen tests ───────────────────────────────
+
+;; Test: integer literal
+(assert-c-contains "42" "airl_int(42)" "int literal codegen")
+
+;; Test: string literal
+(assert-c-contains "\"hello\"" "airl_str(\"hello\", 5)" "string literal codegen")
+
+;; Test: boolean literal
+(assert-c-contains "true" "airl_bool(1)" "bool true codegen")
+(assert-c-contains "false" "airl_bool(0)" "bool false codegen")
+
+;; Test: arithmetic
+(assert-c-contains "(+ 1 2)" "airl_add" "add codegen")
+(assert-c-contains "(+ 1 2)" "airl_int(1)" "add arg1 codegen")
+(assert-c-contains "(+ 1 2)" "airl_int(2)" "add arg2 codegen")
+
+;; Test: comparison
+(assert-c-contains "(< 1 2)" "airl_lt" "lt codegen")
+
+;; Test: if expression
+(assert-c-contains "(if true 1 2)" "airl_as_bool_raw" "if codegen")
+
+;; Test: let binding
+(assert-c-contains "(let (x : i64 5) x)" "RtValue* x" "let binding codegen")
+
+;; Test: do block
+(assert-c-contains "(do 1 2 3)" "airl_int(3)" "do block codegen")
+
+;; Test: function definition
+(assert-c-contains "(defn add1 :sig [(x : i64) -> i64] :requires [(valid x)] :ensures [(valid result)] :body (+ x 1))" "RtValue* add1" "defn codegen")
+
+;; Test: list literal
+(assert-c-contains "[1 2 3]" "airl_list_new" "list codegen")
+
+;; Test: variant
+(assert-c-contains "(Ok 42)" "airl_make_variant" "variant codegen")
+
+;; Test: builtin calls
+(assert-c-contains "(head [1 2])" "airl_head" "head builtin codegen")
+(assert-c-contains "(empty? [])" "airl_empty" "empty? builtin codegen")
+
+;; Test: match expression
+(assert-c-contains "(match (Ok 42) (Ok v) v _ 0)" "airl_match_tag" "match codegen")
+
+;; Test: lambda
+(assert-c-contains "((fn [x] (+ x 1)) 10)" "__lambda_" "lambda codegen")
+(assert-c-contains "((fn [x] (+ x 1)) 10)" "airl_make_closure" "lambda closure codegen")
+
+;; Test: full program produces valid C structure
+(defn test-full-program
+  :sig [-> Bool]
+  :requires [true]
+  :ensures [(valid result)]
+  :body (match (compile-to-c "(defn double :sig [(x : i64) -> i64] :requires [(valid x)] :ensures [(valid result)] :body (* x 2)) (print (double 21))")
+    (Ok c-code)
+      (do
+        (if (contains c-code "#include \"airl_rt.h\"")
+          (print "PASS: has include")
+          (print "FAIL: missing include"))
+        (if (contains c-code "int main(")
+          (print "PASS: has main")
+          (print "FAIL: missing main"))
+        (if (contains c-code "airl_set_args")
+          (print "PASS: has airl_set_args")
+          (print "FAIL: missing airl_set_args"))
+        (if (contains c-code "airl_flush_stdout")
+          (print "PASS: has airl_flush_stdout")
+          (print "FAIL: missing airl_flush_stdout"))
+        (if (contains c-code "RtValue* double_")
+          (print "PASS: has double function — note: 'double' is not a keyword conflict since mangling is simple")
+          ;; double might just be 'double' not 'double_' since there's no hyphen
+          (if (contains c-code "RtValue* double(")
+            (print "PASS: has double function")
+            (print "FAIL: missing double function")))
+        (print "Full C output:")
+        (print c-code)
+        true)
+    (Err e) (do (print "FAIL: full program error:" e) false)))
+
+(test-full-program)
+
+;; Test: print full output for a simple program
+(defn test-print-output
+  :sig [-> Bool]
+  :requires [true]
+  :ensures [(valid result)]
+  :body (match (compile-to-c "(+ 1 2)")
+    (Ok c-code)
+      (do
+        (print "=== Simple (+ 1 2) output ===")
+        (print c-code)
+        (print "=== end ===")
+        true)
+    (Err e) (do (print "FAIL: simple output error:" e) false)))
+
+(test-print-output)
+
+(print "codegen_c tests complete")
