@@ -151,17 +151,26 @@ fn cmd_compile(args: &[String]) {
         // Find airl-rt static library
         let (rt_lib, runtime_lib) = find_airl_libs();
 
+        // Check if program needs the full runtime (uses run-bytecode or compile-to-executable)
+        let needs_runtime = std::str::from_utf8(&obj_bytes).ok()
+            .map(|_| false) // binary, can't check strings easily
+            .unwrap_or(false)
+            || files.iter().any(|f| {
+                std::fs::read_to_string(f).ok()
+                    .map(|s| s.contains("run-bytecode") || s.contains("compile-to-executable") || s.contains("run-compiled-bc"))
+                    .unwrap_or(false)
+            });
+
         // Link with system cc
         let mut cmd = std::process::Command::new("cc");
         cmd.arg(&obj_path)
             .arg("-o")
             .arg(&output)
             .arg(&rt_lib);
-        // Also link airl-runtime if available (provides run-bytecode for self-hosting)
-        if !runtime_lib.is_empty() {
+        // Only link libairl_runtime.a for self-hosting programs that need bytecode VM
+        if needs_runtime && !runtime_lib.is_empty() {
             cmd.arg(&runtime_lib);
-            // airl-runtime depends on airl-rt, so re-add it for symbol resolution order
-            cmd.arg(&rt_lib);
+            cmd.arg(&rt_lib); // re-add for symbol resolution order
         }
         let status = cmd
             .arg("-lm")

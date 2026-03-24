@@ -1581,15 +1581,23 @@ pub fn compile_to_executable_impl(
         .map_err(|e| format!("write {}: {}", obj_path, e))?;
 
     // 5. Find libraries and link
-    let rt_lib = find_lib("airl_rt");
-    let runtime_lib = find_lib("airl_runtime");
+    // Only link libairl_runtime.a if the program uses builtins that need it
+    // (run-bytecode, compile-to-executable). Normal programs only need libairl_rt.a.
+    let needs_runtime = all_funcs.iter().any(|f| {
+        f.constants.iter().any(|c| matches!(c,
+            Value::Str(s) if s == "run-bytecode" || s == "compile-to-executable"))
+    });
 
+    let rt_lib = find_lib("airl_rt");
     let mut cmd = std::process::Command::new("cc");
     cmd.arg(&obj_path).arg("-o").arg(output_path);
     if !rt_lib.is_empty() { cmd.arg(&rt_lib); }
-    if !runtime_lib.is_empty() {
-        cmd.arg(&runtime_lib);
-        if !rt_lib.is_empty() { cmd.arg(&rt_lib); } // re-add for symbol order
+    if needs_runtime {
+        let runtime_lib = find_lib("airl_runtime");
+        if !runtime_lib.is_empty() {
+            cmd.arg(&runtime_lib);
+            if !rt_lib.is_empty() { cmd.arg(&rt_lib); }
+        }
     }
     cmd.arg("-lm").arg("-lpthread").arg("-ldl");
 
