@@ -39,6 +39,7 @@ pub struct RuntimeImports {
 
     // Logic
     pub as_bool_raw: FuncId,
+    pub as_int_raw: FuncId,
 
     // Arithmetic
     pub add: FuncId,
@@ -240,6 +241,9 @@ pub struct BytecodeAot {
     compiled_funcs: HashMap<String, FuncId>,
     /// Functions compiled via the unboxed (primitive) path.
     eligible_funcs: HashSet<String>,
+    /// Return type hints for eligible (unboxed) functions, used for
+    /// reboxing when a boxed caller invokes an unboxed callee.
+    eligible_return_hints: HashMap<String, TypeHint>,
 }
 
 impl BytecodeAot {
@@ -270,6 +274,7 @@ impl BytecodeAot {
             stable_strings: Vec::new(),
             compiled_funcs: HashMap::new(),
             eligible_funcs: HashSet::new(),
+            eligible_return_hints: HashMap::new(),
         })
     }
 
@@ -307,6 +312,7 @@ impl BytecodeAot {
         let str_ctor   = declare_import(m, "airl_str",   sig_ptr_i64_ret_ptr(m));
 
         let as_bool_raw = declare_import(m, "airl_as_bool_raw", sig_1_ptr_ret_i64(m));
+        let as_int_raw  = declare_import(m, "airl_as_int_raw",  sig_1_ptr_ret_i64(m));
 
         let s2 = sig_2_ptr(m);
         let add    = declare_import(m, "airl_add", s2.clone());
@@ -391,7 +397,7 @@ impl BytecodeAot {
         RuntimeImports {
             value_retain, value_release, value_clone,
             int_ctor, float_ctor, bool_ctor, nil_ctor, unit_ctor, str_ctor,
-            as_bool_raw,
+            as_bool_raw, as_int_raw,
             add, sub, mul, div, modulo,
             eq, ne, lt, gt, le, ge,
             not, and, or, xor,
@@ -804,11 +810,7 @@ impl BytecodeAot {
                             type_hints[dst] = TypeHint::Bool;
                             builder.ins().iconst(types::I64, *b as i64)
                         }
-                        // String constants in unboxed functions — skip (only int/float/bool valid)
-                        _ => {
-                            type_hints[dst] = TypeHint::Int;
-                            builder.ins().iconst(types::I64, 0)
-                        }
+                        _ => return Err("LoadConst: unsupported constant type in unboxed function".into()),
                     };
                     builder.def_var(vars[dst], val);
                     last_was_terminator = false;
@@ -1081,6 +1083,20 @@ impl BytecodeAot {
             builder.ins().return_(&[zero]);
         }
 
+        // ── Record return type hint for boundary marshaling ─────────────
+        // Find the first Return instruction and use its source register's type hint.
+        let mut return_hint = TypeHint::Int; // default
+        for instr in &func.instructions {
+            if instr.op == Op::Return {
+                let src = instr.a as usize;
+                if src < type_hints.len() {
+                    return_hint = type_hints[src];
+                }
+                break;
+            }
+        }
+        self.eligible_return_hints.insert(func.name.clone(), return_hint);
+
         // ── Seal all blocks ──────────────────────────────────────────────
         builder.seal_all_blocks();
         builder.finalize();
@@ -1139,6 +1155,18 @@ impl BytecodeAot {
                             // handled inline
                         } else if let Some(&builtin_id) = self.builtin_map.get(callee_name.as_str()) {
                             call_targets.insert(callee_name.clone(), builtin_id);
+                        } else if self.eligible_funcs.contains(callee_name) {
+                            // Callee was compiled unboxed — use I64 signature
+                            let mut call_sig = self.module.make_signature();
+                            for _ in 0..argc {
+                                call_sig.params.push(AbiParam::new(types::I64));
+                            }
+                            call_sig.returns.push(AbiParam::new(types::I64));
+                            let callee_id = self
+                                .module
+                                .declare_function(callee_name, Linkage::Local, &call_sig)
+                                .map_err(|e| format!("call declare (eligible): {}", e))?;
+                            call_targets.insert(callee_name.clone(), callee_id);
                         } else {
                             let mut call_sig = self.module.make_signature();
                             for _ in 0..argc {
@@ -1547,7 +1575,62 @@ impl BytecodeAot {
                         let result = builder.inst_results(call)[0];
                         builder.def_var(vars[dst], result);
                         last_was_terminator = false;
+                    } else if self.eligible_funcs.contains(&callee_name) {
+                        // ── Boundary marshal: boxed caller → unboxed callee ──
+                        // 1. Extract raw i64 from each boxed arg via airl_as_int_raw
+                        // 2. Call the unboxed function with raw I64 args
+                        // 3. Rebox the raw i64 result based on the callee's return hint
+
+                        let callee_func_id = if let Some(&id) = call_targets.get(&callee_name) {
+                            id
+                        } else {
+                            return Err(format!("call target '{}' not declared", callee_name));
+                        };
+                        let func_ref = self.module.declare_func_in_func(callee_func_id, builder.func);
+                        let as_int_raw_ref = self.module.declare_func_in_func(self.rt.as_int_raw, builder.func);
+
+                        // Unbox each arg: *mut RtValue → i64
+                        let mut call_args = Vec::new();
+                        for j in 0..argc {
+                            let arg_ptr = builder.use_var(vars[dst + 1 + j]);
+                            let raw_call = builder.ins().call(as_int_raw_ref, &[arg_ptr]);
+                            let raw_val = builder.inst_results(raw_call)[0];
+                            call_args.push(raw_val);
+                        }
+
+                        // Call the unboxed function
+                        let call = builder.ins().call(func_ref, &call_args);
+                        let raw_result = builder.inst_results(call)[0];
+
+                        // Rebox the result based on the callee's return type hint
+                        let return_hint = self.eligible_return_hints
+                            .get(&callee_name)
+                            .copied()
+                            .unwrap_or(TypeHint::Int);
+
+                        let boxed_result = match return_hint {
+                            TypeHint::Int => {
+                                let ctor_ref = self.module.declare_func_in_func(self.rt.int_ctor, builder.func);
+                                let c = builder.ins().call(ctor_ref, &[raw_result]);
+                                builder.inst_results(c)[0]
+                            }
+                            TypeHint::Float => {
+                                // raw_result is f64 bits as i64 — bitcast to f64 for airl_float
+                                let f_val = builder.ins().bitcast(types::F64, MemFlags::new(), raw_result);
+                                let ctor_ref = self.module.declare_func_in_func(self.rt.float_ctor, builder.func);
+                                let c = builder.ins().call(ctor_ref, &[f_val]);
+                                builder.inst_results(c)[0]
+                            }
+                            TypeHint::Bool => {
+                                let ctor_ref = self.module.declare_func_in_func(self.rt.bool_ctor, builder.func);
+                                let c = builder.ins().call(ctor_ref, &[raw_result]);
+                                builder.inst_results(c)[0]
+                            }
+                        };
+                        builder.def_var(vars[dst], boxed_result);
+                        last_was_terminator = false;
                     } else {
+                        // Normal boxed-to-boxed call
                         let callee_func_id = if callee_name == func.name {
                             func_id
                         } else if let Some(&id) = call_targets.get(&callee_name) {
