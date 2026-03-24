@@ -6,6 +6,7 @@ pub mod pattern;
 pub mod builtins;
 pub mod agent_client;
 pub mod ir;
+pub mod ast_to_ir;
 pub mod bytecode;
 pub mod bytecode_compiler;
 pub mod bytecode_vm;
