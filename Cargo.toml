@@ -12,8 +12,22 @@ members = [
     "crates/airl-driver",
     "crates/airl-rt",
 ]
-# Note: airl-mlir requires libzstd-dev and LLVM 19+ for melior.
-# If not installed, use: cargo test --workspace --exclude airl-mlir
+# airl-mlir is excluded from default-members because it requires libzstd-dev
+# and LLVM 19+ for melior. Build with GPU support via:
+#   cargo build -p airl-driver --features mlir
+# Or build the full workspace including mlir:
+#   cargo build --workspace --features mlir
+default-members = [
+    "crates/airl-syntax",
+    "crates/airl-types",
+    "crates/airl-contracts",
+    "crates/airl-runtime",
+    "crates/airl-agent",
+    "crates/airl-codegen",
+    "crates/airl-solver",
+    "crates/airl-driver",
+    "crates/airl-rt",
+]
 
 [workspace.package]
 version = "0.2.0"
