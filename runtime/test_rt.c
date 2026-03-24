@@ -881,6 +881,226 @@ TEST(test_map_overwrite) {
     airl_value_release(m);
 }
 
+/* ---- Task 6: Variants, Closures, I/O ---- */
+
+TEST(test_make_variant) {
+    RtValue* tag = airl_str("Ok", 2);
+    RtValue* inner = airl_int(42);
+    RtValue* v = airl_make_variant(tag, inner);
+    assert(v->tag == RT_VARIANT);
+    display_to_string(v);
+    assert(strcmp(display_buf, "(Ok 42)") == 0);
+    airl_value_release(v);
+    airl_value_release(inner);
+    airl_value_release(tag);
+}
+
+TEST(test_make_variant_unit_inner) {
+    RtValue* tag = airl_str("None", 4);
+    RtValue* inner = airl_unit();
+    RtValue* v = airl_make_variant(tag, inner);
+    assert(v->tag == RT_VARIANT);
+    display_to_string(v);
+    assert(strcmp(display_buf, "(None)") == 0);
+    airl_value_release(v);
+    airl_value_release(inner);
+    airl_value_release(tag);
+}
+
+TEST(test_match_tag_success) {
+    RtValue* tag = airl_str("Ok", 2);
+    RtValue* inner = airl_int(42);
+    RtValue* v = airl_make_variant(tag, inner);
+    RtValue* match_tag = airl_str("Ok", 2);
+    RtValue* result = airl_match_tag(v, match_tag);
+    assert(result != NULL);
+    assert(result->data.i == 42);
+    airl_value_release(result);
+    airl_value_release(v);
+    airl_value_release(inner);
+    airl_value_release(tag);
+    airl_value_release(match_tag);
+}
+
+TEST(test_match_tag_fail) {
+    RtValue* tag = airl_str("Ok", 2);
+    RtValue* inner = airl_int(42);
+    RtValue* v = airl_make_variant(tag, inner);
+    RtValue* match_tag = airl_str("Err", 3);
+    RtValue* result = airl_match_tag(v, match_tag);
+    assert(result == NULL);
+    airl_value_release(v);
+    airl_value_release(inner);
+    airl_value_release(tag);
+    airl_value_release(match_tag);
+}
+
+TEST(test_match_tag_not_variant) {
+    RtValue* v = airl_int(42);
+    RtValue* tag = airl_str("Ok", 2);
+    RtValue* result = airl_match_tag(v, tag);
+    assert(result == NULL);
+    airl_value_release(v);
+    airl_value_release(tag);
+}
+
+TEST(test_nested_variant) {
+    RtValue* tag_inner = airl_str("Ok", 2);
+    RtValue* inner = airl_make_variant(tag_inner, airl_int(7));
+    RtValue* tag_outer = airl_str("Some", 4);
+    RtValue* v = airl_make_variant(tag_outer, inner);
+    display_to_string(v);
+    assert(strcmp(display_buf, "(Some (Ok 7))") == 0);
+    airl_value_release(v);
+    airl_value_release(inner);
+    airl_value_release(tag_inner);
+    airl_value_release(tag_outer);
+}
+
+/* Closure test helpers */
+static RtValue* test_closure_double(RtValue* x) {
+    return airl_mul(x, airl_int(2));
+}
+
+static RtValue* test_closure_add(RtValue* a, RtValue* b) {
+    return airl_add(a, b);
+}
+
+TEST(test_closure_no_capture) {
+    RtValue* c = airl_make_closure((void*)test_closure_double, NULL, 0);
+    assert(c->tag == RT_CLOSURE);
+    RtValue* arg = airl_int(21);
+    RtValue* result = airl_call_closure(c, &arg, 1);
+    assert(result->data.i == 42);
+    airl_value_release(result);
+    airl_value_release(c);
+    airl_value_release(arg);
+}
+
+TEST(test_closure_with_capture) {
+    RtValue* offset = airl_int(10);
+    RtValue* c = airl_make_closure((void*)test_closure_add, &offset, 1);
+    RtValue* arg = airl_int(5);
+    RtValue* result = airl_call_closure(c, &arg, 1);
+    assert(result->data.i == 15);
+    airl_value_release(result);
+    airl_value_release(c);
+    airl_value_release(offset);
+    airl_value_release(arg);
+}
+
+TEST(test_closure_display) {
+    RtValue* c = airl_make_closure((void*)test_closure_double, NULL, 0);
+    display_to_string(c);
+    assert(strcmp(display_buf, "<closure>") == 0);
+    airl_value_release(c);
+}
+
+TEST(test_type_of_int) {
+    RtValue* t = airl_type_of(airl_int(1));
+    assert(t->data.s.len == 3 && memcmp(t->data.s.ptr, "Int", 3) == 0);
+    airl_value_release(t);
+}
+
+TEST(test_type_of_str) {
+    RtValue* s = airl_str("hi", 2);
+    RtValue* t = airl_type_of(s);
+    assert(t->data.s.len == 3 && memcmp(t->data.s.ptr, "Str", 3) == 0);
+    airl_value_release(t);
+    airl_value_release(s);
+}
+
+TEST(test_type_of_float) {
+    RtValue* t = airl_type_of(airl_float(3.14));
+    assert(t->data.s.len == 5 && memcmp(t->data.s.ptr, "Float", 5) == 0);
+    airl_value_release(t);
+}
+
+TEST(test_type_of_bool) {
+    RtValue* t = airl_type_of(airl_bool(1));
+    assert(t->data.s.len == 4 && memcmp(t->data.s.ptr, "Bool", 4) == 0);
+    airl_value_release(t);
+}
+
+TEST(test_type_of_nil) {
+    RtValue* t = airl_type_of(airl_nil());
+    assert(t->data.s.len == 3 && memcmp(t->data.s.ptr, "Nil", 3) == 0);
+    airl_value_release(t);
+}
+
+TEST(test_type_of_list) {
+    RtValue* l = airl_list_new(NULL, 0);
+    RtValue* t = airl_type_of(l);
+    assert(t->data.s.len == 4 && memcmp(t->data.s.ptr, "List", 4) == 0);
+    airl_value_release(t);
+    airl_value_release(l);
+}
+
+TEST(test_type_of_variant) {
+    RtValue* tag = airl_str("Ok", 2);
+    RtValue* v = airl_make_variant(tag, airl_int(1));
+    RtValue* t = airl_type_of(v);
+    assert(t->data.s.len == 7 && memcmp(t->data.s.ptr, "Variant", 7) == 0);
+    airl_value_release(t);
+    airl_value_release(v);
+    airl_value_release(tag);
+}
+
+TEST(test_type_of_closure) {
+    RtValue* c = airl_make_closure((void*)test_closure_double, NULL, 0);
+    RtValue* t = airl_type_of(c);
+    assert(t->data.s.len == 7 && memcmp(t->data.s.ptr, "Closure", 7) == 0);
+    airl_value_release(t);
+    airl_value_release(c);
+}
+
+TEST(test_valid) {
+    assert(airl_as_bool_raw(airl_valid(airl_int(1))) == 1);
+    assert(airl_as_bool_raw(airl_valid(airl_nil())) == 1);
+    assert(airl_as_bool_raw(airl_valid(airl_bool(0))) == 1);
+}
+
+TEST(test_get_args) {
+    char* fake_argv[] = { "prog", "arg1", "arg2" };
+    airl_set_args(3, fake_argv);
+    RtValue* args = airl_get_args();
+    assert(args->tag == RT_LIST);
+    assert(args->data.list.len == 3);
+    assert(args->data.list.items[0]->data.s.len == 4 && memcmp(args->data.list.items[0]->data.s.ptr, "prog", 4) == 0);
+    assert(args->data.list.items[1]->data.s.len == 4 && memcmp(args->data.list.items[1]->data.s.ptr, "arg1", 4) == 0);
+    assert(args->data.list.items[2]->data.s.len == 4 && memcmp(args->data.list.items[2]->data.s.ptr, "arg2", 4) == 0);
+    airl_value_release(args);
+}
+
+TEST(test_get_args_empty) {
+    char* fake_argv[] = { NULL }; /* not used */
+    airl_set_args(0, fake_argv);
+    RtValue* args = airl_get_args();
+    assert(args->tag == RT_LIST);
+    assert(args->data.list.len == 0);
+    airl_value_release(args);
+}
+
+TEST(test_read_file) {
+    /* Write a temp file, read it back */
+    FILE* f = fopen("/tmp/airl_test_read.txt", "w");
+    fprintf(f, "hello from file");
+    fclose(f);
+    RtValue* path = airl_str("/tmp/airl_test_read.txt", 23);
+    RtValue* content = airl_read_file(path);
+    assert(content->tag == RT_STR);
+    assert(content->data.s.len == 15);
+    assert(memcmp(content->data.s.ptr, "hello from file", 15) == 0);
+    airl_value_release(content);
+    airl_value_release(path);
+    remove("/tmp/airl_test_read.txt");
+}
+
+TEST(test_contract_fail) {
+    int64_t result = airl_jit_contract_fail(1, 2, 3);
+    assert(result == 0);
+}
+
 int main(void) {
     printf("C Runtime Tests (Task 1):\n");
     RUN(test_int);
@@ -980,6 +1200,29 @@ int main(void) {
     RUN(test_map_get_or);
     RUN(test_map_values_sorted);
     RUN(test_map_overwrite);
+    printf("\nC Runtime Tests (Task 6):\n");
+    RUN(test_make_variant);
+    RUN(test_make_variant_unit_inner);
+    RUN(test_match_tag_success);
+    RUN(test_match_tag_fail);
+    RUN(test_match_tag_not_variant);
+    RUN(test_nested_variant);
+    RUN(test_closure_no_capture);
+    RUN(test_closure_with_capture);
+    RUN(test_closure_display);
+    RUN(test_type_of_int);
+    RUN(test_type_of_str);
+    RUN(test_type_of_float);
+    RUN(test_type_of_bool);
+    RUN(test_type_of_nil);
+    RUN(test_type_of_list);
+    RUN(test_type_of_variant);
+    RUN(test_type_of_closure);
+    RUN(test_valid);
+    RUN(test_get_args);
+    RUN(test_get_args_empty);
+    RUN(test_read_file);
+    RUN(test_contract_fail);
     printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;
 }
