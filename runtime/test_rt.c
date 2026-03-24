@@ -493,6 +493,250 @@ TEST(test_cons_empty) {
     airl_value_release(one);
 }
 
+/* ---- Task 4: String Operations ---- */
+
+TEST(test_char_at) {
+    RtValue* s = airl_str("hello", 5);
+    RtValue* r = airl_char_at(s, airl_int(0));
+    assert(r->data.s.len == 1 && r->data.s.ptr[0] == 'h');
+    airl_value_release(r);
+    r = airl_char_at(s, airl_int(4));
+    assert(r->data.s.len == 1 && r->data.s.ptr[0] == 'o');
+    airl_value_release(r);
+    airl_value_release(s);
+}
+
+TEST(test_char_at_utf8) {
+    /* "cafe\xcc\x81" = "café" as 6 bytes: c(1) a(1) f(1) e(1) combining-accent(2) */
+    /* Use precomposed: "caf\xc3\xa9" = 5 bytes, 4 codepoints */
+    RtValue* s = airl_str("caf\xc3\xa9", 5);
+    RtValue* r = airl_char_at(s, airl_int(3));  /* should be e-acute */
+    assert(r->data.s.len == 2);  /* e-acute is 2 bytes in UTF-8 */
+    assert((unsigned char)r->data.s.ptr[0] == 0xC3);
+    assert((unsigned char)r->data.s.ptr[1] == 0xA9);
+    airl_value_release(r);
+    airl_value_release(s);
+}
+
+TEST(test_substring) {
+    RtValue* s = airl_str("hello world", 11);
+    RtValue* r = airl_substring(s, airl_int(0), airl_int(5));
+    assert(r->data.s.len == 5 && memcmp(r->data.s.ptr, "hello", 5) == 0);
+    airl_value_release(r);
+    airl_value_release(s);
+}
+
+TEST(test_substring_utf8) {
+    /* "caf\xc3\xa9s" = 6 bytes, 5 codepoints: c a f e-acute s */
+    RtValue* s = airl_str("caf\xc3\xa9s", 6);
+    RtValue* r = airl_substring(s, airl_int(2), airl_int(4));  /* "fé" */
+    assert(r->data.s.len == 3);  /* f(1) + é(2) = 3 bytes */
+    assert(r->data.s.ptr[0] == 'f');
+    airl_value_release(r);
+    airl_value_release(s);
+}
+
+TEST(test_chars) {
+    RtValue* s = airl_str("abc", 3);
+    RtValue* r = airl_chars(s);
+    assert(r->tag == RT_LIST);
+    assert(r->data.list.len == 3);
+    assert(r->data.list.items[0]->data.s.ptr[0] == 'a');
+    assert(r->data.list.items[1]->data.s.ptr[0] == 'b');
+    assert(r->data.list.items[2]->data.s.ptr[0] == 'c');
+    airl_value_release(r);
+    airl_value_release(s);
+}
+
+TEST(test_chars_empty) {
+    RtValue* s = airl_str("", 0);
+    RtValue* r = airl_chars(s);
+    assert(r->tag == RT_LIST);
+    assert(r->data.list.len == 0);
+    airl_value_release(r);
+    airl_value_release(s);
+}
+
+TEST(test_split) {
+    RtValue* s = airl_str("a,b,c", 5);
+    RtValue* d = airl_str(",", 1);
+    RtValue* r = airl_split(s, d);
+    assert(r->data.list.len == 3);
+    assert(r->data.list.items[0]->data.s.len == 1 && r->data.list.items[0]->data.s.ptr[0] == 'a');
+    assert(r->data.list.items[1]->data.s.len == 1 && r->data.list.items[1]->data.s.ptr[0] == 'b');
+    assert(r->data.list.items[2]->data.s.len == 1 && r->data.list.items[2]->data.s.ptr[0] == 'c');
+    airl_value_release(r);
+    airl_value_release(s);
+    airl_value_release(d);
+}
+
+TEST(test_split_empty_delim) {
+    RtValue* s = airl_str("abc", 3);
+    RtValue* d = airl_str("", 0);
+    RtValue* r = airl_split(s, d);
+    assert(r->data.list.len == 3);
+    airl_value_release(r);
+    airl_value_release(s);
+    airl_value_release(d);
+}
+
+TEST(test_join) {
+    RtValue* items[] = { airl_str("a", 1), airl_str("b", 1), airl_str("c", 1) };
+    RtValue* list = airl_list_new(items, 3);
+    RtValue* sep = airl_str("-", 1);
+    RtValue* r = airl_join(list, sep);
+    assert(r->data.s.len == 5 && memcmp(r->data.s.ptr, "a-b-c", 5) == 0);
+    airl_value_release(r);
+    airl_value_release(list);
+    airl_value_release(sep);
+    for (int i = 0; i < 3; i++) airl_value_release(items[i]);
+}
+
+TEST(test_join_empty) {
+    RtValue* list = airl_list_new(NULL, 0);
+    RtValue* sep = airl_str(",", 1);
+    RtValue* r = airl_join(list, sep);
+    assert(r->data.s.len == 0);
+    airl_value_release(r);
+    airl_value_release(list);
+    airl_value_release(sep);
+}
+
+TEST(test_contains) {
+    RtValue* s = airl_str("hello world", 11);
+    RtValue* sub1 = airl_str("world", 5);
+    RtValue* sub2 = airl_str("xyz", 3);
+    assert(airl_as_bool_raw(airl_contains(s, sub1)) == 1);
+    assert(airl_as_bool_raw(airl_contains(s, sub2)) == 0);
+    airl_value_release(s);
+    airl_value_release(sub1);
+    airl_value_release(sub2);
+}
+
+TEST(test_starts_with) {
+    RtValue* s = airl_str("hello", 5);
+    RtValue* p1 = airl_str("hel", 3);
+    RtValue* p2 = airl_str("xyz", 3);
+    assert(airl_as_bool_raw(airl_starts_with(s, p1)) == 1);
+    assert(airl_as_bool_raw(airl_starts_with(s, p2)) == 0);
+    airl_value_release(s);
+    airl_value_release(p1);
+    airl_value_release(p2);
+}
+
+TEST(test_ends_with) {
+    RtValue* s = airl_str("hello", 5);
+    RtValue* suf1 = airl_str("llo", 3);
+    RtValue* suf2 = airl_str("xyz", 3);
+    assert(airl_as_bool_raw(airl_ends_with(s, suf1)) == 1);
+    assert(airl_as_bool_raw(airl_ends_with(s, suf2)) == 0);
+    airl_value_release(s);
+    airl_value_release(suf1);
+    airl_value_release(suf2);
+}
+
+TEST(test_index_of) {
+    RtValue* s = airl_str("hello world", 11);
+    RtValue* sub1 = airl_str("world", 5);
+    RtValue* r = airl_index_of(s, sub1);
+    assert(r->data.i == 6);
+    airl_value_release(r);
+    RtValue* sub2 = airl_str("xyz", 3);
+    r = airl_index_of(s, sub2);
+    assert(r->data.i == -1);
+    airl_value_release(r);
+    airl_value_release(s);
+    airl_value_release(sub1);
+    airl_value_release(sub2);
+}
+
+TEST(test_index_of_utf8) {
+    /* "cafébar" = c a f é b a r, é is 2 bytes. "bar" starts at char index 4 */
+    RtValue* s = airl_str("caf\xc3\xa9""bar", 8);
+    RtValue* sub = airl_str("bar", 3);
+    RtValue* r = airl_index_of(s, sub);
+    assert(r->data.i == 4);  /* character index, not byte index */
+    airl_value_release(r);
+    airl_value_release(s);
+    airl_value_release(sub);
+}
+
+TEST(test_trim) {
+    RtValue* s = airl_str("  hello  ", 9);
+    RtValue* r = airl_trim(s);
+    assert(r->data.s.len == 5 && memcmp(r->data.s.ptr, "hello", 5) == 0);
+    airl_value_release(r);
+    airl_value_release(s);
+}
+
+TEST(test_trim_tabs_newlines) {
+    RtValue* s = airl_str("\t\nhello\r\n", 9);
+    RtValue* r = airl_trim(s);
+    assert(r->data.s.len == 5 && memcmp(r->data.s.ptr, "hello", 5) == 0);
+    airl_value_release(r);
+    airl_value_release(s);
+}
+
+TEST(test_trim_empty) {
+    RtValue* s = airl_str("   ", 3);
+    RtValue* r = airl_trim(s);
+    assert(r->data.s.len == 0);
+    airl_value_release(r);
+    airl_value_release(s);
+}
+
+TEST(test_to_upper) {
+    RtValue* s = airl_str("hello", 5);
+    RtValue* r = airl_to_upper(s);
+    assert(memcmp(r->data.s.ptr, "HELLO", 5) == 0);
+    airl_value_release(r);
+    airl_value_release(s);
+}
+
+TEST(test_to_lower) {
+    RtValue* s = airl_str("HELLO", 5);
+    RtValue* r = airl_to_lower(s);
+    assert(memcmp(r->data.s.ptr, "hello", 5) == 0);
+    airl_value_release(r);
+    airl_value_release(s);
+}
+
+TEST(test_replace) {
+    RtValue* s = airl_str("hello world", 11);
+    RtValue* old_s = airl_str("world", 5);
+    RtValue* new_s = airl_str("AIRL", 4);
+    RtValue* r = airl_replace(s, old_s, new_s);
+    assert(r->data.s.len == 10 && memcmp(r->data.s.ptr, "hello AIRL", 10) == 0);
+    airl_value_release(r);
+    airl_value_release(s);
+    airl_value_release(old_s);
+    airl_value_release(new_s);
+}
+
+TEST(test_replace_multiple) {
+    RtValue* s = airl_str("aXbXc", 5);
+    RtValue* old_s = airl_str("X", 1);
+    RtValue* new_s = airl_str("--", 2);
+    RtValue* r = airl_replace(s, old_s, new_s);
+    assert(r->data.s.len == 7 && memcmp(r->data.s.ptr, "a--b--c", 7) == 0);
+    airl_value_release(r);
+    airl_value_release(s);
+    airl_value_release(old_s);
+    airl_value_release(new_s);
+}
+
+TEST(test_replace_empty_pattern) {
+    RtValue* s = airl_str("hello", 5);
+    RtValue* old_s = airl_str("", 0);
+    RtValue* new_s = airl_str("X", 1);
+    RtValue* r = airl_replace(s, old_s, new_s);
+    assert(r->data.s.len == 5 && memcmp(r->data.s.ptr, "hello", 5) == 0);
+    airl_value_release(r);
+    airl_value_release(s);
+    airl_value_release(old_s);
+    airl_value_release(new_s);
+}
+
 int main(void) {
     printf("C Runtime Tests (Task 1):\n");
     RUN(test_int);
@@ -555,6 +799,30 @@ int main(void) {
     RUN(test_append);
     RUN(test_tail_single);
     RUN(test_cons_empty);
+    printf("\nC Runtime Tests (Task 4):\n");
+    RUN(test_char_at);
+    RUN(test_char_at_utf8);
+    RUN(test_substring);
+    RUN(test_substring_utf8);
+    RUN(test_chars);
+    RUN(test_chars_empty);
+    RUN(test_split);
+    RUN(test_split_empty_delim);
+    RUN(test_join);
+    RUN(test_join_empty);
+    RUN(test_contains);
+    RUN(test_starts_with);
+    RUN(test_ends_with);
+    RUN(test_index_of);
+    RUN(test_index_of_utf8);
+    RUN(test_trim);
+    RUN(test_trim_tabs_newlines);
+    RUN(test_trim_empty);
+    RUN(test_to_upper);
+    RUN(test_to_lower);
+    RUN(test_replace);
+    RUN(test_replace_multiple);
+    RUN(test_replace_empty_pattern);
     printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;
 }
