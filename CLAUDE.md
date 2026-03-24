@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~479 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.2.0.
+AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~508 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.2.0.
 
 **Language spec:** `AIRL-Language-Specification-v0.1.0.md`
 **LLM guide:** `AIRL-LLM-Guide.md` — **MUST read this file before writing any AIRL code.** It contains critical language idioms, pitfalls, and patterns that prevent common mistakes.
@@ -34,7 +34,7 @@ cargo run --features jit -- check <file.airl> # Type-check and verify
 cargo run --features jit -- repl              # Interactive REPL
 ```
 
-**v0.2 execution model:** `airl run` JIT-compiles eligible functions to native x86-64 via Cranelift with contract assertions as conditional branches. Ineligible functions (using lists, closures, variants, builtins) fall back to the bytecode VM automatically. No mode flags needed.
+**v0.2 execution model:** `airl run` JIT-full-compiles **all** functions to native x86-64 via Cranelift using the `airl-rt` C-ABI runtime for value operations. Contract assertions and ownership checks compile to native conditional branches. Quantifier expressions (`forall`/`exists`) are desugared to `fold`+`range` loops. No mode flags needed.
 
 **First build note:** Z3 (in `airl-solver`) compiles from C++ source on first build (~5-15 min). Requires CMake, C++ compiler, Python 3.
 
@@ -61,7 +61,7 @@ airl-driver ← airl-solver (Z3)
 - **Zero external deps for core crates.** Only `airl-codegen` (Cranelift) and `airl-solver` (Z3) have external deps.
 - **Tests are inline** `#[cfg(test)]` modules in each source file, plus fixture-based E2E tests in `crates/airl-driver/tests/fixtures.rs`.
 - **Fixtures live in** `tests/fixtures/valid/`, `tests/fixtures/type_errors/`, `tests/fixtures/contract_errors/`, `tests/fixtures/linearity_errors/`, `tests/fixtures/agent/`, `tests/fixtures/interpreter_only/`.
-- **`interpreter_only/` fixtures** require the tree-walking interpreter (quantifier expressions, runtime ownership enforcement). These don't run in the default bytecode/JIT path.
+- **`interpreter_only/` fixtures** require the tree-walking interpreter (e.g., `non_exhaustive_match.airl`). Most former interpreter-only fixtures have been moved: quantifier fixtures to `valid/`, ownership fixtures to `linearity_errors/`.
 - **The `orchestrator.airl` fixture** requires the built binary (uses `spawn-agent`) — it's in `tests/fixtures/agent/`, NOT `tests/fixtures/valid/`, so the fixture runner doesn't try to run it.
 - **Builtin dispatch pattern:** Builtins are dispatched via `CallBuiltin` opcode in the bytecode VM, which calls into `Builtins::get()` registry. The tree-walking interpreter (`eval.rs`) is kept for the REPL and agent runtime but is not the default execution path.
 
@@ -263,7 +263,5 @@ cargo run --release --features jit -- run bootstrap/fixpoint_test.airl          
 ## Known Issues
 
 1. **`airl-mlir` requires system libraries:** `melior` needs `libzstd-dev` and LLVM 19+ (`llvm-19-dev libmlir-19-dev`). The crate is excluded from `default-members` so plain `cargo build` / `cargo test` skip it automatically. To build with GPU/MLIR support: `cargo build -p airl-driver --features mlir` (set `MLIR_SYS_190_PREFIX=/usr/lib/llvm-19` if needed). A `Dockerfile` at the workspace root provides a fully reproducible build environment with all dependencies pre-installed (`docker build -t airl .`). The `build.rs` in `crates/airl-mlir/` detects missing LLVM and prints actionable install instructions before the melior linker error fires.
-2. **Quantifier expressions (`forall`/`exists`) are interpreter-only.** The bytecode compiler maps them to `nil`. Z3 verification of quantifier contracts still works at check time; runtime evaluation requires `--interpreted` flag.
-3. **Runtime ownership enforcement via `MarkMoved`/`CheckNotMoved` opcodes.** The bytecode VM tracks moved registers at runtime for explicitly `Own`-annotated parameters. Use-after-move and borrow+move conflicts produce runtime errors. The static linearity checker still runs (better messages) but is non-fatal in Run mode -- runtime enforcement is the backstop. Functions with ownership opcodes fall back to bytecode VM (not JIT-eligible).
-4. **JIT ineligibility for non-primitive functions.** Functions using lists, closures, variants, or builtin calls fall back to the bytecode VM. This is transparent but significantly slower for compute-heavy code (~23x slower than Python on fib(30) scale).
+2. **Runtime errors in JIT'd `extern "C"` functions are non-recoverable.** Runtime errors (e.g., type mismatches in `airl_mul`) in `extern "C"` JIT helper functions call `process::exit(1)`. These are prevented at compile time by the type checker, but a future improvement would use `extern "C-unwind"` ABI for recovery.
 
