@@ -71,6 +71,9 @@ pub struct RuntimeImports {
     pub at:       FuncId,
     pub append:   FuncId,
     pub list_new: FuncId,
+    pub at_or: FuncId,
+    pub set_at: FuncId,
+    pub list_contains: FuncId,
 
     // Variant / pattern
     pub make_variant: FuncId,
@@ -404,6 +407,9 @@ impl BytecodeAot {
         let at     = declare_import(m, "airl_at",     s2.clone());
         let append = declare_import(m, "airl_append", s2.clone());
         let list_new = declare_import(m, "airl_list_new", sig_ptr_i64_ret_ptr(m));
+        let at_or = declare_import(m, "airl_at_or", sig_3_ptr(m));
+        let set_at = declare_import(m, "airl_set_at", sig_3_ptr(m));
+        let list_contains = declare_import(m, "airl_list_contains", s2.clone());
 
         let make_variant = declare_import(m, "airl_make_variant", s2.clone());
         let match_tag    = declare_import(m, "airl_match_tag",    s2.clone());
@@ -515,7 +521,7 @@ impl BytecodeAot {
             add, sub, mul, div, modulo,
             eq, ne, lt, gt, le, ge,
             not, and, or, xor,
-            head, tail, cons, empty, length, at, append, list_new,
+            head, tail, cons, empty, length, at, append, list_new, at_or, set_at, list_contains,
             make_variant, match_tag,
             make_closure, call_closure,
             print, println, print_values, type_of, valid,
@@ -568,6 +574,9 @@ impl BytecodeAot {
         m.insert("length".into(), rt.length);
         m.insert("at".into(),     rt.at);
         m.insert("append".into(), rt.append);
+        m.insert("at-or".into(),          rt.at_or);
+        m.insert("set-at".into(),         rt.set_at);
+        m.insert("list-contains?".into(), rt.list_contains);
 
         m.insert("print".into(),   rt.print);
         m.insert("println".into(), rt.println);

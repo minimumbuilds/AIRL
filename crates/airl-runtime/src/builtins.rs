@@ -100,6 +100,9 @@ impl Builtins {
         self.register("tail", builtin_tail);
         self.register("empty?", builtin_empty);
         self.register("cons", builtin_cons);
+        self.register("at-or", builtin_at_or);
+        self.register("set-at", builtin_set_at);
+        self.register("list-contains?", builtin_list_contains);
     }
 
     // ── String ──────────────────────────────────────────
@@ -558,6 +561,46 @@ fn builtin_append(args: &[Value]) -> Result<Value, RuntimeError> {
         _ => Err(RuntimeError::TypeError(
             "`append` expects a List as first argument".into(),
         )),
+    }
+}
+
+fn builtin_at_or(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("at-or", args, 3)?;
+    match (&args[0], &args[1]) {
+        (Value::List(items), Value::Int(idx)) => {
+            let i = *idx as usize;
+            if i >= items.len() {
+                Ok(args[2].clone()) // default
+            } else {
+                Ok(items[i].clone())
+            }
+        }
+        _ => Err(RuntimeError::TypeError("`at-or` expects (List, Int, default)".into())),
+    }
+}
+
+fn builtin_set_at(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("set-at", args, 3)?;
+    match (&args[0], &args[1]) {
+        (Value::List(items), Value::Int(idx)) => {
+            let i = *idx as usize;
+            if i >= items.len() {
+                Err(RuntimeError::IndexOutOfBounds { index: i, len: items.len() })
+            } else {
+                let mut new_items = items.clone();
+                new_items[i] = args[2].clone();
+                Ok(Value::List(new_items))
+            }
+        }
+        _ => Err(RuntimeError::TypeError("`set-at` expects (List, Int, value)".into())),
+    }
+}
+
+fn builtin_list_contains(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("list-contains?", args, 2)?;
+    match &args[0] {
+        Value::List(items) => Ok(Value::Bool(items.contains(&args[1]))),
+        _ => Err(RuntimeError::TypeError("`list-contains?` expects (List, value)".into())),
     }
 }
 

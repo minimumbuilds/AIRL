@@ -127,6 +127,85 @@ pub extern "C" fn airl_append(list: *mut RtValue, elem: *mut RtValue) -> *mut Rt
     }
 }
 
+/// `at-or(list, idx, default)` — safe indexing, returns default on out-of-bounds.
+#[no_mangle]
+pub extern "C" fn airl_at_or(list: *mut RtValue, idx: *mut RtValue, default: *mut RtValue) -> *mut RtValue {
+    let v = unsafe { &*list };
+    let iv = unsafe { &*idx };
+    let i = match &iv.data {
+        RtData::Int(n) => *n as usize,
+        _ => rt_error("at-or: index must be Int"),
+    };
+    match &v.data {
+        RtData::List(items) => {
+            if i >= items.len() {
+                airl_value_retain(default);
+                default
+            } else {
+                airl_value_retain(items[i]);
+                items[i]
+            }
+        }
+        _ => rt_error("at-or: first argument must be List"),
+    }
+}
+
+/// `set-at(list, idx, val)` — return new list with element at idx replaced.
+#[no_mangle]
+pub extern "C" fn airl_set_at(list: *mut RtValue, idx: *mut RtValue, val: *mut RtValue) -> *mut RtValue {
+    let v = unsafe { &*list };
+    let iv = unsafe { &*idx };
+    let i = match &iv.data {
+        RtData::Int(n) => *n as usize,
+        _ => rt_error("set-at: index must be Int"),
+    };
+    match &v.data {
+        RtData::List(items) => {
+            if i >= items.len() {
+                rt_error(&format!("set-at: index {} out of bounds (len {})", i, items.len()));
+            }
+            let mut new_items = Vec::with_capacity(items.len());
+            for (j, &item) in items.iter().enumerate() {
+                if j == i {
+                    airl_value_retain(val);
+                    new_items.push(val);
+                } else {
+                    airl_value_retain(item);
+                    new_items.push(item);
+                }
+            }
+            rt_list(new_items)
+        }
+        _ => rt_error("set-at: first argument must be List"),
+    }
+}
+
+/// `list-contains?(list, val)` — check if element is in list.
+#[no_mangle]
+pub extern "C" fn airl_list_contains(list: *mut RtValue, val: *mut RtValue) -> *mut RtValue {
+    let v = unsafe { &*list };
+    match &v.data {
+        RtData::List(items) => {
+            for &item in items {
+                // Use the runtime equality check
+                let eq_result = crate::comparison::airl_eq(item, val);
+                let is_true = unsafe {
+                    match &(*eq_result).data {
+                        RtData::Bool(b) => *b,
+                        _ => false,
+                    }
+                };
+                crate::memory::airl_value_release(eq_result);
+                if is_true {
+                    return crate::value::rt_bool(true);
+                }
+            }
+            crate::value::rt_bool(false)
+        }
+        _ => rt_error("list-contains?: first argument must be List"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

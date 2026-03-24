@@ -102,6 +102,7 @@ impl TypeChecker {
             "read-file", "write-file", "file-exists?", "get-args",
             "append-file", "delete-file", "delete-dir", "rename-file",
             "read-dir", "create-dir", "file-size", "is-dir?",
+            "at-or", "set-at", "list-contains?",
             // System builtins
             "str", "int-to-string", "float-to-string", "string-to-int", "string-to-float",
             "char-code", "char-from-code",
