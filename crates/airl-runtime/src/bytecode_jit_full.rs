@@ -840,63 +840,95 @@ impl BytecodeJitFull {
     /// Try to compile a function (and its call dependencies) to native code.
     /// Unlike `bytecode_jit.rs`, there is no eligibility check — every function
     /// is compilable because all value operations go through runtime calls.
+    /// Collect dependency-ordered compilation list (iterative, no recursion).
+    fn collect_compile_order(
+        &self,
+        func: &BytecodeFunc,
+        all_functions: &HashMap<String, BytecodeFunc>,
+    ) -> Vec<String> {
+        let mut order = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        let mut stack = vec![func.name.clone()];
+
+        while let Some(name) = stack.pop() {
+            if visited.contains(&name) || self.compiled.contains_key(&name) {
+                continue;
+            }
+            visited.insert(name.clone());
+
+            if let Some(f) = all_functions.get(&name) {
+                // Check for unresolvable targets
+                let mut resolvable = true;
+                for instr in &f.instructions {
+                    if instr.op == Op::Call || instr.op == Op::TailCall {
+                        if let Value::Str(callee) = &f.constants[instr.a as usize] {
+                            if callee != &f.name
+                                && !self.compiled.contains_key(callee)
+                                && !all_functions.contains_key(callee)
+                                && !self.builtin_map.contains_key(callee)
+                                && callee != "print"
+                            {
+                                resolvable = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if !resolvable {
+                    continue;
+                }
+
+                // Push dependencies (they'll be compiled first due to order reversal)
+                for instr in &f.instructions {
+                    if instr.op == Op::Call || instr.op == Op::MakeClosure {
+                        if let Value::Str(callee) = &f.constants[instr.a as usize] {
+                            if callee != &f.name && !visited.contains(callee) {
+                                stack.push(callee.clone());
+                            }
+                        }
+                    }
+                }
+                order.push(name);
+            }
+        }
+        // Reverse: DFS post-order means dependencies come after their dependents.
+        // We need callees compiled before callers.
+        order.reverse();
+        order
+    }
+
     pub fn try_compile_full(
         &mut self,
         func: &BytecodeFunc,
         all_functions: &HashMap<String, BytecodeFunc>,
     ) {
-        let name = func.name.clone();
+        // Build an extended map that includes the target function itself
+        // (unit tests may pass an empty all_functions map)
+        let mut extended = all_functions.clone();
+        extended.entry(func.name.clone()).or_insert_with(|| func.clone());
 
-        // Already compiled — skip.
-        if self.compiled.contains_key(&name) {
-            return;
-        }
+        // Iteratively collect all functions to compile in dependency order
+        let compile_order = self.collect_compile_order(func, &extended);
 
-        // Pre-check: skip functions that reference unresolvable call targets.
-        // This prevents Cranelift panics on missing symbols (e.g., tensor.add
-        // without MLIR feature). Functions that can't be compiled fall back to
-        // bytecode interpretation.
-        for instr in &func.instructions {
-            if instr.op == Op::Call || instr.op == Op::TailCall {
-                if let Value::Str(callee_name) = &func.constants[instr.a as usize] {
-                    if callee_name != &func.name
-                        && !self.compiled.contains_key(callee_name)
-                        && !all_functions.contains_key(callee_name)
-                        && !self.builtin_map.contains_key(callee_name)
-                        && callee_name != "print"  // print is handled specially
-                    {
-                        return; // unresolvable target — skip compilation
+        for name in &compile_order {
+            if self.compiled.contains_key(name) {
+                continue;
+            }
+            let f = match extended.get(name) {
+                Some(f) => f.clone(),
+                None => continue,
+            };
+            match self.compile_func(&f, all_functions) {
+                Ok(ptr) => {
+                    if std::env::var("AIRL_JIT_DEBUG").as_deref() == Ok("1") {
+                        eprintln!("[JIT-full] compiled {}", name);
                     }
+                    self.compiled.insert(name.clone(), ptr);
                 }
-            }
-        }
-
-        // Compile call dependencies first (ensures callees are defined before callers).
-        // Also compile MakeClosure targets so their function pointers are available.
-        for instr in &func.instructions {
-            if instr.op == Op::Call || instr.op == Op::MakeClosure {
-                if let Value::Str(callee_name) = &func.constants[instr.a as usize] {
-                    if callee_name != &func.name
-                        && !self.compiled.contains_key(callee_name)
-                    {
-                        if let Some(callee) = all_functions.get(callee_name).cloned() {
-                            self.try_compile_full(&callee, all_functions);
-                        }
+                Err(e) => {
+                    if std::env::var("AIRL_JIT_DEBUG").as_deref() == Ok("1") {
+                        eprintln!("[JIT-full] {} compile error: {}", name, e);
                     }
-                }
-            }
-        }
-
-        match self.compile_func(func, all_functions) {
-            Ok(ptr) => {
-                if std::env::var("AIRL_JIT_DEBUG").as_deref() == Ok("1") {
-                    eprintln!("[JIT-full] compiled {}", name);
-                }
-                self.compiled.insert(name, ptr);
-            }
-            Err(e) => {
-                if std::env::var("AIRL_JIT_DEBUG").as_deref() == Ok("1") {
-                    eprintln!("[JIT-full] {} compile error: {}", name, e);
                 }
             }
         }

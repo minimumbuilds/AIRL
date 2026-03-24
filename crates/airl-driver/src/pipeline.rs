@@ -205,6 +205,80 @@ pub fn run_file(path: &str) -> Result<Value, PipelineError> {
     run_source(&source)
 }
 
+/// Run a file with pre-loaded modules. Each preload is compiled as a separate
+/// compilation unit (like stdlib modules) before the main file. This allows
+/// jit-full to handle each module independently instead of one concatenated file.
+pub fn run_file_with_preloads(path: &str, preloads: &[String]) -> Result<Value, PipelineError> {
+    let source = std::fs::read_to_string(path)
+        .map_err(|e| PipelineError::Io(e.to_string()))?;
+
+    // Lex + parse + compile user source
+    let mut lexer = Lexer::new(&source);
+    let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
+    let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
+    let mut diags = Diagnostics::new();
+    let mut tops = Vec::new();
+    for sexpr in &sexprs {
+        match parser::parse_top_level(sexpr, &mut diags) {
+            Ok(top) => tops.push(top),
+            Err(d) => {
+                let mut diags2 = Diagnostics::new();
+                match parser::parse_expr(sexpr, &mut diags2) {
+                    Ok(expr) => tops.push(airl_syntax::ast::TopLevel::Expr(expr)),
+                    Err(_) => return Err(PipelineError::Syntax(d)),
+                }
+            }
+        }
+    }
+
+    let ownership_map = build_ownership_map(&tops);
+    let (ir_nodes, contracts) = compile_tops_with_contracts(&tops);
+    let mut bc_compiler = BytecodeCompiler::with_prefix("user");
+    bc_compiler.set_ownership_map(ownership_map);
+    let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
+
+    // Create VM with jit-full when available
+    #[cfg(feature = "jit")]
+    let mut vm = BytecodeVm::new_with_full_jit();
+    #[cfg(not(feature = "jit"))]
+    let mut vm = BytecodeVm::new();
+
+    // Load stdlib
+    for (src, name) in &[
+        (COLLECTIONS_SOURCE, "collections"),
+        (MATH_SOURCE, "math"),
+        (RESULT_SOURCE, "result"),
+        (STRING_SOURCE, "string"),
+        (MAP_SOURCE, "map"),
+    ] {
+        compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
+    }
+
+    // Load each preloaded module as a separate compilation unit
+    for preload_path in preloads {
+        let preload_src = std::fs::read_to_string(preload_path)
+            .map_err(|e| PipelineError::Io(format!("{}: {}", preload_path, e)))?;
+        let module_name = std::path::Path::new(preload_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "module".to_string());
+        compile_and_load_stdlib_bytecode(&mut vm, &preload_src, &module_name)?;
+    }
+
+    // Load user functions
+    for func in funcs {
+        vm.load_function(func);
+    }
+    vm.load_function(main_func);
+
+    // Skip JIT for preloaded programs — preloaded modules may have 100+ functions
+    // that overwhelm Cranelift. Bytecode VM handles them fine.
+    // The user's main file functions are small enough for JIT if needed,
+    // but for simplicity we run everything on bytecode when preloads are used.
+
+    vm.exec_main().map_err(PipelineError::Runtime)
+}
+
 pub fn check_source(source: &str) -> Result<(), PipelineError> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;

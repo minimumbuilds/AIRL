@@ -31,37 +31,48 @@ fn main() {
 
 fn cmd_run(args: &[String]) {
     if args.is_empty() {
-        eprintln!("Usage: airl run [--jit|--jit-full|--interpreted] <file.airl>");
+        eprintln!("Usage: airl run [--load module.airl ...] [--bytecode|--jit-full] <file.airl>");
         std::process::exit(1);
     }
 
-    let (mode, path) = match args[0].as_str() {
-        "--interpreted" => {
-            if args.len() < 2 { eprintln!("Usage: airl run --interpreted <file.airl>"); std::process::exit(1); }
-            ("interpreted", &args[1])
+    // Parse flags: --load, --bytecode, --jit-full, then the main file
+    let mut preloads: Vec<String> = Vec::new();
+    let mut mode = "default";
+    let mut main_file: Option<&str> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--load" => {
+                if i + 1 >= args.len() { eprintln!("--load requires a file path"); std::process::exit(1); }
+                preloads.push(args[i + 1].clone());
+                i += 2;
+            }
+            "--bytecode" => { mode = "bytecode"; i += 1; }
+            "--jit-full" => { mode = "jit-full"; i += 1; }
+            "--interpreted" => { mode = "default"; i += 1; }
+            "--" => break, // rest are user args, handled by get-args
+            _ => {
+                main_file = Some(&args[i]);
+                i += 1;
+                break; // everything after main file is user args
+            }
         }
-        "--bytecode" => {
-            if args.len() < 2 { eprintln!("Usage: airl run --bytecode <file.airl>"); std::process::exit(1); }
-            ("bytecode", &args[1])
-        }
-        "--jit-full" => {
-            if args.len() < 2 { eprintln!("Usage: airl run --jit-full <file.airl>"); std::process::exit(1); }
-            ("jit-full", &args[1])
-        }
-        _ => ("default", &args[0]),
+    }
+
+    let path = match main_file {
+        Some(p) => p,
+        None => { eprintln!("No input file specified"); std::process::exit(1); }
     };
 
-    let result = match mode {
-        "interpreted" => run_file(path),
-        "bytecode" => run_file_bytecode(path),
-        #[cfg(feature = "jit")]
-        "jit-full" => run_file_jit_full(path),
-        _ => {
-            // Default: run_file uses jit-full when JIT feature is enabled
-            // (with full type checking, linearity analysis, and Z3 verification).
-            // Falls back to pure bytecode when JIT feature is not enabled.
-            run_file(path)
+    let result = if preloads.is_empty() {
+        match mode {
+            "bytecode" => run_file_bytecode(path),
+            #[cfg(feature = "jit")]
+            "jit-full" => run_file_jit_full(path),
+            _ => run_file(path),
         }
+    } else {
+        airl_driver::pipeline::run_file_with_preloads(path, &preloads)
     };
 
     match result {
