@@ -217,6 +217,155 @@ TEST(test_clone_null) {
     assert(c == NULL);
 }
 
+/* ---- Task 2: Arithmetic, Comparison, Logic ---- */
+
+TEST(test_add_int) {
+    RtValue* r = airl_add(airl_int(3), airl_int(4));
+    assert(r->data.i == 7);
+    airl_value_release(r);
+}
+
+TEST(test_add_float) {
+    RtValue* r = airl_add(airl_float(1.5), airl_float(2.5));
+    assert(r->data.f == 4.0);
+    airl_value_release(r);
+}
+
+TEST(test_add_str) {
+    RtValue* r = airl_add(airl_str("hello", 5), airl_str(" world", 6));
+    assert(r->data.s.len == 11);
+    assert(memcmp(r->data.s.ptr, "hello world", 11) == 0);
+    airl_value_release(r);
+}
+
+TEST(test_sub_int) {
+    RtValue* r = airl_sub(airl_int(10), airl_int(3));
+    assert(r->data.i == 7);
+    airl_value_release(r);
+}
+
+TEST(test_mul_int) {
+    RtValue* r = airl_mul(airl_int(6), airl_int(7));
+    assert(r->data.i == 42);
+    airl_value_release(r);
+}
+
+TEST(test_div_int) {
+    RtValue* r = airl_div(airl_int(10), airl_int(3));
+    assert(r->data.i == 3);  /* integer division */
+    airl_value_release(r);
+}
+
+TEST(test_mod_int) {
+    RtValue* r = airl_mod(airl_int(10), airl_int(3));
+    assert(r->data.i == 1);
+    airl_value_release(r);
+}
+
+TEST(test_eq_int) {
+    assert(airl_as_bool_raw(airl_eq(airl_int(42), airl_int(42))) == 1);
+    assert(airl_as_bool_raw(airl_eq(airl_int(42), airl_int(43))) == 0);
+}
+
+TEST(test_lt_int) {
+    assert(airl_as_bool_raw(airl_lt(airl_int(3), airl_int(7))) == 1);
+    assert(airl_as_bool_raw(airl_lt(airl_int(7), airl_int(3))) == 0);
+}
+
+TEST(test_eq_str) {
+    assert(airl_as_bool_raw(airl_eq(airl_str("abc", 3), airl_str("abc", 3))) == 1);
+    assert(airl_as_bool_raw(airl_eq(airl_str("abc", 3), airl_str("def", 3))) == 0);
+}
+
+TEST(test_not) {
+    assert(airl_as_bool_raw(airl_not(airl_bool(1))) == 0);
+    assert(airl_as_bool_raw(airl_not(airl_bool(0))) == 1);
+}
+
+TEST(test_and_or) {
+    assert(airl_as_bool_raw(airl_and(airl_bool(1), airl_bool(1))) == 1);
+    assert(airl_as_bool_raw(airl_and(airl_bool(1), airl_bool(0))) == 0);
+    assert(airl_as_bool_raw(airl_or(airl_bool(0), airl_bool(1))) == 1);
+    assert(airl_as_bool_raw(airl_or(airl_bool(0), airl_bool(0))) == 0);
+}
+
+TEST(test_ne_int) {
+    assert(airl_as_bool_raw(airl_ne(airl_int(1), airl_int(2))) == 1);
+    assert(airl_as_bool_raw(airl_ne(airl_int(5), airl_int(5))) == 0);
+}
+
+TEST(test_gt_int) {
+    assert(airl_as_bool_raw(airl_gt(airl_int(7), airl_int(3))) == 1);
+    assert(airl_as_bool_raw(airl_gt(airl_int(3), airl_int(7))) == 0);
+}
+
+TEST(test_le_int) {
+    assert(airl_as_bool_raw(airl_le(airl_int(3), airl_int(7))) == 1);
+    assert(airl_as_bool_raw(airl_le(airl_int(7), airl_int(7))) == 1);
+    assert(airl_as_bool_raw(airl_le(airl_int(8), airl_int(7))) == 0);
+}
+
+TEST(test_ge_int) {
+    assert(airl_as_bool_raw(airl_ge(airl_int(7), airl_int(3))) == 1);
+    assert(airl_as_bool_raw(airl_ge(airl_int(7), airl_int(7))) == 1);
+    assert(airl_as_bool_raw(airl_ge(airl_int(3), airl_int(7))) == 0);
+}
+
+TEST(test_xor) {
+    assert(airl_as_bool_raw(airl_xor(airl_bool(1), airl_bool(0))) == 1);
+    assert(airl_as_bool_raw(airl_xor(airl_bool(0), airl_bool(1))) == 1);
+    assert(airl_as_bool_raw(airl_xor(airl_bool(1), airl_bool(1))) == 0);
+    assert(airl_as_bool_raw(airl_xor(airl_bool(0), airl_bool(0))) == 0);
+}
+
+TEST(test_sub_float) {
+    RtValue* r = airl_sub(airl_float(5.5), airl_float(2.0));
+    assert(r->data.f == 3.5);
+    airl_value_release(r);
+}
+
+TEST(test_mul_float) {
+    RtValue* r = airl_mul(airl_float(3.0), airl_float(2.5));
+    assert(r->data.f == 7.5);
+    airl_value_release(r);
+}
+
+TEST(test_div_float) {
+    RtValue* r = airl_div(airl_float(7.0), airl_float(2.0));
+    assert(r->data.f == 3.5);
+    airl_value_release(r);
+}
+
+TEST(test_mod_float) {
+    RtValue* r = airl_mod(airl_float(7.5), airl_float(2.0));
+    assert(r->data.f == 1.5);
+    airl_value_release(r);
+}
+
+TEST(test_eq_bool) {
+    assert(airl_as_bool_raw(airl_eq(airl_bool(1), airl_bool(1))) == 1);
+    assert(airl_as_bool_raw(airl_eq(airl_bool(0), airl_bool(1))) == 0);
+}
+
+TEST(test_eq_nil) {
+    assert(airl_as_bool_raw(airl_eq(airl_nil(), airl_nil())) == 1);
+}
+
+TEST(test_eq_type_mismatch) {
+    assert(airl_as_bool_raw(airl_eq(airl_int(1), airl_str("1", 1))) == 0);
+}
+
+TEST(test_lt_float) {
+    assert(airl_as_bool_raw(airl_lt(airl_float(1.5), airl_float(2.5))) == 1);
+    assert(airl_as_bool_raw(airl_lt(airl_float(3.0), airl_float(2.0))) == 0);
+}
+
+TEST(test_lt_str) {
+    assert(airl_as_bool_raw(airl_lt(airl_str("abc", 3), airl_str("abd", 3))) == 1);
+    assert(airl_as_bool_raw(airl_lt(airl_str("abd", 3), airl_str("abc", 3))) == 0);
+    assert(airl_as_bool_raw(airl_lt(airl_str("ab", 2), airl_str("abc", 3))) == 1);
+}
+
 int main(void) {
     printf("C Runtime Tests (Task 1):\n");
     RUN(test_int);
@@ -240,6 +389,33 @@ int main(void) {
     RUN(test_clone_str);
     RUN(test_clone_nil);
     RUN(test_clone_null);
+    printf("\nC Runtime Tests (Task 2):\n");
+    RUN(test_add_int);
+    RUN(test_add_float);
+    RUN(test_add_str);
+    RUN(test_sub_int);
+    RUN(test_mul_int);
+    RUN(test_div_int);
+    RUN(test_mod_int);
+    RUN(test_eq_int);
+    RUN(test_lt_int);
+    RUN(test_eq_str);
+    RUN(test_not);
+    RUN(test_and_or);
+    RUN(test_ne_int);
+    RUN(test_gt_int);
+    RUN(test_le_int);
+    RUN(test_ge_int);
+    RUN(test_xor);
+    RUN(test_sub_float);
+    RUN(test_mul_float);
+    RUN(test_div_float);
+    RUN(test_mod_float);
+    RUN(test_eq_bool);
+    RUN(test_eq_nil);
+    RUN(test_eq_type_mismatch);
+    RUN(test_lt_float);
+    RUN(test_lt_str);
     printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;
 }
