@@ -143,6 +143,7 @@ pub struct RuntimeImports {
 
     // HTTP
     pub http_post: FuncId,
+    pub http_request: FuncId,
 
     // JSON
     pub json_parse: FuncId,
@@ -184,6 +185,16 @@ fn sig_2_ptr(m: &ObjectModule) -> cranelift_codegen::ir::Signature {
 
 fn sig_3_ptr(m: &ObjectModule) -> cranelift_codegen::ir::Signature {
     let mut sig = m.make_signature();
+    sig.params.push(AbiParam::new(PTR));
+    sig.params.push(AbiParam::new(PTR));
+    sig.params.push(AbiParam::new(PTR));
+    sig.returns.push(AbiParam::new(PTR));
+    sig
+}
+
+fn sig_4_ptr(m: &ObjectModule) -> cranelift_codegen::ir::Signature {
+    let mut sig = m.make_signature();
+    sig.params.push(AbiParam::new(PTR));
     sig.params.push(AbiParam::new(PTR));
     sig.params.push(AbiParam::new(PTR));
     sig.params.push(AbiParam::new(PTR));
@@ -440,6 +451,7 @@ impl BytecodeAot {
 
         // HTTP
         let http_post = declare_import(m, "airl_http_post", sig_3_ptr(m));
+        let http_request = declare_import(m, "airl_http_request", sig_4_ptr(m));
 
         // JSON
         let json_parse = declare_import(m, "airl_json_parse", s1.clone());
@@ -476,7 +488,7 @@ impl BytecodeAot {
             read_dir, create_dir, file_size, is_dir,
             get_args, run_bytecode, compile_to_exe,
             int_to_string, float_to_string, string_to_int,
-            time_now, getenv, http_post, json_parse, json_stringify, shell_exec,
+            time_now, getenv, http_post, http_request, json_parse, json_stringify, shell_exec,
             contract_fail,
         }
     }
@@ -573,6 +585,7 @@ impl BytecodeAot {
 
         // HTTP
         m.insert("http-post".into(), rt.http_post);
+        m.insert("http-request".into(), rt.http_request);
 
         // JSON
         m.insert("json-parse".into(),     rt.json_parse);
