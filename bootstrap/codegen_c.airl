@@ -245,15 +245,65 @@
         (set-diff (tail a) b)
         (cons h (set-diff (tail a) b))))))
 
-;; Stub: free-var detection is expensive and causes stack issues during compilation.
-;; For now, all lambdas capture no variables. This means closures won't work,
-;; but function definitions, calls, match, etc. all work correctly.
+;; Free-variable detection: walk the IR tree and collect all IRLoad names.
+;; Split into small helpers to avoid overwhelming the bytecode compiler
+;; with a single large match expression.
+
+(defn collect-loads-list
+  :sig [(items : List) -> List]
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body (if (empty? items) []
+    (set-union (collect-loads (head items)) (collect-loads-list (tail items)))))
+
+(defn collect-loads-bindings
+  :sig [(binds : List) -> List]
+  :requires [(valid binds)]
+  :ensures [(valid result)]
+  :body (if (empty? binds) []
+    (let (b : _ (head binds))
+      (set-union (collect-loads (at b 1)) (collect-loads-bindings (tail binds))))))
+
+(defn collect-loads-arms
+  :sig [(arms : List) -> List]
+  :requires [(valid arms)]
+  :ensures [(valid result)]
+  :body (if (empty? arms) []
+    (let (arm : _ (head arms))
+      (set-union (collect-loads (at arm 1)) (collect-loads-arms (tail arms))))))
 
 (defn collect-loads
   :sig [(ir : _) -> List]
   :requires [(valid ir)]
   :ensures [(valid result)]
-  :body [])
+  :body (match ir
+    (IRLoad name) [name]
+    (IRInt _) []
+    (IRFloat _) []
+    (IRStr _) []
+    (IRBool _) []
+    (IRNil _) []
+    (IRIf parts) (set-union (collect-loads (at parts 0))
+                   (set-union (collect-loads (at parts 1))
+                     (collect-loads (at parts 2))))
+    (IRCall parts) (collect-loads-list (at parts 1))
+    (IRCallExpr parts) (set-union (collect-loads (at parts 0))
+                         (collect-loads-list (at parts 1)))
+    (IRDo exprs) (collect-loads-list exprs)
+    (IRList items) (collect-loads-list items)
+    (IRVariant parts) (collect-loads-list (at parts 1))
+    (IRLet parts) (let (binds : List (at parts 0))
+                    (let (body-loads : List (collect-loads (at parts 1)))
+                      (let (bind-loads : List (collect-loads-bindings binds))
+                        (let (bound-names : List (map (fn [b] (at b 0)) binds))
+                          (set-union bind-loads (set-diff body-loads bound-names))))))
+    (IRLambda parts) (let (params : List (at parts 0))
+                       (set-diff (collect-loads (at parts 1)) params))
+    (IRMatch parts) (set-union (collect-loads (at parts 0))
+                      (collect-loads-arms (at parts 1)))
+    (IRTry expr) (collect-loads expr)
+    (IRFunc _) []
+    _ []))
 
 (defn free-vars
   :sig [(params : List) (body : _) -> List]
@@ -261,13 +311,70 @@
   :ensures [(valid result)]
   :body (set-diff (collect-loads body) params))
 
+;; Rewrite captured variable references in a lambda body.
+;; Replaces IRLoad(name) with IRLoad("__cap_" + mangle(name)) for all captured names.
+
+(defn rewrite-captures-list
+  :sig [(caps : List) (items : List) -> List]
+  :requires [(valid caps)]
+  :ensures [(valid result)]
+  :body (if (empty? items) []
+    (cons (rewrite-captures caps (head items))
+      (rewrite-captures-list caps (tail items)))))
+
+(defn rewrite-captures-bindings
+  :sig [(caps : List) (binds : List) -> List]
+  :requires [(valid caps)]
+  :ensures [(valid result)]
+  :body (if (empty? binds) []
+    (let (b : _ (head binds))
+      (cons [(at b 0) (rewrite-captures caps (at b 1))]
+        (rewrite-captures-bindings caps (tail binds))))))
+
+(defn rewrite-captures-arms
+  :sig [(caps : List) (arms : List) -> List]
+  :requires [(valid caps)]
+  :ensures [(valid result)]
+  :body (if (empty? arms) []
+    (let (arm : _ (head arms))
+      (cons [(at arm 0) (rewrite-captures caps (at arm 1))]
+        (rewrite-captures-arms caps (tail arms))))))
+
+(defn rewrite-captures
+  :sig [(caps : List) (ir : _) -> _]
+  :requires [(valid caps)]
+  :ensures [(valid result)]
+  :body (match ir
+    (IRLoad name) (if (set-contains caps name)
+                    (IRLoad (+ "__cap_" (mangle-name name)))
+                    ir)
+    (IRIf parts) (IRIf [(rewrite-captures caps (at parts 0))
+                        (rewrite-captures caps (at parts 1))
+                        (rewrite-captures caps (at parts 2))])
+    (IRCall parts) (IRCall [(at parts 0)
+                           (rewrite-captures-list caps (at parts 1))])
+    (IRCallExpr parts) (IRCallExpr [(rewrite-captures caps (at parts 0))
+                                   (rewrite-captures-list caps (at parts 1))])
+    (IRDo exprs) (IRDo (rewrite-captures-list caps exprs))
+    (IRList items) (IRList (rewrite-captures-list caps items))
+    (IRVariant parts) (IRVariant [(at parts 0)
+                                 (rewrite-captures-list caps (at parts 1))])
+    (IRLet parts) (IRLet [(rewrite-captures-bindings caps (at parts 0))
+                          (rewrite-captures caps (at parts 1))])
+    (IRMatch parts) (IRMatch [(rewrite-captures caps (at parts 0))
+                              (rewrite-captures-arms caps (at parts 1))])
+    (IRLambda parts) (IRLambda [(at parts 0)
+                                (rewrite-captures caps (at parts 1))])
+    (IRTry expr) (IRTry (rewrite-captures caps expr))
+    _ ir))
+
 ;; ── Codegen state ─────────────────────────────────────────
 
 (defn cg-make-state
   :sig [-> _]
   :requires [true]
   :ensures [(valid result)]
-  :body (map-from ["lambda-ctr" 0 "lambdas" [] "fwd-decls" []]))
+  :body (map-from ["lambda-ctr" 0 "lambdas" [] "fwd-decls" [] "func-names" []]))
 
 (defn cg-lambda-ctr
   :sig [(st : _) -> i64]
@@ -429,8 +536,17 @@
       (let (args : List (at parts 1))
         (let (bi : _ (builtin-c-name name))
           (if (= bi nil)
-            (let (r : List (emit-c-args st args))
-              [(at r 0) (str3 (mangle-name name) "(" (+ (at r 1) ")"))])
+            (let (fn-names : List (map-get-or st "func-names" []))
+              (if (set-contains fn-names name)
+                (let (r : List (emit-c-args st args))
+                  [(at r 0) (str3 (mangle-name name) "(" (+ (at r 1) ")"))])
+                (let (r : List (emit-c-args st args))
+                  (let (ns : String (cg-int-to-string (length args)))
+                    (if (= (length args) 0)
+                      [(at r 0) (str3 "airl_call_closure(" (mangle-name name) ", NULL, 0)")]
+                      (let (p1 : String (str3 "({ RtValue* __cargs[] = {" (at r 1) "}; "))
+                        (let (p2 : String (str5 "airl_call_closure(" (mangle-name name) ", __cargs, " ns "); })"))
+                          [(at r 0) (+ p1 p2)])))))))
             (if (= name "print")
               (emit-c-print st args)
               (let (r : List (emit-c-args st args))
@@ -532,7 +648,7 @@
                 (let (cap-params : List (map (fn [c] (+ "__cap_" (mangle-name c))) captures))
                   (let (fn-params : List (map (fn [p] (mangle-name p)) params))
                     (let (all-params : List (concat cap-params fn-params))
-                      (let (r : List (emit-c-expr st2 body-ir))
+                      (let (r : List (emit-c-expr st2 (rewrite-captures captures body-ir)))
                         (let (pdecls : String (emit-c-param-decls all-params))
                           (let (fwd : String (str4 "static RtValue* " lname "(" (+ pdecls ");")))
                             (let (fdef : String (str6 "static RtValue* " lname "(" pdecls ") { return " (+ (at r 1) "; }")))
@@ -682,8 +798,10 @@
     (let (node : _ (head nodes))
       (match node
         (IRFunc parts)
-          (let (r : List (emit-c-func st node))
-            (emit-c-top-levels-loop (at r 0) (tail nodes) (append funcs (at r 1)) (append fwds (at r 2)) main-stmts))
+          (let (fname : String (at parts 0))
+            (let (st-with-fn : _ (map-set st "func-names" (cons fname (map-get-or st "func-names" []))))
+              (let (r : List (emit-c-func st-with-fn node))
+                (emit-c-top-levels-loop (at r 0) (tail nodes) (append funcs (at r 1)) (append fwds (at r 2)) main-stmts))))
         (IRNil _)
           (emit-c-top-levels-loop st (tail nodes) funcs fwds main-stmts)
         _
