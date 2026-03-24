@@ -1,0 +1,746 @@
+;; bootstrap/codegen_c.airl — IR-to-C code generator
+;; Requires: bootstrap/lexer.airl, bootstrap/parser.airl, bootstrap/compiler.airl (loaded first)
+;;
+;; Translates IR nodes from the bootstrap compiler into C source code
+;; that links against libairl_rt_c.a (the AIRL C runtime).
+;; Every AIRL value at runtime is a RtValue* pointer.
+;;
+;; Design: All emit-c-* functions return [state, code-string] as a 2-element list.
+;; Use (at result 0) for state and (at result 1) for code.
+
+;; ── Integer-to-string helper ──────────────────────────────
+
+(defn cg-digit-to-char
+  :sig [(d : i64) -> String]
+  :requires [(>= d 0) (<= d 9)]
+  :ensures [(valid result)]
+  :body (char-at "0123456789" d))
+
+(defn cg-nat-to-str
+  :sig [(n : i64) (acc : String) -> String]
+  :requires [(>= n 0)]
+  :ensures [(valid result)]
+  :body (if (= n 0)
+    (if (= acc "") "0" acc)
+    (let (digit : String (cg-digit-to-char (% n 10)))
+      (cg-nat-to-str (/ n 10) (+ digit acc)))))
+
+(defn cg-int-to-string
+  :sig [(n : i64) -> String]
+  :requires [(valid n)]
+  :ensures [(valid result)]
+  :body (if (< n 0)
+    (+ "-" (cg-nat-to-str (* n -1) ""))
+    (cg-nat-to-str n "")))
+
+;; ── String helpers ────────────────────────────────────────
+
+(defn cg-str-len
+  :sig [(s : String) -> i64]
+  :requires [(valid s)]
+  :ensures [(>= result 0)]
+  :body (length (chars s)))
+
+(defn str3
+  :sig [(a : String) (b : String) (c : String) -> String]
+  :requires [(valid a)]
+  :ensures [(valid result)]
+  :body (+ a (+ b c)))
+
+(defn str4
+  :sig [(a : String) (b : String) (c : String) (d : String) -> String]
+  :requires [(valid a)]
+  :ensures [(valid result)]
+  :body (+ a (+ b (+ c d))))
+
+(defn str5
+  :sig [(a : String) (b : String) (c : String) (d : String) (e : String) -> String]
+  :requires [(valid a)]
+  :ensures [(valid result)]
+  :body (+ a (+ b (+ c (+ d e)))))
+
+(defn str6
+  :sig [(a : String) (b : String) (c : String) (d : String) (e : String) (f : String) -> String]
+  :requires [(valid a)]
+  :ensures [(valid result)]
+  :body (+ a (+ b (+ c (+ d (+ e f))))))
+
+;; ── Name mangling ─────────────────────────────────────────
+
+(defn mangle-char
+  :sig [(ch : String) -> String]
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (if (= ch "-") "_"
+    (if (= ch "?") "_q"
+      (if (= ch "!") "_b"
+        ch))))
+
+(defn mangle-name-loop
+  :sig [(s : String) (i : i64) (len : i64) (acc : String) -> String]
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (if (>= i len) acc
+    (let (ch : String (char-at s i))
+      (mangle-name-loop s (+ i 1) len (+ acc (mangle-char ch))))))
+
+(defn mangle-name
+  :sig [(name : String) -> String]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body
+    (if (= name "<=") "__le__"
+      (if (= name ">=") "__ge__"
+        (if (= name "!=") "__ne__"
+          (if (= name "+") "__plus__"
+            (if (= name "*") "__star__"
+              (if (= name "/") "__slash__"
+                (if (= name "%") "__pct__"
+                  (if (= name "=") "__eq__"
+                    (if (= name "<") "__lt__"
+                      (if (= name ">") "__gt__"
+                        (mangle-name-loop name 0 (cg-str-len name) ""))))))))))))
+
+;; ── Builtin mapping ───────────────────────────────────────
+
+(defn builtin-c-name
+  :sig [(name : String) -> _]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body
+    (if (= name "+") "airl_add"
+      (if (= name "-") "airl_sub"
+        (if (= name "*") "airl_mul"
+          (if (= name "/") "airl_div"
+            (if (= name "%") "airl_mod"
+              (if (= name "=") "airl_eq"
+                (if (= name "!=") "airl_ne"
+                  (if (= name "<") "airl_lt"
+                    (if (= name ">") "airl_gt"
+                      (if (= name "<=") "airl_le"
+                        (if (= name ">=") "airl_ge"
+                          (if (= name "not") "airl_not"
+                            (if (= name "and") "airl_and"
+                              (if (= name "or") "airl_or"
+                                (if (= name "xor") "airl_xor"
+                                  (builtin-c-name-2 name)))))))))))))))))
+
+(defn builtin-c-name-2
+  :sig [(name : String) -> _]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body
+    (if (= name "head") "airl_head"
+      (if (= name "tail") "airl_tail"
+        (if (= name "cons") "airl_cons"
+          (if (= name "empty?") "airl_empty"
+            (if (= name "length") "airl_length"
+              (if (= name "at") "airl_at"
+                (if (= name "append") "airl_append"
+                  (if (= name "char-at") "airl_char_at"
+                    (if (= name "substring") "airl_substring"
+                      (if (= name "chars") "airl_chars"
+                        (if (= name "split") "airl_split"
+                          (if (= name "join") "airl_join"
+                            (if (= name "contains") "airl_contains"
+                              (if (= name "starts-with") "airl_starts_with"
+                                (if (= name "ends-with") "airl_ends_with"
+                                  (builtin-c-name-3 name)))))))))))))))))
+
+(defn builtin-c-name-3
+  :sig [(name : String) -> _]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body
+    (if (= name "index-of") "airl_index_of"
+      (if (= name "trim") "airl_trim"
+        (if (= name "to-upper") "airl_to_upper"
+          (if (= name "to-lower") "airl_to_lower"
+            (if (= name "replace") "airl_replace"
+              (if (= name "map-new") "airl_map_new"
+                (if (= name "map-from") "airl_map_from"
+                  (if (= name "map-get") "airl_map_get"
+                    (if (= name "map-get-or") "airl_map_get_or"
+                      (if (= name "map-set") "airl_map_set"
+                        (if (= name "map-has") "airl_map_has"
+                          (if (= name "map-remove") "airl_map_remove"
+                            (if (= name "map-keys") "airl_map_keys"
+                              (if (= name "map-values") "airl_map_values"
+                                (if (= name "map-size") "airl_map_size"
+                                  (builtin-c-name-4 name)))))))))))))))))
+
+(defn builtin-c-name-4
+  :sig [(name : String) -> _]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body
+    (if (= name "print") "airl_print"
+      (if (= name "type-of") "airl_type_of"
+        (if (= name "valid") "airl_valid"
+          (if (= name "read-file") "airl_read_file"
+            (if (= name "write-file") "airl_write_file"
+              (if (= name "file-exists?") "airl_file_exists"
+                (if (= name "get-args") "airl_get_args"
+                  (if (= name "int-to-string") "airl_int_to_string"
+                    nil)))))))))
+
+;; ── C string escaping ─────────────────────────────────────
+
+(defn escape-c-char
+  :sig [(ch : String) -> String]
+  :requires [(valid ch)]
+  :ensures [(valid result)]
+  :body (if (= ch "\\") "\\\\"
+    (if (= ch "\"") "\\\""
+      (if (= ch "\n") "\\n"
+        (if (= ch "\t") "\\t"
+          (if (= ch "\r") "\\r"
+            ch))))))
+
+(defn escape-c-string-loop
+  :sig [(s : String) (i : i64) (len : i64) (acc : String) -> String]
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (if (>= i len) acc
+    (let (ch : String (char-at s i))
+      (escape-c-string-loop s (+ i 1) len (+ acc (escape-c-char ch))))))
+
+(defn escape-c-string
+  :sig [(s : String) -> String]
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (escape-c-string-loop s 0 (cg-str-len s) ""))
+
+;; ── Free variable detection ───────────────────────────────
+
+(defn set-contains
+  :sig [(lst : List) (item : String) -> Bool]
+  :requires [(valid lst)]
+  :ensures [(valid result)]
+  :body (if (empty? lst) false
+    (if (= (head lst) item) true
+      (set-contains (tail lst) item))))
+
+(defn set-add
+  :sig [(lst : List) (item : String) -> List]
+  :requires [(valid lst)]
+  :ensures [(valid result)]
+  :body (if (set-contains lst item) lst
+    (cons item lst)))
+
+(defn set-union
+  :sig [(a : List) (b : List) -> List]
+  :requires [(valid a)]
+  :ensures [(valid result)]
+  :body (if (empty? b) a
+    (set-union (set-add a (head b)) (tail b))))
+
+(defn set-diff
+  :sig [(a : List) (b : List) -> List]
+  :requires [(valid a)]
+  :ensures [(valid result)]
+  :body (if (empty? a) []
+    (let (h : String (head a))
+      (if (set-contains b h)
+        (set-diff (tail a) b)
+        (cons h (set-diff (tail a) b))))))
+
+;; Stub: free-var detection is expensive and causes stack issues during compilation.
+;; For now, all lambdas capture no variables. This means closures won't work,
+;; but function definitions, calls, match, etc. all work correctly.
+
+(defn collect-loads
+  :sig [(ir : _) -> List]
+  :requires [(valid ir)]
+  :ensures [(valid result)]
+  :body [])
+
+(defn free-vars
+  :sig [(params : List) (body : _) -> List]
+  :requires [(valid params)]
+  :ensures [(valid result)]
+  :body (set-diff (collect-loads body) params))
+
+;; ── Codegen state ─────────────────────────────────────────
+
+(defn cg-make-state
+  :sig [-> _]
+  :requires [true]
+  :ensures [(valid result)]
+  :body (map-from ["lambda-ctr" 0 "lambdas" [] "fwd-decls" []]))
+
+(defn cg-lambda-ctr
+  :sig [(st : _) -> i64]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-get st "lambda-ctr"))
+
+(defn cg-lambdas
+  :sig [(st : _) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-get st "lambdas"))
+
+(defn cg-fwd-decls
+  :sig [(st : _) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (map-get st "fwd-decls"))
+
+(defn cg-next-lambda
+  :sig [(st : _) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (ctr : i64 (cg-lambda-ctr st))
+      (let (name : String (+ "__lambda_" (cg-int-to-string ctr)))
+        [(map-set st "lambda-ctr" (+ ctr 1)) name])))
+
+(defn cg-add-lambda
+  :sig [(st : _) (name : String) (all-params : List) (body-code : String) (fwd : String) -> _]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (entry : List [name all-params body-code])
+      (let (st2 : _ (map-set st "lambdas" (append (cg-lambdas st) entry)))
+        (map-set st2 "fwd-decls" (append (cg-fwd-decls st2) fwd)))))
+
+;; ── C code building helpers ───────────────────────────────
+
+(defn emit-c-param-decls
+  :sig [(params : List) -> String]
+  :requires [(valid params)]
+  :ensures [(valid result)]
+  :body (if (empty? params) "void"
+    (join (map (fn [p] (+ "RtValue* " p)) params) ", ")))
+
+(defn make-variant-tag
+  :sig [(tag : String) -> String]
+  :requires [(valid tag)]
+  :ensures [(valid result)]
+  :body
+    (let (tl : String (cg-int-to-string (cg-str-len tag)))
+      (str5 "airl_str(\"" tag "\", " tl ")")))
+
+;; ── Core expression emitter ───────────────────────────────
+;; All emit-c-* functions return [state, code-string] as a list.
+
+(defn emit-c-expr
+  :sig [(st : _) (ir : _) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (match ir
+    (IRInt v)    [st (str3 "airl_int(" (cg-int-to-string v) ")")]
+    (IRFloat v)  [st (str3 "airl_float(" (cg-int-to-string v) ".0)")]
+    (IRStr s)    (let (esc : String (escape-c-string s))
+                   (let (sl : String (cg-int-to-string (cg-str-len s)))
+                     [st (str5 "airl_str(\"" esc "\", " sl ")")]))
+    (IRBool b)   (if b [st "airl_bool(1)"] [st "airl_bool(0)"])
+    (IRNil _)    [st "airl_nil()"]
+    (IRLoad name) [st (mangle-name name)]
+    (IRIf parts) (emit-c-if st parts)
+    (IRLet parts) (emit-c-let st parts)
+    (IRDo exprs) (emit-c-do st exprs)
+    (IRCall parts) (emit-c-call st parts)
+    (IRCallExpr parts) (emit-c-call-expr st parts)
+    (IRList items) (emit-c-list st items)
+    (IRVariant parts) (emit-c-variant st parts)
+    (IRMatch parts) (emit-c-match st parts)
+    (IRLambda parts) (emit-c-lambda st parts)
+    (IRTry expr) (emit-c-try st expr)
+    _ [st "/* unknown IR node */ airl_nil()"]))
+
+;; ── If ────────────────────────────────────────────────────
+
+(defn emit-c-if
+  :sig [(st : _) (parts : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (r1 : List (emit-c-expr st (at parts 0)))
+      (let (r2 : List (emit-c-expr (at r1 0) (at parts 1)))
+        (let (r3 : List (emit-c-expr (at r2 0) (at parts 2)))
+          [(at r3 0) (str6 "(airl_as_bool_raw(" (at r1 1) ") ? " (at r2 1) " : " (+ (at r3 1) ")"))]))))
+
+;; ── Let ───────────────────────────────────────────────────
+
+(defn emit-c-let-bindings
+  :sig [(st : _) (bindings : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (if (empty? bindings) [st ""]
+    (match (head bindings)
+      (IRBinding parts)
+        (let (bname : String (at parts 0))
+          (let (r1 : List (emit-c-expr st (at parts 1)))
+            (let (r2 : List (emit-c-let-bindings (at r1 0) (tail bindings)))
+              [(at r2 0) (str5 "RtValue* " (mangle-name bname) " = " (at r1 1) (+ "; " (at r2 1)))])))
+      _ (emit-c-let-bindings st (tail bindings)))))
+
+(defn emit-c-let
+  :sig [(st : _) (parts : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (r1 : List (emit-c-let-bindings st (at parts 0)))
+      (let (r2 : List (emit-c-expr (at r1 0) (at parts 1)))
+        [(at r2 0) (str4 "({ " (at r1 1) (at r2 1) "; })")])))
+
+;; ── Do ────────────────────────────────────────────────────
+
+(defn emit-c-do-exprs
+  :sig [(st : _) (exprs : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (if (empty? exprs) [st "airl_nil()"]
+    (let (r1 : List (emit-c-expr st (head exprs)))
+      (if (empty? (tail exprs))
+        r1
+        (let (r2 : List (emit-c-do-exprs (at r1 0) (tail exprs)))
+          [(at r2 0) (str3 (at r1 1) "; " (at r2 1))])))))
+
+(defn emit-c-do
+  :sig [(st : _) (exprs : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (r : List (emit-c-do-exprs st exprs))
+      [(at r 0) (str3 "({ " (at r 1) "; })")]))
+
+;; ── Call ──────────────────────────────────────────────────
+
+(defn emit-c-args
+  :sig [(st : _) (args : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (if (empty? args) [st ""]
+    (let (r1 : List (emit-c-expr st (head args)))
+      (if (empty? (tail args))
+        r1
+        (let (r2 : List (emit-c-args (at r1 0) (tail args)))
+          [(at r2 0) (str3 (at r1 1) ", " (at r2 1))])))))
+
+(defn emit-c-call
+  :sig [(st : _) (parts : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (name : String (at parts 0))
+      (let (args : List (at parts 1))
+        (let (bi : _ (builtin-c-name name))
+          (if (= bi nil)
+            (let (r : List (emit-c-args st args))
+              [(at r 0) (str3 (mangle-name name) "(" (+ (at r 1) ")"))])
+            (if (= name "print")
+              (emit-c-print st args)
+              (let (r : List (emit-c-args st args))
+                [(at r 0) (str3 bi "(" (+ (at r 1) ")"))])))))))
+
+(defn emit-c-print
+  :sig [(st : _) (args : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (argc : i64 (length args))
+      (if (= argc 1)
+        (let (r : List (emit-c-expr st (head args)))
+          [(at r 0) (str3 "airl_print(" (at r 1) ")")])
+        (let (r : List (emit-c-args st args))
+          (let (ns : String (cg-int-to-string argc))
+            (let (p1 : String (str3 "({ RtValue* __pargs[] = {" (at r 1) "}; "))
+              (let (p2 : String (str4 "airl_print_values(__pargs, " ns "); " "})"))
+                [(at r 0) (+ p1 p2)])))))))
+
+;; ── Call expression (computed callee) ─────────────────────
+
+(defn emit-c-call-expr
+  :sig [(st : _) (parts : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (r1 : List (emit-c-expr st (at parts 0)))
+      (let (r2 : List (emit-c-args (at r1 0) (at parts 1)))
+        (let (ns : String (cg-int-to-string (length (at parts 1))))
+          (let (p1 : String (str3 "({ RtValue* __cargs[] = {" (at r2 1) "}; "))
+            (let (p2 : String (str5 "airl_call_closure(" (at r1 1) ", __cargs, " ns "); })"))
+              [(at r2 0) (+ p1 p2)]))))))
+
+;; ── List literal ──────────────────────────────────────────
+
+(defn emit-c-list
+  :sig [(st : _) (items : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (n : i64 (length items))
+      (if (= n 0)
+        [st "airl_list_new(NULL, 0)"]
+        (let (r : List (emit-c-args st items))
+          (let (ns : String (cg-int-to-string n))
+            (let (p1 : String (str3 "({ RtValue* __litems[] = {" (at r 1) "}; "))
+              (let (p2 : String (str4 "airl_list_new(__litems, " ns "); " "})"))
+                [(at r 0) (+ p1 p2)])))))))
+
+;; ── Variant constructor ───────────────────────────────────
+
+(defn emit-c-variant
+  :sig [(st : _) (parts : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (tag : String (at parts 0))
+      (let (args : List (at parts 1))
+        (let (te : String (make-variant-tag tag))
+          (if (empty? args)
+            [st (str3 "airl_make_variant(" te ", airl_nil())")]
+            (if (= (length args) 1)
+              (let (r : List (emit-c-expr st (head args)))
+                [(at r 0) (str5 "airl_make_variant(" te ", " (at r 1) ")")])
+              (let (r : List (emit-c-args st args))
+                (let (ns : String (cg-int-to-string (length args)))
+                  (let (p1 : String (str3 "({ RtValue* __vargs[] = {" (at r 1) "}; "))
+                    (let (p2 : String (str6 "airl_make_variant(" te ", airl_list_new(__vargs, " ns ")); " "})"))
+                      [(at r 0) (+ p1 p2)]))))))))))
+
+;; ── Lambda ────────────────────────────────────────────────
+
+(defn emit-closure-site
+  :sig [(st : _) (lname : String) (captures : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (ncap : i64 (length captures))
+      (if (= ncap 0)
+        [st (str3 "airl_make_closure(" lname ", NULL, 0)")]
+        (let (ca : String (join (map (fn [c] (mangle-name c)) captures) ", "))
+          (let (ns : String (cg-int-to-string ncap))
+            (let (p1 : String (str3 "({ RtValue* __caps[] = {" ca "}; "))
+              (let (p2 : String (str5 "airl_make_closure(" lname ", __caps, " ns "); })"))
+                [st (+ p1 p2)])))))))
+
+(defn emit-c-lambda
+  :sig [(st : _) (parts : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (params : List (at parts 0))
+      (let (body-ir : _ (at parts 1))
+        (let (captures : List (free-vars params body-ir))
+          (let (pair : List (cg-next-lambda st))
+            (let (st2 : _ (at pair 0))
+              (let (lname : String (at pair 1))
+                (let (cap-params : List (map (fn [c] (+ "__cap_" (mangle-name c))) captures))
+                  (let (fn-params : List (map (fn [p] (mangle-name p)) params))
+                    (let (all-params : List (concat cap-params fn-params))
+                      (let (r : List (emit-c-expr st2 body-ir))
+                        (let (pdecls : String (emit-c-param-decls all-params))
+                          (let (fwd : String (str4 "static RtValue* " lname "(" (+ pdecls ");")))
+                            (let (fdef : String (str6 "static RtValue* " lname "(" pdecls ") { return " (+ (at r 1) "; }")))
+                              (let (st3 : _ (cg-add-lambda (at r 0) lname all-params fdef fwd))
+                                (emit-closure-site st3 lname captures))))))))))))))))
+
+;; ── Pattern match ─────────────────────────────────────────
+
+(defn emit-c-match
+  :sig [(st : _) (parts : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (r1 : List (emit-c-expr st (at parts 0)))
+      (let (r2 : List (emit-c-match-arms (at r1 0) "__mscr" (at parts 1)))
+        [(at r2 0) (str5 "({ RtValue* __mscr = " (at r1 1) "; " (at r2 1) "; })")])))
+
+(defn emit-c-match-arms
+  :sig [(st : _) (sn : String) (arms : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (if (empty? arms) [st "airl_nil() /* no match */"]
+    (match (head arms)
+      (IRArm parts)
+        (let (pat : _ (at parts 0))
+          (let (body-ir : _ (at parts 1))
+            (match pat
+              (IRPatWild _)
+                (emit-c-expr st body-ir)
+
+              (IRPatBind name)
+                (let (r : List (emit-c-expr st body-ir))
+                  [(at r 0) (str6 "({ RtValue* " (mangle-name name) " = " sn "; " (+ (at r 1) "; })"))])
+
+              (IRPatLit value)
+                (let (lc : String (emit-lit-check sn value))
+                  (let (r1 : List (emit-c-expr st body-ir))
+                    (let (r2 : List (emit-c-match-arms (at r1 0) sn (tail arms)))
+                      [(at r2 0) (str6 "(" lc " ? " (at r1 1) " : " (+ (at r2 1) ")"))])))
+
+              (IRPatVariant vparts)
+                (emit-c-variant-arm st sn vparts body-ir (tail arms))
+
+              _ (emit-c-match-arms st sn (tail arms)))))
+      _ (emit-c-match-arms st sn (tail arms)))))
+
+(defn emit-c-variant-arm
+  :sig [(st : _) (sn : String) (vparts : List) (body-ir : _) (rest-arms : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (vtag : String (at vparts 0))
+      (let (inner-pats : List (at vparts 1))
+        (let (te : String (make-variant-tag vtag))
+          (let (mv : String (+ "__mv_" (mangle-name vtag)))
+            (let (r1 : List (emit-c-variant-body st mv inner-pats body-ir))
+              (let (r2 : List (emit-c-match-arms (at r1 0) sn rest-arms))
+                (let (p1 : String (str5 "({ RtValue* " mv " = airl_match_tag(" sn ", "))
+                  (let (p2 : String (str5 te "); " mv " ? " (at r1 1)))
+                    (let (p3 : String (str3 " : " (at r2 1) "; })"))
+                      [(at r2 0) (str3 p1 p2 p3)]))))))))))
+
+(defn emit-lit-check
+  :sig [(sn : String) (value : _) -> String]
+  :requires [(valid sn)]
+  :ensures [(valid result)]
+  :body (if (= (type-of value) "Int")
+    (let (vs : String (cg-int-to-string value))
+      (str5 "airl_as_bool_raw(airl_eq(" sn ", airl_int(" vs ")))"))
+    (if (= (type-of value) "Str")
+      (let (esc : String (escape-c-string value))
+        (let (sl : String (cg-int-to-string (cg-str-len value)))
+          (str6 "airl_as_bool_raw(airl_eq(" sn ", airl_str(\"" esc "\", " (+ sl "))))"))))
+      (if (= (type-of value) "Bool")
+        (if value
+          (str3 "airl_as_bool_raw(airl_eq(" sn ", airl_bool(1)))")
+          (str3 "airl_as_bool_raw(airl_eq(" sn ", airl_bool(0)))"))
+        (str3 "airl_as_bool_raw(airl_eq(" sn ", airl_nil()))")))))
+
+(defn emit-c-variant-body
+  :sig [(st : _) (mv : String) (inner-pats : List) (body-ir : _) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? inner-pats)
+      (emit-c-expr st body-ir)
+      (let (ip : _ (head inner-pats))
+        (match ip
+          (IRPatWild _)
+            (emit-c-expr st body-ir)
+          (IRPatBind name)
+            (let (r : List (emit-c-expr st body-ir))
+              [(at r 0) (str6 "({ RtValue* " (mangle-name name) " = " mv "; " (+ (at r 1) "; })"))])
+          (IRPatVariant vparts)
+            (let (vtag : String (at vparts 0))
+              (let (sub-pats : List (at vparts 1))
+                (let (te : String (make-variant-tag vtag))
+                  (let (nv : String (+ "__nmv_" (mangle-name vtag)))
+                    (let (r : List (emit-c-variant-body st nv sub-pats body-ir))
+                      (let (p1 : String (str5 "({ RtValue* " nv " = airl_match_tag(" mv ", "))
+                        (let (p2 : String (str5 te "); " nv " ? " (at r 1)))
+                          [(at r 0) (str3 p1 p2 " : airl_nil(); })")])))))))
+          _ (emit-c-expr st body-ir)))))
+
+;; ── Try expression ────────────────────────────────────────
+
+(defn emit-c-try
+  :sig [(st : _) (expr : _) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body
+    (let (r : List (emit-c-expr st expr))
+      (let (p1 : String (+ "({ RtValue* __t = " (at r 1)))
+        (let (p2 : String "; RtValue* __ok = airl_match_tag(__t, airl_str(\"Ok\", 2)); ")
+          (let (p3 : String "if(!__ok){fprintf(stderr,\"try failed\\n\");exit(1);} __ok; })")
+            [(at r 0) (str3 p1 p2 p3)])))))
+
+;; ── Top-level function emitter ────────────────────────────
+
+(defn emit-c-func
+  :sig [(st : _) (ir : _) -> List]
+  :intent "Return [state, def-string, fwd-decl-string]"
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (match ir
+    (IRFunc parts)
+      (let (name : String (at parts 0))
+        (let (params : List (at parts 1))
+          (let (body-ir : _ (at parts 2))
+            (let (mn : String (mangle-name name))
+              (let (cp : List (map (fn [p] (mangle-name p)) params))
+                (let (pd : String (emit-c-param-decls cp))
+                  (let (r : List (emit-c-expr st body-ir))
+                    (let (fwd : String (str4 "RtValue* " mn "(" (+ pd ");")))
+                      (let (def : String (str6 "RtValue* " mn "(" pd ") {\n    return " (+ (at r 1) ";\n}")))
+                        [(at r 0) def fwd])))))))))
+    _ (let (r : List (emit-c-expr st ir))
+        [(at r 0) (at r 1) ""])))
+
+;; ── Full program emitter ──────────────────────────────────
+
+(defn emit-c-top-levels-loop
+  :sig [(st : _) (nodes : List) (funcs : List) (fwds : List) (main-stmts : List) -> List]
+  :requires [(valid st)]
+  :ensures [(valid result)]
+  :body (if (empty? nodes) [st funcs fwds main-stmts]
+    (let (node : _ (head nodes))
+      (match node
+        (IRFunc parts)
+          (let (r : List (emit-c-func st node))
+            (emit-c-top-levels-loop (at r 0) (tail nodes) (append funcs (at r 1)) (append fwds (at r 2)) main-stmts))
+        (IRNil _)
+          (emit-c-top-levels-loop st (tail nodes) funcs fwds main-stmts)
+        _
+          (let (r : List (emit-c-expr st node))
+            (emit-c-top-levels-loop (at r 0) (tail nodes) funcs fwds (append main-stmts (at r 1))))))))
+
+(defn emit-c-program
+  :sig [(ir-nodes : List) -> String]
+  :requires [(valid ir-nodes)]
+  :ensures [(valid result)]
+  :body
+    (let (st : _ (cg-make-state))
+      (let (r : List (emit-c-top-levels-loop st ir-nodes [] [] []))
+        (let (st2 : _ (at r 0))
+          (let (funcs : List (at r 1))
+            (let (fwds : List (at r 2))
+              (let (main-stmts : List (at r 3))
+                (let (header : String (str3 "#include \"airl_rt.h\"\n" "#include <stdio.h>\n" "#include <stdlib.h>\n\n"))
+                  (let (uf : String (if (empty? fwds) "" (+ (join fwds "\n") "\n")))
+                    (let (lf : String (if (empty? (cg-fwd-decls st2)) "" (+ (join (cg-fwd-decls st2) "\n") "\n")))
+                      (let (ld : String (emit-lambda-defs (cg-lambdas st2)))
+                        (let (fd : String (if (empty? funcs) "" (+ (join funcs "\n\n") "\n")))
+                          (let (mb : String (emit-main-stmts main-stmts))
+                            (let (mf : String (str4 "int main(int argc, char** argv) {\n" "    airl_set_args(argc, argv);\n" mb "    airl_flush_stdout();\n    return 0;\n}\n"))
+                              (str6 header "/* Forward declarations */\n" (+ uf lf) (+ "\n/* Lambda definitions */\n" ld) (+ "\n/* Function definitions */\n" fd) (+ "\n/* Main */\n" mf))))))))))))))))
+
+(defn emit-lambda-defs
+  :sig [(lambdas : List) -> String]
+  :requires [(valid lambdas)]
+  :ensures [(valid result)]
+  :body (if (empty? lambdas) ""
+    (let (entry : List (head lambdas))
+      (str3 (at entry 2) "\n\n" (emit-lambda-defs (tail lambdas))))))
+
+(defn emit-main-stmts
+  :sig [(stmts : List) -> String]
+  :requires [(valid stmts)]
+  :ensures [(valid result)]
+  :body (if (empty? stmts) ""
+    (str3 "    " (head stmts) (+ ";\n" (emit-main-stmts (tail stmts))))))
+
+;; ── Convenience: full pipeline from source ────────────────
+
+(defn compile-to-c
+  :sig [(source : String) -> _]
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err e) (Err (+ "lex error: " e))
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err (+ "parse-sexpr error: " e))
+          (Ok sexprs)
+            (match (parse-program sexprs)
+              (Err e) (Err (+ "parse error: " e))
+              (Ok ast-nodes)
+                (match (compile-program ast-nodes)
+                  (Err e) (Err (+ "compile error: " e))
+                  (Ok ir-nodes) (Ok (emit-c-program ir-nodes)))))))
