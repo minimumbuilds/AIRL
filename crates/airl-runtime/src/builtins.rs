@@ -46,6 +46,7 @@ impl Builtins {
         b.register_bytes();
         b.register_tcp();
         b.register_threads();
+        b.register_compression();
         b
     }
 
@@ -1798,6 +1799,17 @@ impl Builtins {
         self.register("channel-recv", builtin_channel_recv);
         self.register("channel-recv-timeout", builtin_channel_recv_timeout);
         self.register("channel-close", builtin_channel_close);
+    }
+
+    fn register_compression(&mut self) {
+        self.register("gzip-compress", builtin_gzip_compress);
+        self.register("gzip-decompress", builtin_gzip_decompress);
+        self.register("snappy-compress", builtin_snappy_compress);
+        self.register("snappy-decompress", builtin_snappy_decompress);
+        self.register("lz4-compress", builtin_lz4_compress);
+        self.register("lz4-decompress", builtin_lz4_decompress);
+        self.register("zstd-compress", builtin_zstd_compress);
+        self.register("zstd-decompress", builtin_zstd_decompress);
     }
 }
 
@@ -3830,6 +3842,79 @@ fn builtin_channel_close(args: &[Value]) -> Result<Value, RuntimeError> {
     let removed_tx = channel_senders().lock().unwrap().remove(&handle_id).is_some();
     let removed_rx = channel_receivers().lock().unwrap().remove(&handle_id).is_some();
     Ok(Value::Bool(removed_tx || removed_rx))
+}
+
+// ── Compression builtins ──────────────────────────────────────────
+
+fn builtin_gzip_compress(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("gzip-compress", args, 1)?;
+    let data = extract_byte_list("gzip-compress", &args[0])?;
+    let bytes: Vec<u8> = data.iter().map(|b| *b as u8).collect();
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    std::io::Write::write_all(&mut encoder, &bytes).map_err(|e| RuntimeError::Custom(format!("gzip-compress: {}", e)))?;
+    let compressed = encoder.finish().map_err(|e| RuntimeError::Custom(format!("gzip-compress: {}", e)))?;
+    Ok(Value::IntList(compressed.iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_gzip_decompress(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("gzip-decompress", args, 1)?;
+    let data = extract_byte_list("gzip-decompress", &args[0])?;
+    let bytes: Vec<u8> = data.iter().map(|b| *b as u8).collect();
+    use flate2::read::GzDecoder;
+    let mut decoder = GzDecoder::new(&bytes[..]);
+    let mut decompressed = Vec::new();
+    std::io::Read::read_to_end(&mut decoder, &mut decompressed).map_err(|e| RuntimeError::Custom(format!("gzip-decompress: {}", e)))?;
+    Ok(Value::IntList(decompressed.iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_snappy_compress(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("snappy-compress", args, 1)?;
+    let data = extract_byte_list("snappy-compress", &args[0])?;
+    let bytes: Vec<u8> = data.iter().map(|b| *b as u8).collect();
+    let compressed = snap::raw::Encoder::new().compress_vec(&bytes).map_err(|e| RuntimeError::Custom(format!("snappy-compress: {}", e)))?;
+    Ok(Value::IntList(compressed.iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_snappy_decompress(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("snappy-decompress", args, 1)?;
+    let data = extract_byte_list("snappy-decompress", &args[0])?;
+    let bytes: Vec<u8> = data.iter().map(|b| *b as u8).collect();
+    let decompressed = snap::raw::Decoder::new().decompress_vec(&bytes).map_err(|e| RuntimeError::Custom(format!("snappy-decompress: {}", e)))?;
+    Ok(Value::IntList(decompressed.iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_lz4_compress(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("lz4-compress", args, 1)?;
+    let data = extract_byte_list("lz4-compress", &args[0])?;
+    let bytes: Vec<u8> = data.iter().map(|b| *b as u8).collect();
+    let compressed = lz4_flex::compress_prepend_size(&bytes);
+    Ok(Value::IntList(compressed.iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_lz4_decompress(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("lz4-decompress", args, 1)?;
+    let data = extract_byte_list("lz4-decompress", &args[0])?;
+    let bytes: Vec<u8> = data.iter().map(|b| *b as u8).collect();
+    let decompressed = lz4_flex::decompress_size_prepended(&bytes).map_err(|e| RuntimeError::Custom(format!("lz4-decompress: {}", e)))?;
+    Ok(Value::IntList(decompressed.iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_zstd_compress(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("zstd-compress", args, 1)?;
+    let data = extract_byte_list("zstd-compress", &args[0])?;
+    let bytes: Vec<u8> = data.iter().map(|b| *b as u8).collect();
+    let compressed = zstd::encode_all(&bytes[..], 3).map_err(|e| RuntimeError::Custom(format!("zstd-compress: {}", e)))?;
+    Ok(Value::IntList(compressed.iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_zstd_decompress(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("zstd-decompress", args, 1)?;
+    let data = extract_byte_list("zstd-decompress", &args[0])?;
+    let bytes: Vec<u8> = data.iter().map(|b| *b as u8).collect();
+    let decompressed = zstd::decode_all(&bytes[..]).map_err(|e| RuntimeError::Custom(format!("zstd-decompress: {}", e)))?;
+    Ok(Value::IntList(decompressed.iter().map(|b| *b as i64).collect()))
 }
 
 #[cfg(test)]
