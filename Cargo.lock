@@ -74,15 +74,19 @@ version = "0.5.1"
 dependencies = [
  "base64",
  "crc32c",
+ "flate2",
  "hex",
  "hmac",
+ "lz4_flex",
  "pbkdf2",
  "rand",
  "regex",
  "rustls",
  "rustls-pemfile",
  "sha2",
+ "snap",
  "webpki-roots 0.26.11",
+ "zstd",
 ]
 
 [[package]]

@@ -923,4 +923,69 @@ pub extern "C" fn airl_crc32c(buf: *mut RtValue) -> *mut RtValue {
     rt_int(crc32c::crc32c(&bytes) as i64)
 }
 
+// ── Compression builtins ─────────────────────────────────────────────────────
+
+#[no_mangle]
+pub extern "C" fn airl_gzip_compress(data: *mut RtValue) -> *mut RtValue {
+    let bytes = extract_bytes(data);
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    std::io::Write::write_all(&mut encoder, &bytes).unwrap();
+    let compressed = encoder.finish().unwrap();
+    rt_list(compressed.iter().map(|b| rt_int(*b as i64)).collect())
+}
+
+#[no_mangle]
+pub extern "C" fn airl_gzip_decompress(data: *mut RtValue) -> *mut RtValue {
+    let bytes = extract_bytes(data);
+    use flate2::read::GzDecoder;
+    let mut decoder = GzDecoder::new(&bytes[..]);
+    let mut decompressed = Vec::new();
+    std::io::Read::read_to_end(&mut decoder, &mut decompressed).unwrap();
+    rt_list(decompressed.iter().map(|b| rt_int(*b as i64)).collect())
+}
+
+#[no_mangle]
+pub extern "C" fn airl_snappy_compress(data: *mut RtValue) -> *mut RtValue {
+    let bytes = extract_bytes(data);
+    let compressed = snap::raw::Encoder::new().compress_vec(&bytes).unwrap();
+    rt_list(compressed.iter().map(|b| rt_int(*b as i64)).collect())
+}
+
+#[no_mangle]
+pub extern "C" fn airl_snappy_decompress(data: *mut RtValue) -> *mut RtValue {
+    let bytes = extract_bytes(data);
+    let decompressed = snap::raw::Decoder::new().decompress_vec(&bytes).unwrap();
+    rt_list(decompressed.iter().map(|b| rt_int(*b as i64)).collect())
+}
+
+#[no_mangle]
+pub extern "C" fn airl_lz4_compress(data: *mut RtValue) -> *mut RtValue {
+    let bytes = extract_bytes(data);
+    let compressed = lz4_flex::compress_prepend_size(&bytes);
+    rt_list(compressed.iter().map(|b| rt_int(*b as i64)).collect())
+}
+
+#[no_mangle]
+pub extern "C" fn airl_lz4_decompress(data: *mut RtValue) -> *mut RtValue {
+    let bytes = extract_bytes(data);
+    let decompressed = lz4_flex::decompress_size_prepended(&bytes).unwrap();
+    rt_list(decompressed.iter().map(|b| rt_int(*b as i64)).collect())
+}
+
+#[no_mangle]
+pub extern "C" fn airl_zstd_compress(data: *mut RtValue) -> *mut RtValue {
+    let bytes = extract_bytes(data);
+    let compressed = zstd::encode_all(&bytes[..], 3).unwrap();
+    rt_list(compressed.iter().map(|b| rt_int(*b as i64)).collect())
+}
+
+#[no_mangle]
+pub extern "C" fn airl_zstd_decompress(data: *mut RtValue) -> *mut RtValue {
+    let bytes = extract_bytes(data);
+    let decompressed = zstd::decode_all(&bytes[..]).unwrap();
+    rt_list(decompressed.iter().map(|b| rt_int(*b as i64)).collect())
+}
+
 // airl_run_bytecode and airl_compile_to_executable are defined elsewhere in airl-runtime

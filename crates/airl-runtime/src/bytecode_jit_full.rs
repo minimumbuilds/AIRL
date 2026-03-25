@@ -202,6 +202,16 @@ pub struct RuntimeImports {
     pub bytes_slice: FuncId,
     pub crc32c: FuncId,
 
+    // Compression
+    pub gzip_compress: FuncId,
+    pub gzip_decompress: FuncId,
+    pub snappy_compress: FuncId,
+    pub snappy_decompress: FuncId,
+    pub lz4_compress: FuncId,
+    pub lz4_decompress: FuncId,
+    pub zstd_compress: FuncId,
+    pub zstd_decompress: FuncId,
+
     // TCP sockets
     pub tcp_connect: FuncId,
     pub tcp_close: FuncId,
@@ -688,6 +698,16 @@ impl BytecodeJitFull {
         let bytes_slice = declare_import(m, "airl_bytes_slice", sig_3_ptr(m));
         let crc32c = declare_import(m, "airl_crc32c", s1.clone());
 
+        // Compression
+        let gzip_compress = declare_import(m, "airl_gzip_compress", s1.clone());
+        let gzip_decompress = declare_import(m, "airl_gzip_decompress", s1.clone());
+        let snappy_compress = declare_import(m, "airl_snappy_compress", s1.clone());
+        let snappy_decompress = declare_import(m, "airl_snappy_decompress", s1.clone());
+        let lz4_compress = declare_import(m, "airl_lz4_compress", s1.clone());
+        let lz4_decompress = declare_import(m, "airl_lz4_decompress", s1.clone());
+        let zstd_compress = declare_import(m, "airl_zstd_compress", s1.clone());
+        let zstd_decompress = declare_import(m, "airl_zstd_decompress", s1.clone());
+
         // TCP sockets
         let tcp_connect = declare_import(m, "airl_tcp_connect", s2.clone());
         let tcp_close = declare_import(m, "airl_tcp_close", s1.clone());
@@ -743,6 +763,8 @@ impl BytecodeJitFull {
             bytes_from_int16, bytes_from_int32, bytes_from_int64,
             bytes_to_int16, bytes_to_int32, bytes_to_int64,
             bytes_from_string, bytes_to_string, bytes_concat, bytes_slice, crc32c,
+            gzip_compress, gzip_decompress, snappy_compress, snappy_decompress,
+            lz4_compress, lz4_decompress, zstd_compress, zstd_decompress,
             tcp_connect, tcp_close, tcp_send, tcp_recv, tcp_recv_exact, tcp_set_timeout, tcp_connect_tls,
             contract_fail,
         }
@@ -894,6 +916,16 @@ impl BytecodeJitFull {
         m.insert("bytes-concat".into(),      rt.bytes_concat);
         m.insert("bytes-slice".into(),       rt.bytes_slice);
         m.insert("crc32c".into(),            rt.crc32c);
+
+        // Compression
+        m.insert("gzip-compress".into(),    rt.gzip_compress);
+        m.insert("gzip-decompress".into(),  rt.gzip_decompress);
+        m.insert("snappy-compress".into(),  rt.snappy_compress);
+        m.insert("snappy-decompress".into(),rt.snappy_decompress);
+        m.insert("lz4-compress".into(),     rt.lz4_compress);
+        m.insert("lz4-decompress".into(),   rt.lz4_decompress);
+        m.insert("zstd-compress".into(),    rt.zstd_compress);
+        m.insert("zstd-decompress".into(),  rt.zstd_decompress);
 
         // TCP sockets
         m.insert("tcp-connect".into(),     rt.tcp_connect);
