@@ -130,10 +130,12 @@ The stdlib is 4 modules (49 functions total) — mostly pure AIRL, with Rust bui
 - `json-parse`, `json-stringify` — JSON ↔ AIRL value conversion
 - `http-post` — **deprecated**, use `(http-request "POST" url body headers)` instead
 
-**System builtins** (4) in `crates/airl-runtime/src/builtins.rs`:
+**System builtins** (6) in `crates/airl-runtime/src/builtins.rs`:
 - `shell-exec` — `(shell-exec cmd args-list)` → Result with stdout/stderr/exit-code
 - `time-now` — milliseconds since epoch → Int
-- `getenv` — `(getenv "VAR")` → Str or nil
+- `sleep` — `(sleep ms)` pause execution for N milliseconds → Nil
+- `format-time` — `(format-time millis fmt)` format UTC timestamp. Supports `%Y %m %d %H %M %S`.
+- `getenv` — `(getenv "VAR")` → Result[Str, Str]
 - `get-args` — command-line arguments → List[Str]
 
 ### Stdlib Modules (Pure AIRL)
@@ -269,6 +271,7 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **Float Math Builtins** — 15 builtins: transcendentals (`sqrt`, `sin`, `cos`, `tan`, `log`, `exp`), rounding (`floor`, `ceil`, `round` → Int), conversion (`float-to-int`, `int-to-float`), IEEE 754 (`infinity`, `nan`, `is-nan?`, `is-infinite?`). All accept Int or Float via `as_float` auto-coercion. New `crates/airl-rt/src/math.rs` module.
 - **Collection Builtins** — 3 Rust builtins: `at-or` (safe indexing with default), `set-at` (immutable update at index), `list-contains?` (element membership). 3 AIRL stdlib functions: `unique` (deduplicate), `enumerate` (zip-with-index), `group-by` (group elements by key function → Map).
 - **Error Handling Builtins** — `panic` (abort with custom message) and `assert` (abort if condition false). Provides explicit error paths beyond contract violations.
+- **Time/Date Builtins** — `sleep` (pause N milliseconds) and `format-time` (format Unix timestamp with `%Y %m %d %H %M %S` specifiers, UTC, zero external deps — uses Howard Hinnant civil calendar algorithm).
 
 ---
 
