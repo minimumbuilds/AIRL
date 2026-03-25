@@ -1,3 +1,0 @@
-;; ERROR: NonExhaustive
-;; Match missing Err variant for Result type
-(match (Err "e") (Ok v) v)

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~520 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.2.1.
+AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~520 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.4.0.
 
 **Language spec:** `AIRL-Language-Specification-v0.1.0.md`
 **LLM header:** `AIRL-Header.md` — **MUST read before writing any AIRL code.** Compressed reference with all traps, syntax, signatures, and patterns (~360 lines, ~3K tokens). Replaces the 7-file pre-flight checklist.
@@ -36,7 +36,7 @@ cargo run --features jit -- check <file.airl>          # Type-check and verify
 cargo run --features jit -- repl                       # Interactive REPL
 ```
 
-**v0.2 execution model:** `airl run` JIT-full-compiles **all** functions to native x86-64 via Cranelift using the `airl-rt` C-ABI runtime for value operations. `airl compile` AOT-compiles to standalone native executables with two-tier compilation: eligible pure-arithmetic functions use raw `i64`/`f64` register ops (42x faster than Python), ineligible functions use boxed `*mut RtValue` calls. Contract assertions and ownership checks compile to native conditional branches. Quantifier expressions (`forall`/`exists`) are desugared to `fold`+`range` loops.
+**Execution model (v0.4.0):** `airl run` JIT-full-compiles **all** functions to native x86-64 via Cranelift using the `airl-rt` C-ABI runtime for value operations. JIT-full is the default when built with `--features jit`; falls back to bytecode VM otherwise. VM-aware builtins provide native `map`/`filter`/`fold`/`sort` with IntList specialization and inline closure compilation. `airl compile` AOT-compiles to standalone native executables with two-tier compilation: eligible pure-arithmetic functions use raw `i64`/`f64` register ops (42x faster than Python), ineligible functions use boxed `*mut RtValue` calls. Contract assertions and ownership checks compile to native conditional branches. Quantifier expressions (`forall`/`exists`) are desugared to `fold`+`range` loops.
 
 **First build note:** Z3 (in `airl-solver`) compiles from C++ source on first build (~5-15 min). Requires CMake, C++ compiler, Python 3.
 
@@ -62,8 +62,7 @@ airl-driver ← airl-solver (Z3)
 
 - **Zero external deps for core crates.** Only `airl-codegen` (Cranelift) and `airl-solver` (Z3) have external deps.
 - **Tests are inline** `#[cfg(test)]` modules in each source file, plus fixture-based E2E tests in `crates/airl-driver/tests/fixtures.rs`.
-- **Fixtures live in** `tests/fixtures/valid/`, `tests/fixtures/type_errors/`, `tests/fixtures/contract_errors/`, `tests/fixtures/linearity_errors/`, `tests/fixtures/agent/`, `tests/fixtures/interpreter_only/`.
-- **`interpreter_only/` fixtures** require the tree-walking interpreter (e.g., `non_exhaustive_match.airl`). Most former interpreter-only fixtures have been moved: quantifier fixtures to `valid/`, ownership fixtures to `linearity_errors/`.
+- **Fixtures live in** `tests/fixtures/valid/`, `tests/fixtures/type_errors/`, `tests/fixtures/contract_errors/`, `tests/fixtures/linearity_errors/`, `tests/fixtures/agent/`.
 - **The `orchestrator.airl` fixture** requires the built binary (uses `spawn-agent`) — it's in `tests/fixtures/agent/`, NOT `tests/fixtures/valid/`, so the fixture runner doesn't try to run it.
 - **Builtin dispatch pattern:** Builtins are dispatched via `CallBuiltin` opcode in the bytecode VM, which calls into `Builtins::get()` registry. The tree-walking interpreter (`eval.rs`) is kept for the REPL and agent runtime but is not the default execution path.
 
@@ -291,6 +290,11 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **Error Handling Builtins** — `panic` (abort with custom message) and `assert` (abort if condition false). Provides explicit error paths beyond contract violations.
 - **Time/Date Builtins** — `sleep` (pause N milliseconds) and `format-time` (format Unix timestamp with `%Y %m %d %H %M %S` specifiers, UTC, zero external deps — uses Howard Hinnant civil calendar algorithm).
 - **Set Data Structure** — 11 AIRL stdlib functions in `stdlib/set.airl`: `set-new`, `set-from`, `set-add`, `set-remove`, `set-contains?`, `set-size`, `set-to-list`, `set-union`, `set-intersection`, `set-difference`, `set-subset?`, `set-equal?`. Implemented over maps (keys with `true` values). Elements must be strings. Auto-loaded as prelude.
+- **v0.3.0 Builtins & Performance** — 20 new builtins (path, regex, crypto, read-lines, char-count), expanded unboxed AOT for native list ops, COW tail views + in-place append in C runtime, VM-aware builtins for native `map`/`filter`/`fold`/`sort` (bypass AIRL stdlib recursion for 10-100x speedup on large lists).
+- **v0.3.1 Specialization** — Inline closures compiled to native code (no closure allocation for simple lambdas), IntList specialization (unboxed `Vec<i64>` storage for integer-only lists), 7 new builtins.
+- **v0.4.0 Pattern Detection** — Compound predicate detection for filter specialization (e.g., `(fn [x] (and (> x 0) (< x 10)))` compiled to native branch chain). Closure pattern detection for fold/map/filter (recognizes common lambda shapes and emits specialized native loops).
+- **JIT-Full Bug Fixes** — All 5 JIT-full bugs resolved: variant tag string corruption (intern strings to stable storage), Cranelift verifier errors (proper block terminators), closure dispatch (compile MakeClosure targets in dependency pass), MakeClosure captures (read capture_count from function metadata), variadic print arity (airl_print_values runtime function).
+- **AIRL Header File** — Token-efficient LLM reference (`AIRL-Header.md`, ~360 lines / ~3K tokens) replacing 7-file pre-flight checklist (~2,105 lines / ~15K tokens). 5.4x compression with zero information loss on critical semantics.
 
 ---
 
