@@ -207,6 +207,21 @@ pub struct RuntimeImports {
     pub base64_decode: FuncId,
     pub random_bytes: FuncId,
 
+    // Crypto (byte-oriented)
+    pub sha512: FuncId,
+    pub hmac_sha512: FuncId,
+    pub sha256_bytes: FuncId,
+    pub sha512_bytes: FuncId,
+    pub hmac_sha256_bytes: FuncId,
+    pub hmac_sha512_bytes: FuncId,
+    pub pbkdf2_sha256: FuncId,
+    pub pbkdf2_sha512: FuncId,
+    pub base64_decode_bytes: FuncId,
+    pub base64_encode_bytes: FuncId,
+    pub bitwise_xor: FuncId,
+    pub bitwise_and: FuncId,
+    pub bitwise_or: FuncId,
+
     // Byte encoding
     pub bytes_from_int16: FuncId,
     pub bytes_from_int32: FuncId,
@@ -591,6 +606,21 @@ impl BytecodeAot {
         let base64_decode = declare_import(m, "airl_base64_decode", s1.clone());
         let random_bytes = declare_import(m, "airl_random_bytes", s1.clone());
 
+        // Crypto (byte-oriented)
+        let sha512 = declare_import(m, "airl_sha512", s1.clone());
+        let hmac_sha512 = declare_import(m, "airl_hmac_sha512", s2.clone());
+        let sha256_bytes = declare_import(m, "airl_sha256_bytes", s1.clone());
+        let sha512_bytes = declare_import(m, "airl_sha512_bytes", s1.clone());
+        let hmac_sha256_bytes = declare_import(m, "airl_hmac_sha256_bytes", s2.clone());
+        let hmac_sha512_bytes = declare_import(m, "airl_hmac_sha512_bytes", s2.clone());
+        let pbkdf2_sha256 = declare_import(m, "airl_pbkdf2_sha256", sig_4_ptr(m));
+        let pbkdf2_sha512 = declare_import(m, "airl_pbkdf2_sha512", sig_4_ptr(m));
+        let base64_decode_bytes = declare_import(m, "airl_base64_decode_bytes", s1.clone());
+        let base64_encode_bytes = declare_import(m, "airl_base64_encode_bytes", s1.clone());
+        let bitwise_xor = declare_import(m, "airl_bitwise_xor", s2.clone());
+        let bitwise_and = declare_import(m, "airl_bitwise_and", s2.clone());
+        let bitwise_or = declare_import(m, "airl_bitwise_or", s2.clone());
+
         // Byte encoding
         let bytes_from_int16 = declare_import(m, "airl_bytes_from_int16", s1.clone());
         let bytes_from_int32 = declare_import(m, "airl_bytes_from_int32", s1.clone());
@@ -651,6 +681,11 @@ impl BytecodeAot {
             path_join, path_parent, path_filename, path_extension, is_absolute,
             regex_match, regex_find_all, regex_replace, regex_split,
             sha256, hmac_sha256, base64_encode, base64_decode, random_bytes,
+            sha512, hmac_sha512, sha256_bytes, sha512_bytes,
+            hmac_sha256_bytes, hmac_sha512_bytes,
+            pbkdf2_sha256, pbkdf2_sha512,
+            base64_decode_bytes, base64_encode_bytes,
+            bitwise_xor, bitwise_and, bitwise_or,
             bytes_from_int16, bytes_from_int32, bytes_from_int64,
             bytes_to_int16, bytes_to_int32, bytes_to_int64,
             bytes_from_string, bytes_to_string, bytes_concat, bytes_slice, crc32c,
@@ -812,6 +847,19 @@ impl BytecodeAot {
         m.insert("base64-encode".into(), rt.base64_encode);
         m.insert("base64-decode".into(), rt.base64_decode);
         m.insert("random-bytes".into(),  rt.random_bytes);
+        m.insert("sha512".into(),              rt.sha512);
+        m.insert("hmac-sha512".into(),         rt.hmac_sha512);
+        m.insert("sha256-bytes".into(),        rt.sha256_bytes);
+        m.insert("sha512-bytes".into(),        rt.sha512_bytes);
+        m.insert("hmac-sha256-bytes".into(),   rt.hmac_sha256_bytes);
+        m.insert("hmac-sha512-bytes".into(),   rt.hmac_sha512_bytes);
+        m.insert("pbkdf2-sha256".into(),       rt.pbkdf2_sha256);
+        m.insert("pbkdf2-sha512".into(),       rt.pbkdf2_sha512);
+        m.insert("base64-decode-bytes".into(), rt.base64_decode_bytes);
+        m.insert("base64-encode-bytes".into(), rt.base64_encode_bytes);
+        m.insert("bitwise-xor".into(),         rt.bitwise_xor);
+        m.insert("bitwise-and".into(),         rt.bitwise_and);
+        m.insert("bitwise-or".into(),          rt.bitwise_or);
         // str and format are variadic — handled specially in compile_func like print
         // They use (ptr*, i64) -> ptr signature (same as print_values)
         m.insert("str".into(),            rt.str_variadic);

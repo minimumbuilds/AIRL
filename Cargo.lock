@@ -76,6 +76,7 @@ dependencies = [
  "crc32c",
  "hex",
  "hmac",
+ "pbkdf2",
  "rand",
  "regex",
  "sha2",

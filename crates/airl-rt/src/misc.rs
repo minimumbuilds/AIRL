@@ -453,6 +453,124 @@ pub extern "C" fn airl_random_bytes(n: *mut RtValue) -> *mut RtValue {
     rt_str(hex)
 }
 
+// ── Crypto (byte-oriented) ──
+
+#[no_mangle]
+pub extern "C" fn airl_sha512(s: *mut RtValue) -> *mut RtValue {
+    use sha2::{Digest, Sha512};
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.as_bytes().to_vec(), _ => vec![] };
+    let hash = Sha512::digest(&input);
+    rt_str(hex::encode(hash))
+}
+
+#[no_mangle]
+pub extern "C" fn airl_hmac_sha512(key: *mut RtValue, msg: *mut RtValue) -> *mut RtValue {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha512;
+    let k = match unsafe { &(*key).data } { RtData::Str(s) => s.as_bytes().to_vec(), _ => vec![] };
+    let m = match unsafe { &(*msg).data } { RtData::Str(s) => s.as_bytes().to_vec(), _ => vec![] };
+    let mut mac = Hmac::<Sha512>::new_from_slice(&k).unwrap();
+    mac.update(&m);
+    rt_str(hex::encode(mac.finalize().into_bytes()))
+}
+
+#[no_mangle]
+pub extern "C" fn airl_sha256_bytes(data: *mut RtValue) -> *mut RtValue {
+    let bytes = extract_bytes(data);
+    use sha2::Digest;
+    let hash = sha2::Sha256::digest(&bytes);
+    rt_list(hash.iter().map(|b| rt_int(*b as i64)).collect())
+}
+
+#[no_mangle]
+pub extern "C" fn airl_sha512_bytes(data: *mut RtValue) -> *mut RtValue {
+    let bytes = extract_bytes(data);
+    use sha2::Digest;
+    let hash = sha2::Sha512::digest(&bytes);
+    rt_list(hash.iter().map(|b| rt_int(*b as i64)).collect())
+}
+
+#[no_mangle]
+pub extern "C" fn airl_hmac_sha256_bytes(key: *mut RtValue, data: *mut RtValue) -> *mut RtValue {
+    use hmac::{Hmac, Mac};
+    let k = extract_bytes(key);
+    let d = extract_bytes(data);
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(&k).unwrap();
+    mac.update(&d);
+    rt_list(mac.finalize().into_bytes().iter().map(|b| rt_int(*b as i64)).collect())
+}
+
+#[no_mangle]
+pub extern "C" fn airl_hmac_sha512_bytes(key: *mut RtValue, data: *mut RtValue) -> *mut RtValue {
+    use hmac::{Hmac, Mac};
+    let k = extract_bytes(key);
+    let d = extract_bytes(data);
+    let mut mac = Hmac::<sha2::Sha512>::new_from_slice(&k).unwrap();
+    mac.update(&d);
+    rt_list(mac.finalize().into_bytes().iter().map(|b| rt_int(*b as i64)).collect())
+}
+
+#[no_mangle]
+pub extern "C" fn airl_pbkdf2_sha256(password: *mut RtValue, salt: *mut RtValue, iterations: *mut RtValue, key_len: *mut RtValue) -> *mut RtValue {
+    let pw = match unsafe { &(*password).data } { RtData::Str(s) => s.clone(), _ => return rt_list(vec![]) };
+    let salt_bytes = extract_bytes(salt);
+    let iters = match unsafe { &(*iterations).data } { RtData::Int(n) => *n as u32, _ => 4096 };
+    let klen = match unsafe { &(*key_len).data } { RtData::Int(n) => *n as usize, _ => 32 };
+    let mut derived = vec![0u8; klen];
+    pbkdf2::pbkdf2_hmac::<sha2::Sha256>(pw.as_bytes(), &salt_bytes, iters, &mut derived);
+    rt_list(derived.iter().map(|b| rt_int(*b as i64)).collect())
+}
+
+#[no_mangle]
+pub extern "C" fn airl_pbkdf2_sha512(password: *mut RtValue, salt: *mut RtValue, iterations: *mut RtValue, key_len: *mut RtValue) -> *mut RtValue {
+    let pw = match unsafe { &(*password).data } { RtData::Str(s) => s.clone(), _ => return rt_list(vec![]) };
+    let salt_bytes = extract_bytes(salt);
+    let iters = match unsafe { &(*iterations).data } { RtData::Int(n) => *n as u32, _ => 4096 };
+    let klen = match unsafe { &(*key_len).data } { RtData::Int(n) => *n as usize, _ => 64 };
+    let mut derived = vec![0u8; klen];
+    pbkdf2::pbkdf2_hmac::<sha2::Sha512>(pw.as_bytes(), &salt_bytes, iters, &mut derived);
+    rt_list(derived.iter().map(|b| rt_int(*b as i64)).collect())
+}
+
+#[no_mangle]
+pub extern "C" fn airl_base64_decode_bytes(data: *mut RtValue) -> *mut RtValue {
+    use base64::Engine;
+    let bytes = extract_bytes(data);
+    match base64::engine::general_purpose::STANDARD.decode(&bytes) {
+        Ok(decoded) => rt_list(decoded.iter().map(|b| rt_int(*b as i64)).collect()),
+        Err(_) => rt_list(vec![]),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn airl_base64_encode_bytes(data: *mut RtValue) -> *mut RtValue {
+    use base64::Engine;
+    let bytes = extract_bytes(data);
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    rt_list(encoded.as_bytes().iter().map(|b| rt_int(*b as i64)).collect())
+}
+
+#[no_mangle]
+pub extern "C" fn airl_bitwise_xor(a: *mut RtValue, b: *mut RtValue) -> *mut RtValue {
+    let va = match unsafe { &(*a).data } { RtData::Int(n) => *n, _ => 0 };
+    let vb = match unsafe { &(*b).data } { RtData::Int(n) => *n, _ => 0 };
+    rt_int(va ^ vb)
+}
+
+#[no_mangle]
+pub extern "C" fn airl_bitwise_and(a: *mut RtValue, b: *mut RtValue) -> *mut RtValue {
+    let va = match unsafe { &(*a).data } { RtData::Int(n) => *n, _ => 0 };
+    let vb = match unsafe { &(*b).data } { RtData::Int(n) => *n, _ => 0 };
+    rt_int(va & vb)
+}
+
+#[no_mangle]
+pub extern "C" fn airl_bitwise_or(a: *mut RtValue, b: *mut RtValue) -> *mut RtValue {
+    let va = match unsafe { &(*a).data } { RtData::Int(n) => *n, _ => 0 };
+    let vb = match unsafe { &(*b).data } { RtData::Int(n) => *n, _ => 0 };
+    rt_int(va | vb)
+}
+
 // ── Type conversions ──
 
 #[no_mangle]
