@@ -156,9 +156,9 @@ This is why AIRL makes contracts **grammar-level mandatory** — the parser lite
 
 ### Compilation & Execution
 
-AIRL v0.2 supports two execution modes:
+AIRL supports two execution modes, both sharing the same Rust runtime (`crates/airl-rt/`):
 
-**`airl run` (JIT)** — All functions compiled to native x86-64 via Cranelift at load time, using the `airl-rt` C-ABI runtime library for value operations.
+**`airl run` (JIT)** — All functions compiled to native x86-64 via Cranelift at load time. Falls back to bytecode VM for ineligible functions. Thread-per-task concurrency with message-passing channels (v0.5.0).
 
 **`airl compile` (AOT)** — Produces standalone native executables with a two-tier compilation strategy:
 - **Unboxed tier:** Eligible functions (pure arithmetic, no lists/closures/builtins) compile to raw `i64`/`f64` register operations — single CPU instructions, no heap allocation. fib(35): 56ms (42x faster than Python).

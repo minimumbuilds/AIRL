@@ -1512,11 +1512,13 @@
                 (match (compile-program ast-nodes)
                   (Err e) (Err e)
                   (Ok ir-nodes) (Ok (run-ir ir-nodes)))))))
+;; DEPRECATED: C codegen backend. libairl_rt_c.a has been retired (v0.5.0).
+;; Use `airl compile` (Cranelift AOT) for native binaries.
+;;
 ;; bootstrap/codegen_c.airl — IR-to-C code generator
 ;; Requires: bootstrap/lexer.airl, bootstrap/parser.airl, bootstrap/compiler.airl (loaded first)
 ;;
-;; Translates IR nodes from the bootstrap compiler into C source code
-;; that links against libairl_rt_c.a (the AIRL C runtime).
+;; Translates IR nodes from the bootstrap compiler into C source code.
 ;; Every AIRL value at runtime is a RtValue* pointer.
 ;;
 ;; Design: All emit-c-* functions return [state, code-string] as a 2-element list.

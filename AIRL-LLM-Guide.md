@@ -914,11 +914,13 @@ Returns the name of the first spawned agent:
 
 ## 10a. Concurrency Model
 
-AIRL's parallelism is **agent-level only**: process isolation + message passing. There are no thread-level concurrency primitives (no threads, channels, mutexes, atomics, or async/await within a single program).
+AIRL supports two levels of concurrency:
 
-All concurrent primitives: `spawn-agent`, `send`, `send-async`, `await`, `parallel`, `broadcast`.
+**Thread-level (v0.5.0):** Thread-per-task with message-passing channels. `thread-spawn` creates an OS thread running a closure. `channel-new` creates unbounded channels for inter-thread communication. No shared mutable state — channels are the only way threads communicate. See section 6 "Concurrency" for full API.
 
-Fine-grained parallelism within a computation requires spawning agent processes. This is a deliberate design choice for safety and verifiability — no shared mutable state means no data races and no need for synchronization primitives.
+**Agent-level:** Process isolation + message passing via `spawn-agent`, `send`, `send-async`, `await`, `parallel`, `broadcast`. Agents are separate OS processes communicating via RPC.
+
+Both levels enforce the same principle: **no shared mutable state**. Threads use channels, agents use message passing. No mutexes, atomics, or locks are exposed to AIRL programs.
 
 ---
 

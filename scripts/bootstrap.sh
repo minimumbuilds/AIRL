@@ -1,86 +1,18 @@
 #!/bin/bash
-# scripts/bootstrap.sh — Three-stage bootstrap for AIRL self-hosting
+# scripts/bootstrap.sh — DEPRECATED
 #
-# Stage 0: Build C runtime library
-# Stage 1: Use Rust toolchain to run bootstrap compiler on test program
-# Stage 2: Compile the test with C runtime → standalone native binary
+# The C codegen bootstrap pipeline (AIRL → C → cc → binary linked to libairl_rt_c.a)
+# has been retired in v0.5.0. The C runtime was removed.
 #
-# Usage: ./scripts/bootstrap.sh [input.airl]
-# Default input: a hello-world program
+# For native binary compilation, use the Cranelift AOT path:
+#   cargo run --features jit,aot -- compile <file.airl> -o <binary>
+#
+# The bootstrap compiler (lexer, parser, type checker, IR compiler) still runs
+# on the bytecode VM via `airl run`.
 
-set -e
-
-cd "$(dirname "$0")/.."
-
-RUNTIME_DIR="runtime"
-BOOTSTRAP_DIR="bootstrap"
-BUILD_DIR="/tmp/airl-bootstrap"
-mkdir -p "$BUILD_DIR"
-
-INPUT="${1:-}"
-if [ -z "$INPUT" ]; then
-    # Default test program (in current directory for read-file compatibility)
-    INPUT="__bootstrap_test__.airl"
-    cat > "$INPUT" << 'AIRL'
-(defn factorial
-  :sig [(n : i64) -> i64]
-  :requires [(valid n)]
-  :ensures [(valid result)]
-  :body (if (<= n 1) 1 (* n (factorial (- n 1)))))
-
-(print "fact 5:" (factorial 5))
-(print "fact 10:" (factorial 10))
-(print "Self-hosting bootstrap works!")
-AIRL
-fi
-
-echo "=== Stage 0: Build C runtime ==="
-(cd "$RUNTIME_DIR" && make clean && make libairl_rt_c.a)
-echo "  Built: $RUNTIME_DIR/libairl_rt_c.a"
-
+echo "ERROR: bootstrap.sh is deprecated."
+echo "The C runtime (libairl_rt_c.a) has been retired."
 echo ""
-echo "=== Stage 1: Compile AIRL → C via bootstrap compiler ==="
-echo "  Input: $INPUT"
-
-# Run the bootstrap compiler using --load to pre-load modules separately
-# (avoids concatenation + JIT issues with large single files)
-RUST_MIN_STACK=67108864 cargo run --release --features jit -- run \
-    --load "$BOOTSTRAP_DIR/lexer.airl" \
-    --load "$BOOTSTRAP_DIR/parser.airl" \
-    --load "$BOOTSTRAP_DIR/compiler.airl" \
-    --load "$BOOTSTRAP_DIR/codegen_c.airl" \
-    "$BOOTSTRAP_DIR/driver.airl" -- "$INPUT" 2>/dev/null \
-    | sed '1s/^"//; /^nil$/d; /^"$/d' \
-    > "$BUILD_DIR/output.c"
-
-if [ ! -s "$BUILD_DIR/output.c" ]; then
-    echo "ERROR: Bootstrap compiler produced no output"
-    exit 1
-fi
-
-echo "  Generated: $(wc -l < "$BUILD_DIR/output.c") lines of C"
-
-echo ""
-echo "=== Stage 2: Compile C → native binary ==="
-cc "$BUILD_DIR/output.c" -I"$RUNTIME_DIR" "$RUNTIME_DIR/libairl_rt_c.a" -lm -o "$BUILD_DIR/program" 2>&1
-echo "  Built: $BUILD_DIR/program"
-echo "  Dependencies: $(ldd "$BUILD_DIR/program" 2>/dev/null | grep -c "=>")" shared libraries
-
-echo ""
-echo "=== Stage 3: Run the native binary ==="
-echo "--- output ---"
-"$BUILD_DIR/program"
-echo "--- end ---"
-
-echo ""
-echo "=== Bootstrap complete ==="
-echo "  Source:  $INPUT"
-echo "  C code:  $BUILD_DIR/output.c"
-echo "  Binary:  $BUILD_DIR/program"
-echo "  Runtime: $RUNTIME_DIR/libairl_rt_c.a (pure C, no Rust)"
-echo ""
-echo "The binary is a standalone native executable."
-echo "No Rust toolchain needed to run it."
-
-# Clean up temp test file if we created it
-[ -f "__bootstrap_test__.airl" ] && rm -f "__bootstrap_test__.airl"
+echo "Use the Cranelift AOT path instead:"
+echo "  cargo run --features jit,aot -- compile <file.airl> -o <binary>"
+exit 1
