@@ -1,0 +1,100 @@
+;; ── AIRL Standard Library: Set ──────────────────
+;;
+;; Sets implemented as maps with true values.
+;; All functions operate on Map values where keys are the set elements.
+
+;; ── set-new : create empty set ──
+(defn set-new
+  :sig [-> Map]
+  :intent "Create an empty set"
+  :requires [true]
+  :ensures [(= (map-size result) 0)]
+  :body (map-new))
+
+;; ── set-from : create set from list ──
+(defn set-from
+  :sig [(xs : List) -> Map]
+  :intent "Create a set from a list of elements"
+  :requires [(valid xs)]
+  :ensures [(valid result)]
+  :body (fold (fn [s x] (map-set s x true)) (map-new) xs))
+
+;; ── set-add : add element to set ──
+(defn set-add
+  :sig [(s : Map) (x : _) -> Map]
+  :intent "Add an element to the set"
+  :requires [(valid s)]
+  :ensures [(map-has result x)]
+  :body (map-set s x true))
+
+;; ── set-remove : remove element from set ──
+(defn set-remove
+  :sig [(s : Map) (x : _) -> Map]
+  :intent "Remove an element from the set"
+  :requires [(valid s)]
+  :ensures [(not (map-has result x))]
+  :body (map-remove s x))
+
+;; ── set-contains? : check membership ──
+(defn set-contains?
+  :sig [(s : Map) (x : _) -> Bool]
+  :intent "Check if element is in the set"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (map-has s x))
+
+;; ── set-size : number of elements ──
+(defn set-size
+  :sig [(s : Map) -> i64]
+  :intent "Number of elements in the set"
+  :requires [(valid s)]
+  :ensures [(>= result 0)]
+  :body (map-size s))
+
+;; ── set-to-list : convert to list ──
+(defn set-to-list
+  :sig [(s : Map) -> List]
+  :intent "Convert set to list of elements"
+  :requires [(valid s)]
+  :ensures [(= (length result) (map-size s))]
+  :body (map-keys s))
+
+;; ── set-union : combine two sets ──
+(defn set-union
+  :sig [(a : Map) (b : Map) -> Map]
+  :intent "Union of two sets"
+  :requires [(valid a) (valid b)]
+  :ensures [(valid result)]
+  :body (fold (fn [s x] (map-set s x true)) a (map-keys b)))
+
+;; ── set-intersection : elements in both sets ──
+(defn set-intersection
+  :sig [(a : Map) (b : Map) -> Map]
+  :intent "Intersection of two sets"
+  :requires [(valid a) (valid b)]
+  :ensures [(valid result)]
+  :body (fold (fn [s x] (if (map-has b x) (map-set s x true) s)) (map-new) (map-keys a)))
+
+;; ── set-difference : elements in a but not b ──
+(defn set-difference
+  :sig [(a : Map) (b : Map) -> Map]
+  :intent "Elements in first set but not second"
+  :requires [(valid a) (valid b)]
+  :ensures [(valid result)]
+  :body (fold (fn [s x] (if (map-has b x) s (map-set s x true))) (map-new) (map-keys a)))
+
+;; ── set-subset? : is a subset of b? ──
+(defn set-subset?
+  :sig [(a : Map) (b : Map) -> Bool]
+  :intent "Check if first set is a subset of second"
+  :requires [(valid a) (valid b)]
+  :ensures [(valid result)]
+  :body (all (fn [x] (map-has b x)) (map-keys a)))
+
+;; ── set-equal? : same elements? ──
+(defn set-equal?
+  :sig [(a : Map) (b : Map) -> Bool]
+  :intent "Check if two sets have the same elements"
+  :requires [(valid a) (valid b)]
+  :ensures [(valid result)]
+  :body (and (= (map-size a) (map-size b)) (set-subset? a b)))

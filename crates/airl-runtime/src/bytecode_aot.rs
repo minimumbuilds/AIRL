@@ -2347,6 +2347,7 @@ const MATH_SOURCE: &str = include_str!("../../../stdlib/math.airl");
 const RESULT_SOURCE: &str = include_str!("../../../stdlib/result.airl");
 const STRING_SOURCE: &str = include_str!("../../../stdlib/string.airl");
 const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
+const SET_SOURCE: &str = include_str!("../../../stdlib/set.airl");
 
 /// Compile source string to bytecode functions via the Rust-side pipeline.
 fn compile_source_to_bytecode(
@@ -2397,6 +2398,7 @@ pub fn compile_to_executable_impl(
         (RESULT_SOURCE, "result"),
         (STRING_SOURCE, "string"),
         (MAP_SOURCE, "map"),
+        (SET_SOURCE, "set"),
     ] {
         let (funcs, _stdlib_main) = compile_source_to_bytecode(src, name)?;
         all_funcs.extend(funcs);

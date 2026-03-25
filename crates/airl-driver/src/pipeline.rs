@@ -15,6 +15,7 @@ const MATH_SOURCE: &str = include_str!("../../../stdlib/math.airl");
 const RESULT_SOURCE: &str = include_str!("../../../stdlib/result.airl");
 const STRING_SOURCE: &str = include_str!("../../../stdlib/string.airl");
 const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
+const SET_SOURCE: &str = include_str!("../../../stdlib/set.airl");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineMode {
@@ -152,6 +153,7 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
         (RESULT_SOURCE, "result"),
         (STRING_SOURCE, "string"),
         (MAP_SOURCE, "map"),
+        (SET_SOURCE, "set"),
     ] {
         compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
     }
@@ -221,6 +223,7 @@ pub fn run_file_with_preloads(path: &str, preloads: &[String]) -> Result<Value, 
         (RESULT_SOURCE, "result"),
         (STRING_SOURCE, "string"),
         (MAP_SOURCE, "map"),
+        (SET_SOURCE, "set"),
     ] {
         compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
     }
@@ -607,6 +610,7 @@ pub fn run_source_bytecode(source: &str) -> Result<Value, PipelineError> {
         (RESULT_SOURCE, "result"),
         (STRING_SOURCE, "string"),
         (MAP_SOURCE, "map"),
+        (SET_SOURCE, "set"),
     ] {
         compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
     }
@@ -696,6 +700,7 @@ pub fn run_source_jit_full(source: &str) -> Result<Value, PipelineError> {
         (RESULT_SOURCE, "result"),
         (STRING_SOURCE, "string"),
         (MAP_SOURCE, "map"),
+        (SET_SOURCE, "set"),
     ] {
         compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
     }
@@ -793,6 +798,7 @@ pub fn compile_and_load_stdlib_bytecode_repl(vm: &mut BytecodeVm) {
         (RESULT_SOURCE, "result"),
         (STRING_SOURCE, "string"),
         (MAP_SOURCE, "map"),
+        (SET_SOURCE, "set"),
     ] {
         compile_and_load_stdlib_bytecode(vm, src, name)
             .unwrap_or_else(|e| panic!("stdlib {} load failed: {}", name, e));
@@ -1007,6 +1013,7 @@ pub fn compile_to_object(paths: &[String]) -> Result<Vec<u8>, PipelineError> {
         (RESULT_SOURCE, "result"),
         (STRING_SOURCE, "string"),
         (MAP_SOURCE, "map"),
+        (SET_SOURCE, "set"),
     ] {
         let (funcs, _stdlib_main) = compile_source_to_bytecode(src, name)?;
         // Only take named functions, skip the __main__ (which just returns nil)
