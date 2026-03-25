@@ -38,6 +38,9 @@ snap = "1"
 lz4_flex = "0.11"
 zstd = "0.13"
 
+[build-dependencies]
+flate2 = "1"
+
 [features]
 mlir = ["airl-mlir"]
 cuda = ["mlir", "airl-mlir/cuda"]

@@ -148,8 +148,20 @@ fn cmd_compile(args: &[String]) {
             std::process::exit(1);
         });
 
-        // Find airl-rt static library
+        // Find airl-rt static library (embedded or on disk)
         let (rt_lib, runtime_lib) = find_airl_libs();
+        let rt_lib = if rt_lib == "-lairl_rt" {
+            // Embedded runtime fallback: extract compressed lib from binary
+            #[cfg(feature = "aot")]
+            match airl_runtime::bytecode_aot::extract_embedded_rt() {
+                Some(path) => path,
+                None => rt_lib, // truly not found, let linker error
+            }
+            #[cfg(not(feature = "aot"))]
+            rt_lib
+        } else {
+            rt_lib
+        };
 
         // Check if program needs the full runtime (uses run-bytecode or compile-to-executable)
         let needs_runtime = std::str::from_utf8(&obj_bytes).ok()
@@ -224,9 +236,6 @@ fn find_airl_libs() -> (String, String) {
     }
 
     let rt = find_lib("airl_rt");
-    if rt.is_empty() {
-        eprintln!("Warning: could not find libairl_rt.a");
-    }
     let runtime = find_lib("airl_runtime");
     (
         if rt.is_empty() { "-lairl_rt".to_string() } else { rt },

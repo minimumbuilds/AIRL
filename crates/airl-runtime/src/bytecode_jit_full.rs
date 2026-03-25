@@ -1800,11 +1800,8 @@ impl BytecodeJitFull {
                         let result = builder.inst_results(call)[0];
                         builder.def_var(vars[dst], result);
                     } else {
-                        // Unknown builtin — store nil
-                        let nil_ref = self.module.declare_func_in_func(self.rt.nil_ctor, builder.func);
-                        let call = builder.ins().call(nil_ref, &[]);
-                        let result = builder.inst_results(call)[0];
-                        builder.def_var(vars[dst], result);
+                        // Unknown builtin — fail loudly instead of silently returning nil
+                        return Err(format!("JIT: unregistered builtin '{}'. Add to build_builtin_map() in bytecode_jit_full.rs", builtin_name));
                     }
                     last_was_terminator = false;
                 }

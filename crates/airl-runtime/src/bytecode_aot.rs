@@ -2519,10 +2519,8 @@ impl BytecodeAot {
                         let result = builder.inst_results(call)[0];
                         builder.def_var(vars[dst], result);
                     } else {
-                        let nil_ref = self.module.declare_func_in_func(self.rt.nil_ctor, builder.func);
-                        let call = builder.ins().call(nil_ref, &[]);
-                        let result = builder.inst_results(call)[0];
-                        builder.def_var(vars[dst], result);
+                        // Unknown builtin — fail loudly instead of silently returning nil
+                        return Err(format!("AOT: unregistered builtin '{}'. Add to build_builtin_map() in bytecode_aot.rs", builtin_name));
                     }
                     last_was_terminator = false;
                 }
@@ -3057,10 +3055,10 @@ pub fn compile_to_executable_impl(
             Value::Str(s) if s == "run-bytecode" || s == "compile-to-executable"))
     });
 
-    let rt_lib = find_lib("airl_rt");
+    let rt_lib = get_or_extract_rt_lib()?;
     let mut cmd = std::process::Command::new("cc");
     cmd.arg(&obj_path).arg("-o").arg(output_path);
-    if !rt_lib.is_empty() { cmd.arg(&rt_lib); }
+    cmd.arg(&rt_lib);
     if needs_runtime {
         let runtime_lib = find_lib("airl_runtime");
         if !runtime_lib.is_empty() {
@@ -3077,6 +3075,45 @@ pub fn compile_to_executable_impl(
         Ok(())
     } else {
         Err(format!("linker failed: {:?}", status.code()))
+    }
+}
+
+/// Compressed libairl_rt.a embedded at build time.
+/// Empty if the library wasn't found during compilation (development builds).
+const EMBEDDED_RT_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libairl_rt.a.gz"));
+
+/// Extract the embedded compressed runtime to a temp file. Returns the path, or None if not embedded.
+pub fn extract_embedded_rt() -> Option<String> {
+    if EMBEDDED_RT_GZ.is_empty() { return None; }
+    use std::io::Read;
+    let mut decoder = flate2::read::GzDecoder::new(EMBEDDED_RT_GZ);
+    let mut data = Vec::new();
+    decoder.read_to_end(&mut data).ok()?;
+    let tmp = std::env::temp_dir().join("libairl_rt.a");
+    std::fs::write(&tmp, &data).ok()?;
+    Some(tmp.to_string_lossy().to_string())
+}
+
+/// Get the runtime library path: try embedded first, fall back to disk search.
+fn get_or_extract_rt_lib() -> Result<String, String> {
+    // If embedded runtime is available (non-empty), decompress to temp
+    if !EMBEDDED_RT_GZ.is_empty() {
+        use std::io::Read;
+        let mut decoder = flate2::read::GzDecoder::new(EMBEDDED_RT_GZ);
+        let mut data = Vec::new();
+        decoder.read_to_end(&mut data)
+            .map_err(|e| format!("decompress embedded runtime: {}", e))?;
+        let tmp = std::env::temp_dir().join("libairl_rt.a");
+        std::fs::write(&tmp, &data)
+            .map_err(|e| format!("write runtime to {}: {}", tmp.display(), e))?;
+        return Ok(tmp.to_string_lossy().to_string());
+    }
+    // Fall back to searching on disk (development builds)
+    let path = find_lib("airl_rt");
+    if path.is_empty() {
+        Err("libairl_rt.a not found. Build with: cargo build --features aot -p airl-rt".into())
+    } else {
+        Ok(path)
     }
 }
 

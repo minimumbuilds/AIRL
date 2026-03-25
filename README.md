@@ -154,6 +154,27 @@ This is why AIRL makes contracts **grammar-level mandatory** — the parser lite
 - **Standard library** — 89 pure AIRL functions (collections, math, result combinators, string, map, set) auto-loaded as a prelude
 - **120+ Rust builtins** — arithmetic, comparisons, list ops (10), string ops (17), map ops (10), file I/O (13), float math (15), path (5), regex (4), crypto (5), HTTP, JSON, type conversion, error handling, time, system, format, exit
 
+### Distribution Model
+
+AIRL is distributed as a **single binary** — build once with `cargo build`, then use anywhere:
+
+```bash
+# Build the compiler (requires Rust toolchain — one-time)
+cargo build --release --features jit,aot
+cp target/release/airl-driver /usr/local/bin/airl
+
+# Compile AIRL programs to native binaries (no Rust needed)
+airl compile app.airl -o app
+./app
+
+# Or run directly with JIT (like go run)
+airl run app.airl
+```
+
+The runtime library (`libairl_rt.a`) is **embedded in the compiler binary** — compressed at build time, extracted to a temp file during `airl compile`, then cleaned up. The only external dependency at compile time is a system C linker (`cc`), present on all Linux/macOS systems.
+
+**TODO:** Replace `cc` with Cranelift native ELF emission for zero-dependency compilation (no system linker needed).
+
 ### Compilation & Execution
 
 AIRL supports two execution modes, both sharing the same Rust runtime (`crates/airl-rt/`):
