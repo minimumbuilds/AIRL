@@ -328,27 +328,25 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 ---
 
-## Remaining Tasks
+## Milestones
 
-### Tier 1 — Long-term
+### G3 Self-Hosted Compiler (v0.5.2) — ACHIEVED
 
-#### 1. Bootstrap Compiler → Standalone Native Binaries
+**The AIRL compiler is self-hosted.** The G3 compiler (`bootstrap/g3_compiler.airl`) is written entirely in AIRL and produces native binaries. All compilation logic — lexing, parsing, bytecode compilation, stdlib compilation — is AIRL code. Cranelift (native code generation) and `libairl_rt.a` (runtime) are exposed as builtins embedded in the `airl` binary, same as Go's assembler is part of the Go toolchain.
 
-**Status: Self-compiling, fixpoint verified, AOT produces native executables with unboxed fast path.** The bootstrap compiler (lexer, parser, evaluator, type checker, IR compiler — ~2,500 lines of AIRL) can compile itself and produce identical output whether run interpreted or compiled (fixpoint). It is a working, self-compiling AIRL compiler written in AIRL.
+**Pipeline:** AIRL source → bootstrap lexer (AIRL) → parser (AIRL) → bc_compiler (AIRL) → BCFunc bytecode → `compile-bytecode-to-executable` builtin (Cranelift AOT) → native binary.
 
-**What's achieved:**
-- **Lexer** (`bootstrap/lexer.airl`, ~365 lines) — tokenizes AIRL source. Self-parse verified (15,691 chars → 3,400 tokens).
-- **Parser** (`bootstrap/parser.airl`, ~930 lines) — converts tokens to typed AST, including `deftype` declarations.
-- **Evaluator** (`bootstrap/eval.airl`, ~616 lines) — interprets AST using tagged value variants and map-based environment frames.
-- **Type Checker** (`bootstrap/types.airl` + `bootstrap/typecheck.airl`, ~715 lines) — two-pass architecture. All bootstrap modules type-check cleanly.
-- **IR Compiler** (`bootstrap/compiler.airl`, ~400 lines) — compiles AST to tree-flattened IR.
-- **Fixpoint** — compiled compiler produces identical IR to interpreted compiler.
-- **AOT native executables** — `airl compile <file.airl> -o <binary>` produces standalone native executables linked against `libairl_rt.a`.
-- **Unboxed AOT fast path** — Eligible pure-arithmetic functions compile to raw CPU instructions (no heap allocation). fib(35): 56ms (42x faster than Python).
+**What works:** Contracts, closures, pattern matching, all stdlib functions (sum-list, product-list, abs, map, filter, fold, sort, etc.), cross-module function resolution.
 
-**Runtime dependency:** The compiled output links against `libairl_rt.a`, which provides ~48 primitive builtins (`+`, `-`, `head`, `tail`, `char-at`, `map-get`, `print`, etc.) as `extern "C"` functions. This is analogous to a C compiler that needs `libc`.
+**External dependency:** System C linker (`cc`) for final linking. Present on all Linux/macOS systems.
 
-**Next steps:** Extend unboxed path to more function types (e.g., functions calling builtins via inlined implementations). Improve list-heavy AOT performance (currently slower than Python due to recursive stdlib).
+### Remaining — Next Steps
+
+1. **Self-compilation (fixpoint)** — G3 compiles itself, producing a G3-compiled G3 that produces identical binaries.
+2. **Eliminate `cc` dependency** — Replace system linker with Cranelift native ELF emission or bundled linker. Zero external dependencies.
+3. **Builtin unification** — Single source of truth for all builtins (macro codegen) to prevent divergence between VM and AOT paths.
+4. **~50 missing AOT builtin registrations** — Thread/channel, type conversion, tensor builtins not yet in Cranelift maps.
+5. **Z3 verification depth** — Extend Z3 to prove list and ADT properties.
 
 ---
 
