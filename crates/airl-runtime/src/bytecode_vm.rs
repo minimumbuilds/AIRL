@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use crate::bytecode::*;
 use crate::value::Value;
-use crate::builtins::Builtins;
+use crate::builtins::{Builtins, VmCaller};
 use crate::error::RuntimeError;
 
 struct CallFrame {
@@ -103,6 +103,14 @@ impl BytecodeVm {
     }
 
     fn run(&mut self) -> Result<Value, RuntimeError> {
+        self.run_with_min_depth(0)
+    }
+
+    /// Run the VM loop until the call stack depth drops to `min_depth`.
+    /// When `min_depth` is 0, this behaves identically to the original `run()`.
+    /// When called from `invoke_in_nested_frame`, `min_depth` is the stack
+    /// depth of the caller, so we stop as soon as the nested frame returns.
+    fn run_with_min_depth(&mut self, min_depth: usize) -> Result<Value, RuntimeError> {
         loop {
             let (func_name, ip, func_len) = {
                 let frame = self.call_stack.last().unwrap();
@@ -117,7 +125,7 @@ impl BytecodeVm {
                 let return_reg = self.call_stack.last().unwrap().return_reg;
                 self.call_stack.pop();
                 self.recursion_depth = self.recursion_depth.saturating_sub(1);
-                if self.call_stack.is_empty() {
+                if self.call_stack.len() <= min_depth {
                     return Ok(Value::Nil);
                 }
                 let caller = self.call_stack.last_mut().unwrap();
@@ -520,8 +528,13 @@ impl BytecodeVm {
                         }
                     }
 
-                    // Try builtin first
-                    if let Some(f) = self.builtins.get(&name) {
+                    // Try VM-aware builtins first (map, filter, fold, sort)
+                    if let Some(f) = self.builtins.get_with_vm(&name) {
+                        let f = *f; // Copy fn pointer to release borrow on self
+                        let result = f(self, &args)?;
+                        self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                    } else if let Some(f) = self.builtins.get(&name) {
+                        // Try regular builtin
                         let result = f(&args)?;
                         self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
                     } else {
@@ -543,7 +556,12 @@ impl BytecodeVm {
                         let frame = self.call_stack.last().unwrap();
                         (0..argc).map(|i| frame.registers[instr.dst as usize + 1 + i].clone()).collect()
                     };
-                    if let Some(f) = self.builtins.get(&name) {
+                    // Try VM-aware builtins first (map, filter, fold, sort)
+                    if let Some(f) = self.builtins.get_with_vm(&name) {
+                        let f = *f; // Copy fn pointer to release borrow on self
+                        let result = f(self, &args)?;
+                        self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                    } else if let Some(f) = self.builtins.get(&name) {
                         let result = f(&args)?;
                         self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
                     } else {
@@ -566,7 +584,11 @@ impl BytecodeVm {
                         }
                         Value::IRFuncRef(ref name) => {
                             let name = name.clone();
-                            if let Some(f) = self.builtins.get(&name) {
+                            if let Some(f) = self.builtins.get_with_vm(&name) {
+                                let f = *f;
+                                let result = f(self, &args)?;
+                                self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                            } else if let Some(f) = self.builtins.get(&name) {
                                 let result = f(&args)?;
                                 self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
                             } else {
@@ -575,7 +597,11 @@ impl BytecodeVm {
                         }
                         Value::BuiltinFn(ref name) => {
                             let name = name.clone();
-                            if let Some(f) = self.builtins.get(&name) {
+                            if let Some(f) = self.builtins.get_with_vm(&name) {
+                                let f = *f;
+                                let result = f(self, &args)?;
+                                self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                            } else if let Some(f) = self.builtins.get(&name) {
                                 let result = f(&args)?;
                                 self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
                             } else {
@@ -598,7 +624,7 @@ impl BytecodeVm {
                     let return_reg = self.call_stack.last().unwrap().return_reg;
                     self.call_stack.pop();
                     self.recursion_depth = self.recursion_depth.saturating_sub(1);
-                    if self.call_stack.is_empty() {
+                    if self.call_stack.len() <= min_depth {
                         return Ok(result);
                     }
                     let caller = self.call_stack.last_mut().unwrap();
@@ -633,6 +659,17 @@ impl BytecodeVm {
         }
     }
 
+    /// Invoke a function in a nested frame, returning its result without
+    /// disturbing the outer call stack. Safe to call from within VM-aware builtins.
+    fn invoke_in_nested_frame(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        if !self.functions.contains_key(name) {
+            return Err(RuntimeError::UndefinedSymbol(name.to_string()));
+        }
+        let target_depth = self.call_stack.len();
+        self.push_frame(name, &args, 0)?;
+        self.run_with_min_depth(target_depth)
+    }
+
     /// Call a named function with the given argument values.
     /// The function must already be loaded in the VM.
     /// This pushes a fresh call frame and runs the VM until the function returns.
@@ -652,6 +689,33 @@ impl BytecodeVm {
         }
         self.load_function(main_func);
         self.exec_main()
+    }
+}
+
+impl VmCaller for BytecodeVm {
+    fn call_value(&mut self, callee: &Value, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        match callee {
+            Value::BytecodeClosure(closure) => {
+                let mut full_args = closure.captured.clone();
+                full_args.extend(args);
+                self.invoke_in_nested_frame(&closure.func_name.clone(), full_args)
+            }
+            Value::IRFuncRef(ref name) | Value::BuiltinFn(ref name) => {
+                let name = name.clone();
+                // Check VM-aware builtins first
+                if let Some(f) = self.builtins.get_with_vm(&name) {
+                    let f = *f;
+                    return f(self, &args);
+                }
+                // Check regular builtins
+                if let Some(f) = self.builtins.get(&name) {
+                    return f(&args);
+                }
+                // Then try nested frame for user functions
+                self.invoke_in_nested_frame(&name, args)
+            }
+            _ => Err(RuntimeError::Custom(format!("not callable: {}", callee))),
+        }
     }
 }
 

@@ -6,14 +6,24 @@ use std::collections::HashMap;
 
 pub type BuiltinFnPtr = fn(&[Value]) -> Result<Value, RuntimeError>;
 
+/// Trait for calling AIRL values (closures, functions) from within builtins.
+/// Implemented by BytecodeVm to allow VM-aware builtins to invoke closures.
+pub trait VmCaller {
+    fn call_value(&mut self, callee: &Value, args: Vec<Value>) -> Result<Value, RuntimeError>;
+}
+
+pub type BuiltinWithVmFn = fn(&mut dyn VmCaller, &[Value]) -> Result<Value, RuntimeError>;
+
 pub struct Builtins {
     fns: HashMap<String, BuiltinFnPtr>,
+    fns_with_vm: HashMap<String, BuiltinWithVmFn>,
 }
 
 impl Builtins {
     pub fn new() -> Self {
         let mut b = Builtins {
             fns: HashMap::new(),
+            fns_with_vm: HashMap::new(),
         };
         b.register_arithmetic();
         b.register_comparison();
@@ -30,6 +40,7 @@ impl Builtins {
         b.register_path();
         b.register_regex();
         b.register_crypto();
+        b.register_vm_aware();
         b
     }
 
@@ -38,11 +49,19 @@ impl Builtins {
     }
 
     pub fn has(&self, name: &str) -> bool {
-        self.fns.contains_key(name)
+        self.fns.contains_key(name) || self.fns_with_vm.contains_key(name)
     }
 
     fn register(&mut self, name: &str, f: BuiltinFnPtr) {
         self.fns.insert(name.to_string(), f);
+    }
+
+    pub fn register_with_vm(&mut self, name: &str, f: BuiltinWithVmFn) {
+        self.fns_with_vm.insert(name.to_string(), f);
+    }
+
+    pub fn get_with_vm(&self, name: &str) -> Option<&BuiltinWithVmFn> {
+        self.fns_with_vm.get(name)
     }
 
     // ── Arithmetic ──────────────────────────────────────
@@ -1522,6 +1541,115 @@ impl Builtins {
         self.register("base64-decode", builtin_base64_decode);
         self.register("random-bytes", builtin_random_bytes);
     }
+
+    // ── VM-aware builtins (require closure calling) ─────
+
+    fn register_vm_aware(&mut self) {
+        self.register_with_vm("map", builtin_map_vm);
+        self.register_with_vm("filter", builtin_filter_vm);
+        self.register_with_vm("fold", builtin_fold_vm);
+        self.register_with_vm("sort", builtin_sort_vm);
+    }
+}
+
+// ── VM-aware list builtins (require closure calling) ──────────────
+
+fn builtin_map_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 2 {
+        return Err(RuntimeError::TypeError(format!(
+            "`map` expects 2 argument(s), got {}", args.len()
+        )));
+    }
+    let f = args[0].clone();
+    let xs = match &args[1] {
+        Value::List(items) => items.clone(),
+        _ => return Err(RuntimeError::TypeError("map: second argument must be a list".into())),
+    };
+    let mut results = Vec::with_capacity(xs.len());
+    for x in xs {
+        results.push(vm.call_value(&f, vec![x])?);
+    }
+    Ok(Value::List(results))
+}
+
+fn builtin_filter_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 2 {
+        return Err(RuntimeError::TypeError(format!(
+            "`filter` expects 2 argument(s), got {}", args.len()
+        )));
+    }
+    let pred = args[0].clone();
+    let xs = match &args[1] {
+        Value::List(items) => items.clone(),
+        _ => return Err(RuntimeError::TypeError("filter: second argument must be a list".into())),
+    };
+    let mut results = Vec::new();
+    for x in xs {
+        let keep = vm.call_value(&pred, vec![x.clone()])?;
+        match keep {
+            Value::Bool(true) => results.push(x),
+            Value::Bool(false) => {}
+            Value::Nil => {}              // nil is falsy
+            _ => results.push(x),         // everything else is truthy
+        }
+    }
+    Ok(Value::List(results))
+}
+
+fn builtin_fold_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 3 {
+        return Err(RuntimeError::TypeError(format!(
+            "`fold` expects 3 argument(s), got {}", args.len()
+        )));
+    }
+    let f = args[0].clone();
+    let mut acc = args[1].clone();
+    let xs = match &args[2] {
+        Value::List(items) => items.clone(),
+        _ => return Err(RuntimeError::TypeError("fold: third argument must be a list".into())),
+    };
+    for x in xs {
+        acc = vm.call_value(&f, vec![acc, x])?;
+    }
+    Ok(acc)
+}
+
+fn builtin_sort_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 2 {
+        return Err(RuntimeError::TypeError(format!(
+            "`sort` expects 2 argument(s), got {}", args.len()
+        )));
+    }
+    let cmp = args[0].clone();
+    let xs = match &args[1] {
+        Value::List(items) => items.clone(),
+        _ => return Err(RuntimeError::TypeError("sort: second argument must be a list".into())),
+    };
+
+    fn merge_sort(vm: &mut dyn VmCaller, cmp: &Value, xs: Vec<Value>) -> Result<Vec<Value>, RuntimeError> {
+        if xs.len() <= 1 { return Ok(xs); }
+        let mid = xs.len() / 2;
+        let left = merge_sort(vm, cmp, xs[..mid].to_vec())?;
+        let right = merge_sort(vm, cmp, xs[mid..].to_vec())?;
+        let mut result = Vec::with_capacity(left.len() + right.len());
+        let (mut i, mut j) = (0, 0);
+        while i < left.len() && j < right.len() {
+            let is_less = vm.call_value(cmp, vec![left[i].clone(), right[j].clone()])?;
+            if matches!(is_less, Value::Bool(true)) {
+                result.push(left[i].clone());
+                i += 1;
+            } else {
+                result.push(right[j].clone());
+                j += 1;
+            }
+        }
+        result.extend_from_slice(&left[i..]);
+        result.extend_from_slice(&right[j..]);
+        Ok(result)
+    }
+
+    let sorted = merge_sort(vm, &cmp, xs)?;
+    Ok(Value::List(sorted))
 }
 
 fn builtin_int_to_string(args: &[Value]) -> Result<Value, RuntimeError> {

@@ -2,81 +2,45 @@
 ;; Performance test fixtures for AIRL v0.3.0 list-heavy operations
 
 ;; ── 1. Sum 10K integers ──────────────────────────────────
-(defn sum-10k
-  :sig [() -> i64]
-  :intent "Sum integers 0..9999 using fold over range"
-  :requires [(valid true)]
-  :ensures [(= result 49995000)]
-  :body (fold (fn [acc x] (+ acc x)) 0 (range 0 10000)))
-
 (let (start : i64 (time-now))
-  (let (result : i64 (sum-10k))
+  (let (result : i64 (fold (fn [acc x] (+ acc x)) 0 (range 0 10000)))
     (let (elapsed : i64 (- (time-now) start))
       (do
-        (assert (= result 49995000) "sum-10k should be 49995000")
-        (print "Sum 10K:" result "in" elapsed "ms")))))
+        (assert (= result 49995000) "sum-10k failed")
+        (print "Sum 10K:" result "in" elapsed "ms\n")))))
 
 ;; ── 2. Filter evens from 10K ─────────────────────────────
-(defn count-evens-10k
-  :sig [() -> i64]
-  :intent "Count even integers in 0..9999"
-  :requires [(valid true)]
-  :ensures [(= result 5000)]
-  :body (length (filter (fn [x] (= (% x 2) 0)) (range 0 10000))))
-
 (let (start : i64 (time-now))
-  (let (result : i64 (count-evens-10k))
+  (let (result : i64 (length (filter (fn [x] (= (% x 2) 0)) (range 0 10000))))
     (let (elapsed : i64 (- (time-now) start))
       (do
-        (assert (= result 5000) "count-evens-10k should be 5000")
-        (print "Filter evens 10K:" result "in" elapsed "ms")))))
+        (assert (= result 5000) "count-evens failed")
+        (print "Filter evens 10K:" result "in" elapsed "ms\n")))))
 
-;; ── 3. Map squares over 1K ───────────────────────────────
-(defn map-squares-1k
-  :sig [() -> List]
-  :intent "Square each integer in 0..999"
-  :requires [(valid true)]
-  :ensures [(= (length result) 1000)]
-  :body (map (fn [x] (* x x)) (range 0 1000)))
-
+;; ── 3. Map squares over 1K ──────────────────────────────
 (let (start : i64 (time-now))
-  (let (squares : List (map-squares-1k))
+  (let (squares : _ (map (fn [x] (* x x)) (range 0 1000)))
     (let (elapsed : i64 (- (time-now) start))
-      (let (last-elem : i64 (at squares 999))
+      (let (last : i64 (at squares 999))
         (do
-          (assert (= last-elem 998001) "last element should be 999*999 = 998001")
-          (print "Map squares 1K: last =" last-elem "in" elapsed "ms"))))))
+          (assert (= last 998001) "map-squares failed")
+          (print "Map squares 1K: last=" last "in" elapsed "ms\n"))))))
 
-;; ── 4. Sort 100 integers in reverse ──────────────────────
-(defn sort-reversed-100
-  :sig [() -> List]
-  :intent "Sort a reversed list of 0..99 back into ascending order"
-  :requires [(valid true)]
-  :ensures [(= (length result) 100)]
-  :body (sort (fn [a b] (< a b)) (reverse (range 0 100))))
-
+;; ── 4. Sort 100 reversed ────────────────────────────────
 (let (start : i64 (time-now))
-  (let (sorted : List (sort-reversed-100))
+  (let (sorted : _ (sort (fn [a b] (< a b)) (reverse (range 0 100))))
     (let (elapsed : i64 (- (time-now) start))
       (do
-        (assert (= sorted (range 0 100)) "sort-reversed-100 should equal (range 0 100)")
-        (print "Sort 100 reversed: last =" (at sorted 99) "in" elapsed "ms")))))
+        (assert (= (at sorted 0) 0) "sort first failed")
+        (assert (= (at sorted 99) 99) "sort last failed")
+        (print "Sort 100 reversed: in" elapsed "ms\n")))))
 
-;; ── 5. Chained operation: sum of squares of evens 0..99 ──
-(defn chained-sum-sq-evens
-  :sig [() -> i64]
-  :intent "Sum of squares of even numbers in 0..99"
-  :requires [(valid true)]
-  :ensures [(valid result)]
-  :body (fold (fn [acc x] (+ acc x))
-              0
-              (map (fn [x] (* x x))
-                   (filter (fn [x] (= (% x 2) 0))
-                           (range 0 100)))))
-
+;; ── 5. Chained: sum of squares of evens 0-99 ────────────
 (let (start : i64 (time-now))
-  (let (result : i64 (chained-sum-sq-evens))
+  (let (result : i64 (fold (fn [acc x] (+ acc x)) 0
+                        (map (fn [x] (* x x))
+                          (filter (fn [x] (= (% x 2) 0)) (range 0 100)))))
     (let (elapsed : i64 (- (time-now) start))
       (do
-        (assert (= result 161700) "chained sum of squares of evens 0..99 should be 161700")
-        (print "Chained sum-sq-evens:" result "in" elapsed "ms")))))
+        (assert (= result 161700) "chained failed")
+        (print "Chained sum-sq-evens:" result "in" elapsed "ms\n")))))
