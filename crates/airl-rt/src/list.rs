@@ -206,6 +206,169 @@ pub extern "C" fn airl_list_contains(list: *mut RtValue, val: *mut RtValue) -> *
     }
 }
 
+// ── Higher-order list operations (for AOT-compiled code) ─────────
+
+use crate::closure::airl_call_closure;
+use crate::value::rt_nil;
+
+/// map: apply closure to each element, return new list
+#[no_mangle]
+pub extern "C" fn airl_map(closure: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
+    let items = unsafe {
+        match &(*list).data {
+            RtData::List(items) => items.clone(),
+            _ => rt_error("airl_map: second arg must be a List"),
+        }
+    };
+    let mut result = Vec::with_capacity(items.len());
+    for &item in &items {
+        airl_value_retain(item);
+        let args: [*mut RtValue; 1] = [item];
+        let val = airl_call_closure(closure, args.as_ptr(), 1);
+        result.push(val);
+    }
+    rt_list(result)
+}
+
+/// filter: keep elements where closure returns true
+#[no_mangle]
+pub extern "C" fn airl_filter(closure: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
+    let items = unsafe {
+        match &(*list).data {
+            RtData::List(items) => items.clone(),
+            _ => rt_error("airl_filter: second arg must be a List"),
+        }
+    };
+    let mut result = Vec::new();
+    for &item in &items {
+        airl_value_retain(item);
+        let args: [*mut RtValue; 1] = [item];
+        let test = airl_call_closure(closure, args.as_ptr(), 1);
+        let keep = unsafe { matches!(&(*test).data, RtData::Bool(true)) };
+        if keep {
+            airl_value_retain(item);
+            result.push(item);
+        }
+    }
+    rt_list(result)
+}
+
+/// fold: left fold with accumulator
+#[no_mangle]
+pub extern "C" fn airl_fold(
+    closure: *mut RtValue, init: *mut RtValue, list: *mut RtValue,
+) -> *mut RtValue {
+    let items = unsafe {
+        match &(*list).data {
+            RtData::List(items) => items.clone(),
+            _ => rt_error("airl_fold: third arg must be a List"),
+        }
+    };
+    airl_value_retain(init);
+    let mut acc = init;
+    for &item in &items {
+        airl_value_retain(item);
+        let args: [*mut RtValue; 2] = [acc, item];
+        acc = airl_call_closure(closure, args.as_ptr(), 2);
+    }
+    acc
+}
+
+/// sort: insertion sort with comparison closure
+#[no_mangle]
+pub extern "C" fn airl_sort(closure: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
+    let items = unsafe {
+        match &(*list).data {
+            RtData::List(items) => items.clone(),
+            _ => rt_error("airl_sort: second arg must be a List"),
+        }
+    };
+    if items.len() <= 1 {
+        airl_value_retain(list);
+        return list;
+    }
+    let mut vec = items;
+    for i in 1..vec.len() {
+        let mut j = i;
+        while j > 0 {
+            airl_value_retain(vec[j - 1]);
+            airl_value_retain(vec[j]);
+            let args: [*mut RtValue; 2] = [vec[j - 1], vec[j]];
+            let cmp = airl_call_closure(closure, args.as_ptr(), 2);
+            let is_less = unsafe { matches!(&(*cmp).data, RtData::Bool(true)) };
+            if !is_less {
+                vec.swap(j - 1, j);
+                j -= 1;
+            } else {
+                break;
+            }
+        }
+    }
+    for &item in &vec { airl_value_retain(item); }
+    rt_list(vec)
+}
+
+/// any: true if closure returns true for any element
+#[no_mangle]
+pub extern "C" fn airl_any(closure: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
+    let items = unsafe {
+        match &(*list).data {
+            RtData::List(items) => items.clone(),
+            _ => rt_error("airl_any: second arg must be a List"),
+        }
+    };
+    for &item in &items {
+        airl_value_retain(item);
+        let args: [*mut RtValue; 1] = [item];
+        let test = airl_call_closure(closure, args.as_ptr(), 1);
+        if unsafe { matches!(&(*test).data, RtData::Bool(true)) } {
+            return rt_bool(true);
+        }
+    }
+    rt_bool(false)
+}
+
+/// all: true if closure returns true for all elements
+#[no_mangle]
+pub extern "C" fn airl_all(closure: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
+    let items = unsafe {
+        match &(*list).data {
+            RtData::List(items) => items.clone(),
+            _ => rt_error("airl_all: second arg must be a List"),
+        }
+    };
+    for &item in &items {
+        airl_value_retain(item);
+        let args: [*mut RtValue; 1] = [item];
+        let test = airl_call_closure(closure, args.as_ptr(), 1);
+        if !unsafe { matches!(&(*test).data, RtData::Bool(true)) } {
+            return rt_bool(false);
+        }
+    }
+    rt_bool(true)
+}
+
+/// find: first element where closure returns true, or nil
+#[no_mangle]
+pub extern "C" fn airl_find(closure: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
+    let items = unsafe {
+        match &(*list).data {
+            RtData::List(items) => items.clone(),
+            _ => rt_error("airl_find: second arg must be a List"),
+        }
+    };
+    for &item in &items {
+        airl_value_retain(item);
+        let args: [*mut RtValue; 1] = [item];
+        let test = airl_call_closure(closure, args.as_ptr(), 1);
+        if unsafe { matches!(&(*test).data, RtData::Bool(true)) } {
+            airl_value_retain(item);
+            return item;
+        }
+    }
+    rt_nil()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

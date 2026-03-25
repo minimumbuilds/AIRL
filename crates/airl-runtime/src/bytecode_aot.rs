@@ -192,6 +192,14 @@ pub struct RuntimeImports {
     pub zip_fn: FuncId,
     pub flatten_fn: FuncId,
     pub enumerate_fn: FuncId,
+    // Higher-order list ops (closure-accepting)
+    pub map_ho: FuncId,
+    pub filter_ho: FuncId,
+    pub fold_ho: FuncId,
+    pub sort_ho: FuncId,
+    pub any_ho: FuncId,
+    pub all_ho: FuncId,
+    pub find_ho: FuncId,
     pub path_join: FuncId,
     pub path_parent: FuncId,
     pub path_filename: FuncId,
@@ -604,6 +612,15 @@ impl BytecodeAot {
         let zip_fn = declare_import(m, "airl_zip", s2.clone());
         let flatten_fn = declare_import(m, "airl_flatten", s1.clone());
         let enumerate_fn = declare_import(m, "airl_enumerate", s1.clone());
+        // Higher-order list ops (closure + list -> result)
+        let map_ho = declare_import(m, "airl_map", s2.clone());
+        let filter_ho = declare_import(m, "airl_filter", s2.clone());
+        let s3 = sig_3_ptr(m);
+        let fold_ho = declare_import(m, "airl_fold", s3);
+        let sort_ho = declare_import(m, "airl_sort", s2.clone());
+        let any_ho = declare_import(m, "airl_any", s2.clone());
+        let all_ho = declare_import(m, "airl_all", s2.clone());
+        let find_ho = declare_import(m, "airl_find", s2.clone());
         let path_join = declare_import(m, "airl_path_join", s1.clone());
         let path_parent = declare_import(m, "airl_path_parent", s1.clone());
         let path_filename = declare_import(m, "airl_path_filename", s1.clone());
@@ -707,6 +724,7 @@ impl BytecodeAot {
             assert_fn, panic_fn, exit_fn, sleep_fn, format_time, read_lines,
             concat_lists, range_fn, reverse_list, take_fn, drop_fn, zip_fn,
             flatten_fn, enumerate_fn,
+            map_ho, filter_ho, fold_ho, sort_ho, any_ho, all_ho, find_ho,
             path_join, path_parent, path_filename, path_extension, is_absolute,
             regex_match, regex_find_all, regex_replace, regex_split,
             sha256, hmac_sha256, base64_encode, base64_decode, random_bytes,
@@ -929,6 +947,15 @@ impl BytecodeAot {
         m.insert("tcp-recv-exact".into(),  rt.tcp_recv_exact);
         m.insert("tcp-set-timeout".into(), rt.tcp_set_timeout);
         m.insert("tcp-connect-tls".into(), rt.tcp_connect_tls);
+
+        // Higher-order list operations (closure-accepting)
+        m.insert("map".into(),    rt.map_ho);
+        m.insert("filter".into(), rt.filter_ho);
+        m.insert("fold".into(),   rt.fold_ho);
+        m.insert("sort".into(),   rt.sort_ho);
+        m.insert("any".into(),    rt.any_ho);
+        m.insert("all".into(),    rt.all_ho);
+        m.insert("find".into(),   rt.find_ho);
 
         m
     }
