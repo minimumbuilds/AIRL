@@ -30,6 +30,7 @@ pub enum Value {
     Unit,
     Tensor(Box<crate::tensor::TensorValue>),
     List(Vec<Value>),
+    IntList(Vec<i64>),  // Specialized homogeneous integer list (cache-friendly, no boxing)
     Tuple(Vec<Value>),
     Variant(String, Box<Value>),
     Struct(BTreeMap<String, Value>),
@@ -64,6 +65,14 @@ impl fmt::Display for Value {
                 for (i, item) in items.iter().enumerate() {
                     if i > 0 { write!(f, " ")?; }
                     write!(f, "{}", item)?;
+                }
+                write!(f, "]")
+            }
+            Value::IntList(xs) => {
+                write!(f, "[")?;
+                for (i, x) in xs.iter().enumerate() {
+                    if i > 0 { write!(f, " ")?; }
+                    write!(f, "{}", x)?;
                 }
                 write!(f, "]")
             }
@@ -120,6 +129,12 @@ impl PartialEq for Value {
             (Value::Nil, Value::Nil) => true,
             (Value::Unit, Value::Unit) => true,
             (Value::List(a), Value::List(b)) => a == b,
+            (Value::IntList(a), Value::IntList(b)) => a == b,
+            (Value::IntList(xs), Value::List(ys)) | (Value::List(ys), Value::IntList(xs)) => {
+                xs.len() == ys.len() && xs.iter().zip(ys.iter()).all(|(x, y)| {
+                    matches!(y, Value::Int(n) if *n == *x)
+                })
+            }
             (Value::Tuple(a), Value::Tuple(b)) => a == b,
             (Value::Variant(na, va), Value::Variant(nb, vb)) => na == nb && va == vb,
             (Value::Struct(a), Value::Struct(b)) => a == b,
@@ -141,6 +156,18 @@ impl PartialEq for Value {
             (Value::IRFuncRef(_), _) => false,
             (Value::BytecodeClosure(_), _) => false,
             _ => false,
+        }
+    }
+}
+
+impl Value {
+    /// Convert any list-like value into a Vec<Value>.
+    /// IntList is transparently promoted to a boxed list.
+    pub fn into_list(self) -> Vec<Value> {
+        match self {
+            Value::List(items) => items,
+            Value::IntList(items) => items.into_iter().map(Value::Int).collect(),
+            other => vec![other],
         }
     }
 }
@@ -336,5 +363,46 @@ mod tests {
         let v = Value::Int(42);
         let v2 = v.clone();
         let _ = format!("{:?}", v2);
+    }
+
+    // ── IntList ─────────────────────────────────────────
+
+    #[test]
+    fn intlist_display() {
+        let v = Value::IntList(vec![1, 2, 3]);
+        assert_eq!(format!("{}", v), "[1 2 3]");
+    }
+
+    #[test]
+    fn intlist_display_empty() {
+        let v = Value::IntList(vec![]);
+        assert_eq!(format!("{}", v), "[]");
+    }
+
+    #[test]
+    fn intlist_eq_intlist() {
+        assert_eq!(Value::IntList(vec![1, 2, 3]), Value::IntList(vec![1, 2, 3]));
+        assert_ne!(Value::IntList(vec![1, 2]), Value::IntList(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn intlist_eq_list_cross() {
+        let il = Value::IntList(vec![1, 2, 3]);
+        let l = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        assert_eq!(il, l);
+        assert_eq!(l, il);
+    }
+
+    #[test]
+    fn intlist_neq_list_mixed() {
+        let il = Value::IntList(vec![1, 2, 3]);
+        let l = Value::List(vec![Value::Int(1), Value::Str("two".into()), Value::Int(3)]);
+        assert_ne!(il, l);
+    }
+
+    #[test]
+    fn intlist_into_list() {
+        let il = Value::IntList(vec![10, 20]);
+        assert_eq!(il.into_list(), vec![Value::Int(10), Value::Int(20)]);
     }
 }

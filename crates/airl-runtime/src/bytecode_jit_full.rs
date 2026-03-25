@@ -686,6 +686,11 @@ impl BytecodeJitFull {
                 let ptrs: Vec<*mut RtValue> = items.iter().map(|i| Self::value_to_rt_with_compiled(i, compiled)).collect();
                 rt_list(ptrs)
             }
+            Value::IntList(ints) => {
+                // Promote to boxed list for JIT interop
+                let ptrs: Vec<*mut RtValue> = ints.iter().map(|n| Self::value_to_rt_with_compiled(&Value::Int(*n), compiled)).collect();
+                rt_list(ptrs)
+            }
             Value::Tuple(items) => {
                 let ptrs: Vec<*mut RtValue> = items.iter().map(|i| Self::value_to_rt_with_compiled(i, compiled)).collect();
                 rt_list(ptrs)

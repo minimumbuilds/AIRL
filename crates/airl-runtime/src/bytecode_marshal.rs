@@ -87,6 +87,19 @@ fn value_to_instruction(val: &Value) -> Result<Instruction, RuntimeError> {
             let b    = value_to_u16(&items[3], "instruction b")?;
             Ok(Instruction::new(op, dst, a, b))
         }
+        Value::IntList(ints) => {
+            if ints.len() < 4 {
+                return Err(type_err(&format!(
+                    "instruction: expected 4 elements, got {}",
+                    ints.len()
+                )));
+            }
+            let op  = int_to_op(ints[0] as u16)?;
+            let dst = ints[1] as u16;
+            let a   = ints[2] as u16;
+            let b   = ints[3] as u16;
+            Ok(Instruction::new(op, dst, a, b))
+        }
         _ => Err(type_err("expected instruction as list [op dst a b]")),
     }
 }

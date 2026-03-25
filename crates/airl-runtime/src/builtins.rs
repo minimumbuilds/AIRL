@@ -129,6 +129,10 @@ impl Builtins {
         self.register("concat", builtin_concat);
         self.register("flatten", builtin_flatten);
         self.register("range", builtin_range);
+        self.register("take", builtin_take);
+        self.register("drop", builtin_drop);
+        self.register("zip", builtin_zip);
+        self.register("enumerate", builtin_enumerate);
     }
 
     // ── String ──────────────────────────────────────────
@@ -550,6 +554,7 @@ fn builtin_length(args: &[Value]) -> Result<Value, RuntimeError> {
     expect_arity("length", args, 1)?;
     match &args[0] {
         Value::List(items) => Ok(Value::Int(items.len() as i64)),
+        Value::IntList(xs) => Ok(Value::Int(xs.len() as i64)),
         Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
         _ => Err(RuntimeError::TypeError(format!(
             "`length` expects List or Str, got {}",
@@ -572,6 +577,17 @@ fn builtin_at(args: &[Value]) -> Result<Value, RuntimeError> {
                 Ok(items[i].clone())
             }
         }
+        (Value::IntList(xs), Value::Int(idx)) => {
+            let i = *idx as usize;
+            if i >= xs.len() {
+                Err(RuntimeError::IndexOutOfBounds {
+                    index: i,
+                    len: xs.len(),
+                })
+            } else {
+                Ok(Value::Int(xs[i]))
+            }
+        }
         _ => Err(RuntimeError::TypeError(
             "`at` expects (List, Int)".into(),
         )),
@@ -580,8 +596,19 @@ fn builtin_at(args: &[Value]) -> Result<Value, RuntimeError> {
 
 fn builtin_append(args: &[Value]) -> Result<Value, RuntimeError> {
     expect_arity("append", args, 2)?;
-    match &args[0] {
-        Value::List(items) => {
+    match (&args[0], &args[1]) {
+        (Value::IntList(xs), Value::Int(n)) => {
+            let mut new_xs = xs.clone();
+            new_xs.push(*n);
+            Ok(Value::IntList(new_xs))
+        }
+        (Value::IntList(xs), _) => {
+            // Element is not Int — promote to List
+            let mut new_items: Vec<Value> = xs.iter().map(|x| Value::Int(*x)).collect();
+            new_items.push(args[1].clone());
+            Ok(Value::List(new_items))
+        }
+        (Value::List(items), _) => {
             let mut new_items = items.clone();
             new_items.push(args[1].clone());
             Ok(Value::List(new_items))
@@ -603,6 +630,14 @@ fn builtin_at_or(args: &[Value]) -> Result<Value, RuntimeError> {
                 Ok(items[i].clone())
             }
         }
+        (Value::IntList(xs), Value::Int(idx)) => {
+            let i = *idx as usize;
+            if i >= xs.len() {
+                Ok(args[2].clone()) // default
+            } else {
+                Ok(Value::Int(xs[i]))
+            }
+        }
         _ => Err(RuntimeError::TypeError("`at-or` expects (List, Int, default)".into())),
     }
 }
@@ -610,6 +645,21 @@ fn builtin_at_or(args: &[Value]) -> Result<Value, RuntimeError> {
 fn builtin_set_at(args: &[Value]) -> Result<Value, RuntimeError> {
     expect_arity("set-at", args, 3)?;
     match (&args[0], &args[1]) {
+        (Value::IntList(xs), Value::Int(idx)) => {
+            let i = *idx as usize;
+            if i >= xs.len() {
+                Err(RuntimeError::IndexOutOfBounds { index: i, len: xs.len() })
+            } else if let Value::Int(n) = &args[2] {
+                let mut new_xs = xs.clone();
+                new_xs[i] = *n;
+                Ok(Value::IntList(new_xs))
+            } else {
+                // Setting non-Int in IntList — promote to List
+                let mut new_items: Vec<Value> = xs.iter().map(|x| Value::Int(*x)).collect();
+                new_items[i] = args[2].clone();
+                Ok(Value::List(new_items))
+            }
+        }
         (Value::List(items), Value::Int(idx)) => {
             let i = *idx as usize;
             if i >= items.len() {
@@ -626,8 +676,10 @@ fn builtin_set_at(args: &[Value]) -> Result<Value, RuntimeError> {
 
 fn builtin_list_contains(args: &[Value]) -> Result<Value, RuntimeError> {
     expect_arity("list-contains?", args, 2)?;
-    match &args[0] {
-        Value::List(items) => Ok(Value::Bool(items.contains(&args[1]))),
+    match (&args[0], &args[1]) {
+        (Value::IntList(xs), Value::Int(n)) => Ok(Value::Bool(xs.contains(n))),
+        (Value::IntList(_), _) => Ok(Value::Bool(false)), // non-Int can't be in IntList
+        (Value::List(items), _) => Ok(Value::Bool(items.contains(&args[1]))),
         _ => Err(RuntimeError::TypeError("`list-contains?` expects (List, value)".into())),
     }
 }
@@ -640,6 +692,13 @@ fn builtin_head(args: &[Value]) -> Result<Value, RuntimeError> {
                 Err(RuntimeError::TypeError("head: empty list".into()))
             } else {
                 Ok(items[0].clone())
+            }
+        }
+        Value::IntList(xs) => {
+            if xs.is_empty() {
+                Err(RuntimeError::TypeError("head: empty list".into()))
+            } else {
+                Ok(Value::Int(xs[0]))
             }
         }
         _ => Err(RuntimeError::TypeError(format!(
@@ -659,6 +718,13 @@ fn builtin_tail(args: &[Value]) -> Result<Value, RuntimeError> {
                 Ok(Value::List(items[1..].to_vec()))
             }
         }
+        Value::IntList(xs) => {
+            if xs.is_empty() {
+                Err(RuntimeError::TypeError("tail: empty list".into()))
+            } else {
+                Ok(Value::IntList(xs[1..].to_vec()))
+            }
+        }
         _ => Err(RuntimeError::TypeError(format!(
             "`tail` expects a List, got {}",
             type_name(&args[0])
@@ -670,6 +736,7 @@ fn builtin_empty(args: &[Value]) -> Result<Value, RuntimeError> {
     expect_arity("empty?", args, 1)?;
     match &args[0] {
         Value::List(items) => Ok(Value::Bool(items.is_empty())),
+        Value::IntList(xs) => Ok(Value::Bool(xs.is_empty())),
         _ => Err(RuntimeError::TypeError(format!(
             "`empty?` expects a List, got {}",
             type_name(&args[0])
@@ -679,8 +746,19 @@ fn builtin_empty(args: &[Value]) -> Result<Value, RuntimeError> {
 
 fn builtin_cons(args: &[Value]) -> Result<Value, RuntimeError> {
     expect_arity("cons", args, 2)?;
-    match &args[1] {
-        Value::List(items) => {
+    match (&args[0], &args[1]) {
+        (Value::Int(n), Value::IntList(xs)) => {
+            let mut new_xs = vec![*n];
+            new_xs.extend_from_slice(xs);
+            Ok(Value::IntList(new_xs))
+        }
+        (_, Value::IntList(xs)) => {
+            // Element is not Int — promote to List
+            let mut new_items = vec![args[0].clone()];
+            new_items.extend(xs.iter().map(|x| Value::Int(*x)));
+            Ok(Value::List(new_items))
+        }
+        (_, Value::List(items)) => {
             let mut new_items = vec![args[0].clone()];
             new_items.extend(items.iter().cloned());
             Ok(Value::List(new_items))
@@ -702,6 +780,11 @@ fn builtin_reverse(args: &[Value]) -> Result<Value, RuntimeError> {
             reversed.reverse();
             Ok(Value::List(reversed))
         }
+        Value::IntList(xs) => {
+            let mut reversed = xs.clone();
+            reversed.reverse();
+            Ok(Value::IntList(reversed))
+        }
         _ => Err(RuntimeError::TypeError(
             "reverse: argument must be a list".into(),
         )),
@@ -711,6 +794,21 @@ fn builtin_reverse(args: &[Value]) -> Result<Value, RuntimeError> {
 fn builtin_concat(args: &[Value]) -> Result<Value, RuntimeError> {
     expect_arity("concat", args, 2)?;
     match (&args[0], &args[1]) {
+        (Value::IntList(xs), Value::IntList(ys)) => {
+            let mut result = xs.clone();
+            result.extend_from_slice(ys);
+            Ok(Value::IntList(result))
+        }
+        (Value::IntList(xs), Value::List(ys)) => {
+            let mut result: Vec<Value> = xs.iter().map(|x| Value::Int(*x)).collect();
+            result.extend(ys.iter().cloned());
+            Ok(Value::List(result))
+        }
+        (Value::List(xs), Value::IntList(ys)) => {
+            let mut result = xs.clone();
+            result.extend(ys.iter().map(|y| Value::Int(*y)));
+            Ok(Value::List(result))
+        }
         (Value::List(xs), Value::List(ys)) => {
             let mut result = xs.clone();
             result.extend(ys.iter().cloned());
@@ -726,14 +824,27 @@ fn builtin_flatten(args: &[Value]) -> Result<Value, RuntimeError> {
     expect_arity("flatten", args, 1)?;
     match &args[0] {
         Value::List(xss) => {
-            let mut result = Vec::new();
-            for xs in xss {
-                match xs {
-                    Value::List(inner) => result.extend(inner.iter().cloned()),
-                    other => result.push(other.clone()),
+            // Check if all inner lists are IntList for fast path
+            let all_intlist = xss.iter().all(|xs| matches!(xs, Value::IntList(_)));
+            if all_intlist && !xss.is_empty() {
+                let mut result = Vec::new();
+                for xs in xss {
+                    if let Value::IntList(inner) = xs {
+                        result.extend_from_slice(inner);
+                    }
                 }
+                Ok(Value::IntList(result))
+            } else {
+                let mut result = Vec::new();
+                for xs in xss {
+                    match xs {
+                        Value::List(inner) => result.extend(inner.iter().cloned()),
+                        Value::IntList(inner) => result.extend(inner.iter().map(|x| Value::Int(*x))),
+                        other => result.push(other.clone()),
+                    }
+                }
+                Ok(Value::List(result))
             }
-            Ok(Value::List(result))
         }
         _ => Err(RuntimeError::TypeError(
             "flatten: argument must be a list".into(),
@@ -759,8 +870,77 @@ fn builtin_range(args: &[Value]) -> Result<Value, RuntimeError> {
             ))
         }
     };
-    let result: Vec<Value> = (start..end).map(Value::Int).collect();
-    Ok(Value::List(result))
+    let result: Vec<i64> = (start..end).collect();
+    Ok(Value::IntList(result))
+}
+
+fn builtin_take(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("take", args, 2)?;
+    let n = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(RuntimeError::TypeError("take: first arg must be integer".into())),
+    };
+    match &args[1] {
+        Value::List(items) => Ok(Value::List(items[..n.min(items.len())].to_vec())),
+        Value::IntList(xs) => Ok(Value::IntList(xs[..n.min(xs.len())].to_vec())),
+        _ => Err(RuntimeError::TypeError("take: second arg must be list".into())),
+    }
+}
+
+fn builtin_drop(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("drop", args, 2)?;
+    let n = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(RuntimeError::TypeError("drop: first arg must be integer".into())),
+    };
+    match &args[1] {
+        Value::List(items) => {
+            let start = n.min(items.len());
+            Ok(Value::List(items[start..].to_vec()))
+        }
+        Value::IntList(xs) => {
+            let start = n.min(xs.len());
+            Ok(Value::IntList(xs[start..].to_vec()))
+        }
+        _ => Err(RuntimeError::TypeError("drop: second arg must be list".into())),
+    }
+}
+
+fn builtin_zip(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("zip", args, 2)?;
+    let xs_vec: Vec<Value> = match &args[0] {
+        Value::List(items) => items.clone(),
+        Value::IntList(ints) => ints.iter().map(|x| Value::Int(*x)).collect(),
+        _ => return Err(RuntimeError::TypeError("zip: first arg must be list".into())),
+    };
+    let ys_vec: Vec<Value> = match &args[1] {
+        Value::List(items) => items.clone(),
+        Value::IntList(ints) => ints.iter().map(|y| Value::Int(*y)).collect(),
+        _ => return Err(RuntimeError::TypeError("zip: second arg must be list".into())),
+    };
+    let pairs: Vec<Value> = xs_vec.iter().zip(ys_vec.iter())
+        .map(|(x, y)| Value::List(vec![x.clone(), y.clone()]))
+        .collect();
+    Ok(Value::List(pairs))
+}
+
+fn builtin_enumerate(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("enumerate", args, 1)?;
+    match &args[0] {
+        Value::List(items) => {
+            let pairs: Vec<Value> = items.iter().enumerate()
+                .map(|(i, x)| Value::List(vec![Value::Int(i as i64), x.clone()]))
+                .collect();
+            Ok(Value::List(pairs))
+        }
+        Value::IntList(xs) => {
+            let pairs: Vec<Value> = xs.iter().enumerate()
+                .map(|(i, x)| Value::List(vec![Value::Int(i as i64), Value::Int(*x)]))
+                .collect();
+            Ok(Value::List(pairs))
+        }
+        _ => Err(RuntimeError::TypeError("enumerate: argument must be list".into())),
+    }
 }
 
 // ── Utility implementations ─────────────────────────────
@@ -892,6 +1072,10 @@ fn builtin_join(args: &[Value]) -> Result<Value, RuntimeError> {
                     other => parts.push(format!("{}", other)),
                 }
             }
+            Ok(Value::Str(parts.join(sep.as_str())))
+        }
+        (Value::IntList(xs), Value::Str(sep)) => {
+            let parts: Vec<String> = xs.iter().map(|x| x.to_string()).collect();
             Ok(Value::Str(parts.join(sep.as_str())))
         }
         _ => Err(RuntimeError::TypeError(
@@ -1191,6 +1375,7 @@ fn type_name(val: &Value) -> &'static str {
         Value::Unit => "Unit",
         Value::Tensor(_) => "Tensor",
         Value::List(_) => "List",
+        Value::IntList(_) => "List",  // IntList is transparent — reports as "List"
         Value::Tuple(_) => "Tuple",
         Value::Variant(_, _) => "Variant",
         Value::Struct(_) => "Struct",
@@ -1549,6 +1734,9 @@ impl Builtins {
         self.register_with_vm("filter", builtin_filter_vm);
         self.register_with_vm("fold", builtin_fold_vm);
         self.register_with_vm("sort", builtin_sort_vm);
+        self.register_with_vm("any", builtin_any_vm);
+        self.register_with_vm("all", builtin_all_vm);
+        self.register_with_vm("find", builtin_find_vm);
     }
 }
 
@@ -1561,6 +1749,37 @@ fn builtin_map_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, Runtim
         )));
     }
     let f = args[0].clone();
+
+    // Fast path: IntList input
+    if let Value::IntList(xs) = &args[1] {
+        let mut results_int = Vec::with_capacity(xs.len());
+        let mut all_int = true;
+        let mut results_mixed: Vec<Value> = Vec::new();
+
+        for x in xs {
+            let result = vm.call_value(&f, vec![Value::Int(*x)])?;
+            if all_int {
+                if let Value::Int(n) = result {
+                    results_int.push(n);
+                } else {
+                    // Switch to mixed mode
+                    all_int = false;
+                    results_mixed = results_int.iter().map(|n| Value::Int(*n)).collect();
+                    results_mixed.push(result);
+                }
+            } else {
+                results_mixed.push(result);
+            }
+        }
+
+        if all_int {
+            return Ok(Value::IntList(results_int));
+        } else {
+            return Ok(Value::List(results_mixed));
+        }
+    }
+
+    // Generic path
     let xs = match &args[1] {
         Value::List(items) => items.clone(),
         _ => return Err(RuntimeError::TypeError("map: second argument must be a list".into())),
@@ -1579,6 +1798,22 @@ fn builtin_filter_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, Run
         )));
     }
     let pred = args[0].clone();
+
+    // Fast path: IntList
+    if let Value::IntList(xs) = &args[1] {
+        let mut results = Vec::new();
+        for x in xs {
+            let keep = vm.call_value(&pred, vec![Value::Int(*x)])?;
+            match keep {
+                Value::Bool(true) => results.push(*x),
+                Value::Bool(false) | Value::Nil => {}
+                _ => results.push(*x), // truthy
+            }
+        }
+        return Ok(Value::IntList(results));
+    }
+
+    // Generic path
     let xs = match &args[1] {
         Value::List(items) => items.clone(),
         _ => return Err(RuntimeError::TypeError("filter: second argument must be a list".into())),
@@ -1603,9 +1838,49 @@ fn builtin_fold_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, Runti
         )));
     }
     let f = args[0].clone();
-    let mut acc = args[1].clone();
+    let init = args[1].clone();
+
+    // Fast path: IntList + Int accumulator + builtin arithmetic
+    if let (Value::Int(init_n), Value::IntList(xs)) = (&init, &args[2]) {
+        let mut acc = *init_n;
+        if let Value::BuiltinFn(name) = &f {
+            match name.as_str() {
+                "+" => {
+                    for x in xs { acc = acc.wrapping_add(*x); }
+                    return Ok(Value::Int(acc));
+                }
+                "*" => {
+                    for x in xs { acc = acc.wrapping_mul(*x); }
+                    return Ok(Value::Int(acc));
+                }
+                _ => {} // fall through to generic IntList path
+            }
+        }
+        // Generic IntList path: call function but avoid boxing where possible
+        for x in xs {
+            let result = vm.call_value(&f, vec![Value::Int(acc), Value::Int(*x)])?;
+            match result {
+                Value::Int(n) => acc = n,
+                other => {
+                    // Accumulator is no longer Int — fall through to generic path
+                    // Continue with remaining elements as a List
+                    let remaining_start = xs.iter().position(|v| *v == *x).unwrap_or(0);
+                    let mut generic_acc = other;
+                    for rx in &xs[remaining_start + 1..] {
+                        generic_acc = vm.call_value(&f, vec![generic_acc, Value::Int(*rx)])?;
+                    }
+                    return Ok(generic_acc);
+                }
+            }
+        }
+        return Ok(Value::Int(acc));
+    }
+
+    // Generic path
+    let mut acc = init;
     let xs = match &args[2] {
         Value::List(items) => items.clone(),
+        Value::IntList(items) => items.iter().map(|x| Value::Int(*x)).collect(),
         _ => return Err(RuntimeError::TypeError("fold: third argument must be a list".into())),
     };
     for x in xs {
@@ -1623,6 +1898,7 @@ fn builtin_sort_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, Runti
     let cmp = args[0].clone();
     let xs = match &args[1] {
         Value::List(items) => items.clone(),
+        Value::IntList(ints) => ints.iter().map(|x| Value::Int(*x)).collect(),
         _ => return Err(RuntimeError::TypeError("sort: second argument must be a list".into())),
     };
 
@@ -1650,6 +1926,72 @@ fn builtin_sort_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, Runti
 
     let sorted = merge_sort(vm, &cmp, xs)?;
     Ok(Value::List(sorted))
+}
+
+fn builtin_any_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 2 {
+        return Err(RuntimeError::TypeError(format!(
+            "`any` expects 2 argument(s), got {}", args.len()
+        )));
+    }
+    let pred = args[0].clone();
+    let xs = match &args[1] {
+        Value::List(items) => items.clone(),
+        Value::IntList(ints) => ints.iter().map(|x| Value::Int(*x)).collect(),
+        _ => return Err(RuntimeError::TypeError("any: second argument must be a list".into())),
+    };
+    for x in xs {
+        let result = vm.call_value(&pred, vec![x])?;
+        match result {
+            Value::Bool(false) | Value::Nil => {}
+            _ => return Ok(Value::Bool(true)),
+        }
+    }
+    Ok(Value::Bool(false))
+}
+
+fn builtin_all_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 2 {
+        return Err(RuntimeError::TypeError(format!(
+            "`all` expects 2 argument(s), got {}", args.len()
+        )));
+    }
+    let pred = args[0].clone();
+    let xs = match &args[1] {
+        Value::List(items) => items.clone(),
+        Value::IntList(ints) => ints.iter().map(|x| Value::Int(*x)).collect(),
+        _ => return Err(RuntimeError::TypeError("all: second argument must be a list".into())),
+    };
+    for x in xs {
+        let result = vm.call_value(&pred, vec![x])?;
+        match result {
+            Value::Bool(false) | Value::Nil => return Ok(Value::Bool(false)),
+            _ => {}
+        }
+    }
+    Ok(Value::Bool(true))
+}
+
+fn builtin_find_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 2 {
+        return Err(RuntimeError::TypeError(format!(
+            "`find` expects 2 argument(s), got {}", args.len()
+        )));
+    }
+    let pred = args[0].clone();
+    let xs = match &args[1] {
+        Value::List(items) => items.clone(),
+        Value::IntList(ints) => ints.iter().map(|x| Value::Int(*x)).collect(),
+        _ => return Err(RuntimeError::TypeError("find: second argument must be a list".into())),
+    };
+    for x in xs {
+        let result = vm.call_value(&pred, vec![x.clone()])?;
+        match result {
+            Value::Bool(false) | Value::Nil => {}
+            _ => return Ok(x),
+        }
+    }
+    Ok(Value::Nil)
 }
 
 fn builtin_int_to_string(args: &[Value]) -> Result<Value, RuntimeError> {
@@ -3631,5 +3973,303 @@ mod tests {
         let b = builtins();
         let result = call(&b, "char-count", &[Value::Str("".into())]).unwrap();
         assert_eq!(result, Value::Int(0));
+    }
+
+    // ── take ──────────────────────────────────────────────
+
+    #[test]
+    fn take_partial() {
+        let b = builtins();
+        let result = call(&b, "take", &[
+            Value::Int(2),
+            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+        ]).unwrap();
+        assert_eq!(result, Value::List(vec![Value::Int(1), Value::Int(2)]));
+    }
+
+    #[test]
+    fn take_more_than_length() {
+        let b = builtins();
+        let result = call(&b, "take", &[
+            Value::Int(5),
+            Value::List(vec![Value::Int(1), Value::Int(2)]),
+        ]).unwrap();
+        assert_eq!(result, Value::List(vec![Value::Int(1), Value::Int(2)]));
+    }
+
+    // ── drop ──────────────────────────────────────────────
+
+    #[test]
+    fn drop_partial() {
+        let b = builtins();
+        let result = call(&b, "drop", &[
+            Value::Int(2),
+            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+        ]).unwrap();
+        assert_eq!(result, Value::List(vec![Value::Int(3)]));
+    }
+
+    #[test]
+    fn drop_more_than_length() {
+        let b = builtins();
+        let result = call(&b, "drop", &[
+            Value::Int(5),
+            Value::List(vec![Value::Int(1), Value::Int(2)]),
+        ]).unwrap();
+        assert_eq!(result, Value::List(vec![]));
+    }
+
+    // ── zip ───────────────────────────────────────────────
+
+    #[test]
+    fn zip_equal_length() {
+        let b = builtins();
+        let result = call(&b, "zip", &[
+            Value::List(vec![Value::Int(1), Value::Int(2)]),
+            Value::List(vec![Value::Int(3), Value::Int(4)]),
+        ]).unwrap();
+        assert_eq!(result, Value::List(vec![
+            Value::List(vec![Value::Int(1), Value::Int(3)]),
+            Value::List(vec![Value::Int(2), Value::Int(4)]),
+        ]));
+    }
+
+    #[test]
+    fn zip_unequal_length() {
+        let b = builtins();
+        let result = call(&b, "zip", &[
+            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+            Value::List(vec![Value::Int(10)]),
+        ]).unwrap();
+        assert_eq!(result, Value::List(vec![
+            Value::List(vec![Value::Int(1), Value::Int(10)]),
+        ]));
+    }
+
+    // ── enumerate ─────────────────────────────────────────
+
+    #[test]
+    fn enumerate_basic() {
+        let b = builtins();
+        let result = call(&b, "enumerate", &[
+            Value::List(vec![Value::Str("a".into()), Value::Str("b".into())]),
+        ]).unwrap();
+        assert_eq!(result, Value::List(vec![
+            Value::List(vec![Value::Int(0), Value::Str("a".into())]),
+            Value::List(vec![Value::Int(1), Value::Str("b".into())]),
+        ]));
+    }
+
+    #[test]
+    fn enumerate_empty() {
+        let b = builtins();
+        let result = call(&b, "enumerate", &[
+            Value::List(vec![]),
+        ]).unwrap();
+        assert_eq!(result, Value::List(vec![]));
+    }
+
+    // ── any/all/find (VM-aware) ───────────────────────────
+    // These builtins require a running VM to call closures, so they
+    // need integration tests rather than unit tests. The builtins are
+    // registered and can be verified via has():
+
+    #[test]
+    fn any_all_find_registered() {
+        let b = builtins();
+        assert!(b.has("any"), "any builtin should be registered");
+        assert!(b.has("all"), "all builtin should be registered");
+        assert!(b.has("find"), "find builtin should be registered");
+        assert!(b.get_with_vm("any").is_some(), "any should be VM-aware");
+        assert!(b.get_with_vm("all").is_some(), "all should be VM-aware");
+        assert!(b.get_with_vm("find").is_some(), "find should be VM-aware");
+    }
+
+    // ── IntList builtins ─────────────────────────────────
+
+    #[test]
+    fn range_returns_intlist() {
+        let b = builtins();
+        let result = call(&b, "range", &[Value::Int(0), Value::Int(5)]).unwrap();
+        assert_eq!(result, Value::IntList(vec![0, 1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn length_intlist() {
+        let b = builtins();
+        let result = call(&b, "length", &[Value::IntList(vec![10, 20, 30])]).unwrap();
+        assert_eq!(result, Value::Int(3));
+    }
+
+    #[test]
+    fn at_intlist() {
+        let b = builtins();
+        let result = call(&b, "at", &[Value::IntList(vec![10, 20, 30]), Value::Int(2)]).unwrap();
+        assert_eq!(result, Value::Int(30));
+    }
+
+    #[test]
+    fn at_intlist_out_of_bounds() {
+        let b = builtins();
+        let result = call(&b, "at", &[Value::IntList(vec![10]), Value::Int(5)]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn head_intlist() {
+        let b = builtins();
+        let result = call(&b, "head", &[Value::IntList(vec![7, 8, 9])]).unwrap();
+        assert_eq!(result, Value::Int(7));
+    }
+
+    #[test]
+    fn head_intlist_empty() {
+        let b = builtins();
+        let result = call(&b, "head", &[Value::IntList(vec![])]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn tail_intlist() {
+        let b = builtins();
+        let result = call(&b, "tail", &[Value::IntList(vec![1, 2, 3])]).unwrap();
+        assert_eq!(result, Value::IntList(vec![2, 3]));
+    }
+
+    #[test]
+    fn reverse_intlist() {
+        let b = builtins();
+        let result = call(&b, "reverse", &[Value::IntList(vec![1, 2, 3])]).unwrap();
+        assert_eq!(result, Value::IntList(vec![3, 2, 1]));
+    }
+
+    #[test]
+    fn empty_intlist() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "empty?", &[Value::IntList(vec![])]).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            call(&b, "empty?", &[Value::IntList(vec![1])]).unwrap(),
+            Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn cons_int_into_intlist() {
+        let b = builtins();
+        let result = call(&b, "cons", &[Value::Int(0), Value::IntList(vec![1, 2])]).unwrap();
+        assert_eq!(result, Value::IntList(vec![0, 1, 2]));
+    }
+
+    #[test]
+    fn cons_nonint_promotes_intlist() {
+        let b = builtins();
+        let result = call(&b, "cons", &[Value::Str("x".into()), Value::IntList(vec![1, 2])]).unwrap();
+        assert_eq!(result, Value::List(vec![Value::Str("x".into()), Value::Int(1), Value::Int(2)]));
+    }
+
+    #[test]
+    fn append_int_to_intlist() {
+        let b = builtins();
+        let result = call(&b, "append", &[Value::IntList(vec![1, 2]), Value::Int(3)]).unwrap();
+        assert_eq!(result, Value::IntList(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn append_nonint_promotes_intlist() {
+        let b = builtins();
+        let result = call(&b, "append", &[Value::IntList(vec![1, 2]), Value::Str("x".into())]).unwrap();
+        assert_eq!(result, Value::List(vec![Value::Int(1), Value::Int(2), Value::Str("x".into())]));
+    }
+
+    #[test]
+    fn concat_intlists() {
+        let b = builtins();
+        let result = call(&b, "concat", &[Value::IntList(vec![1, 2]), Value::IntList(vec![3, 4])]).unwrap();
+        assert_eq!(result, Value::IntList(vec![1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn concat_intlist_and_list() {
+        let b = builtins();
+        let result = call(&b, "concat", &[Value::IntList(vec![1]), Value::List(vec![Value::Str("a".into())])]).unwrap();
+        assert_eq!(result, Value::List(vec![Value::Int(1), Value::Str("a".into())]));
+    }
+
+    #[test]
+    fn list_contains_intlist() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "list-contains?", &[Value::IntList(vec![1, 2, 3]), Value::Int(2)]).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            call(&b, "list-contains?", &[Value::IntList(vec![1, 2, 3]), Value::Int(5)]).unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            call(&b, "list-contains?", &[Value::IntList(vec![1, 2, 3]), Value::Str("x".into())]).unwrap(),
+            Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn at_or_intlist() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "at-or", &[Value::IntList(vec![10, 20]), Value::Int(0), Value::Int(-1)]).unwrap(),
+            Value::Int(10)
+        );
+        assert_eq!(
+            call(&b, "at-or", &[Value::IntList(vec![10, 20]), Value::Int(5), Value::Int(-1)]).unwrap(),
+            Value::Int(-1)
+        );
+    }
+
+    #[test]
+    fn set_at_intlist_int() {
+        let b = builtins();
+        let result = call(&b, "set-at", &[Value::IntList(vec![1, 2, 3]), Value::Int(1), Value::Int(99)]).unwrap();
+        assert_eq!(result, Value::IntList(vec![1, 99, 3]));
+    }
+
+    #[test]
+    fn set_at_intlist_promotes() {
+        let b = builtins();
+        let result = call(&b, "set-at", &[Value::IntList(vec![1, 2, 3]), Value::Int(1), Value::Str("x".into())]).unwrap();
+        assert_eq!(result, Value::List(vec![Value::Int(1), Value::Str("x".into()), Value::Int(3)]));
+    }
+
+    #[test]
+    fn take_intlist() {
+        let b = builtins();
+        let result = call(&b, "take", &[Value::Int(2), Value::IntList(vec![1, 2, 3])]).unwrap();
+        assert_eq!(result, Value::IntList(vec![1, 2]));
+    }
+
+    #[test]
+    fn drop_intlist() {
+        let b = builtins();
+        let result = call(&b, "drop", &[Value::Int(1), Value::IntList(vec![1, 2, 3])]).unwrap();
+        assert_eq!(result, Value::IntList(vec![2, 3]));
+    }
+
+    #[test]
+    fn intlist_eq_list_via_eq_builtin() {
+        let b = builtins();
+        let result = call(&b, "=", &[
+            Value::IntList(vec![1, 2, 3]),
+            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+        ]).unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn type_of_intlist() {
+        let b = builtins();
+        let result = call(&b, "type-of", &[Value::IntList(vec![1, 2])]).unwrap();
+        assert_eq!(result, Value::Str("List".into()));
     }
 }
