@@ -1,12 +1,12 @@
 # AIRL Standard Library: Collections
 
-> Source: `stdlib/prelude.airl` | 15 functions | Auto-loaded
+> Source: `stdlib/prelude.airl` | 18 functions | Auto-loaded
 
 Provides higher-order collection operations built in pure AIRL using recursive patterns. All functions are available automatically — no imports needed.
 
 ## Dependencies
 
-Relies on 4 Rust builtins for list destructuring:
+Relies on 7 Rust builtins for list operations:
 
 | Builtin | Signature | Description |
 |---------|-----------|-------------|
@@ -14,6 +14,9 @@ Relies on 4 Rust builtins for list destructuring:
 | `tail` | `(tail xs)` → List | All but first (errors on empty) |
 | `empty?` | `(empty? xs)` → Bool | Is list empty? |
 | `cons` | `(cons x xs)` → List | Prepend element to front |
+| `at-or` | `(at-or xs idx default)` → element | Safe indexing (returns default on out-of-bounds) |
+| `set-at` | `(set-at xs idx val)` → List | Immutable update at index (returns new list) |
+| `list-contains?` | `(list-contains? xs val)` → Bool | Element membership check |
 
 ## Functions
 
@@ -113,6 +116,9 @@ Relies on 4 Rust builtins for list destructuring:
 | `find` | `(find pred xs)` | any/nil | returns nil if not found |
 | `sort` | `(sort cmp xs)` | List | ensures `(= (length result) (length xs))` |
 | `merge` | `(merge cmp xs ys)` | List | ensures `(= (length result) (+ (length xs) (length ys)))` |
+| `unique` | `(unique xs)` | List | removes duplicate elements (preserves first occurrence) |
+| `enumerate` | `(enumerate xs)` | List | pairs each element with its 0-based index: `[[0 a] [1 b] ...]` |
+| `group-by` | `(group-by f xs)` | Map | groups elements by key function into `{key: [elements]}` |
 
 ## Performance Notes
 

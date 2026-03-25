@@ -2,7 +2,7 @@
 
 > Source: `stdlib/math.airl` | 13 functions | Auto-loaded
 
-Integer math utilities written in pure AIRL. All functions operate on `i64` values and are available automatically — no imports needed.
+Integer math utilities written in pure AIRL, plus 15 float math Rust builtins. All functions are available automatically — no imports needed.
 
 ## Dependencies
 
@@ -86,4 +86,26 @@ Integer math utilities written in pure AIRL. All functions operate on `i64` valu
 - `pow` uses naive recursive multiplication — O(exp). For large exponents, consider using repeated squaring (not yet in stdlib).
 - `gcd` implements the Euclidean algorithm. Both arguments must be non-negative.
 - `sum-list` and `product-list` use `fold` internally, so they share its recursion depth characteristics.
-- All functions are integer-only (`i64`). For float math, use arithmetic builtins directly (`+`, `-`, `*`, `/` on float literals).
+- The stdlib functions above are integer-only (`i64`).
+
+## Float Math Builtins (Rust)
+
+15 Rust builtins for float operations. All accept Int or Float arguments (auto-coerce via `as_float`).
+
+| Builtin | Signature | Returns | Description |
+|---------|-----------|---------|-------------|
+| `sqrt` | `(sqrt x)` | Float | Square root |
+| `sin` | `(sin x)` | Float | Sine (radians) |
+| `cos` | `(cos x)` | Float | Cosine (radians) |
+| `tan` | `(tan x)` | Float | Tangent (radians) |
+| `log` | `(log x)` | Float | Natural logarithm (ln) |
+| `exp` | `(exp x)` | Float | e^x |
+| `floor` | `(floor x)` | Int | Round down |
+| `ceil` | `(ceil x)` | Int | Round up |
+| `round` | `(round x)` | Int | Round to nearest |
+| `float-to-int` | `(float-to-int x)` | Int | Truncate toward zero |
+| `int-to-float` | `(int-to-float n)` | Float | Widen integer to float |
+| `infinity` | `(infinity)` | Float | IEEE 754 positive infinity |
+| `nan` | `(nan)` | Float | IEEE 754 NaN |
+| `is-nan?` | `(is-nan? x)` | Bool | Check for NaN |
+| `is-infinite?` | `(is-infinite? x)` | Bool | Check for infinity |

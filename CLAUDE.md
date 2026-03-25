@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~508 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.2.1.
+AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~520 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.2.1.
 
 **Language spec:** `AIRL-Language-Specification-v0.1.0.md`
 **LLM guide:** `AIRL-LLM-Guide.md` — **MUST read this file before writing any AIRL code.** It contains critical language idioms, pitfalls, and patterns that prevent common mistakes.
@@ -71,22 +71,27 @@ airl-driver ← airl-solver (Z3)
 
 **Location:** `stdlib/` directory (embedded in binary via `include_str!`, auto-loaded before user code)
 
-The stdlib is 4 modules (46 functions total) — mostly pure AIRL, with Rust builtins for list destructuring and string character access.
+The stdlib is 4 modules (49 functions total) — mostly pure AIRL, with Rust builtins for list destructuring, string character access, file I/O, float math, and HTTP.
 
 ### Primitive Builtins (Rust)
 
-**List builtins** (4) in `crates/airl-runtime/src/builtins.rs`:
+**List builtins** (7) in `crates/airl-runtime/src/builtins.rs`:
 - `head` — first element of list (errors on empty)
 - `tail` — all but first element (errors on empty)
 - `empty?` — is list empty? → Bool
 - `cons` — prepend element to front of list → List
+- `at-or` — `(at-or list idx default)` safe indexing, returns default on out-of-bounds
+- `set-at` — `(set-at list idx val)` immutable update at index, returns new list
+- `list-contains?` — `(list-contains? list val)` element membership check → Bool
 
-**String builtins** (14) in `crates/airl-runtime/src/builtins.rs`:
+**String builtins** (17) in `crates/airl-runtime/src/builtins.rs`:
 - `str` — **variadic string concatenation with auto-coercion**. `(str "count: " 42 " done")` → `"count: 42 done"`. Strings included as-is (no quotes); all other types auto-coerced via Display.
 - `char-at`, `substring`, `chars` — character access (Unicode-safe)
 - `split`, `join` — split/join strings
 - `contains`, `starts-with`, `ends-with`, `index-of` — search
 - `trim`, `to-upper`, `to-lower`, `replace` — transformation
+- `char-code` — `(char-code "A")` → `65` (Unicode codepoint of first character)
+- `char-from-code` — `(char-from-code 65)` → `"A"` (1-char string from codepoint)
 
 **Map builtins** (10) in `crates/airl-runtime/src/builtins.rs`:
 - `map-new`, `map-from` — creation
@@ -94,9 +99,42 @@ The stdlib is 4 modules (46 functions total) — mostly pure AIRL, with Rust bui
 - `map-set`, `map-remove` — mutation (returns new map)
 - `map-keys`, `map-values` — enumeration
 
+**File I/O builtins** (11) in `crates/airl-runtime/src/builtins.rs`:
+- `read-file`, `write-file`, `append-file` — read/write/append file contents
+- `file-exists?`, `is-dir?` — path queries
+- `delete-file`, `delete-dir` — removal (delete-file rejects directories)
+- `rename-file` — rename/move files and directories
+- `read-dir` — list directory entries (sorted) → List[Str]
+- `create-dir` — create directory recursively (idempotent)
+- `file-size` — size in bytes → Int
+- All paths sandbox-validated: no absolute paths, no `..`
+
+**Float math builtins** (15) in `crates/airl-runtime/src/builtins.rs`:
+- `sqrt`, `sin`, `cos`, `tan`, `log` (natural), `exp` — transcendentals (accept Int or Float)
+- `floor`, `ceil`, `round` — rounding (return Int)
+- `float-to-int`, `int-to-float` — explicit numeric conversion
+- `infinity`, `nan` — IEEE 754 special values (0-arg constructors)
+- `is-nan?`, `is-infinite?` — IEEE 754 predicates → Bool
+
+**Type conversion builtins** (5) in `crates/airl-runtime/src/builtins.rs`:
+- `int-to-string`, `float-to-string` — numeric to string
+- `string-to-int`, `string-to-float` — string to numeric (returns Result)
+- `type-of` — returns type name as string
+
+**Network/JSON builtins** (3) in `crates/airl-runtime/src/builtins.rs`:
+- `http-request` — `(http-request method url body headers)` → Result[Str, Str]. Supports GET, POST, PUT, DELETE, PATCH, HEAD.
+- `json-parse`, `json-stringify` — JSON ↔ AIRL value conversion
+- `http-post` — **deprecated**, use `(http-request "POST" url body headers)` instead
+
+**System builtins** (4) in `crates/airl-runtime/src/builtins.rs`:
+- `shell-exec` — `(shell-exec cmd args-list)` → Result with stdout/stderr/exit-code
+- `time-now` — milliseconds since epoch → Int
+- `getenv` — `(getenv "VAR")` → Str or nil
+- `get-args` — command-line arguments → List[Str]
+
 ### Stdlib Modules (Pure AIRL)
 
-**Collections** (`stdlib/prelude.airl`) — 15 functions:
+**Collections** (`stdlib/prelude.airl`) — 18 functions:
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -115,6 +153,9 @@ The stdlib is 4 modules (46 functions total) — mostly pure AIRL, with Rust bui
 | `find` | `(find pred xs)` | First element satisfying pred, or nil |
 | `sort` | `(sort cmp xs)` | Merge sort with comparison fn |
 | `merge` | `(merge cmp xs ys)` | Merge two sorted lists |
+| `unique` | `(unique xs)` | Remove duplicate elements |
+| `enumerate` | `(enumerate xs)` | Pair each element with its 0-based index |
+| `group-by` | `(group-by f xs)` | Group elements by key function → Map |
 
 **Math** (`stdlib/math.airl`) — 13 functions:
 
@@ -218,6 +259,11 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **Runtime Ownership Tracking** — `MarkMoved` and `CheckNotMoved` bytecode opcodes for runtime move enforcement. The bytecode compiler emits ownership checks around calls to functions with `Own`-annotated parameters: `CheckNotMoved` before the call (use-after-move detection), `MarkMoved` after (marks register consumed), and conflict detection for borrow+move on the same register. Subsequent `Load` of a moved variable emits `CheckNotMoved`. Pipeline builds ownership map from AST parameter annotations and passes it to the bytecode compiler. Static linearity checker is now non-fatal in Run mode (warns only); runtime enforcement is the backstop. Functions with ownership opcodes are JIT-ineligible (fall back to bytecode VM). Fixtures moved from `interpreter_only/` to `linearity_errors/`.
 - **Unboxed AOT Compilation** — Two-tier AOT compiler in `bytecode_aot.rs`. Eligible functions (pure arithmetic, no lists/variants/closures/builtins, arity ≤ 8) compile to raw `i64`/`f64` register operations — arithmetic is single CPU instructions, no heap allocation. Ineligible functions compile with boxed `*mut RtValue` (existing path). `is_eligible()` checks opcodes and recursively validates cross-function calls. `compile_func_unboxed()` ports the JIT's unboxed compilation to `ObjectModule`. Boundary marshaling in `compile_func()` extracts raw values from boxed args via `airl_as_int_raw`, calls the unboxed function, and reboxes the result using `eligible_return_hints`. Added `airl_as_int_raw` and `airl_as_float_raw` to `airl-rt`. Performance: fib(35) AOT unboxed 56ms vs Python 2,335ms (**42x faster**), vs boxed AOT ~16s (**~290x speedup** from unboxing).
 - **File I/O Builtins** — 8 new builtins: `append-file`, `delete-file`, `delete-dir`, `rename-file`, `read-dir`, `create-dir`, `file-size`, `is-dir?`. All sandbox-validated (no absolute paths, no `..`). Registered in bytecode VM, JIT-full, and AOT. `extern "C"` counterparts in `airl-rt`. Also backfilled missing `airl_write_file` and `airl_file_exists` in `airl-rt` (were declared in AOT but never defined). Total file I/O builtins: 11 (`read-file`, `write-file`, `append-file`, `file-exists?`, `delete-file`, `delete-dir`, `rename-file`, `read-dir`, `create-dir`, `file-size`, `is-dir?`).
+- **Execution Path Consolidation** — Deleted 1,422 lines of dead code: primitive JIT (`bytecode_jit.rs`, 951 lines), orphaned AST-level JIT (`airl-codegen/jit.rs`, 362 lines), dead pipeline functions (`run_file_jit`/`run_source_jit`). Extracted shared contract-error signaling into `jit_contract.rs`. Removed primitive JIT field and dispatch from bytecode VM. v0.2.1.
+- **HTTP Request Builtin** — Generic `(http-request method url body headers)` supporting GET, POST, PUT, DELETE, PATCH, HEAD. Returns `Result[Str, Str]`. Uses `ureq` in Rust, `libcurl` with `CURLOPT_CUSTOMREQUEST` in C runtime. `http-post` marked deprecated.
+- **Character Code Builtins** — `char-code` (string → Unicode codepoint as Int), `char-from-code` (Int codepoint → 1-char string), `string-to-float` (parse float strings → Result). Unlocks `parse_int` and cipher algorithms that were impossible without character-to-digit conversion.
+- **Float Math Builtins** — 15 builtins: transcendentals (`sqrt`, `sin`, `cos`, `tan`, `log`, `exp`), rounding (`floor`, `ceil`, `round` → Int), conversion (`float-to-int`, `int-to-float`), IEEE 754 (`infinity`, `nan`, `is-nan?`, `is-infinite?`). All accept Int or Float via `as_float` auto-coercion. New `crates/airl-rt/src/math.rs` module.
+- **Collection Builtins** — 3 Rust builtins: `at-or` (safe indexing with default), `set-at` (immutable update at index), `list-contains?` (element membership). 3 AIRL stdlib functions: `unique` (deduplicate), `enumerate` (zip-with-index), `group-by` (group elements by key function → Map).
 
 ---
 

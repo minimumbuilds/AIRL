@@ -151,7 +151,8 @@ This is why AIRL makes contracts **grammar-level mandatory** — the parser lite
 - Algebraic data types (sum types, product types)
 - Pattern matching with exhaustiveness checking
 - First-class functions and closures
-- **Standard library** — 46 pure AIRL functions (collections, math, result combinators, string, map) auto-loaded as a prelude
+- **Standard library** — 49 pure AIRL functions (collections, math, result combinators, string, map) auto-loaded as a prelude
+- **~75 Rust builtins** — arithmetic, comparisons, list ops, string ops (17), map ops (10), file I/O (11), float math (15), HTTP, JSON, type conversion, system
 
 ### Compilation & Execution
 
@@ -517,7 +518,7 @@ AIRL_AOT_DEBUG=1 cargo run --release --features jit,aot -- compile program.airl 
 
 ## Project Stats
 
-- **~508 tests** across 8 crates
+- **~520 tests** across 8 crates
 - **~19,000 lines** of Rust + **~21,000 lines** of AIRL (bootstrap compiler + tests)
 - **All functions JIT-compiled** — every function compiles to native x86-64 via Cranelift (jit-full)
 - **AOT produces standalone native executables** — `airl compile` with two-tier unboxed/boxed compilation
