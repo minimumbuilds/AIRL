@@ -5,24 +5,23 @@
 AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~520 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.2.1.
 
 **Language spec:** `AIRL-Language-Specification-v0.1.0.md`
-**LLM guide:** `AIRL-LLM-Guide.md` — **MUST read this file before writing any AIRL code.** It contains critical language idioms, pitfalls, and patterns that prevent common mistakes.
-**Stdlib docs:** `stdlib/*.md` — **MUST read before writing AIRL code that uses library functions.** Five modules: `collections.md` (map/filter/fold/sort), `math.md` (abs/pow/gcd), `result.md` (Result combinators), `string.md` (13 Rust builtins + 10 AIRL functions), `map.md` (10 Rust builtins + 8 AIRL functions). Also read the stdlib source (`stdlib/*.airl`) for exact signatures and implementations.
+**LLM header:** `AIRL-Header.md` — **MUST read before writing any AIRL code.** Compressed reference with all traps, syntax, signatures, and patterns (~360 lines, ~3K tokens). Replaces the 7-file pre-flight checklist.
+**Full LLM guide:** `AIRL-LLM-Guide.md` — Verbose human-readable reference with examples. Read for deep understanding; `AIRL-Header.md` is sufficient for code generation.
+**Stdlib docs:** `stdlib/*.md` — Detailed docs with examples. Read for edge cases beyond what the header covers.
 **Design specs:** `docs/superpowers/specs/`
 **Implementation plans:** `docs/superpowers/plans/`
 
 ## Pre-Flight Checklist (BLOCKING)
 
-**Before writing or modifying ANY `.airl` file, you MUST have read ALL of the following in the current conversation. No exceptions. No rationalizing ("this code doesn't use stdlib" is not an excuse). Complete all reads BEFORE writing a single line of AIRL.**
+**Before writing or modifying ANY `.airl` file, you MUST have read the following in the current conversation. No exceptions.**
 
-1. `AIRL-LLM-Guide.md` — **entire file**, not partial. Contains critical pitfalls (eager `and`/`or`, no mixed int/float, etc.)
-2. `stdlib/collections.md` — `map`/`filter`/`fold`/`sort` signatures and semantics
-3. `stdlib/math.md` — `abs`/`pow`/`gcd` signatures
-4. `stdlib/result.md` — Result combinator signatures (`unwrap-or`, `and-then`, etc.)
-5. `stdlib/string.md` — 13 Rust builtins + 10 AIRL helper signatures
-6. `stdlib/map.md` — 10 Rust builtins + 8 AIRL helper signatures
-7. `stdlib/set.md` — 11 set operations (over maps, string elements only)
+1. `AIRL-Header.md` — **entire file**. Contains all traps, syntax rules, function signatures, and patterns. This single file replaces reading 7 separate files.
 
-**If you have not read all 7 files above, STOP and read them now before proceeding.**
+**If you have not read the file above, STOP and read it now before proceeding.**
+
+*For deeper understanding, the full reference files are also available:*
+- `AIRL-LLM-Guide.md` — verbose guide with examples
+- `stdlib/*.md` — detailed stdlib docs (collections, math, result, string, map, set)
 
 ## Build & Test
 
