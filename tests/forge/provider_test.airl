@@ -1,0 +1,110 @@
+;; provider_test.airl — Tests for lib/forge/provider.airl
+;; Run with: cargo run --release --features jit -- run --load lib/forge/codec.airl --load lib/forge/schema.airl --load lib/forge/tools.airl --load lib/forge/provider.airl tests/forge/provider_test.airl
+
+;; --- make-provider: creates correct map ---
+(let (p : _ (make-provider "anthropic" "https://api.anthropic.com/v1/messages" "sk-test-key" "claude-3-5-sonnet-20241022"))
+  (do
+    (assert (map-has p "name") "provider should have name key")
+    (assert (map-has p "api-url") "provider should have api-url key")
+    (assert (map-has p "api-key") "provider should have api-key key")
+    (assert (map-has p "model") "provider should have model key")
+    (assert (= (map-get p "name") "anthropic") "provider name should be anthropic")
+    (assert (= (map-get p "api-key") "sk-test-key") "provider api-key should match")
+    (assert (= (map-get p "model") "claude-3-5-sonnet-20241022") "provider model should match")))
+
+;; --- make-message: creates correct map ---
+(let (msg : _ (make-message "user" "Hello, world!"))
+  (do
+    (assert (map-has msg "role") "message should have role key")
+    (assert (map-has msg "content") "message should have content key")
+    (assert (= (map-get msg "role") "user") "message role should be user")
+    (assert (= (map-get msg "content") "Hello, world!") "message content should match")))
+
+;; --- make-message: assistant role ---
+(let (amsg : _ (make-message "assistant" "I can help with that."))
+  (do
+    (assert (= (map-get amsg "role") "assistant") "assistant message role should match")
+    (assert (= (map-get amsg "content") "I can help with that.") "assistant message content should match")))
+
+;; --- format-messages-anthropic without tools (nil) has no tools key ---
+(let (msgs : _ [(make-message "user" "Hello")])
+  (let (req-no-tools : _ (format-messages-anthropic msgs "claude-3-5-sonnet-20241022" nil))
+    (do
+      (assert (map-has req-no-tools "model") "request should have model key")
+      (assert (map-has req-no-tools "messages") "request should have messages key")
+      (assert (map-has req-no-tools "max_tokens") "request should have max_tokens key")
+      (assert (= (map-get req-no-tools "max_tokens") 1024) "max_tokens should be 1024")
+      (assert (not (map-has req-no-tools "tools")) "request should NOT have tools key when tools is nil"))))
+
+;; --- format-messages-anthropic without tools (empty list) has no tools key ---
+(let (msgs2 : _ [(make-message "user" "Hello")])
+  (let (req-empty-tools : _ (format-messages-anthropic msgs2 "claude-3-5-sonnet-20241022" []))
+    (assert (not (map-has req-empty-tools "tools")) "request should NOT have tools key when tools is empty list")))
+
+;; --- format-messages-anthropic WITH tools has tools key ---
+(let (msgs3 : _ [(make-message "user" "What's the weather?")])
+  (let (fake-tool : _ (map-from ["name" "get_weather" "description" "Get weather"]))
+    (let (req-with-tools : _ (format-messages-anthropic msgs3 "claude-3-5-sonnet-20241022" [fake-tool]))
+      (do
+        (assert (map-has req-with-tools "tools") "request should have tools key when tools provided")
+        (assert (= (length (map-get req-with-tools "tools")) 1) "tools list should have 1 item")))))
+
+;; --- extract-text-content from mock response ---
+(let (text-block : _ (map-from ["type" "text" "text" "The answer is 42"]))
+  (let (mock-response : _ (map-from ["id" "msg_001"
+                                      "type" "message"
+                                      "role" "assistant"
+                                      "content" [text-block]
+                                      "model" "claude-3-5-sonnet-20241022"
+                                      "stop_reason" "end_turn"]))
+    (let (extracted : _ (extract-text-content mock-response))
+      (do
+        (assert (is-ok? extracted) "extract-text-content should return Ok for valid response")
+        (assert (= (unwrap-or extracted "") "The answer is 42") "extracted text should match")))))
+
+;; --- extract-text-content from response with mixed content (tool_use before text) ---
+(let (tool-block : _ (map-from ["type" "tool_use" "id" "tool_001" "name" "calculator"]))
+  (let (text-block2 : _ (map-from ["type" "text" "text" "I calculated it"]))
+    (let (mixed-response : _ (map-from ["content" [tool-block text-block2]]))
+      (let (extracted2 : _ (extract-text-content mixed-response))
+        (do
+          (assert (is-ok? extracted2) "should find text block even after tool_use block")
+          (assert (= (unwrap-or extracted2 "") "I calculated it") "should extract text from second block"))))))
+
+;; --- extract-text-content from error response ---
+(let (error-inner : _ (map-from ["type" "invalid_request_error" "message" "API key is invalid"]))
+  (let (error-response : _ (map-from ["type" "error" "error" error-inner]))
+    (let (err-result : _ (extract-text-content error-response))
+      (do
+        (assert (is-err? err-result) "extract-text-content should return Err for error response")
+        (let (err-msg : _ (match err-result (Ok _) "" (Err e) e))
+          (assert (contains err-msg "API key is invalid") "error message should contain API error detail"))))))
+
+;; --- extract-text-content from response with no content ---
+(let (no-content-resp : _ (map-from ["id" "msg_002" "stop_reason" "end_turn"]))
+  (let (no-content-result : _ (extract-text-content no-content-resp))
+    (assert (is-err? no-content-result) "should return Err when response has no content field")))
+
+;; --- extract-tool-calls from response with mixed content blocks ---
+(let (tc1 : _ (map-from ["type" "tool_use" "id" "tc_001" "name" "search"]))
+  (let (tc2 : _ (map-from ["type" "tool_use" "id" "tc_002" "name" "calculator"]))
+    (let (txt : _ (map-from ["type" "text" "text" "Let me help you"]))
+      (let (resp-mixed : _ (map-from ["content" [txt tc1 tc2]]))
+        (let (tool-calls : _ (extract-tool-calls resp-mixed))
+          (do
+            (assert (= (length tool-calls) 2) "should extract exactly 2 tool_use blocks")
+            (assert (= (map-get (at tool-calls 0) "name") "search") "first tool call should be search")
+            (assert (= (map-get (at tool-calls 1) "name") "calculator") "second tool call should be calculator")))))))
+
+;; --- extract-tool-calls from response with no tool_use blocks ---
+(let (txt-only : _ (map-from ["type" "text" "text" "Just text here"]))
+  (let (resp-text-only : _ (map-from ["content" [txt-only]]))
+    (let (no-tools : _ (extract-tool-calls resp-text-only))
+      (assert (empty? no-tools) "should return empty list when no tool_use blocks"))))
+
+;; --- extract-tool-calls from response with no content field ---
+(let (empty-resp : _ (map-from ["id" "msg_003"]))
+  (let (no-tools2 : _ (extract-tool-calls empty-resp))
+    (assert (empty? no-tools2) "should return empty list when no content field")))
+
+(print "ALL PROVIDER TESTS PASSED")

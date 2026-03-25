@@ -1,0 +1,90 @@
+;; provider.airl — LLM Provider abstraction for Forge (Anthropic API)
+
+(defn make-provider
+  :sig [(name : String) (api-url : String) (api-key : String) (model : String) -> Map]
+  :intent "Create a provider config map with name, api-url, api-key, and model"
+  :requires [(not (= name "")) (not (= api-key ""))]
+  :ensures [(map-has result "name") (map-has result "api-url") (map-has result "api-key") (map-has result "model")]
+  :body
+  (map-from ["name" name
+             "api-url" api-url
+             "api-key" api-key
+             "model" model]))
+
+(defn make-message
+  :sig [(role : String) (content : String) -> Map]
+  :intent "Create a message map with role and content fields"
+  :requires [(not (= role "")) (not (= content ""))]
+  :ensures [(map-has result "role") (map-has result "content")]
+  :body
+  (map-from ["role" role "content" content]))
+
+(defn format-messages-anthropic
+  :sig [(messages : List) (model : String) (tools : _) -> Map]
+  :intent "Build Anthropic API request body with model, messages, max_tokens, and optional tools"
+  :requires [(valid messages) (not (= model ""))]
+  :ensures [(map-has result "model") (map-has result "messages") (map-has result "max_tokens")]
+  :body
+  (let (base : _ (map-from ["model" model
+                             "messages" messages
+                             "max_tokens" 1024]))
+    (if (= tools nil)
+      base
+      (if (empty? tools)
+        base
+        (map-set base "tools" tools)))))
+
+(defn call-provider
+  :sig [(provider : Map) (messages : List) (tools : _) -> _]
+  :intent "Make HTTP POST to Anthropic API with messages, return parsed Result"
+  :requires [(map-has provider "api-url") (map-has provider "api-key") (map-has provider "model")]
+  :ensures [(valid result)]
+  :body
+  (let (api-url : _ (map-get provider "api-url"))
+    (let (api-key : _ (map-get provider "api-key"))
+      (let (model : _ (map-get provider "model"))
+        (let (body-map : _ (format-messages-anthropic messages model tools))
+          (let (body-str : _ (json-stringify body-map))
+            (let (headers : _ (map-from ["Content-Type" "application/json"
+                                         "x-api-key" api-key
+                                         "anthropic-version" "2023-06-01"]))
+              (let (http-result : _ (http-request "POST" api-url body-str headers))
+                (match http-result
+                  (Err e) (Err e)
+                  (Ok resp-str)
+                    (let (parse-result : _ (json-parse resp-str))
+                      (match parse-result
+                        (Err e) (Err (str "Failed to parse response: " e))
+                        (Ok resp) (Ok resp))))))))))))
+
+(defn extract-text-content
+  :sig [(response : Map) -> _]
+  :intent "Extract first text block from Anthropic response content list, or return error"
+  :requires [(valid response)]
+  :ensures [(valid result)]
+  :body
+  (if (map-has response "error")
+    (let (err-obj : _ (map-get response "error"))
+      (let (err-msg : _ (map-get-or err-obj "message" "Unknown error"))
+        (Err err-msg)))
+    (if (map-has response "content")
+      (let (content : _ (map-get response "content"))
+        (let (text-block : _ (find (fn [block] (map-has block "text")) content))
+          (if (= text-block nil)
+            (Err "No text block found in response content")
+            (Ok (map-get text-block "text")))))
+      (Err "Response has no content field"))))
+
+(defn extract-tool-calls
+  :sig [(response : Map) -> List]
+  :intent "Filter content blocks where type is tool_use, returns list (may be empty)"
+  :requires [(valid response)]
+  :ensures [(valid result)]
+  :body
+  (if (map-has response "content")
+    (let (content : _ (map-get response "content"))
+      (filter (fn [block] (if (map-has block "type")
+                            (= (map-get block "type") "tool_use")
+                            false))
+              content))
+    []))

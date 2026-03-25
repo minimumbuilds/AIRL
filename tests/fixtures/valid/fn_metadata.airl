@@ -1,0 +1,20 @@
+;; EXPECT: ()
+(defn add-nums
+  :sig [(a : i64) (b : i64) -> i64]
+  :intent "Add two numbers together"
+  :requires [(valid a) (valid b)]
+  :ensures [(= result (+ a b))]
+  :body (+ a b))
+
+(let (r : _ (fn-metadata "add-nums"))
+  (match r
+    (Ok m) (do
+      (if (= (map-get m "name") "add-nums") (print "OK name") (print "FAIL name"))
+      (if (= (map-get m "intent") "Add two numbers together") (print "OK intent") (print "FAIL intent"))
+      (if (= (length (map-get m "param-names")) 2) (print "OK params") (print "FAIL params")))
+    (Err e) (print "FAIL:" e)))
+
+(let (r2 : _ (fn-metadata "nonexistent-fn"))
+  (match r2
+    (Ok _) (print "FAIL should-not-find")
+    (Err _) (print "OK not-found")))

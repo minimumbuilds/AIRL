@@ -1,0 +1,62 @@
+;; schema.airl — Type to JSON Schema conversion for Forge
+
+(defn type-to-json-schema
+  :sig [(type-str : String) -> Map]
+  :intent "Convert an AIRL type string to a JSON Schema map"
+  :requires [(valid type-str)]
+  :ensures [(valid result)]
+  :body
+  (if (= type-str "i64")
+    (map-from ["type" "integer"])
+    (if (= type-str "i32")
+      (map-from ["type" "integer"])
+      (if (= type-str "f64")
+        (map-from ["type" "number"])
+        (if (= type-str "f32")
+          (map-from ["type" "number"])
+          (if (= type-str "Bool")
+            (map-from ["type" "boolean"])
+            (if (= type-str "String")
+              (map-from ["type" "string"])
+              (if (= type-str "Nil")
+                (map-from ["type" "null"])
+                (if (= type-str "List")
+                  (map-from ["type" "array"])
+                  (if (= type-str "Map")
+                    (map-from ["type" "object"])
+                    (if (= type-str "_")
+                      (map-new)
+                      (map-from ["type" "string" "description" (str "AIRL type: " type-str)]))))))))))))
+
+(defn param-to-schema
+  :sig [(pname : String) (ptype : String) -> List]
+  :intent "Convert a parameter name and type to a [name schema] pair"
+  :requires [(not (= pname ""))]
+  :ensures [(valid result)]
+  :body
+  [pname (type-to-json-schema ptype)])
+
+(defn fn-to-tool-schema
+  :sig [(meta : Map) -> Map]
+  :intent "Convert fn-metadata map to an OpenAI-style tool schema map"
+  :requires [(map-has meta "name")]
+  :ensures [(map-has result "name")]
+  :body
+  (let (fn-name : _ (map-get meta "name"))
+    (let (description : _ (map-get-or meta "intent" ""))
+      (let (param-names : _ (map-get-or meta "param-names" []))
+        (let (param-types : _ (map-get-or meta "param-types" []))
+          (let (pairs : _ (zip param-names param-types))
+            (let (properties : _ (fold
+                                    (fn [acc pair]
+                                      (let (pname : _ (at pair 0))
+                                        (let (ptype : _ (at pair 1))
+                                          (map-set acc pname (type-to-json-schema ptype)))))
+                                    (map-new)
+                                    pairs))
+              (let (parameters : _ (map-from ["type" "object"
+                                              "properties" properties
+                                              "required" param-names]))
+                (map-from ["name" fn-name
+                           "description" description
+                           "parameters" parameters])))))))))

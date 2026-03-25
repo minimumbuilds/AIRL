@@ -1,0 +1,58 @@
+;; codec_test.airl — Tests for lib/forge/codec.airl
+;; Run with: cargo run --release --features jit -- run --load lib/forge/codec.airl tests/forge/codec_test.airl
+
+;; --- encode-value: int ---
+(let (enc-int : _ (encode-value 42))
+  (do
+    (assert (is-ok? enc-int) "encode-value int should be Ok")
+    (assert (= (unwrap-or enc-int "") "42") "encode-value int should stringify to 42")))
+
+;; --- encode-value: string ---
+(let (enc-str : _ (encode-value "hello"))
+  (do
+    (assert (is-ok? enc-str) "encode-value string should be Ok")
+    (assert (= (unwrap-or enc-str "") "\"hello\"") "encode-value string should be JSON string")))
+
+;; --- encode-list ---
+(let (enc-list : _ (encode-list [1 2 3]))
+  (do
+    (assert (is-ok? enc-list) "encode-list should be Ok")
+    (assert (= (unwrap-or enc-list "") "[1,2,3]") "encode-list should stringify list")))
+
+;; --- decode-value: JSON object ---
+(let (dec-obj : _ (decode-value "{\"name\":\"Alice\",\"age\":30}"))
+  (do
+    (assert (is-ok? dec-obj) "decode-value should be Ok for valid JSON")
+    (let (obj : _ (match dec-obj (Ok v) v (Err _) (map-new)))
+      (do
+        (assert (map-has obj "name") "decoded object should have name key")
+        (assert (= (map-get obj "name") "Alice") "decoded name should be Alice")))))
+
+;; --- decode-as: all keys present ---
+(let (dec-as-ok : _ (decode-as "{\"x\":1,\"y\":2}" ["x" "y"]))
+  (do
+    (assert (is-ok? dec-as-ok) "decode-as should be Ok when all keys present")
+    (let (m : _ (match dec-as-ok (Ok v) v (Err _) (map-new)))
+      (assert (= (map-get m "x") 1) "x should be 1"))))
+
+;; --- decode-as: missing key ---
+(let (dec-as-err : _ (decode-as "{\"x\":1}" ["x" "z"]))
+  (do
+    (assert (is-err? dec-as-err) "decode-as should be Err when keys missing")
+    (let (msg : _ (match dec-as-err (Ok _) "" (Err e) e))
+      (assert (contains msg "z") "error message should mention missing key z"))))
+
+;; --- extract-field: key present ---
+(let (m : _ (map-from ["color" "red" "size" "large"]))
+  (do
+    (let (field-ok : _ (extract-field m "color"))
+      (do
+        (assert (is-ok? field-ok) "extract-field present key should be Ok")
+        (assert (= (unwrap-or field-ok "") "red") "extracted color should be red")))
+    (let (field-err : _ (extract-field m "weight"))
+      (do
+        (assert (is-err? field-err) "extract-field missing key should be Err")
+        (let (msg : _ (match field-err (Ok _) "" (Err e) e))
+          (assert (contains msg "weight") "error should mention missing key name"))))))
+
+(print "ALL CODEC TESTS PASSED")

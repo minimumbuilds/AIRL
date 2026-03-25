@@ -56,6 +56,7 @@ struct CallFrame {
 
 pub struct BytecodeVm {
     pub functions: HashMap<String, BytecodeFunc>,
+    fn_metadata: HashMap<String, crate::bytecode::FnDefMetadata>,
     builtins: Builtins,
     call_stack: Vec<CallFrame>,
     recursion_depth: usize,
@@ -67,6 +68,7 @@ impl BytecodeVm {
     pub fn new() -> Self {
         BytecodeVm {
             functions: HashMap::new(),
+            fn_metadata: HashMap::new(),
             builtins: Builtins::new(),
             call_stack: Vec::new(),
             recursion_depth: 0,
@@ -79,6 +81,7 @@ impl BytecodeVm {
     pub fn new_with_full_jit() -> Self {
         BytecodeVm {
             functions: HashMap::new(),
+            fn_metadata: HashMap::new(),
             builtins: Builtins::new(),
             call_stack: Vec::new(),
             recursion_depth: 0,
@@ -105,6 +108,7 @@ impl BytecodeVm {
     pub fn spawn_child(&self) -> BytecodeVm {
         BytecodeVm {
             functions: self.functions.clone(),
+            fn_metadata: self.fn_metadata.clone(),
             builtins: Builtins::new(),
             call_stack: Vec::new(),
             recursion_depth: 0,
@@ -115,6 +119,50 @@ impl BytecodeVm {
 
     pub fn load_function(&mut self, func: BytecodeFunc) {
         self.functions.insert(func.name.clone(), func);
+    }
+
+    /// Store function metadata (param types, intent, contracts) for runtime introspection.
+    pub fn store_fn_metadata(&mut self, meta: crate::bytecode::FnDefMetadata) {
+        self.fn_metadata.insert(meta.name.clone(), meta);
+    }
+
+    /// Look up metadata for a function by name.
+    pub fn get_fn_metadata(&self, name: &str) -> Option<&crate::bytecode::FnDefMetadata> {
+        self.fn_metadata.get(name)
+    }
+
+    /// Dispatch the `fn-metadata` builtin: look up function metadata and return
+    /// a Result-wrapped Map with name, intent, param info, and contracts.
+    fn dispatch_fn_metadata(&self, args: &[Value]) -> Result<Value, RuntimeError> {
+        let fname = match args.first() {
+            Some(Value::Str(s)) => s.clone(),
+            _ => return Err(RuntimeError::Custom(
+                "fn-metadata: requires 1 string argument (function name)".into())),
+        };
+        match self.fn_metadata.get(&fname) {
+            Some(meta) => {
+                let mut m = HashMap::new();
+                m.insert("name".to_string(), Value::Str(meta.name.clone()));
+                m.insert("intent".to_string(), match &meta.intent {
+                    Some(s) => Value::Str(s.clone()),
+                    None => Value::Nil,
+                });
+                m.insert("param-names".to_string(), Value::List(
+                    meta.param_names.iter().map(|s| Value::Str(s.clone())).collect()));
+                m.insert("param-types".to_string(), Value::List(
+                    meta.param_types.iter().map(|s| Value::Str(s.clone())).collect()));
+                m.insert("return-type".to_string(), Value::Str(meta.return_type.clone()));
+                m.insert("requires".to_string(), Value::List(
+                    meta.requires.iter().map(|s| Value::Str(s.clone())).collect()));
+                m.insert("ensures".to_string(), Value::List(
+                    meta.ensures.iter().map(|s| Value::Str(s.clone())).collect()));
+                Ok(Value::Variant("Ok".to_string(), Box::new(Value::Map(m))))
+            }
+            None => {
+                Ok(Value::Variant("Err".to_string(),
+                    Box::new(Value::Str(format!("function not found: {}", fname)))))
+            }
+        }
     }
 
     /// Execute a function by name with no arguments. Used to run __main__.
@@ -602,6 +650,11 @@ impl BytecodeVm {
                         thread_handles().lock().unwrap().insert(id, handle);
                         self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = Value::Int(id);
                     }
+                    // Special dispatch: fn-metadata needs access to VM's metadata map
+                    else if name == "fn-metadata" {
+                        let result = self.dispatch_fn_metadata(&args)?;
+                        self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                    }
                     // Try VM-aware builtins first (map, filter, fold, sort)
                     else if let Some(f) = self.builtins.get_with_vm(&name) {
                         let f = *f; // Copy fn pointer to release borrow on self
@@ -651,6 +704,11 @@ impl BytecodeVm {
                         let id = NEXT_THREAD_HANDLE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         thread_handles().lock().unwrap().insert(id, handle);
                         self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = Value::Int(id);
+                    }
+                    // Special dispatch: fn-metadata needs access to VM's metadata map
+                    else if name == "fn-metadata" {
+                        let result = self.dispatch_fn_metadata(&args)?;
+                        self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
                     }
                     // Try VM-aware builtins first (map, filter, fold, sort)
                     else if let Some(f) = self.builtins.get_with_vm(&name) {
@@ -711,6 +769,9 @@ impl BytecodeVm {
                                 let id = NEXT_THREAD_HANDLE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                                 thread_handles().lock().unwrap().insert(id, handle);
                                 self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = Value::Int(id);
+                            } else if name == "fn-metadata" {
+                                let result = self.dispatch_fn_metadata(&args)?;
+                                self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
                             } else if let Some(f) = self.builtins.get_with_vm(&name) {
                                 let f = *f;
                                 let result = f(self, &args)?;

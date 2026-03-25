@@ -1,0 +1,51 @@
+;; validate_test.airl — Tests for lib/forge/validate.airl
+
+;; --- validate-output tests ---
+
+(let (r1 : _ (validate-output 42 (fn [x] (> x 0)) "must be positive"))
+  (match r1
+    (Err e) (do (print "FAIL validate-output success:" e) (exit 1))
+    (Ok v)  (if (= v 42)
+               (print "PASS validate-output success")
+               (do (print "FAIL validate-output success: wrong value" v) (exit 1)))))
+
+(let (r2 : _ (validate-output -5 (fn [x] (> x 0)) "must be positive"))
+  (match r2
+    (Ok v)  (do (print "FAIL validate-output failure: expected Err got Ok" v) (exit 1))
+    (Err e) (if (contains e "must be positive")
+               (print "PASS validate-output failure")
+               (do (print "FAIL validate-output failure: wrong error message" e) (exit 1)))))
+
+;; --- validate-keys tests ---
+
+(let (m : _ (map-from ["name" "Alice" "age" 30 "email" "alice@example.com"]))
+  (let (r3 : _ (validate-keys m ["name" "age" "email"]))
+    (match r3
+      (Err e) (do (print "FAIL validate-keys success:" e) (exit 1))
+      (Ok v)  (print "PASS validate-keys success"))))
+
+(let (m2 : _ (map-from ["name" "Bob"]))
+  (let (r4 : _ (validate-keys m2 ["name" "age" "email"]))
+    (match r4
+      (Ok v)  (do (print "FAIL validate-keys failure: expected Err got Ok") (exit 1))
+      (Err e) (if (contains e "Missing required keys")
+                 (print "PASS validate-keys failure")
+                 (do (print "FAIL validate-keys failure: wrong error message" e) (exit 1))))))
+
+;; --- validate-type tests ---
+
+(let (r5 : _ (validate-type 99 "Int"))
+  (match r5
+    (Err e) (do (print "FAIL validate-type success:" e) (exit 1))
+    (Ok v)  (if (= v 99)
+               (print "PASS validate-type success")
+               (do (print "FAIL validate-type success: wrong value" v) (exit 1)))))
+
+(let (r6 : _ (validate-type "hello" "Int"))
+  (match r6
+    (Ok v)  (do (print "FAIL validate-type failure: expected Err got Ok" v) (exit 1))
+    (Err e) (if (contains e "Type mismatch")
+               (print "PASS validate-type failure")
+               (do (print "FAIL validate-type failure: wrong error message" e) (exit 1)))))
+
+(print "ALL VALIDATE TESTS PASSED")

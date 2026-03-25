@@ -135,7 +135,7 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
     let ownership_map = build_ownership_map(&tops);
 
     // Compile AST → IR → Bytecode with contracts
-    let (ir_nodes, contracts) = compile_tops_with_contracts(&tops);
+    let (ir_nodes, contracts, fn_meta) = compile_tops_with_contracts(&tops);
     let mut bc_compiler = BytecodeCompiler::with_prefix("user");
     bc_compiler.set_ownership_map(ownership_map);
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
@@ -162,6 +162,9 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
         vm.load_function(func);
     }
     vm.load_function(main_func);
+    for meta in fn_meta {
+        vm.store_fn_metadata(meta);
+    }
     // JIT-full: compile all loaded functions to native code before execution
     #[cfg(feature = "jit")]
     vm.jit_full_compile_all();
@@ -205,7 +208,7 @@ pub fn run_file_with_preloads(path: &str, preloads: &[String]) -> Result<Value, 
     }
 
     let ownership_map = build_ownership_map(&tops);
-    let (ir_nodes, contracts) = compile_tops_with_contracts(&tops);
+    let (ir_nodes, contracts, fn_meta) = compile_tops_with_contracts(&tops);
     let mut bc_compiler = BytecodeCompiler::with_prefix("user");
     bc_compiler.set_ownership_map(ownership_map);
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
@@ -244,6 +247,9 @@ pub fn run_file_with_preloads(path: &str, preloads: &[String]) -> Result<Value, 
         vm.load_function(func);
     }
     vm.load_function(main_func);
+    for meta in fn_meta {
+        vm.store_fn_metadata(meta);
+    }
 
     // Skip JIT for preloaded programs — preloaded modules may have 100+ functions
     // that overwhelm Cranelift. Bytecode VM handles them fine.
@@ -530,12 +536,18 @@ fn build_ownership_map(tops: &[airl_syntax::ast::TopLevel]) -> HashMap<String, V
 
 // ── Shared: AST → IR with contracts ───────────────────────
 
-/// Compile a list of top-level AST nodes to IR, extracting contract clauses as IR+source pairs.
+/// Compile a list of top-level AST nodes to IR, extracting contract clauses as IR+source pairs
+/// and function metadata for runtime introspection.
 fn compile_tops_with_contracts(
     tops: &[airl_syntax::ast::TopLevel],
-) -> (Vec<IRNode>, HashMap<String, (Vec<(IRNode, String)>, Vec<(IRNode, String)>, Vec<(IRNode, String)>)>) {
+) -> (
+    Vec<IRNode>,
+    HashMap<String, (Vec<(IRNode, String)>, Vec<(IRNode, String)>, Vec<(IRNode, String)>)>,
+    Vec<airl_runtime::bytecode::FnDefMetadata>,
+) {
     let mut ir_nodes = Vec::new();
     let mut contracts = HashMap::new();
+    let mut metadata = Vec::new();
 
     for top in tops {
         match top {
@@ -552,9 +564,25 @@ fn compile_tops_with_contracts(
                 let inv: Vec<(IRNode, String)> = f.invariants.iter()
                     .map(|e| (compile_expr(e), e.to_airl()))
                     .collect();
+                // Capture metadata for runtime introspection (before moving contract vecs)
+                let req_strings: Vec<String> = req.iter().map(|(_, s)| s.clone()).collect();
+                let ens_strings: Vec<String> = ens.iter().map(|(_, s)| s.clone()).collect();
+                let inv_strings: Vec<String> = inv.iter().map(|(_, s)| s.clone()).collect();
+
                 if !req.is_empty() || !ens.is_empty() || !inv.is_empty() {
                     contracts.insert(f.name.clone(), (req, ens, inv));
                 }
+
+                metadata.push(airl_runtime::bytecode::FnDefMetadata {
+                    name: f.name.clone(),
+                    param_names: f.params.iter().map(|p| p.name.clone()).collect(),
+                    param_types: f.params.iter().map(|p| p.ty.to_airl()).collect(),
+                    return_type: f.return_type.to_airl(),
+                    intent: f.intent.clone(),
+                    requires: req_strings,
+                    ensures: ens_strings,
+                    invariants: inv_strings,
+                });
             }
             airl_syntax::ast::TopLevel::Expr(e) => {
                 ir_nodes.push(compile_expr(e));
@@ -565,7 +593,7 @@ fn compile_tops_with_contracts(
         }
     }
 
-    (ir_nodes, contracts)
+    (ir_nodes, contracts, metadata)
 }
 
 // ── Bytecode Pipeline ─────────────────────────────────────
@@ -597,7 +625,7 @@ pub fn run_source_bytecode(source: &str) -> Result<Value, PipelineError> {
 
     // Build ownership map and compile AST → IR with contracts
     let ownership_map = build_ownership_map(&tops);
-    let (ir_nodes, contracts) = compile_tops_with_contracts(&tops);
+    let (ir_nodes, contracts, fn_meta) = compile_tops_with_contracts(&tops);
     let mut bc_compiler = BytecodeCompiler::with_prefix("user");
     bc_compiler.set_ownership_map(ownership_map);
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
@@ -619,6 +647,9 @@ pub fn run_source_bytecode(source: &str) -> Result<Value, PipelineError> {
         vm.load_function(func);
     }
     vm.load_function(main_func);
+    for meta in fn_meta {
+        vm.store_fn_metadata(meta);
+    }
     vm.exec_main().map_err(PipelineError::Runtime)
 }
 
@@ -685,7 +716,7 @@ pub fn run_source_jit_full(source: &str) -> Result<Value, PipelineError> {
 
     // Build ownership map and compile AST → IR → Bytecode with contracts
     let ownership_map = build_ownership_map(&tops);
-    let (ir_nodes, contracts) = compile_tops_with_contracts(&tops);
+    let (ir_nodes, contracts, fn_meta) = compile_tops_with_contracts(&tops);
     let mut bc_compiler = BytecodeCompiler::with_prefix("user");
     bc_compiler.set_ownership_map(ownership_map);
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
@@ -710,6 +741,9 @@ pub fn run_source_jit_full(source: &str) -> Result<Value, PipelineError> {
         vm.load_function(func);
     }
     vm.load_function(main_func);
+    for meta in fn_meta {
+        vm.store_fn_metadata(meta);
+    }
 
     // Two-pass: compile all loaded functions, then execute
     vm.jit_full_compile_all();
@@ -828,7 +862,7 @@ pub fn compile_and_run_repl_input(source: &str, vm: &mut BytecodeVm) -> Result<V
     }
 
     let ownership_map = build_ownership_map(&tops);
-    let (ir_nodes, contracts) = compile_tops_with_contracts(&tops);
+    let (ir_nodes, contracts, fn_meta) = compile_tops_with_contracts(&tops);
     let mut bc_compiler = BytecodeCompiler::with_prefix("repl");
     bc_compiler.set_ownership_map(ownership_map);
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
@@ -837,6 +871,9 @@ pub fn compile_and_run_repl_input(source: &str, vm: &mut BytecodeVm) -> Result<V
         vm.load_function(func);
     }
     vm.load_function(main_func);
+    for meta in fn_meta {
+        vm.store_fn_metadata(meta);
+    }
     vm.exec_main().map_err(|e| format!("{}", e))
 }
 

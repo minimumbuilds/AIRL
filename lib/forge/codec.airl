@@ -1,0 +1,55 @@
+;; codec.airl — JSON encode/decode marshalling for Forge
+
+(defn encode-value
+  :sig [(value : _) -> _]
+  :intent "Wrap json-stringify in an Ok Result"
+  :requires [(valid value)]
+  :ensures [(is-ok? result)]
+  :body (Ok (json-stringify value)))
+
+(defn decode-value
+  :sig [(json-str : String) -> _]
+  :intent "Wrap json-parse (which returns Result) for a non-empty string"
+  :requires [(not (= json-str ""))]
+  :ensures [(valid result)]
+  :body (json-parse json-str))
+
+(defn decode-as
+  :sig [(json-str : String) (expected-keys : List) -> _]
+  :intent "Parse JSON then validate all expected keys present in the result map"
+  :requires [(not (= json-str ""))]
+  :ensures [(valid result)]
+  :body
+  (let (parse-result : _ (json-parse json-str))
+    (match parse-result
+      (Err e) (Err e)
+      (Ok parsed)
+        (let (all-present : _ (all (fn [k] (map-has parsed k)) expected-keys))
+          (if all-present
+            (Ok parsed)
+            (let (missing : _ (filter (fn [k] (not (map-has parsed k))) expected-keys))
+              (Err (str "missing keys: " (json-stringify missing)))))))))
+
+(defn extract-field
+  :sig [(m : Map) (key : String) -> _]
+  :intent "Safely extract a map field, returns Ok(value) or Err if missing"
+  :requires [(valid m) (not (= key ""))]
+  :ensures [(valid result)]
+  :body
+  (if (map-has m key)
+    (Ok (map-get m key))
+    (Err (str "missing field: " key))))
+
+(defn encode-list
+  :sig [(values : List) -> _]
+  :intent "Wrap json-stringify for lists in an Ok Result"
+  :requires [(valid values)]
+  :ensures [(is-ok? result)]
+  :body (Ok (json-stringify values)))
+
+(defn encode-map
+  :sig [(m : Map) -> _]
+  :intent "Wrap json-stringify for maps in an Ok Result"
+  :requires [(valid m)]
+  :ensures [(is-ok? result)]
+  :body (Ok (json-stringify m)))

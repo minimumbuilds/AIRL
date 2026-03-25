@@ -93,6 +93,19 @@ pub struct BytecodeFunc {
     pub constants: Vec<Value>,
 }
 
+/// Metadata about a function definition, preserved from AST for runtime introspection.
+#[derive(Debug, Clone)]
+pub struct FnDefMetadata {
+    pub name: String,
+    pub param_names: Vec<String>,
+    pub param_types: Vec<String>,
+    pub return_type: String,
+    pub intent: Option<String>,
+    pub requires: Vec<String>,
+    pub ensures: Vec<String>,
+    pub invariants: Vec<String>,
+}
+
 /// A bytecode closure: function index + captured values.
 #[derive(Debug, Clone)]
 pub struct BytecodeClosureValue {

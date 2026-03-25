@@ -1793,6 +1793,10 @@ impl Builtins {
         // but must be registered so the bytecode compiler emits CallBuiltin for it
         self.register("thread-spawn", |_| Err(RuntimeError::Custom(
             "thread-spawn: must be called through VM dispatch".into())));
+        // fn-metadata is handled specially in bytecode_vm.rs CallBuiltin dispatch
+        // (needs access to VM's fn_metadata HashMap)
+        self.register("fn-metadata", |_| Err(RuntimeError::Custom(
+            "fn-metadata: must be called through VM dispatch".into())));
         self.register("thread-join", builtin_thread_join);
         self.register("channel-new", builtin_channel_new);
         self.register("channel-send", builtin_channel_send);

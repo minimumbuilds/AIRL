@@ -1,0 +1,61 @@
+;; tools_test.airl — Tests for lib/forge/tools.airl
+
+;; Test subject: a simple function with metadata for auto-discovery
+(defn greet
+  :sig [(name : String) -> String]
+  :intent "Greet a person by name"
+  :requires [(not (= name ""))]
+  :ensures [(valid result)]
+  :body (str "Hello, " name "!"))
+
+;; Test 1: identity returns x unchanged
+(let (v1 : _ (identity 42))
+  (assert (= v1 42) "identity must return 42"))
+
+(let (v2 : _ (identity "hello"))
+  (assert (= v2 "hello") "identity must return 'hello'"))
+
+;; Test 2: register-fn auto-discovers greet
+(let (reg0 : _ (make-registry))
+  (let (reg-result : _ (register-fn reg0 "greet" (fn [n] (greet n))))
+    (do
+      (assert (is-ok? reg-result) "register-fn must succeed for greet")
+
+      ;; Test 3: list-tools returns ["greet"]
+      (let (reg1 : _ (unwrap-or reg-result (map-new)))
+        (do
+          (let (names : _ (list-tools reg1))
+            (do
+              (assert (= (length names) 1) "registry must have 1 tool")
+              (assert (list-contains? names "greet") "registry must contain 'greet'")))
+
+          ;; Test 4: lookup-tool finds greet
+          (let (look-result : _ (lookup-tool reg1 "greet"))
+            (do
+              (assert (is-ok? look-result) "lookup-tool must find 'greet'")
+              (let (tool : _ (unwrap-or look-result (map-new)))
+                (do
+                  (assert (= (map-get tool "name") "greet") "tool name must be 'greet'")
+                  (assert (= (map-get tool "intent") "Greet a person by name") "tool intent must match")))))
+
+          ;; Test 5: call-tool invokes greet with ["World"] -> "Hello, World!"
+          (let (call-result : _ (call-tool reg1 "greet" ["World"]))
+            (do
+              (assert (is-ok? call-result) "call-tool must succeed")
+              (let (output : _ (unwrap-or call-result ""))
+                (assert (= output "Hello, World!") "call-tool must return 'Hello, World!'"))))
+
+          ;; Test 6: lookup-tool returns Err for missing tool
+          (let (miss-result : _ (lookup-tool reg1 "no-such-tool"))
+            (assert (is-err? miss-result) "lookup-tool must return Err for missing tool"))
+
+          ;; Test 7: tool-schemas returns 1 schema
+          (let (schemas : _ (tool-schemas reg1))
+            (do
+              (assert (= (length schemas) 1) "tool-schemas must return 1 schema")
+              (let (s : _ (at schemas 0))
+                (do
+                  (assert (= (map-get s "name") "greet") "schema name must be 'greet'")
+                  (assert (= (map-get s "description") "Greet a person by name") "schema description must match"))))))))))
+
+(print "ALL TOOLS TESTS PASSED")

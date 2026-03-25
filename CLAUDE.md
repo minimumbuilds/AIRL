@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~520 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.5.1.
+AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~520 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.5.2.
 
 **Language spec:** `AIRL-Language-Specification-v0.1.0.md`
 **LLM header:** `AIRL-Header.md` — **MUST read before writing any AIRL code.** Compressed reference with all traps, syntax, signatures, and patterns (~360 lines, ~3K tokens). Replaces the 7-file pre-flight checklist.
@@ -319,6 +319,7 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **TCP Socket Builtins** — 6 builtins for handle-based TCP networking: `tcp-connect` (connect to host:port, returns handle), `tcp-close`, `tcp-send` (send byte list), `tcp-recv` (receive up to N bytes), `tcp-recv-exact` (receive exactly N bytes), `tcp-set-timeout`. All return `Result`. Thread-safe global handle map using `Mutex` + `OnceLock`.
 - **Thread-per-Task Concurrency (v0.5.0)** — 7 builtins for OS-level threading with message-passing channels. `thread-spawn` creates a child BytecodeVm (cloned function registry, fresh builtins/call stack, shared JIT via `Arc<BytecodeJitFull>`), spawns it on a new OS thread with 64MB stack. `thread-join` returns `Result[Value, Str]` (propagates runtime errors as Err). Channels use `std::sync::mpsc` (unbounded, single consumer). `channel-new` returns `[sender receiver]` handle pair. `channel-send`/`channel-recv`/`channel-recv-timeout`/`channel-close` for message passing. No shared mutable state — channels are the only inter-thread communication. Handle-based design follows TCP pattern (global `Mutex<HashMap>` registries with `AtomicI64` counters).
 - **C Runtime Retired (v0.5.0)** — Deleted `runtime/` directory (~5,148 lines of C). The C runtime (`libairl_rt_c.a`) was a parallel reimplementation of builtins already covered by the Rust `airl-rt` crate (strict superset: 123 shared + 36 Rust-only functions). It existed to support the bootstrap C codegen backend (`bootstrap/codegen_c.airl`), which is superseded by Cranelift AOT (`airl compile`). Two-path architecture established: `builtins.rs` (VM) + `crates/airl-rt/` (AOT). Bootstrap C codegen files marked deprecated.
+- **AIRL-Forge Phase 1** — `fn-metadata` builtin for runtime function introspection (`FnDefMetadata` struct threaded through bytecode compilation pipeline, VM-dispatched builtin returns Map with name/intent/param-names/param-types/return-type/requires/ensures). 6 AIRL library modules in `lib/forge/`: codec (JSON marshalling with key validation), schema (AIRL type → JSON Schema conversion), tools (registry with auto-discovery via `:intent` + `fn-metadata`), provider (Anthropic API abstraction with message formatting and response extraction), validate (predicate/key/type validation with retry feedback loop), chain (sequential pipelines via fold + fan-out). Loaded via `--load` flags. Design spec: `docs/superpowers/specs/2026-03-23-airl-forge-design.md`.
 
 ---
 

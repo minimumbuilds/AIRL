@@ -1,0 +1,101 @@
+;; tools.airl — Tool registry with auto-discovery for Forge
+
+(defn identity
+  :sig [(x : _) -> _]
+  :intent "Return x unchanged"
+  :requires [(valid x)]
+  :ensures [(valid result)]
+  :body x)
+
+(defn make-tool
+  :sig [(meta : Map) (handler : _) -> Map]
+  :intent "Build a tool map from fn-metadata and a handler closure"
+  :requires [(map-has meta "name")]
+  :ensures [(map-has result "name")]
+  :body
+  (let (tool-name : _ (map-get meta "name"))
+    (let (tool-intent : _ (map-get-or meta "intent" ""))
+      (let (tool-param-names : _ (map-get-or meta "param-names" []))
+        (let (tool-param-types : _ (map-get-or meta "param-types" []))
+          (let (tool-schema : _ (fn-to-tool-schema meta))
+            (map-from ["name" tool-name
+                       "handler" handler
+                       "schema" tool-schema
+                       "intent" tool-intent
+                       "param-names" tool-param-names
+                       "param-types" tool-param-types])))))))
+
+(defn make-registry
+  :sig [-> Map]
+  :intent "Create an empty tool registry"
+  :requires [(valid true)]
+  :ensures [(valid result)]
+  :body (map-new))
+
+(defn register-tool
+  :sig [(registry : Map) (tool : Map) -> Map]
+  :intent "Add a tool to the registry keyed by tool name"
+  :requires [(map-has tool "name")]
+  :ensures [(valid result)]
+  :body
+  (let (tool-name : _ (map-get tool "name"))
+    (map-set registry tool-name tool)))
+
+(defn register-fn
+  :sig [(registry : Map) (fn-name : String) (handler : _) -> _]
+  :intent "Auto-discover fn metadata by name and register as a tool"
+  :requires [(not (= fn-name ""))]
+  :ensures [(valid result)]
+  :body
+  (let (meta-result : _ (fn-metadata fn-name))
+    (match meta-result
+      (Err e) (Err e)
+      (Ok meta)
+        (let (tool : _ (make-tool meta handler))
+          (Ok (register-tool registry tool))))))
+
+(defn lookup-tool
+  :sig [(registry : Map) (name : String) -> _]
+  :intent "Find a tool by name; returns Ok(tool) or Err if not found"
+  :requires [(valid registry) (not (= name ""))]
+  :ensures [(valid result)]
+  :body
+  (if (map-has registry name)
+    (Ok (map-get registry name))
+    (Err (str "tool not found: " name))))
+
+(defn list-tools
+  :sig [(registry : Map) -> List]
+  :intent "Return a list of all registered tool names"
+  :requires [(valid registry)]
+  :ensures [(valid result)]
+  :body (map-keys registry))
+
+(defn tool-schemas
+  :sig [(registry : Map) -> List]
+  :intent "Return a list of JSON schemas for all tools in the registry"
+  :requires [(valid registry)]
+  :ensures [(valid result)]
+  :body
+  (map (fn [name]
+         (let (tool : _ (map-get registry name))
+           (map-get tool "schema")))
+       (map-keys registry)))
+
+(defn call-tool
+  :sig [(registry : Map) (name : String) (args : List) -> _]
+  :intent "Look up a tool by name and invoke its handler with args"
+  :requires [(valid registry) (not (= name ""))]
+  :ensures [(valid result)]
+  :body
+  (let (lookup-result : _ (lookup-tool registry name))
+    (match lookup-result
+      (Err e) (Err e)
+      (Ok tool)
+        (let (handler : _ (map-get tool "handler"))
+          (let (argc : _ (length args))
+            (match argc
+              0 (Ok (handler))
+              1 (Ok (handler (at args 0)))
+              2 (Ok (handler (at args 0) (at args 1)))
+              _ (Ok (handler (at args 0) (at args 1) (at args 2)))))))))

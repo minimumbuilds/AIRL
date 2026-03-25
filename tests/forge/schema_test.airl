@@ -1,0 +1,93 @@
+;; schema_test.airl — Tests for lib/forge/schema.airl
+
+;; Test 1: i64 -> integer
+(let (s1 : _ (type-to-json-schema "i64"))
+  (do
+    (assert (map-has s1 "type") "i64 schema must have 'type' key")
+    (assert (= (map-get s1 "type") "integer") "i64 type must be 'integer'")))
+
+;; Test 2: String -> string
+(let (s2 : _ (type-to-json-schema "String"))
+  (assert (= (map-get s2 "type") "string") "String type must be 'string'"))
+
+;; Test 3: Bool -> boolean
+(let (s3 : _ (type-to-json-schema "Bool"))
+  (assert (= (map-get s3 "type") "boolean") "Bool type must be 'boolean'"))
+
+;; Test 4: f64 -> number
+(let (s4 : _ (type-to-json-schema "f64"))
+  (assert (= (map-get s4 "type") "number") "f64 type must be 'number'"))
+
+;; Test 5: List -> array
+(let (s5 : _ (type-to-json-schema "List"))
+  (assert (= (map-get s5 "type") "array") "List type must be 'array'"))
+
+;; Test 6: Map -> object
+(let (s6 : _ (type-to-json-schema "Map"))
+  (assert (= (map-get s6 "type") "object") "Map type must be 'object'"))
+
+;; Test 7: Nil -> null
+(let (s7 : _ (type-to-json-schema "Nil"))
+  (assert (= (map-get s7 "type") "null") "Nil type must be 'null'"))
+
+;; Test 8: i32 -> integer
+(let (s8 : _ (type-to-json-schema "i32"))
+  (assert (= (map-get s8 "type") "integer") "i32 type must be 'integer'"))
+
+;; Test 9: f32 -> number
+(let (s9 : _ (type-to-json-schema "f32"))
+  (assert (= (map-get s9 "type") "number") "f32 type must be 'number'"))
+
+;; Test 10: _ -> empty map (wildcard/infer)
+(let (s10 : _ (type-to-json-schema "_"))
+  (assert (= (map-size s10) 0) "_ type must produce empty map"))
+
+;; Test 11: unknown type -> string with description
+(let (s11 : _ (type-to-json-schema "MyCustomType"))
+  (do
+    (assert (= (map-get s11 "type") "string") "unknown type must be 'string'")
+    (assert (map-has s11 "description") "unknown type must have 'description'")
+    (assert (contains (map-get s11 "description") "MyCustomType") "description must contain the type name")))
+
+;; Test 12: param-to-schema returns [name schema] pair
+(let (pair : _ (param-to-schema "count" "i64"))
+  (do
+    (assert (= (at pair 0) "count") "param pair[0] must be param name")
+    (assert (= (map-get (at pair 1) "type") "integer") "param pair[1] must be schema map")))
+
+;; Test 13: fn-to-tool-schema with mock metadata
+(let (mock-meta : _ (map-from ["name" "add-numbers"
+                                "intent" "Add two integers together"
+                                "param-names" ["a" "b"]
+                                "param-types" ["i64" "i64"]]))
+  (let (tool : _ (fn-to-tool-schema mock-meta))
+    (do
+      (assert (= (map-get tool "name") "add-numbers") "tool must have correct name")
+      (assert (= (map-get tool "description") "Add two integers together") "tool must have correct description")
+      (assert (map-has tool "parameters") "tool must have parameters")
+      (let (params : _ (map-get tool "parameters"))
+        (do
+          (assert (= (map-get params "type") "object") "parameters type must be 'object'")
+          (assert (map-has params "properties") "parameters must have properties")
+          (assert (map-has params "required") "parameters must have required list")
+          (let (props : _ (map-get params "properties"))
+            (do
+              (assert (map-has props "a") "properties must contain param 'a'")
+              (assert (map-has props "b") "properties must contain param 'b'")
+              (assert (= (map-get (map-get props "a") "type") "integer") "param 'a' must be integer type")
+              (assert (= (map-get (map-get props "b") "type") "integer") "param 'b' must be integer type"))))))))
+
+;; Test 14: fn-to-tool-schema with no params
+(let (mock-meta2 : _ (map-from ["name" "get-time"
+                                 "intent" "Get current time"
+                                 "param-names" []
+                                 "param-types" []]))
+  (let (tool2 : _ (fn-to-tool-schema mock-meta2))
+    (do
+      (assert (= (map-get tool2 "name") "get-time") "tool2 must have correct name")
+      (let (params2 : _ (map-get tool2 "parameters"))
+        (do
+          (assert (= (map-get params2 "type") "object") "parameters type must be 'object'")
+          (assert (= (map-size (map-get params2 "properties")) 0) "empty params: properties must be empty map"))))))
+
+(print "ALL SCHEMA TESTS PASSED")

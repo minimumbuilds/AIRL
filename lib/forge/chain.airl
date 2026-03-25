@@ -1,0 +1,48 @@
+;; chain.airl — Pipeline composition for Forge
+
+(defn make-step
+  :sig [(name : String) (f : _) -> Map]
+  :intent "Create a pipeline step from a name and a function"
+  :requires [(not (= name ""))]
+  :ensures [(map-has result "name") (map-has result "fn")]
+  :body
+  (map-from ["name" name "fn" f]))
+
+(defn chain
+  :sig [(steps : List) (initial-input : _) -> _]
+  :intent "Left-fold over steps threading Result; short-circuits on first Err"
+  :requires [(valid steps)]
+  :ensures [(valid result)]
+  :body
+  (fold
+    (fn [acc step]
+      (match acc
+        (Err e) (Err e)
+        (Ok val)
+          (let (step-fn : _ (map-get step "fn"))
+            (let (step-result : _ (step-fn val))
+              (match step-result
+                (Ok v)  (Ok v)
+                (Err e) (Err e)
+                _       (Ok step-result))))))
+    (Ok initial-input)
+    steps))
+
+(defn fan-out
+  :sig [(fns : List) (input : _) -> _]
+  :intent "Apply each function to the same input; Ok(values) if all succeed, Err(count) if any fail"
+  :requires [(valid fns)]
+  :ensures [(valid result)]
+  :body
+  (let (raw-results : _ (map (fn [f] (f input)) fns))
+    (let (results : _ (map
+                        (fn [r]
+                          (match r
+                            (Ok v)  (Ok v)
+                            (Err e) (Err e)
+                            _       (Ok r)))
+                        raw-results))
+      (let (errors : _ (filter (fn [r] (is-err? r)) results))
+        (if (empty? errors)
+          (Ok (map (fn [r] (unwrap-or r nil)) results))
+          (Err (str (length errors) " step(s) failed")))))))

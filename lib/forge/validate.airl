@@ -1,0 +1,58 @@
+;; validate.airl — Contract-based output validation for Forge
+
+(defn validate-output
+  :sig [(value : _) (pred : _) (error-msg : String) -> _]
+  :intent "Apply pred to value. If true return Ok(value), if false return Err with error-msg and json-stringified value"
+  :requires [(not (= error-msg ""))]
+  :ensures [(valid result)]
+  :body
+  (if (pred value)
+    (Ok value)
+    (Err (str error-msg ": " (json-stringify value)))))
+
+(defn validate-keys
+  :sig [(m : Map) (expected : List) -> _]
+  :intent "Check all expected keys are present in map m. Return Ok(m) or Err listing missing keys"
+  :requires [(valid m) (valid expected)]
+  :ensures [(valid result)]
+  :body
+  (let (missing : _ (filter (fn [k] (not (map-has m k))) expected))
+    (if (empty? missing)
+      (Ok m)
+      (Err (str "Missing required keys: " (json-stringify missing))))))
+
+(defn validate-type
+  :sig [(value : _) (expected-type : String) -> _]
+  :intent "Check type-of value matches expected-type string. Return Ok(value) or Err with type mismatch message"
+  :requires [(not (= expected-type ""))]
+  :ensures [(valid result)]
+  :body
+  (let (actual-type : _ (type-of value))
+    (if (= actual-type expected-type)
+      (Ok value)
+      (Err (str "Type mismatch: expected " expected-type " but got " actual-type)))))
+
+(defn validate-with-retry
+  :sig [(provider : Map) (messages : List) (validator : _) (max-retries : _) -> _]
+  :intent "Call provider, extract text content, run validator. On failure recurse with feedback and decremented retries"
+  :requires [(valid provider) (valid messages) (> max-retries 0)]
+  :ensures [(valid result)]
+  :body
+  (let (response-result : _ (call-provider provider messages nil))
+    (match response-result
+      (Err e) (Err e)
+      (Ok response)
+        (let (text-result : _ (extract-text-content response))
+          (match text-result
+            (Err e) (Err e)
+            (Ok text)
+              (let (validation-result : _ (validator text))
+                (match validation-result
+                  (Ok v) (Ok v)
+                  (Err reason)
+                    (if (> max-retries 1)
+                      (let (feedback-msg : _ (str "Previous response failed validation: " reason ". Please try again."))
+                        (let (feedback : _ (make-message "user" feedback-msg))
+                          (let (updated-messages : _ (concat messages [feedback]))
+                            (validate-with-retry provider updated-messages validator (- max-retries 1)))))
+                      (Err (str "Validation failed after all retries: " reason))))))))))

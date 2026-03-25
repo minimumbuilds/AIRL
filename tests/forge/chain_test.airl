@@ -1,0 +1,41 @@
+;; chain_test.airl — Tests for lib/forge/chain.airl
+
+;; Test 1: chain 3 steps — double, add-ten, to-str — starting from 5 → "20"
+(let (step-double : _ (make-step "double" (fn [x] (* x 2))))
+  (let (step-add-ten : _ (make-step "add-ten" (fn [x] (+ x 10))))
+    (let (step-to-str : _ (make-step "to-str" (fn [x] (int-to-string x))))
+      (let (steps : _ [step-double step-add-ten step-to-str])
+        (let (result : _ (chain steps 5))
+          (do
+            (assert (is-ok? result) "chain of 3 steps must succeed")
+            (let (val : _ (unwrap-or result ""))
+              (assert (= val "20") "chain 5 → double → add-ten → to-str must equal \"20\""))))))))
+
+;; Test 2: chain stops on error at step 2
+(let (step-ok : _ (make-step "ok-step" (fn [x] (+ x 1))))
+  (let (step-err : _ (make-step "err-step" (fn [x] (Err "deliberate failure"))))
+    (let (step-never : _ (make-step "never-step" (fn [x] (* x 100))))
+      (let (steps2 : _ [step-ok step-err step-never])
+        (let (result2 : _ (chain steps2 10))
+          (assert (is-err? result2) "chain must short-circuit on Err step"))))))
+
+;; Test 3: fan-out with 3 functions on input 10 → [20, 30, 40]
+(let (fo-result : _ (fan-out [(fn [x] (* x 2)) (fn [x] (* x 3)) (fn [x] (* x 4))] 10))
+  (do
+    (assert (is-ok? fo-result) "fan-out must succeed when all functions succeed")
+    (let (vals : _ (unwrap-or fo-result []))
+      (do
+        (assert (= (length vals) 3) "fan-out must return 3 values")
+        (assert (= (at vals 0) 20) "fan-out first result must be 20")
+        (assert (= (at vals 1) 30) "fan-out second result must be 30")
+        (assert (= (at vals 2) 40) "fan-out third result must be 40")))))
+
+;; Test 4: chain with a single identity step
+(let (step-id : _ (make-step "id" (fn [x] x)))
+  (let (result3 : _ (chain [step-id] 42))
+    (do
+      (assert (is-ok? result3) "chain with single identity step must succeed")
+      (let (val3 : _ (unwrap-or result3 0))
+        (assert (= val3 42) "single identity step must return input unchanged")))))
+
+(print "ALL CHAIN TESTS PASSED")
