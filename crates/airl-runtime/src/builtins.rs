@@ -1788,6 +1788,43 @@ fn detect_unary_op(func: &BytecodeFunc, closure: &BytecodeClosureValue) -> Optio
     found_op.map(|op| (op, const_val))
 }
 
+/// Detect a compound predicate: (fn [x] (CMP (ARITH x CONST1) CONST2))
+/// Example: (fn [x] (= (% x 2) 0)) → arith=Mod, arith_const=2, cmp=Eq, cmp_const=0
+/// Returns (arith_op, arith_const, cmp_op, cmp_const) if matched.
+fn detect_compound_predicate(
+    func: &BytecodeFunc,
+    closure: &BytecodeClosureValue,
+) -> Option<(Op, i64, Op, i64)> {
+    if func.arity != 1 || !closure.captured.is_empty() { return None; }
+    let mut arith_op = None;
+    let mut cmp_op = None;
+    let mut constants: Vec<i64> = Vec::new();
+    for instr in &func.instructions {
+        match instr.op {
+            Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod => {
+                if arith_op.is_some() { return None; }
+                arith_op = Some(instr.op);
+            }
+            Op::Eq | Op::Ne | Op::Lt | Op::Le | Op::Gt | Op::Ge => {
+                if cmp_op.is_some() { return None; }
+                cmp_op = Some(instr.op);
+            }
+            Op::LoadConst => {
+                if let Some(Value::Int(n)) = func.constants.get(instr.a as usize) {
+                    constants.push(*n);
+                }
+            }
+            Op::Move | Op::Return | Op::MarkMoved | Op::CheckNotMoved => {}
+            _ => return None,
+        }
+    }
+    // Need exactly: 1 arith op + 1 cmp op + 2 constants
+    match (arith_op, cmp_op, constants.len()) {
+        (Some(a), Some(c), 2) => Some((a, constants[0], c, constants[1])),
+        _ => None,
+    }
+}
+
 // ── VM-aware list builtins (require closure calling) ──────────────
 
 fn builtin_map_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, RuntimeError> {
@@ -1870,6 +1907,7 @@ fn builtin_filter_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, Run
         // Closure pattern detection: avoid per-element VM calls
         if let Value::BytecodeClosure(ref closure) = pred {
             if let Some(func) = vm.get_func(&closure.func_name) {
+                // Single-op patterns: (fn [x] (> x 3)), (fn [x] (= x 0))
                 if let Some((op, Some(c))) = detect_unary_op(&func, closure) {
                     let pred_fn: Option<Box<dyn Fn(i64) -> bool>> = match op {
                         Op::Gt => Some(Box::new(move |x| x > c)),
@@ -1882,6 +1920,31 @@ fn builtin_filter_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, Run
                     };
                     if let Some(pred_fn) = pred_fn {
                         return Ok(Value::IntList(xs.iter().filter(|x| pred_fn(**x)).copied().collect()));
+                    }
+                }
+                // Compound patterns: (fn [x] (= (% x 2) 0)), (fn [x] (> (* x 3) 10))
+                if let Some((arith, ac, cmp, cc)) = detect_compound_predicate(&func, closure) {
+                    let apply_arith: Option<Box<dyn Fn(i64) -> i64>> = match arith {
+                        Op::Mod => Some(Box::new(move |x| if ac != 0 { x % ac } else { 0 })),
+                        Op::Add => Some(Box::new(move |x| x.wrapping_add(ac))),
+                        Op::Sub => Some(Box::new(move |x| x.wrapping_sub(ac))),
+                        Op::Mul => Some(Box::new(move |x| x.wrapping_mul(ac))),
+                        Op::Div => Some(Box::new(move |x| if ac != 0 { x / ac } else { 0 })),
+                        _ => None,
+                    };
+                    let apply_cmp: Option<Box<dyn Fn(i64) -> bool>> = match cmp {
+                        Op::Eq => Some(Box::new(move |v| v == cc)),
+                        Op::Ne => Some(Box::new(move |v| v != cc)),
+                        Op::Lt => Some(Box::new(move |v| v < cc)),
+                        Op::Le => Some(Box::new(move |v| v <= cc)),
+                        Op::Gt => Some(Box::new(move |v| v > cc)),
+                        Op::Ge => Some(Box::new(move |v| v >= cc)),
+                        _ => None,
+                    };
+                    if let (Some(arith_fn), Some(cmp_fn)) = (apply_arith, apply_cmp) {
+                        return Ok(Value::IntList(
+                            xs.iter().filter(|x| cmp_fn(arith_fn(**x))).copied().collect()
+                        ));
                     }
                 }
             }
