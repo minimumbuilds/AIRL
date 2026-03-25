@@ -980,6 +980,10 @@ impl VmCaller for BytecodeVm {
             _ => Err(RuntimeError::Custom(format!("not callable: {}", callee))),
         }
     }
+
+    fn get_func(&self, name: &str) -> Option<BytecodeFunc> {
+        self.functions.get(name).cloned()
+    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 use crate::value::Value;
 use crate::error::RuntimeError;
 use crate::tensor::TensorValue;
+use crate::bytecode::{Op, BytecodeFunc, BytecodeClosureValue};
 use airl_types::ty::PrimTy;
 use std::collections::HashMap;
 
@@ -10,6 +11,7 @@ pub type BuiltinFnPtr = fn(&[Value]) -> Result<Value, RuntimeError>;
 /// Implemented by BytecodeVm to allow VM-aware builtins to invoke closures.
 pub trait VmCaller {
     fn call_value(&mut self, callee: &Value, args: Vec<Value>) -> Result<Value, RuntimeError>;
+    fn get_func(&self, name: &str) -> Option<BytecodeFunc>;
 }
 
 pub type BuiltinWithVmFn = fn(&mut dyn VmCaller, &[Value]) -> Result<Value, RuntimeError>;
@@ -1740,6 +1742,52 @@ impl Builtins {
     }
 }
 
+// ── Closure pattern detectors for fast-path specialization ────────
+
+/// Detect if a 2-arg closure body is a single binary arithmetic op.
+/// Matches patterns like (fn [a b] (+ a b)), (fn [a b] (* a b)), etc.
+fn detect_binary_op(func: &BytecodeFunc, closure: &BytecodeClosureValue) -> Option<Op> {
+    if func.arity != 2 || !closure.captured.is_empty() { return None; }
+    let mut found_op = None;
+    for instr in &func.instructions {
+        match instr.op {
+            Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod => {
+                if found_op.is_some() { return None; } // multiple arith ops
+                found_op = Some(instr.op);
+            }
+            Op::Move | Op::Return | Op::LoadConst | Op::MarkMoved | Op::CheckNotMoved => {}
+            _ => return None,
+        }
+    }
+    found_op
+}
+
+/// Detect if a 1-arg closure body is a unary op with optional constant.
+/// Matches: (fn [x] (* x x)), (fn [x] (* x 2)), (fn [x] (+ x 1)), (fn [x] (> x 3))
+fn detect_unary_op(func: &BytecodeFunc, closure: &BytecodeClosureValue) -> Option<(Op, Option<i64>)> {
+    if func.arity != 1 || !closure.captured.is_empty() { return None; }
+    let mut found_op = None;
+    let mut const_val = None;
+    for instr in &func.instructions {
+        match instr.op {
+            Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod
+            | Op::Eq | Op::Ne | Op::Lt | Op::Le | Op::Gt | Op::Ge => {
+                if found_op.is_some() { return None; }
+                found_op = Some(instr.op);
+            }
+            Op::LoadConst => {
+                if instr.a as usize >= func.constants.len() { return None; }
+                if let Value::Int(n) = &func.constants[instr.a as usize] {
+                    const_val = Some(*n);
+                }
+            }
+            Op::Move | Op::Return | Op::MarkMoved | Op::CheckNotMoved => {}
+            _ => return None,
+        }
+    }
+    found_op.map(|op| (op, const_val))
+}
+
 // ── VM-aware list builtins (require closure calling) ──────────────
 
 fn builtin_map_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, RuntimeError> {
@@ -1752,6 +1800,24 @@ fn builtin_map_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, Runtim
 
     // Fast path: IntList input
     if let Value::IntList(xs) = &args[1] {
+        // Closure pattern detection: avoid per-element VM calls
+        if let Value::BytecodeClosure(ref closure) = f {
+            if let Some(func) = vm.get_func(&closure.func_name) {
+                if let Some((op, const_val)) = detect_unary_op(&func, closure) {
+                    let result: Option<Vec<i64>> = match (op, const_val) {
+                        (Op::Mul, None) => Some(xs.iter().map(|x| x.wrapping_mul(*x)).collect()),
+                        (Op::Mul, Some(c)) => Some(xs.iter().map(|x| x.wrapping_mul(c)).collect()),
+                        (Op::Add, Some(c)) => Some(xs.iter().map(|x| x.wrapping_add(c)).collect()),
+                        (Op::Sub, Some(c)) => Some(xs.iter().map(|x| x.wrapping_sub(c)).collect()),
+                        _ => None,
+                    };
+                    if let Some(ints) = result {
+                        return Ok(Value::IntList(ints));
+                    }
+                }
+            }
+        }
+
         let mut results_int = Vec::with_capacity(xs.len());
         let mut all_int = true;
         let mut results_mixed: Vec<Value> = Vec::new();
@@ -1801,6 +1867,26 @@ fn builtin_filter_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, Run
 
     // Fast path: IntList
     if let Value::IntList(xs) = &args[1] {
+        // Closure pattern detection: avoid per-element VM calls
+        if let Value::BytecodeClosure(ref closure) = pred {
+            if let Some(func) = vm.get_func(&closure.func_name) {
+                if let Some((op, Some(c))) = detect_unary_op(&func, closure) {
+                    let pred_fn: Option<Box<dyn Fn(i64) -> bool>> = match op {
+                        Op::Gt => Some(Box::new(move |x| x > c)),
+                        Op::Lt => Some(Box::new(move |x| x < c)),
+                        Op::Ge => Some(Box::new(move |x| x >= c)),
+                        Op::Le => Some(Box::new(move |x| x <= c)),
+                        Op::Eq => Some(Box::new(move |x| x == c)),
+                        Op::Ne => Some(Box::new(move |x| x != c)),
+                        _ => None,
+                    };
+                    if let Some(pred_fn) = pred_fn {
+                        return Ok(Value::IntList(xs.iter().filter(|x| pred_fn(**x)).copied().collect()));
+                    }
+                }
+            }
+        }
+
         let mut results = Vec::new();
         for x in xs {
             let keep = vm.call_value(&pred, vec![Value::Int(*x)])?;
@@ -1854,6 +1940,46 @@ fn builtin_fold_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, Runti
                     return Ok(Value::Int(acc));
                 }
                 _ => {} // fall through to generic IntList path
+            }
+        }
+        // Closure pattern detection: avoid per-element VM calls
+        if let Value::BytecodeClosure(ref closure) = f {
+            if let Some(func) = vm.get_func(&closure.func_name) {
+                if let Some(op) = detect_binary_op(&func, closure) {
+                    match op {
+                        Op::Add => {
+                            for x in xs { acc = acc.wrapping_add(*x); }
+                            return Ok(Value::Int(acc));
+                        }
+                        Op::Sub => {
+                            for x in xs { acc = acc.wrapping_sub(*x); }
+                            return Ok(Value::Int(acc));
+                        }
+                        Op::Mul => {
+                            for x in xs { acc = acc.wrapping_mul(*x); }
+                            return Ok(Value::Int(acc));
+                        }
+                        Op::Div => {
+                            for x in xs {
+                                if *x == 0 {
+                                    return Err(RuntimeError::Custom("division by zero in fold".into()));
+                                }
+                                acc /= x;
+                            }
+                            return Ok(Value::Int(acc));
+                        }
+                        Op::Mod => {
+                            for x in xs {
+                                if *x == 0 {
+                                    return Err(RuntimeError::Custom("modulo by zero in fold".into()));
+                                }
+                                acc %= x;
+                            }
+                            return Ok(Value::Int(acc));
+                        }
+                        _ => {} // fall through
+                    }
+                }
             }
         }
         // Generic IntList path: call function but avoid boxing where possible
