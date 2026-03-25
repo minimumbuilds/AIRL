@@ -22,7 +22,7 @@ fn main() {
             Some("agent") => cmd_agent(&args[2..]),
             Some("call") => cmd_call(&args[2..]),
             Some("fmt") => cmd_fmt(&args[2..]),
-            Some("--version") | Some("-V") => println!("airl 0.4.0"),
+            Some("--version") | Some("-V") => println!("airl 0.5.1"),
             _ => print_usage(),
         }
     }).expect("failed to spawn main thread");
@@ -445,7 +445,7 @@ fn print_pipeline_error(err: &PipelineError, path: &str) {
 
 fn print_usage() {
     println!(
-        "airl 0.4.0 — The AIRL Language
+        "airl 0.5.1 — The AIRL Language
 
 Usage: airl <command> [args]
 

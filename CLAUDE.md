@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~520 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.4.0.
+AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~520 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.5.1.
 
 **Language spec:** `AIRL-Language-Specification-v0.1.0.md`
 **LLM header:** `AIRL-Header.md` — **MUST read before writing any AIRL code.** Compressed reference with all traps, syntax, signatures, and patterns (~360 lines, ~3K tokens). Replaces the 7-file pre-flight checklist.
@@ -36,7 +36,7 @@ cargo run --features jit -- check <file.airl>          # Type-check and verify
 cargo run --features jit -- repl                       # Interactive REPL
 ```
 
-**Execution model (v0.5.0):** Two paths, one runtime. `airl run` JIT-full-compiles all functions to native x86-64 via Cranelift, falling back to the bytecode VM for ineligible functions. `airl compile` AOT-compiles to standalone native executables. Both paths call builtins via `extern "C"` functions in `crates/airl-rt/` (Rust). VM-aware builtins provide native `map`/`filter`/`fold`/`sort` with IntList specialization and inline closure compilation. Eligible pure-arithmetic functions use raw `i64`/`f64` register ops (42x faster than Python). Contract assertions and ownership checks compile to native conditional branches. Thread-per-task concurrency with message-passing channels (v0.5.0).
+**Execution model (v0.5.1):** Two paths, one runtime. `airl run` JIT-full-compiles all functions to native x86-64 via Cranelift, falling back to the bytecode VM for ineligible functions. `airl compile` AOT-compiles to standalone native executables. Both paths call builtins via `extern "C"` functions in `crates/airl-rt/` (Rust). VM-aware builtins provide native `map`/`filter`/`fold`/`sort` with IntList specialization and inline closure compilation. Eligible pure-arithmetic functions use raw `i64`/`f64` register ops (42x faster than Python). Contract assertions and ownership checks compile to native conditional branches. Thread-per-task concurrency with message-passing channels (v0.5.0).
 
 **First build note:** Z3 (in `airl-solver`) compiles from C++ source on first build (~5-15 min). Requires CMake, C++ compiler, Python 3.
 
