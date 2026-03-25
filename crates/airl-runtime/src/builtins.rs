@@ -3410,11 +3410,17 @@ fn builtin_channel_recv(args: &[Value]) -> Result<Value, RuntimeError> {
         Value::Int(n) => *n,
         _ => return Err(RuntimeError::TypeError("channel-recv: handle must be Int".into())),
     };
-    let receivers = channel_receivers().lock().unwrap();
-    match receivers.get(&rx_id) {
-        Some(rx) => match rx.recv() {
-            Ok(val) => Ok(Value::Variant("Ok".into(), Box::new(val))),
-            Err(_) => Ok(Value::Variant("Err".into(), Box::new(Value::Str("channel closed".into())))),
+    // Temporarily remove receiver from map to avoid holding the global lock during blocking recv
+    let rx = channel_receivers().lock().unwrap().remove(&rx_id);
+    match rx {
+        Some(rx) => {
+            let result = match rx.recv() {
+                Ok(val) => Ok(Value::Variant("Ok".into(), Box::new(val))),
+                Err(_) => Ok(Value::Variant("Err".into(), Box::new(Value::Str("channel closed".into())))),
+            };
+            // Put the receiver back
+            channel_receivers().lock().unwrap().insert(rx_id, rx);
+            result
         },
         None => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
             format!("channel-recv: invalid receiver handle {}", rx_id)
@@ -3432,17 +3438,21 @@ fn builtin_channel_recv_timeout(args: &[Value]) -> Result<Value, RuntimeError> {
         Value::Int(n) => *n,
         _ => return Err(RuntimeError::TypeError("channel-recv-timeout: timeout must be Int".into())),
     };
-    let receivers = channel_receivers().lock().unwrap();
-    match receivers.get(&rx_id) {
+    // Temporarily remove receiver from map to avoid holding the global lock during blocking recv
+    let rx = channel_receivers().lock().unwrap().remove(&rx_id);
+    match rx {
         Some(rx) => {
             let duration = std::time::Duration::from_millis(timeout_ms as u64);
-            match rx.recv_timeout(duration) {
+            let result = match rx.recv_timeout(duration) {
                 Ok(val) => Ok(Value::Variant("Ok".into(), Box::new(val))),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) =>
                     Ok(Value::Variant("Err".into(), Box::new(Value::Str("timeout".into())))),
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) =>
                     Ok(Value::Variant("Err".into(), Box::new(Value::Str("channel closed".into())))),
-            }
+            };
+            // Put the receiver back
+            channel_receivers().lock().unwrap().insert(rx_id, rx);
+            result
         }
         None => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
             format!("channel-recv-timeout: invalid receiver handle {}", rx_id)
