@@ -186,6 +186,8 @@ pub struct RuntimeImports {
     pub bitwise_xor: FuncId,
     pub bitwise_and: FuncId,
     pub bitwise_or: FuncId,
+    pub bitwise_shr: FuncId,
+    pub bitwise_shl: FuncId,
 
     // Byte encoding
     pub bytes_from_int16: FuncId,
@@ -670,6 +672,8 @@ impl BytecodeJitFull {
         let bitwise_xor = declare_import(m, "airl_bitwise_xor", s2.clone());
         let bitwise_and = declare_import(m, "airl_bitwise_and", s2.clone());
         let bitwise_or = declare_import(m, "airl_bitwise_or", s2.clone());
+        let bitwise_shr = declare_import(m, "airl_bitwise_shr", s2.clone());
+        let bitwise_shl = declare_import(m, "airl_bitwise_shl", s2.clone());
 
         // Byte encoding
         let bytes_from_int16 = declare_import(m, "airl_bytes_from_int16", s1.clone());
@@ -735,7 +739,7 @@ impl BytecodeJitFull {
             hmac_sha256_bytes, hmac_sha512_bytes,
             pbkdf2_sha256, pbkdf2_sha512,
             base64_decode_bytes, base64_encode_bytes,
-            bitwise_xor, bitwise_and, bitwise_or,
+            bitwise_xor, bitwise_and, bitwise_or, bitwise_shr, bitwise_shl,
             bytes_from_int16, bytes_from_int32, bytes_from_int64,
             bytes_to_int16, bytes_to_int32, bytes_to_int64,
             bytes_from_string, bytes_to_string, bytes_concat, bytes_slice, crc32c,
@@ -873,6 +877,8 @@ impl BytecodeJitFull {
         m.insert("bitwise-xor".into(),         rt.bitwise_xor);
         m.insert("bitwise-and".into(),         rt.bitwise_and);
         m.insert("bitwise-or".into(),          rt.bitwise_or);
+        m.insert("bitwise-shr".into(),         rt.bitwise_shr);
+        m.insert("bitwise-shl".into(),         rt.bitwise_shl);
         m.insert("str".into(),           rt.str_variadic);
         m.insert("format".into(),        rt.format_variadic);
 

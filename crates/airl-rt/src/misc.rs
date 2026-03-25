@@ -571,6 +571,20 @@ pub extern "C" fn airl_bitwise_or(a: *mut RtValue, b: *mut RtValue) -> *mut RtVa
     rt_int(va | vb)
 }
 
+#[no_mangle]
+pub extern "C" fn airl_bitwise_shr(a: *mut RtValue, n: *mut RtValue) -> *mut RtValue {
+    let va = match unsafe { &(*a).data } { RtData::Int(n) => *n, _ => 0 };
+    let vn = match unsafe { &(*n).data } { RtData::Int(n) => *n, _ => 0 };
+    rt_int(((va as u64) >> (vn as u64)) as i64)
+}
+
+#[no_mangle]
+pub extern "C" fn airl_bitwise_shl(a: *mut RtValue, n: *mut RtValue) -> *mut RtValue {
+    let va = match unsafe { &(*a).data } { RtData::Int(n) => *n, _ => 0 };
+    let vn = match unsafe { &(*n).data } { RtData::Int(n) => *n, _ => 0 };
+    rt_int(((va as u64) << (vn as u64)) as i64)
+}
+
 // ── Type conversions ──
 
 #[no_mangle]

@@ -1743,6 +1743,8 @@ impl Builtins {
         self.register("bitwise-xor", builtin_bitwise_xor);
         self.register("bitwise-and", builtin_bitwise_and);
         self.register("bitwise-or", builtin_bitwise_or);
+        self.register("bitwise-shr", builtin_bitwise_shr);
+        self.register("bitwise-shl", builtin_bitwise_shl);
     }
 
     // ── VM-aware builtins (require closure calling) ─────
@@ -3160,6 +3162,40 @@ fn builtin_bitwise_or(args: &[Value]) -> Result<Value, RuntimeError> {
         )),
     };
     Ok(Value::Int(a | b))
+}
+
+fn builtin_bitwise_shr(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("bitwise-shr", args, 2)?;
+    let a = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError(
+            "`bitwise-shr` expects (Int, Int)".into(),
+        )),
+    };
+    let n = match &args[1] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError(
+            "`bitwise-shr` expects (Int, Int)".into(),
+        )),
+    };
+    Ok(Value::Int(((a as u64) >> (n as u64)) as i64))
+}
+
+fn builtin_bitwise_shl(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("bitwise-shl", args, 2)?;
+    let a = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError(
+            "`bitwise-shl` expects (Int, Int)".into(),
+        )),
+    };
+    let n = match &args[1] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError(
+            "`bitwise-shl` expects (Int, Int)".into(),
+        )),
+    };
+    Ok(Value::Int(((a as u64) << (n as u64)) as i64))
 }
 
 // ── Format + Exit implementations ────────────────────────────────────────────
