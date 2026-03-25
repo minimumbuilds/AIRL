@@ -678,11 +678,40 @@ use std::net::TcpStream;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::io::{Read, Write};
 
+enum RtTcpHandle {
+    Plain(TcpStream),
+    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+}
+
+impl Read for RtTcpHandle {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self { RtTcpHandle::Plain(s) => s.read(buf), RtTcpHandle::Tls(s) => s.read(buf) }
+    }
+}
+
+impl Write for RtTcpHandle {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self { RtTcpHandle::Plain(s) => s.write(buf), RtTcpHandle::Tls(s) => s.write(buf) }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self { RtTcpHandle::Plain(s) => s.flush(), RtTcpHandle::Tls(s) => s.flush() }
+    }
+}
+
+impl RtTcpHandle {
+    fn set_timeout(&self, timeout: Option<std::time::Duration>) -> std::io::Result<()> {
+        let stream = match self { RtTcpHandle::Plain(s) => s, RtTcpHandle::Tls(s) => s.get_ref() };
+        stream.set_read_timeout(timeout)?;
+        stream.set_write_timeout(timeout)?;
+        Ok(())
+    }
+}
+
 static NEXT_TCP_HANDLE: AtomicI64 = AtomicI64::new(1);
 
-fn tcp_handles() -> &'static std::sync::Mutex<std::collections::HashMap<i64, TcpStream>> {
+fn tcp_handles() -> &'static std::sync::Mutex<std::collections::HashMap<i64, RtTcpHandle>> {
     use std::sync::{Mutex, OnceLock};
-    static HANDLES: OnceLock<Mutex<std::collections::HashMap<i64, TcpStream>>> = OnceLock::new();
+    static HANDLES: OnceLock<Mutex<std::collections::HashMap<i64, RtTcpHandle>>> = OnceLock::new();
     HANDLES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
@@ -691,7 +720,7 @@ pub extern "C" fn airl_tcp_connect(host: *mut RtValue, port: *mut RtValue) -> *m
     let h = match unsafe { &(*host).data } { RtData::Str(s) => s.clone(), _ => return err_variant("host must be string") };
     let p = match unsafe { &(*port).data } { RtData::Int(n) => *n as u16, _ => return err_variant("port must be int") };
     match TcpStream::connect(format!("{}:{}", h, p)) {
-        Ok(stream) => { let handle = NEXT_TCP_HANDLE.fetch_add(1, Ordering::SeqCst); tcp_handles().lock().unwrap().insert(handle, stream); ok_variant(rt_int(handle)) }
+        Ok(stream) => { let handle = NEXT_TCP_HANDLE.fetch_add(1, Ordering::SeqCst); tcp_handles().lock().unwrap().insert(handle, RtTcpHandle::Plain(stream)); ok_variant(rt_int(handle)) }
         Err(e) => err_variant(&format!("tcp-connect: {}", e)),
     }
 }
@@ -745,9 +774,47 @@ pub extern "C" fn airl_tcp_set_timeout(handle: *mut RtValue, ms: *mut RtValue) -
     let timeout = if millis > 0 { Some(std::time::Duration::from_millis(millis as u64)) } else { None };
     let handles = tcp_handles().lock().unwrap();
     match handles.get(&h) {
-        Some(stream) => { let _ = stream.set_read_timeout(timeout); let _ = stream.set_write_timeout(timeout); ok_variant(rt_nil()) }
+        Some(tcp_handle) => match tcp_handle.set_timeout(timeout) { Ok(()) => ok_variant(rt_nil()), Err(e) => err_variant(&format!("tcp-set-timeout: {}", e)) },
         None => err_variant("invalid handle"),
     }
+}
+
+#[no_mangle]
+pub extern "C" fn airl_tcp_connect_tls(host: *mut RtValue, port: *mut RtValue, ca_path: *mut RtValue, cert_path: *mut RtValue, key_path: *mut RtValue) -> *mut RtValue {
+    let h = match unsafe { &(*host).data } { RtData::Str(s) => s.clone(), _ => return err_variant("host must be string") };
+    let p = match unsafe { &(*port).data } { RtData::Int(n) => *n as u16, _ => return err_variant("port must be int") };
+    let ca = match unsafe { &(*ca_path).data } { RtData::Str(s) => s.clone(), _ => return err_variant("ca-path must be string") };
+    let cert = match unsafe { &(*cert_path).data } { RtData::Str(s) => s.clone(), _ => return err_variant("cert-path must be string") };
+    let key = match unsafe { &(*key_path).data } { RtData::Str(s) => s.clone(), _ => return err_variant("key-path must be string") };
+
+    let mut root_store = rustls::RootCertStore::empty();
+    if ca.is_empty() {
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    } else {
+        let ca_data = match std::fs::read(&ca) { Ok(d) => d, Err(e) => return err_variant(&format!("tcp-connect-tls: read CA: {}", e)) };
+        let certs: Vec<_> = match rustls_pemfile::certs(&mut &ca_data[..]).collect::<Result<Vec<_>, _>>() { Ok(c) => c, Err(e) => return err_variant(&format!("tcp-connect-tls: parse CA: {}", e)) };
+        for c in certs { let _ = root_store.add(c); }
+    }
+
+    let config_builder = rustls::ClientConfig::builder().with_root_certificates(root_store);
+    let config = if !cert.is_empty() && !key.is_empty() {
+        let cert_data = match std::fs::read(&cert) { Ok(d) => d, Err(e) => return err_variant(&format!("read cert: {}", e)) };
+        let key_data = match std::fs::read(&key) { Ok(d) => d, Err(e) => return err_variant(&format!("read key: {}", e)) };
+        let certs: Vec<_> = match rustls_pemfile::certs(&mut &cert_data[..]).collect::<Result<Vec<_>, _>>() { Ok(c) => c, Err(e) => return err_variant(&format!("parse cert: {}", e)) };
+        let pkey = match rustls_pemfile::private_key(&mut &key_data[..]) { Ok(Some(k)) => k, _ => return err_variant("no private key found") };
+        match config_builder.with_client_auth_cert(certs, pkey) { Ok(c) => c, Err(e) => return err_variant(&format!("client auth: {}", e)) }
+    } else {
+        config_builder.with_no_client_auth()
+    };
+
+    let tcp = match TcpStream::connect(format!("{}:{}", h, p)) { Ok(s) => s, Err(e) => return err_variant(&format!("tcp-connect-tls: {}", e)) };
+    let server_name = match rustls::pki_types::ServerName::try_from(h.clone()) { Ok(n) => n, Err(e) => return err_variant(&format!("invalid hostname: {}", e)) };
+    let conn = match rustls::ClientConnection::new(std::sync::Arc::new(config), server_name) { Ok(c) => c, Err(e) => return err_variant(&format!("tls init: {}", e)) };
+    let tls_stream = rustls::StreamOwned::new(conn, tcp);
+
+    let handle = NEXT_TCP_HANDLE.fetch_add(1, Ordering::SeqCst);
+    tcp_handles().lock().unwrap().insert(handle, RtTcpHandle::Tls(Box::new(tls_stream)));
+    ok_variant(rt_int(handle))
 }
 
 // ── Byte encoding ──

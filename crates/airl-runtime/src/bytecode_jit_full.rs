@@ -207,6 +207,7 @@ pub struct RuntimeImports {
     pub tcp_recv: FuncId,
     pub tcp_recv_exact: FuncId,
     pub tcp_set_timeout: FuncId,
+    pub tcp_connect_tls: FuncId,
 
     // Contract failure
     pub contract_fail: FuncId,  // (kind: i64, fn_name_idx: i64, clause_idx: i64) -> i64
@@ -690,6 +691,10 @@ impl BytecodeJitFull {
         let tcp_recv = declare_import(m, "airl_tcp_recv", s2.clone());
         let tcp_recv_exact = declare_import(m, "airl_tcp_recv_exact", s2.clone());
         let tcp_set_timeout = declare_import(m, "airl_tcp_set_timeout", s2.clone());
+        let mut sig5 = m.make_signature();
+        for _ in 0..5 { sig5.params.push(AbiParam::new(PTR)); }
+        sig5.returns.push(AbiParam::new(PTR));
+        let tcp_connect_tls = declare_import(m, "airl_tcp_connect_tls", sig5);
 
         // Contract failure: (i64, i64, i64) -> i64
         let mut cf_sig = m.make_signature();
@@ -734,7 +739,7 @@ impl BytecodeJitFull {
             bytes_from_int16, bytes_from_int32, bytes_from_int64,
             bytes_to_int16, bytes_to_int32, bytes_to_int64,
             bytes_from_string, bytes_to_string, bytes_concat, bytes_slice, crc32c,
-            tcp_connect, tcp_close, tcp_send, tcp_recv, tcp_recv_exact, tcp_set_timeout,
+            tcp_connect, tcp_close, tcp_send, tcp_recv, tcp_recv_exact, tcp_set_timeout, tcp_connect_tls,
             contract_fail,
         }
     }
@@ -891,6 +896,7 @@ impl BytecodeJitFull {
         m.insert("tcp-recv".into(),        rt.tcp_recv);
         m.insert("tcp-recv-exact".into(),  rt.tcp_recv_exact);
         m.insert("tcp-set-timeout".into(), rt.tcp_set_timeout);
+        m.insert("tcp-connect-tls".into(), rt.tcp_connect_tls);
 
         m
     }

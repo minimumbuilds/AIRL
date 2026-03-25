@@ -1782,6 +1782,7 @@ impl Builtins {
         self.register("tcp-recv", builtin_tcp_recv);
         self.register("tcp-recv-exact", builtin_tcp_recv_exact);
         self.register("tcp-set-timeout", builtin_tcp_set_timeout);
+        self.register("tcp-connect-tls", builtin_tcp_connect_tls);
     }
 
     fn register_threads(&mut self) {
@@ -3398,11 +3399,43 @@ use std::net::TcpStream;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::io::{Read as IoRead, Write as IoWrite};
 
+enum TcpHandle {
+    Plain(TcpStream),
+    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+}
+
+impl IoRead for TcpHandle {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self { TcpHandle::Plain(s) => s.read(buf), TcpHandle::Tls(s) => s.read(buf) }
+    }
+}
+
+impl IoWrite for TcpHandle {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self { TcpHandle::Plain(s) => s.write(buf), TcpHandle::Tls(s) => s.write(buf) }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self { TcpHandle::Plain(s) => s.flush(), TcpHandle::Tls(s) => s.flush() }
+    }
+}
+
+impl TcpHandle {
+    fn set_timeout(&self, timeout: Option<std::time::Duration>) -> std::io::Result<()> {
+        let stream = match self {
+            TcpHandle::Plain(s) => s,
+            TcpHandle::Tls(s) => s.get_ref(),
+        };
+        stream.set_read_timeout(timeout)?;
+        stream.set_write_timeout(timeout)?;
+        Ok(())
+    }
+}
+
 static NEXT_TCP_HANDLE: AtomicI64 = AtomicI64::new(1);
 
-fn tcp_handles() -> &'static std::sync::Mutex<HashMap<i64, TcpStream>> {
+fn tcp_handles() -> &'static std::sync::Mutex<HashMap<i64, TcpHandle>> {
     use std::sync::{Mutex, OnceLock};
-    static HANDLES: OnceLock<Mutex<HashMap<i64, TcpStream>>> = OnceLock::new();
+    static HANDLES: OnceLock<Mutex<HashMap<i64, TcpHandle>>> = OnceLock::new();
     HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -3420,7 +3453,7 @@ fn builtin_tcp_connect(args: &[Value]) -> Result<Value, RuntimeError> {
     match TcpStream::connect(&addr) {
         Ok(stream) => {
             let handle = NEXT_TCP_HANDLE.fetch_add(1, Ordering::SeqCst);
-            tcp_handles().lock().unwrap().insert(handle, stream);
+            tcp_handles().lock().unwrap().insert(handle, TcpHandle::Plain(stream));
             Ok(Value::Variant("Ok".into(), Box::new(Value::Int(handle))))
         }
         Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
@@ -3552,23 +3585,77 @@ fn builtin_tcp_set_timeout(args: &[Value]) -> Result<Value, RuntimeError> {
 
     let handles = tcp_handles().lock().unwrap();
     match handles.get(&handle) {
-        Some(stream) => {
-            if let Err(e) = stream.set_read_timeout(timeout) {
-                return Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+        Some(tcp_handle) => {
+            match tcp_handle.set_timeout(timeout) {
+                Ok(()) => Ok(Value::Variant("Ok".into(), Box::new(Value::Nil))),
+                Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
                     format!("tcp-set-timeout: {}", e)
-                ))));
+                )))),
             }
-            if let Err(e) = stream.set_write_timeout(timeout) {
-                return Ok(Value::Variant("Err".into(), Box::new(Value::Str(
-                    format!("tcp-set-timeout: {}", e)
-                ))));
-            }
-            Ok(Value::Variant("Ok".into(), Box::new(Value::Nil)))
         }
         None => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
             format!("tcp-set-timeout: invalid handle {}", handle)
         )))),
     }
+}
+
+fn builtin_tcp_connect_tls(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("tcp-connect-tls", args, 5)?;
+    let host = match &args[0] { Value::Str(s) => s.clone(), _ => return Err(RuntimeError::TypeError("`tcp-connect-tls`: host must be String".into())) };
+    let port = match &args[1] { Value::Int(n) => *n as u16, _ => return Err(RuntimeError::TypeError("`tcp-connect-tls`: port must be Int".into())) };
+    let ca_path = match &args[2] { Value::Str(s) => s.clone(), _ => return Err(RuntimeError::TypeError("`tcp-connect-tls`: ca-path must be String".into())) };
+    let cert_path = match &args[3] { Value::Str(s) => s.clone(), _ => return Err(RuntimeError::TypeError("`tcp-connect-tls`: cert-path must be String".into())) };
+    let key_path = match &args[4] { Value::Str(s) => s.clone(), _ => return Err(RuntimeError::TypeError("`tcp-connect-tls`: key-path must be String".into())) };
+
+    // Build root cert store
+    let mut root_store = rustls::RootCertStore::empty();
+    if ca_path.is_empty() {
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    } else {
+        let ca_data = std::fs::read(&ca_path).map_err(|e| RuntimeError::Custom(format!("tcp-connect-tls: read CA: {}", e)))?;
+        let certs: Vec<_> = rustls_pemfile::certs(&mut &ca_data[..])
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| RuntimeError::Custom(format!("tcp-connect-tls: parse CA: {}", e)))?;
+        for cert in certs {
+            root_store.add(cert).map_err(|e| RuntimeError::Custom(format!("tcp-connect-tls: add CA: {}", e)))?;
+        }
+    }
+
+    let config_builder = rustls::ClientConfig::builder().with_root_certificates(root_store);
+    let config = if !cert_path.is_empty() && !key_path.is_empty() {
+        let cert_data = std::fs::read(&cert_path).map_err(|e| RuntimeError::Custom(format!("tcp-connect-tls: read cert: {}", e)))?;
+        let key_data = std::fs::read(&key_path).map_err(|e| RuntimeError::Custom(format!("tcp-connect-tls: read key: {}", e)))?;
+        let certs: Vec<_> = rustls_pemfile::certs(&mut &cert_data[..])
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| RuntimeError::Custom(format!("tcp-connect-tls: parse cert: {}", e)))?;
+        let key = rustls_pemfile::private_key(&mut &key_data[..])
+            .map_err(|e| RuntimeError::Custom(format!("tcp-connect-tls: parse key: {}", e)))?
+            .ok_or_else(|| RuntimeError::Custom("tcp-connect-tls: no private key found".into()))?;
+        config_builder.with_client_auth_cert(certs, key)
+            .map_err(|e| RuntimeError::Custom(format!("tcp-connect-tls: client auth: {}", e)))?
+    } else {
+        config_builder.with_no_client_auth()
+    };
+
+    let addr = format!("{}:{}", host, port);
+    let tcp_stream = match TcpStream::connect(&addr) {
+        Ok(s) => s,
+        Err(e) => return Ok(Value::Variant("Err".into(), Box::new(Value::Str(format!("tcp-connect-tls: connect: {}", e))))),
+    };
+
+    let server_name = match rustls::pki_types::ServerName::try_from(host.clone()) {
+        Ok(n) => n,
+        Err(e) => return Ok(Value::Variant("Err".into(), Box::new(Value::Str(format!("tcp-connect-tls: invalid hostname: {}", e))))),
+    };
+    let conn = match rustls::ClientConnection::new(std::sync::Arc::new(config), server_name) {
+        Ok(c) => c,
+        Err(e) => return Ok(Value::Variant("Err".into(), Box::new(Value::Str(format!("tcp-connect-tls: tls init: {}", e))))),
+    };
+    let tls_stream = rustls::StreamOwned::new(conn, tcp_stream);
+
+    let handle = NEXT_TCP_HANDLE.fetch_add(1, Ordering::SeqCst);
+    tcp_handles().lock().unwrap().insert(handle, TcpHandle::Tls(Box::new(tls_stream)));
+    Ok(Value::Variant("Ok".into(), Box::new(Value::Int(handle))))
 }
 
 // ── Thread and channel builtin implementations ────────────────────────────────
