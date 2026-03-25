@@ -47,15 +47,38 @@
 
 (defn g3-compile-stdlib
   :sig [-> _]
-  :intent "Compile stdlib via the Rust pipeline (compile-to-executable handles this)"
+  :intent "Compile each stdlib module separately to avoid lambda name collisions"
   :requires [(valid 1)]
   :ensures [(valid result)]
   :body
-    ;; The Rust AOT pipeline (compile-bytecode-to-executable) automatically
-    ;; includes stdlib functions compiled by the Rust bytecode compiler.
-    ;; We just need the file paths so compile-to-executable can find them.
-    ;; Return empty list — stdlib is handled at link time.
-    (Ok []))
+    (let (stdlib-dir : String (g3-find-stdlib-dir))
+      (let (stdlib-files : List [(str stdlib-dir "/prelude.airl")
+                                 (str stdlib-dir "/math.airl")
+                                 (str stdlib-dir "/result.airl")
+                                 (str stdlib-dir "/string.airl")
+                                 (str stdlib-dir "/map.airl")
+                                 (str stdlib-dir "/set.airl")])
+        ;; Compile each module separately. Each gets its own lambda counter
+        ;; starting at 0, so lambda names are __lambda_0, __lambda_1 etc.
+        ;; Since modules are compiled independently, there are no collisions
+        ;; as long as each module's lambdas are internal to that module.
+        ;; NOTE: cross-module references (e.g. math's sum-list calling
+        ;; prelude's fold) work because fold is a named defn, not a lambda.
+        (fold (fn [acc path]
+                (match acc
+                  (Err e) (Err e)
+                  (Ok funcs-so-far)
+                    (let (source : String (read-file path))
+                      (match (g3-compile-source source path)
+                        (Err e) (Err e)
+                        (Ok new-funcs) (Ok (concat funcs-so-far
+                          (filter (fn [f]
+                            (match f
+                              (BCFunc name _ _ _ _ _) (if (= name "__main__") false true)
+                              _ true))
+                            new-funcs)))))))
+              (Ok [])
+              stdlib-files))))
 
 ;; ── Parse CLI arguments ──────────────────────────────────
 

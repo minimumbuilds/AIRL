@@ -60,13 +60,21 @@
   :intent "Create a fresh compiler state"
   :requires [true]
   :ensures [(valid result)]
+  :body (make-compiler-state-named "anon"))
+
+(defn make-compiler-state-named
+  :sig [(func-name : String) -> _]
+  :intent "Create a fresh compiler state with function name for lambda prefixing"
+  :requires [(valid func-name)]
+  :ensures [(valid result)]
   :body (map-from ["instrs" []
                    "consts" []
                    "locals" (map-new)
                    "next-reg" 0
                    "max-reg" 0
                    "lambdas" []
-                   "lambda-ctr" 0]))
+                   "lambda-ctr" 0
+                   "func-name" func-name]))
 
 ;; ── Accessors ───────────────────────────────────────────
 
@@ -269,8 +277,9 @@
   :ensures [(valid result)]
   :body
     (let (ctr : Int (cs-lambda-ctr st))
-      (let (name : String (+ "__lambda_" (bc-int-to-string ctr)))
-        [(map-set st "lambda-ctr" (+ ctr 1)) name])))
+      (let (fn-name : String (map-get-or st "func-name" "anon"))
+        (let (name : String (str "__lambda_" fn-name "_" (bc-int-to-string ctr)))
+          [(map-set st "lambda-ctr" (+ ctr 1)) name]))))
 
 (defn cs-ensure-above-dst
   :sig [(st : _) (dst : Int) -> _]
@@ -1312,7 +1321,7 @@
   :requires [(valid name)]
   :ensures [(valid result)]
   :body
-    (let (st : _ (make-compiler-state))
+    (let (st : _ (make-compiler-state-named name))
       ;; Bind params to first N registers
       (let (st2 : _ (bc-bind-params st params 0))
         (let (arity : Int (length params))
