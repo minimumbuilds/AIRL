@@ -151,8 +151,8 @@ This is why AIRL makes contracts **grammar-level mandatory** — the parser lite
 - Algebraic data types (sum types, product types)
 - Pattern matching with exhaustiveness checking
 - First-class functions and closures
-- **Standard library** — 60 pure AIRL functions (collections, math, result combinators, string, map, set) auto-loaded as a prelude
-- **~80 Rust builtins** — arithmetic, comparisons, list ops (7), string ops (17), map ops (10), file I/O (11), float math (15), HTTP, JSON, type conversion, error handling, time, system
+- **Standard library** — 89 pure AIRL functions (collections, math, result combinators, string, map, set) auto-loaded as a prelude
+- **120+ Rust builtins** — arithmetic, comparisons, list ops (10), string ops (17), map ops (10), file I/O (13), float math (15), path (5), regex (4), crypto (5), HTTP, JSON, type conversion, error handling, time, system, format, exit
 
 ### Compilation & Execution
 
@@ -175,14 +175,33 @@ Contracts are **always enforced** — in both JIT and AOT compiled native code, 
 
 ### Performance
 
-| Benchmark | AIRL v0.2 | Python | Ratio |
-|-----------|-----------|--------|-------|
-| fib(35) AOT native | 56ms | 2,335ms | **42x faster** |
-| fact(20) x 100K AOT | 6ms | 248ms | **41x faster** |
-| 21/25 trivial tasks (AOT) | 1ms | 40ms | **40x faster** |
+**Pure arithmetic (AOT unboxed tier):**
+
+| Benchmark | AIRL v0.2 AOT | Python | Ratio |
+|-----------|---------------|--------|-------|
+| fib(35) | 56ms | 2,335ms | **42x faster** |
+| fact(20) x 100K | 6ms | 248ms | **41x faster** |
+| 21/25 trivial tasks | 1ms | 40ms | **40x faster** |
 | Code size (25 tasks) | 10,519 chars | 18,342 chars | **43% smaller** |
 
-AIRL v0.2 AOT uses a two-tier compilation strategy: eligible pure-arithmetic functions compile to raw CPU instructions (no heap allocation), while functions using lists, closures, or builtins compile with boxed runtime calls. The unboxed fast path achieves C-like performance on compute-heavy workloads, while enforcing contracts on every function call.
+**List-heavy operations (bytecode VM, v0.4.0 release build, 10K elements):**
+
+| Benchmark | v0.2.1 | v0.3.0 | v0.3.1 | v0.4.0 | Python |
+|-----------|--------|--------|--------|--------|--------|
+| fold sum 10K | 798ms | 13ms | 4ms | **<1ms** | 0.2ms |
+| filter evens 10K | — | — | 4ms | **<1ms** | 0.5ms |
+| map squares 1K | — | — | 1ms | **<1ms** | <1ms |
+| sort 100 reversed | — | — | <1ms | **<1ms** | <1ms |
+| chained pipeline | — | — | <1ms | **<1ms** | <1ms |
+
+**Total speedup: 798x** from v0.2.1 to v0.4.0 on list-heavy workloads, achieving Python parity on all measured benchmarks.
+
+**What changed at each version:**
+- **v0.3.0:** Native list builtins (reverse, concat, flatten, range), COW tail views O(1), in-place append, unboxed AOT tier expansion, VM-aware map/filter/fold/sort
+- **v0.3.1:** Inline closure execution (`eval_simple` bypasses frame overhead), `Value::IntList(Vec<i64>)` specialization (unboxed integer lists), 7 more native builtins (any, all, find, take, drop, zip, enumerate)
+- **v0.4.0:** Closure pattern detection — inspects bytecode bodies to replace fold/map/filter with native Rust loops when the closure is simple arithmetic (e.g., `(fn [acc x] (+ acc x))` → `xs.iter().sum()`)
+
+AIRL uses a two-tier compilation strategy: eligible pure-arithmetic functions compile to raw CPU instructions (no heap allocation) via Cranelift AOT, while list operations use specialized runtime paths with IntList, COW data structures, and pattern-detected native loops. Contracts are enforced at all tiers.
 
 ### Bootstrap Compiler (Self-Compiling)
 
@@ -523,6 +542,7 @@ AIRL_AOT_DEBUG=1 cargo run --release --features jit,aot -- compile program.airl 
 - **All functions JIT-compiled** — every function compiles to native x86-64 via Cranelift (jit-full)
 - **AOT produces standalone native executables** — `airl compile` with two-tier unboxed/boxed compilation
 - **Unboxed AOT: 42x faster than Python** — eligible pure-arithmetic functions compile to raw CPU instructions
+- **List operations at Python parity** — 798x speedup from v0.2.1 to v0.4.0 via native builtins, COW tail, IntList, closure pattern detection
 - **Contracts always enforced** — native conditional branches in both JIT and AOT, assertion opcodes in bytecode
 - **Ownership enforced** — static linearity analysis + runtime move tracking
 - **Quantifiers work everywhere** — `forall`/`exists` desugared to `fold`+`range`, no interpreter-only restrictions
