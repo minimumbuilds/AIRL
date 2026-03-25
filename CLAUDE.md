@@ -20,8 +20,9 @@ AIRL (AI Intermediate Representation Language) is a programming language designe
 4. `stdlib/result.md` — Result combinator signatures (`unwrap-or`, `and-then`, etc.)
 5. `stdlib/string.md` — 13 Rust builtins + 10 AIRL helper signatures
 6. `stdlib/map.md` — 10 Rust builtins + 8 AIRL helper signatures
+7. `stdlib/set.md` — 11 set operations (over maps, string elements only)
 
-**If you have not read all 6 files above, STOP and read them now before proceeding.**
+**If you have not read all 7 files above, STOP and read them now before proceeding.**
 
 ## Build & Test
 
@@ -71,7 +72,7 @@ airl-driver ← airl-solver (Z3)
 
 **Location:** `stdlib/` directory (embedded in binary via `include_str!`, auto-loaded before user code)
 
-The stdlib is 4 modules (49 functions total) — mostly pure AIRL, with Rust builtins for list destructuring, string character access, file I/O, float math, and HTTP.
+The stdlib is 5 modules (60 functions total) — mostly pure AIRL, with Rust builtins for list destructuring, string character access, file I/O, float math, and HTTP.
 
 ### Primitive Builtins (Rust)
 
@@ -225,12 +226,31 @@ See `stdlib/string.md` for full documentation including the 13 Rust builtins.
 
 See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
+**Set** (`stdlib/set.airl`) — 11 AIRL functions (implemented over maps):
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `set-new` | `(set-new)` | Create empty set |
+| `set-from` | `(set-from xs)` | Create set from list (dedup) |
+| `set-add` | `(set-add s x)` | Add element |
+| `set-remove` | `(set-remove s x)` | Remove element |
+| `set-contains?` | `(set-contains? s x)` | Check membership |
+| `set-size` | `(set-size s)` | Number of elements |
+| `set-to-list` | `(set-to-list s)` | Convert to list |
+| `set-union` | `(set-union a b)` | Union |
+| `set-intersection` | `(set-intersection a b)` | Intersection |
+| `set-difference` | `(set-difference a b)` | Difference (a \ b) |
+| `set-subset?` | `(set-subset? a b)` | Subset check |
+| `set-equal?` | `(set-equal? a b)` | Equality check |
+
+**Note:** Set elements must be strings (AIRL map keys are string-only). See `stdlib/set.md`.
+
 ### Prelude Loading
 
 - Embedded via `include_str!()` in `crates/airl-driver/src/pipeline.rs`
 - Stdlib is compiled to bytecode and loaded via `compile_and_load_stdlib_bytecode()` before user code
 - Called in `run_source_with_mode()`, `run_source_bytecode()`, JIT pipelines, and REPL startup
-- **Load order matters:** math depends on collections (`fold`), string depends on collections (`filter`, `reverse`)
+- **Load order matters:** math depends on collections (`fold`), string depends on collections (`filter`, `reverse`), set depends on map + collections (`fold`, `all`)
 - **Recursion depth limit:** 50,000 (in `BytecodeVm.recursion_depth`) to prevent stack overflow on large lists
 - **Known issue:** Type checker warns "undefined symbol" for stdlib functions because they are loaded at runtime, not registered in the type checker. Cosmetic only — functions work correctly.
 
@@ -272,6 +292,7 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **Collection Builtins** — 3 Rust builtins: `at-or` (safe indexing with default), `set-at` (immutable update at index), `list-contains?` (element membership). 3 AIRL stdlib functions: `unique` (deduplicate), `enumerate` (zip-with-index), `group-by` (group elements by key function → Map).
 - **Error Handling Builtins** — `panic` (abort with custom message) and `assert` (abort if condition false). Provides explicit error paths beyond contract violations.
 - **Time/Date Builtins** — `sleep` (pause N milliseconds) and `format-time` (format Unix timestamp with `%Y %m %d %H %M %S` specifiers, UTC, zero external deps — uses Howard Hinnant civil calendar algorithm).
+- **Set Data Structure** — 11 AIRL stdlib functions in `stdlib/set.airl`: `set-new`, `set-from`, `set-add`, `set-remove`, `set-contains?`, `set-size`, `set-to-list`, `set-union`, `set-intersection`, `set-difference`, `set-subset?`, `set-equal?`. Implemented over maps (keys with `true` values). Elements must be strings. Auto-loaded as prelude.
 
 ---
 

@@ -151,8 +151,8 @@ This is why AIRL makes contracts **grammar-level mandatory** — the parser lite
 - Algebraic data types (sum types, product types)
 - Pattern matching with exhaustiveness checking
 - First-class functions and closures
-- **Standard library** — 49 pure AIRL functions (collections, math, result combinators, string, map) auto-loaded as a prelude
-- **~75 Rust builtins** — arithmetic, comparisons, list ops, string ops (17), map ops (10), file I/O (11), float math (15), HTTP, JSON, type conversion, system
+- **Standard library** — 60 pure AIRL functions (collections, math, result combinators, string, map, set) auto-loaded as a prelude
+- **~80 Rust builtins** — arithmetic, comparisons, list ops (7), string ops (17), map ops (10), file I/O (11), float math (15), HTTP, JSON, type conversion, error handling, time, system
 
 ### Compilation & Execution
 
