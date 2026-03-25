@@ -29,6 +29,7 @@ hmac = "0.12"
 base64 = "0.22"
 rand = "0.8"
 crc32c = "0.6"
+pbkdf2 = "0.12"
 
 [features]
 mlir = ["airl-mlir"]

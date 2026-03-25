@@ -1730,6 +1730,19 @@ impl Builtins {
         self.register("base64-encode", builtin_base64_encode);
         self.register("base64-decode", builtin_base64_decode);
         self.register("random-bytes", builtin_random_bytes);
+        self.register("sha512", builtin_sha512);
+        self.register("hmac-sha512", builtin_hmac_sha512);
+        self.register("sha256-bytes", builtin_sha256_bytes);
+        self.register("sha512-bytes", builtin_sha512_bytes);
+        self.register("hmac-sha256-bytes", builtin_hmac_sha256_bytes);
+        self.register("hmac-sha512-bytes", builtin_hmac_sha512_bytes);
+        self.register("pbkdf2-sha256", builtin_pbkdf2_sha256);
+        self.register("pbkdf2-sha512", builtin_pbkdf2_sha512);
+        self.register("base64-decode-bytes", builtin_base64_decode_bytes);
+        self.register("base64-encode-bytes", builtin_base64_encode_bytes);
+        self.register("bitwise-xor", builtin_bitwise_xor);
+        self.register("bitwise-and", builtin_bitwise_and);
+        self.register("bitwise-or", builtin_bitwise_or);
     }
 
     // ── VM-aware builtins (require closure calling) ─────
@@ -2922,6 +2935,230 @@ fn builtin_random_bytes(args: &[Value]) -> Result<Value, RuntimeError> {
     rand::thread_rng().fill_bytes(&mut buf);
     let hex: String = buf.iter().map(|b| format!("{:02x}", b)).collect();
     Ok(Value::Str(hex))
+}
+
+// ── SHA-512, HMAC-SHA-512, bytes variants, PBKDF2, base64-bytes, bitwise ─────
+
+fn builtin_sha512(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("sha512", args, 1)?;
+    let data = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`sha512` expects a Str argument".into(),
+        )),
+    };
+    use sha2::Digest;
+    let mut hasher = sha2::Sha512::new();
+    hasher.update(data.as_bytes());
+    let result = hasher.finalize();
+    let hex: String = result.iter().map(|b| format!("{:02x}", b)).collect();
+    Ok(Value::Str(hex))
+}
+
+fn builtin_hmac_sha512(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("hmac-sha512", args, 2)?;
+    let key = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`hmac-sha512` expects (Str, Str)".into(),
+        )),
+    };
+    let data = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`hmac-sha512` expects (Str, Str)".into(),
+        )),
+    };
+    use hmac::{Hmac, Mac};
+    type HmacSha512 = Hmac<sha2::Sha512>;
+    let mut mac = HmacSha512::new_from_slice(key.as_bytes())
+        .map_err(|e| RuntimeError::Custom(format!("hmac-sha512: {}", e)))?;
+    mac.update(data.as_bytes());
+    let result = mac.finalize().into_bytes();
+    let hex: String = result.iter().map(|b| format!("{:02x}", b)).collect();
+    Ok(Value::Str(hex))
+}
+
+fn builtin_sha256_bytes(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("sha256-bytes", args, 1)?;
+    let data_i64 = extract_byte_list("sha256-bytes", &args[0])?;
+    let bytes: Vec<u8> = data_i64.iter().map(|b| *b as u8).collect();
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(&bytes);
+    let result = hasher.finalize();
+    Ok(Value::IntList(result.iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_sha512_bytes(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("sha512-bytes", args, 1)?;
+    let data_i64 = extract_byte_list("sha512-bytes", &args[0])?;
+    let bytes: Vec<u8> = data_i64.iter().map(|b| *b as u8).collect();
+    use sha2::Digest;
+    let mut hasher = sha2::Sha512::new();
+    hasher.update(&bytes);
+    let result = hasher.finalize();
+    Ok(Value::IntList(result.iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_hmac_sha256_bytes(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("hmac-sha256-bytes", args, 2)?;
+    let key_i64 = extract_byte_list("hmac-sha256-bytes", &args[0])?;
+    let key: Vec<u8> = key_i64.iter().map(|b| *b as u8).collect();
+    let data_i64 = extract_byte_list("hmac-sha256-bytes", &args[1])?;
+    let data: Vec<u8> = data_i64.iter().map(|b| *b as u8).collect();
+    use hmac::{Hmac, Mac};
+    type HmacSha256 = Hmac<sha2::Sha256>;
+    let mut mac = HmacSha256::new_from_slice(&key)
+        .map_err(|e| RuntimeError::Custom(format!("hmac-sha256-bytes: {}", e)))?;
+    mac.update(&data);
+    let result = mac.finalize().into_bytes();
+    Ok(Value::IntList(result.iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_hmac_sha512_bytes(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("hmac-sha512-bytes", args, 2)?;
+    let key_i64 = extract_byte_list("hmac-sha512-bytes", &args[0])?;
+    let key: Vec<u8> = key_i64.iter().map(|b| *b as u8).collect();
+    let data_i64 = extract_byte_list("hmac-sha512-bytes", &args[1])?;
+    let data: Vec<u8> = data_i64.iter().map(|b| *b as u8).collect();
+    use hmac::{Hmac, Mac};
+    type HmacSha512 = Hmac<sha2::Sha512>;
+    let mut mac = HmacSha512::new_from_slice(&key)
+        .map_err(|e| RuntimeError::Custom(format!("hmac-sha512-bytes: {}", e)))?;
+    mac.update(&data);
+    let result = mac.finalize().into_bytes();
+    Ok(Value::IntList(result.iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_pbkdf2_sha256(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("pbkdf2-sha256", args, 4)?;
+    let password = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`pbkdf2-sha256` expects Str as first argument".into(),
+        )),
+    };
+    let salt_i64 = extract_byte_list("pbkdf2-sha256", &args[1])?;
+    let salt: Vec<u8> = salt_i64.iter().map(|b| *b as u8).collect();
+    let iterations = match &args[2] {
+        Value::Int(n) => *n as u32,
+        _ => return Err(RuntimeError::TypeError(
+            "`pbkdf2-sha256` expects Int as third argument (iterations)".into(),
+        )),
+    };
+    let key_len = match &args[3] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(RuntimeError::TypeError(
+            "`pbkdf2-sha256` expects Int as fourth argument (key_len)".into(),
+        )),
+    };
+    let mut derived = vec![0u8; key_len];
+    pbkdf2::pbkdf2_hmac::<sha2::Sha256>(password.as_bytes(), &salt, iterations, &mut derived);
+    Ok(Value::IntList(derived.iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_pbkdf2_sha512(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("pbkdf2-sha512", args, 4)?;
+    let password = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`pbkdf2-sha512` expects Str as first argument".into(),
+        )),
+    };
+    let salt_i64 = extract_byte_list("pbkdf2-sha512", &args[1])?;
+    let salt: Vec<u8> = salt_i64.iter().map(|b| *b as u8).collect();
+    let iterations = match &args[2] {
+        Value::Int(n) => *n as u32,
+        _ => return Err(RuntimeError::TypeError(
+            "`pbkdf2-sha512` expects Int as third argument (iterations)".into(),
+        )),
+    };
+    let key_len = match &args[3] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(RuntimeError::TypeError(
+            "`pbkdf2-sha512` expects Int as fourth argument (key_len)".into(),
+        )),
+    };
+    let mut derived = vec![0u8; key_len];
+    pbkdf2::pbkdf2_hmac::<sha2::Sha512>(password.as_bytes(), &salt, iterations, &mut derived);
+    Ok(Value::IntList(derived.iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_base64_decode_bytes(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("base64-decode-bytes", args, 1)?;
+    let data = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`base64-decode-bytes` expects a Str argument".into(),
+        )),
+    };
+    use base64::Engine;
+    match base64::engine::general_purpose::STANDARD.decode(data.as_bytes()) {
+        Ok(bytes) => Ok(Value::Variant("Ok".into(), Box::new(
+            Value::IntList(bytes.iter().map(|b| *b as i64).collect())
+        ))),
+        Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(e.to_string())))),
+    }
+}
+
+fn builtin_base64_encode_bytes(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("base64-encode-bytes", args, 1)?;
+    let data_i64 = extract_byte_list("base64-encode-bytes", &args[0])?;
+    let bytes: Vec<u8> = data_i64.iter().map(|b| *b as u8).collect();
+    use base64::Engine;
+    Ok(Value::Str(base64::engine::general_purpose::STANDARD.encode(&bytes)))
+}
+
+fn builtin_bitwise_xor(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("bitwise-xor", args, 2)?;
+    let a = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError(
+            "`bitwise-xor` expects (Int, Int)".into(),
+        )),
+    };
+    let b = match &args[1] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError(
+            "`bitwise-xor` expects (Int, Int)".into(),
+        )),
+    };
+    Ok(Value::Int(a ^ b))
+}
+
+fn builtin_bitwise_and(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("bitwise-and", args, 2)?;
+    let a = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError(
+            "`bitwise-and` expects (Int, Int)".into(),
+        )),
+    };
+    let b = match &args[1] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError(
+            "`bitwise-and` expects (Int, Int)".into(),
+        )),
+    };
+    Ok(Value::Int(a & b))
+}
+
+fn builtin_bitwise_or(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("bitwise-or", args, 2)?;
+    let a = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError(
+            "`bitwise-or` expects (Int, Int)".into(),
+        )),
+    };
+    let b = match &args[1] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError(
+            "`bitwise-or` expects (Int, Int)".into(),
+        )),
+    };
+    Ok(Value::Int(a | b))
 }
 
 // ── Format + Exit implementations ────────────────────────────────────────────
