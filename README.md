@@ -224,20 +224,28 @@ Contracts are **always enforced** — in both JIT and AOT compiled native code, 
 
 AIRL uses a two-tier compilation strategy: eligible pure-arithmetic functions compile to raw CPU instructions (no heap allocation) via Cranelift AOT, while list operations use specialized runtime paths with IntList, COW data structures, and pattern-detected native loops. Contracts are enforced at all tiers.
 
-### Bootstrap Compiler (Self-Compiling)
+### G3 Self-Hosted Compiler
 
-AIRL includes a self-compiling bootstrap compiler — the compiler's front-end phases (lexer, parser, evaluator, type checker, IR compiler) are themselves implemented in AIRL. This is ~2,500 lines of AIRL that can lex, parse, type-check, and compile AIRL source code — including itself.
+AIRL includes a **self-hosted compiler written entirely in AIRL** that produces native binaries:
 
-**What it does:**
-- **Lexer** (`bootstrap/lexer.airl`, ~365 lines) — Tokenizes AIRL source strings. Self-parse verified: lexes its own source (15,691 chars → 3,400 tokens).
-- **Parser** (`bootstrap/parser.airl`, ~930 lines) — Converts token streams to typed AST nodes, including `deftype` sum/product type declarations.
-- **Evaluator** (`bootstrap/eval.airl`, ~616 lines) — Interprets AST nodes using tagged value variants and a map-based environment frame stack.
-- **Type Checker** (`bootstrap/types.airl` + `bootstrap/typecheck.airl`, ~715 lines) — Two-pass architecture: registration then checking. All bootstrap modules pass cleanly.
-- **IR Compiler** (`bootstrap/compiler.airl`, ~400 lines) — Compiles AST to a tree-flattened IR format.
+```bash
+# Compile an AIRL program to a native binary — using an AIRL compiler
+airl run --load bootstrap/lexer.airl \
+         --load bootstrap/parser.airl \
+         --load bootstrap/bc_compiler.airl \
+         bootstrap/g3_compiler.airl -- app.airl -o app
+./app
+```
 
-**Fixpoint verified:** The compiled compiler produces identical IR to the interpreted compiler — the compiler can compile itself and the output is self-consistent.
+The G3 compiler pipeline:
+1. **Lexer** (`bootstrap/lexer.airl`, ~365 lines) — Tokenizes AIRL source
+2. **Parser** (`bootstrap/parser.airl`, ~930 lines) — Tokens → AST with deftype support
+3. **Bytecode Compiler** (`bootstrap/bc_compiler.airl`, ~1,445 lines) — AST → BCFunc bytecode
+4. **AOT Backend** (`compile-bytecode-to-executable` builtin) — BCFunc → Cranelift → native binary
 
-**Runtime dependency:** The compiled output links against `libairl_rt.a`, which provides ~48 primitive builtins (`+`, `head`, `char-at`, `map-get`, `print`, etc.) as `extern "C"` functions. This is analogous to a C compiler that needs `libc` — the compiler is self-compiling, the output just needs a runtime library to execute. The AOT mode emits object files via Cranelift `ObjectModule` and links with `libairl_rt.a` to produce standalone native executables.
+All compilation logic is AIRL. Cranelift is exposed as a builtin (same as Go's assembler is part of the Go toolchain, not written in Go). The compiled output links against `libairl_rt.a` (embedded in the `airl` binary) for runtime builtins.
+
+**Fixpoint verified:** The bytecode compiler can compile itself and produce identical output.
 
 To build and run the bootstrap compiler tests:
 

@@ -358,6 +358,13 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (any-agent) -> Str                           ; first spawned agent name
 ```
 
+### Compilation
+```
+(run-bytecode bc-funcs) -> any                           ; execute BCFunc list in bytecode VM
+(compile-to-executable [paths] output) -> Nil            ; source files → native binary (Rust pipeline)
+(compile-bytecode-to-executable bc-funcs output) -> Str  ; BCFunc list → native binary (G3 pipeline)
+```
+
 ## PATTERNS
 
 ### Loop with accumulator -> fold

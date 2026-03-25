@@ -324,6 +324,8 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **Embedded Runtime (v0.5.2)** — `libairl_rt.a` is gzip-compressed at build time via `build.rs` and embedded in the `airl` binary via `include_bytes!`. At `airl compile` time, extracted to temp file for linking. Enables self-contained compiler: build once with `cargo build --features jit,aot`, then `airl compile` works anywhere with just `cc`. No Rust toolchain needed at the target.
 - **Builtin Safety Net (v0.5.2)** — JIT-full and AOT silent nil fallback for unregistered builtins replaced with hard errors (`return Err(...)` instead of emitting nil). Catches missing builtin registrations as compile-time errors instead of silent wrong answers.
 
+- **G3 Self-Hosted Compiler (v0.5.2)** — `bootstrap/g3_compiler.airl` (124 lines) is an AIRL compiler written entirely in AIRL. Pipeline: source → bootstrap lexer → parser → bc_compiler → BCFunc → `compile-bytecode-to-executable` (Cranelift AOT + embedded runtime) → native binary. Includes stdlib compilation (6 modules, 86 functions). New `compile-bytecode-to-executable` builtin takes BCFunc values + output path and produces linked native executables. Cranelift is a builtin, not reimplemented in AIRL (like Go's assembler is part of the Go toolchain). Usage: `airl run --load bootstrap/lexer.airl --load bootstrap/parser.airl --load bootstrap/bc_compiler.airl bootstrap/g3_compiler.airl -- input.airl -o output`.
+
 ---
 
 ## Remaining Tasks
