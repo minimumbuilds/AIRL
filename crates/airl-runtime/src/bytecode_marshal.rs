@@ -211,11 +211,26 @@ pub extern "C" fn airl_run_bytecode(prog: *mut airl_rt::value::RtValue) -> *mut 
 /// Takes the same BCFunc format as `run-bytecode` but produces a binary instead of executing.
 #[cfg(feature = "aot")]
 pub fn compile_bytecode_to_executable(funcs: &[Value], output_path: &str) -> Result<(), RuntimeError> {
-    use crate::bytecode_aot::BytecodeAot;
+    use crate::bytecode_aot::{BytecodeAot, compile_source_to_bytecode};
     use std::collections::HashMap;
 
-    // Unmarshal BCFunc values to BytecodeFunc structs
     let mut bc_funcs = Vec::new();
+
+    // 1. Compile stdlib via the Rust pipeline (consistent, tested bytecode)
+    for (src, name) in &[
+        (crate::bytecode_aot::COLLECTIONS_SOURCE, "collections"),
+        (crate::bytecode_aot::MATH_SOURCE, "math"),
+        (crate::bytecode_aot::RESULT_SOURCE, "result"),
+        (crate::bytecode_aot::STRING_SOURCE, "string"),
+        (crate::bytecode_aot::MAP_SOURCE, "map"),
+        (crate::bytecode_aot::SET_SOURCE, "set"),
+    ] {
+        let (stdlib_funcs, _) = compile_source_to_bytecode(src, name)
+            .map_err(|e| RuntimeError::Custom(format!("stdlib compile: {}", e)))?;
+        bc_funcs.extend(stdlib_funcs);
+    }
+
+    // 2. Unmarshal user BCFunc values (from bootstrap compiler)
     for f in funcs {
         bc_funcs.push(value_to_bytecode_func(f)?);
     }
@@ -225,7 +240,7 @@ pub fn compile_bytecode_to_executable(funcs: &[Value], output_path: &str) -> Res
         .map(|f| (f.name.clone(), f.clone()))
         .collect();
 
-    // AOT compile bytecode → native object
+    // 3. AOT compile bytecode → native object
     let mut aot = BytecodeAot::new()
         .map_err(|e| RuntimeError::Custom(format!("AOT init: {}", e)))?;
     for func in &bc_funcs {

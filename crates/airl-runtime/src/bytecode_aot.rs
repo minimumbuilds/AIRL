@@ -952,14 +952,12 @@ impl BytecodeAot {
         m.insert("tcp-set-timeout".into(), rt.tcp_set_timeout);
         m.insert("tcp-connect-tls".into(), rt.tcp_connect_tls);
 
-        // Higher-order list operations (closure-accepting)
-        m.insert("map".into(),    rt.map_ho);
-        m.insert("filter".into(), rt.filter_ho);
-        m.insert("fold".into(),   rt.fold_ho);
-        m.insert("sort".into(),   rt.sort_ho);
-        m.insert("any".into(),    rt.any_ho);
-        m.insert("all".into(),    rt.all_ho);
-        m.insert("find".into(),   rt.find_ho);
+        // NOTE: map/filter/fold/sort/any/all/find are NOT registered here.
+        // They resolve to AIRL stdlib definitions (from prelude.airl) which
+        // use head/tail recursion. The airl_map/airl_fold/etc extern C
+        // functions exist in airl-rt for potential future use, but registering
+        // them causes conflicts when the stdlib's own recursive versions are
+        // also compiled — the closure calling convention differs.
 
         m
     }
@@ -3002,15 +3000,15 @@ impl BytecodeAot {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Embedded stdlib sources
-const COLLECTIONS_SOURCE: &str = include_str!("../../../stdlib/prelude.airl");
-const MATH_SOURCE: &str = include_str!("../../../stdlib/math.airl");
-const RESULT_SOURCE: &str = include_str!("../../../stdlib/result.airl");
-const STRING_SOURCE: &str = include_str!("../../../stdlib/string.airl");
-const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
-const SET_SOURCE: &str = include_str!("../../../stdlib/set.airl");
+pub const COLLECTIONS_SOURCE: &str = include_str!("../../../stdlib/prelude.airl");
+pub const MATH_SOURCE: &str = include_str!("../../../stdlib/math.airl");
+pub const RESULT_SOURCE: &str = include_str!("../../../stdlib/result.airl");
+pub const STRING_SOURCE: &str = include_str!("../../../stdlib/string.airl");
+pub const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
+pub const SET_SOURCE: &str = include_str!("../../../stdlib/set.airl");
 
 /// Compile source string to bytecode functions via the Rust-side pipeline.
-fn compile_source_to_bytecode(
+pub fn compile_source_to_bytecode(
     source: &str,
     prefix: &str,
 ) -> Result<(Vec<BytecodeFunc>, BytecodeFunc), String> {

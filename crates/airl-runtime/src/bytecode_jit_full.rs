@@ -954,14 +954,8 @@ impl BytecodeJitFull {
         m.insert("tcp-set-timeout".into(), rt.tcp_set_timeout);
         m.insert("tcp-connect-tls".into(), rt.tcp_connect_tls);
 
-        // Higher-order list operations
-        m.insert("map".into(),    rt.map_ho);
-        m.insert("filter".into(), rt.filter_ho);
-        m.insert("fold".into(),   rt.fold_ho);
-        m.insert("sort".into(),   rt.sort_ho);
-        m.insert("any".into(),    rt.any_ho);
-        m.insert("all".into(),    rt.all_ho);
-        m.insert("find".into(),   rt.find_ho);
+        // NOTE: map/filter/fold/sort/any/all/find resolve to AIRL stdlib
+        // definitions, not extern C functions. See bytecode_aot.rs comment.
 
         m
     }
