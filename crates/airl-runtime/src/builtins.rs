@@ -204,6 +204,7 @@ impl Builtins {
         self.register("is-dir?", builtin_is_dir);
         #[cfg(feature = "aot")]
         self.register("compile-to-executable", builtin_compile_to_executable);
+        self.register("compile-bytecode-to-executable", builtin_compile_bytecode_to_executable);
     }
 
     // ── Bytecode VM ──────────────────────────────────────
@@ -1643,6 +1644,29 @@ fn builtin_compile_to_executable(args: &[Value]) -> Result<Value, RuntimeError> 
     crate::bytecode_aot::compile_to_executable_impl(&paths, &output)
         .map_err(|e| RuntimeError::Custom(e))?;
     Ok(Value::Unit)
+}
+
+#[cfg(feature = "aot")]
+fn builtin_compile_bytecode_to_executable(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("compile-bytecode-to-executable", args, 2)?;
+    let func_list = match &args[0] {
+        Value::List(items) => items.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "compile-bytecode-to-executable: first arg must be list of BCFunc".into())),
+    };
+    let output_path = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "compile-bytecode-to-executable: second arg must be output path string".into())),
+    };
+    crate::bytecode_marshal::compile_bytecode_to_executable(&func_list, &output_path)?;
+    Ok(Value::Str(format!("Compiled to {}", output_path)))
+}
+
+#[cfg(not(feature = "aot"))]
+fn builtin_compile_bytecode_to_executable(args: &[Value]) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::Custom(
+        "compile-bytecode-to-executable: AOT feature not enabled. Build with --features aot".into()))
 }
 
 // ── Bytecode VM implementation ───────────────────────────

@@ -3095,7 +3095,7 @@ pub fn extract_embedded_rt() -> Option<String> {
 }
 
 /// Get the runtime library path: try embedded first, fall back to disk search.
-fn get_or_extract_rt_lib() -> Result<String, String> {
+pub fn get_or_extract_rt_lib() -> Result<String, String> {
     // If embedded runtime is available (non-empty), decompress to temp
     if !EMBEDDED_RT_GZ.is_empty() {
         use std::io::Read;

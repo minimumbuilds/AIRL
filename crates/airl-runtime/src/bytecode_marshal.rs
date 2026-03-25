@@ -207,6 +207,64 @@ pub extern "C" fn airl_run_bytecode(prog: *mut airl_rt::value::RtValue) -> *mut 
     }
 }
 
+/// Compile a list of BCFunc values to a native executable via Cranelift AOT.
+/// Takes the same BCFunc format as `run-bytecode` but produces a binary instead of executing.
+#[cfg(feature = "aot")]
+pub fn compile_bytecode_to_executable(funcs: &[Value], output_path: &str) -> Result<(), RuntimeError> {
+    use crate::bytecode_aot::BytecodeAot;
+    use std::collections::HashMap;
+
+    // Unmarshal BCFunc values to BytecodeFunc structs
+    let mut bc_funcs = Vec::new();
+    for f in funcs {
+        bc_funcs.push(value_to_bytecode_func(f)?);
+    }
+
+    // Build function map for cross-reference resolution
+    let func_map: HashMap<String, BytecodeFunc> = bc_funcs.iter()
+        .map(|f| (f.name.clone(), f.clone()))
+        .collect();
+
+    // AOT compile bytecode → native object
+    let mut aot = BytecodeAot::new()
+        .map_err(|e| RuntimeError::Custom(format!("AOT init: {}", e)))?;
+    for func in &bc_funcs {
+        let _ = aot.compile_all(std::slice::from_ref(func), &func_map);
+    }
+    aot.emit_entry_point()
+        .map_err(|e| RuntimeError::Custom(format!("AOT entry point: {}", e)))?;
+    let obj_bytes = aot.finish();
+
+    // Write object file
+    let obj_path = format!("{}.o", output_path);
+    std::fs::write(&obj_path, &obj_bytes)
+        .map_err(|e| RuntimeError::Custom(format!("write {}: {}", obj_path, e)))?;
+
+    // Get runtime library (embedded or on disk)
+    let rt_lib = crate::bytecode_aot::get_or_extract_rt_lib()
+        .map_err(|e| RuntimeError::Custom(e))?;
+
+    // Link with system cc
+    let status = std::process::Command::new("cc")
+        .arg(&obj_path)
+        .arg("-o")
+        .arg(output_path)
+        .arg(&rt_lib)
+        .arg("-lm")
+        .arg("-lpthread")
+        .arg("-ldl")
+        .status()
+        .map_err(|e| RuntimeError::Custom(format!("linker: {}", e)))?;
+
+    let _ = std::fs::remove_file(&obj_path);
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(RuntimeError::Custom(format!("linker failed: {:?}", status.code())))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
