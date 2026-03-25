@@ -48,7 +48,7 @@
   :intent "Pad string to width by prepending ch characters"
   :requires [(>= width 0)]
   :ensures [(valid result)]
-  :body (if (>= (length s) width)
+  :body (if (>= (char-count s) width)
           s
           (pad-left (+ ch s) width ch)))
 
@@ -58,7 +58,7 @@
   :intent "Pad string to width by appending ch characters"
   :requires [(>= width 0)]
   :ensures [(valid result)]
-  :body (if (>= (length s) width)
+  :body (if (>= (char-count s) width)
           s
           (pad-right (+ s ch) width ch)))
 

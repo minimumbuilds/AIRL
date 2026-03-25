@@ -129,6 +129,7 @@ impl Builtins {
         self.register("replace", builtin_replace);
         self.register("index-of", builtin_index_of);
         self.register("chars", builtin_chars);
+        self.register("char-count", builtin_char_count);
     }
 
     // ── Utility ─────────────────────────────────────────
@@ -162,6 +163,7 @@ impl Builtins {
         self.register("read-file", builtin_read_file);
         self.register("write-file", builtin_write_file);
         self.register("file-exists?", builtin_file_exists);
+        self.register("read-lines", builtin_read_lines);
         self.register("get-args", builtin_get_args);
         self.register("append-file", builtin_append_file);
         self.register("delete-file", builtin_delete_file);
@@ -990,6 +992,14 @@ fn builtin_chars(args: &[Value]) -> Result<Value, RuntimeError> {
     }
 }
 
+fn builtin_char_count(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("char-count", args, 1)?;
+    match &args[0] {
+        Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
+        _ => Err(RuntimeError::TypeError("char-count: argument must be a string".into())),
+    }
+}
+
 // ── Map implementations ─────────────────────────────────
 
 fn builtin_map_new(args: &[Value]) -> Result<Value, RuntimeError> {
@@ -1238,6 +1248,24 @@ fn builtin_file_exists(args: &[Value]) -> Result<Value, RuntimeError> {
     };
     let validated = validate_sandboxed_path("file-exists?", &path)?;
     Ok(Value::Bool(validated.exists()))
+}
+
+fn builtin_read_lines(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("read-lines", args, 1)?;
+    let path = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("read-lines: argument must be a string path".into())),
+    };
+    let validated = validate_sandboxed_path("read-lines", &path)?;
+    use std::io::BufRead;
+    let file = std::fs::File::open(&validated)
+        .map_err(|e| RuntimeError::Custom(format!("read-lines: {}: {}", path, e)))?;
+    let reader = std::io::BufReader::new(file);
+    let lines: Vec<Value> = reader.lines()
+        .map(|line| line.map(Value::Str))
+        .collect::<std::io::Result<_>>()
+        .map_err(|e| RuntimeError::Custom(format!("read-lines: {}: {}", path, e)))?;
+    Ok(Value::List(lines))
 }
 
 fn builtin_append_file(args: &[Value]) -> Result<Value, RuntimeError> {
@@ -3426,5 +3454,54 @@ mod tests {
         // Format + Exit
         assert!(b.has("format"));
         assert!(b.has("exit"));
+    }
+
+    // ── read-lines ─────────────────────────────────────
+
+    #[test]
+    fn read_lines_returns_list_of_strings() {
+        let b = builtins();
+        let tmp = format!("test_readlines_{}.tmp", std::process::id());
+        std::fs::write(&tmp, "alpha\nbeta\ngamma").unwrap();
+        let result = call(&b, "read-lines", &[Value::Str(tmp.clone())]).unwrap();
+        assert_eq!(result, Value::List(vec![
+            Value::Str("alpha".into()),
+            Value::Str("beta".into()),
+            Value::Str("gamma".into()),
+        ]));
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn read_lines_empty_file() {
+        let b = builtins();
+        let tmp = format!("test_readlines_empty_{}.tmp", std::process::id());
+        std::fs::write(&tmp, "").unwrap();
+        let result = call(&b, "read-lines", &[Value::Str(tmp.clone())]).unwrap();
+        assert_eq!(result, Value::List(vec![]));
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    // ── char-count ─────────────────────────────────────
+
+    #[test]
+    fn char_count_ascii() {
+        let b = builtins();
+        let result = call(&b, "char-count", &[Value::Str("hello".into())]).unwrap();
+        assert_eq!(result, Value::Int(5));
+    }
+
+    #[test]
+    fn char_count_multibyte() {
+        let b = builtins();
+        let result = call(&b, "char-count", &[Value::Str("café".into())]).unwrap();
+        assert_eq!(result, Value::Int(4));
+    }
+
+    #[test]
+    fn char_count_empty() {
+        let b = builtins();
+        let result = call(&b, "char-count", &[Value::Str("".into())]).unwrap();
+        assert_eq!(result, Value::Int(0));
     }
 }
