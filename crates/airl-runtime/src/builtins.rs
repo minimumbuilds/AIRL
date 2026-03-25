@@ -1857,16 +1857,14 @@ fn builtin_fold_vm(vm: &mut dyn VmCaller, args: &[Value]) -> Result<Value, Runti
             }
         }
         // Generic IntList path: call function but avoid boxing where possible
-        for x in xs {
+        for (i, x) in xs.iter().enumerate() {
             let result = vm.call_value(&f, vec![Value::Int(acc), Value::Int(*x)])?;
             match result {
                 Value::Int(n) => acc = n,
                 other => {
-                    // Accumulator is no longer Int — fall through to generic path
-                    // Continue with remaining elements as a List
-                    let remaining_start = xs.iter().position(|v| *v == *x).unwrap_or(0);
+                    // Accumulator is no longer Int — continue with remaining elements
                     let mut generic_acc = other;
-                    for rx in &xs[remaining_start + 1..] {
+                    for rx in &xs[i + 1..] {
                         generic_acc = vm.call_value(&f, vec![generic_acc, Value::Int(*rx)])?;
                     }
                     return Ok(generic_acc);
@@ -3456,6 +3454,8 @@ mod tests {
     fn range_basic() {
         let b = builtins();
         let result = call(&b, "range", &[Value::Int(0), Value::Int(5)]).unwrap();
+        assert_eq!(result, Value::IntList(vec![0, 1, 2, 3, 4]));
+        // IntList should compare equal to the equivalent List
         assert_eq!(
             result,
             Value::List(vec![
@@ -3472,14 +3472,14 @@ mod tests {
     fn range_empty() {
         let b = builtins();
         let result = call(&b, "range", &[Value::Int(5), Value::Int(5)]).unwrap();
-        assert_eq!(result, Value::List(vec![]));
+        assert_eq!(result, Value::IntList(vec![]));
     }
 
     #[test]
     fn range_negative_empty() {
         let b = builtins();
         let result = call(&b, "range", &[Value::Int(5), Value::Int(3)]).unwrap();
-        assert_eq!(result, Value::List(vec![]));
+        assert_eq!(result, Value::IntList(vec![]));
     }
 
     #[test]
