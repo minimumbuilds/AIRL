@@ -405,6 +405,31 @@ AIRL supports capability-based routing, where an orchestrator specifies required
 
 ---
 
+## 5.7 Concurrency Model
+
+AIRL's parallelism model is **agent-level**: process isolation combined with message passing. There are no thread-level concurrency primitives — no threads, channels, mutexes, atomics, or async/await within a single program.
+
+All concurrency is expressed through agent operations:
+
+| Primitive | Purpose |
+|-----------|---------|
+| `spawn-agent` | Fork a new agent process |
+| `send` | Synchronous message to an agent (blocks until reply) |
+| `send-async` | Asynchronous message (returns task ID immediately) |
+| `await` | Block on an async task ID until result or timeout |
+| `parallel` | Await multiple async tasks concurrently |
+| `broadcast` | Send the same task to multiple agents, return first success |
+
+Fine-grained parallelism within a computation requires spawning agent processes. A CPU-bound workload that needs 8-way parallelism spawns 8 agents, each running in its own OS process with its own memory space. Agents share no mutable state; all data exchange happens through serialized message passing.
+
+This is a deliberate design choice, not a missing feature. Agent-level isolation provides:
+
+- **Safety:** No data races, no deadlocks from shared memory, no need for synchronization primitives.
+- **Verifiability:** Each agent's behavior can be verified independently against its contracts.
+- **Distribution:** Agent-based parallelism maps naturally to multi-machine deployment — the same `send`/`await` protocol works across processes, machines, and data centers.
+
+---
+
 ## 6. Execution Model
 
 ### 6.1 Dual-Mode Execution
@@ -637,6 +662,8 @@ The stdlib relies on a small set of Rust builtins for list destructuring, string
 (map-size m)                       ;; → number of entries
 ```
 
+> **Map key restriction:** Map keys are **string-only** in the current implementation. The underlying storage is `HashMap<String, Value>`. For integer keys, use `(int-to-string n)` as a workaround. Non-string key support (integer, boolean, composite keys) is a planned future enhancement. This restriction also applies to Sets, which are implemented as maps with `true` values.
+
 ### 9.2 Collections Module
 
 Source: `stdlib/prelude.airl` — 15 functions for list processing.
@@ -741,7 +768,8 @@ Maps use string keys and arbitrary values. All mutation operations return new ma
 
 - The stdlib is embedded in the binary via `include_str!()` and parsed/evaluated before user code.
 - All collection functions are recursive. A recursion depth limit of 50,000 prevents stack overflow on large lists.
-- Map keys are always strings. Maps are backed by `HashMap<String, Value>` for O(1) operations.
+- Map keys are always strings. Maps are backed by `HashMap<String, Value>` for O(1) operations. For integer keys, use `(int-to-string n)`. Non-string key support is planned.
+- Sets are implemented as maps with `true` values and inherit the string-key restriction.
 - All character indexing in string builtins is Unicode-safe (char-based, not byte-based).
 - See `stdlib/*.md` for detailed documentation per module.
 
@@ -787,9 +815,153 @@ When a contract violation occurs at runtime (in `:verify checked` mode), the sys
 
 ---
 
-## 11. Implementation Roadmap
+## 11. Testing
 
-### 11.1 Phase 1: Interpreter (Rust)
+### 11.1 Current Capabilities
+
+AIRL provides two mechanisms for runtime verification of program correctness:
+
+- **`assert` builtin:** `(assert condition)` — panics with an error message if `condition` evaluates to `false`. Used for ad-hoc runtime checks.
+- **Contract system:** `:requires`, `:ensures`, and `:invariant` clauses on `defn` forms are checked at runtime (in `:verify checked` mode) or proven statically (in `:verify proven` mode via Z3).
+
+### 11.2 What Does Not Exist
+
+AIRL currently has no test runner, no `deftest` form, and no test discovery mechanism. There is no equivalent of `#[test]` (Rust), `def test_*` (Python), or `describe`/`it` (JavaScript).
+
+Tests are run via external tooling: Rust integration tests in `tests/` invoke the AIRL binary with `airl run <file>` and check exit codes and stdout. AIRL programs that exercise functionality use `assert` to signal pass/fail.
+
+### 11.3 Planned
+
+- `(deftest name body)` — a test definition form that registers a named test case.
+- `airl test <file>` — a CLI command that discovers and runs all `deftest` forms in a file, reporting pass/fail counts.
+
+---
+
+## 12. Time
+
+AIRL provides minimal time operations via three builtins:
+
+| Builtin | Signature | Description |
+|---------|-----------|-------------|
+| `time-now` | `(time-now)` → Int | Returns current time as epoch milliseconds (i64) |
+| `sleep` | `(sleep ms)` → Nil | Pauses execution for `ms` milliseconds |
+| `format-time` | `(format-time epoch-ms fmt)` → String | Formats epoch millis using a strftime-style format string |
+
+```clojure
+(let (now : i64 (time-now))
+  (print (format-time now "%Y-%m-%d %H:%M:%S")))
+
+(sleep 1000)  ;; pause for 1 second
+```
+
+There is no duration arithmetic, timezone handling, or date parsing. These are planned future enhancements. For elapsed-time measurement, subtract two `time-now` calls.
+
+---
+
+## 13. Builtin Inventory
+
+This section lists all native builtins registered in the runtime. These are implemented in Rust and available without imports. Stdlib functions (written in pure AIRL) are documented in Section 9.
+
+### 13.1 Arithmetic (5)
+
+`+`, `-`, `*`, `/`, `%`
+
+### 13.2 Comparison (6)
+
+`=`, `!=`, `<`, `>`, `<=`, `>=`
+
+### 13.3 Logic (4)
+
+`and`, `or`, `not`, `xor`
+
+### 13.4 Tensor Operations (13)
+
+`tensor.zeros`, `tensor.ones`, `tensor.rand`, `tensor.identity`, `tensor.add`, `tensor.mul`, `tensor.matmul`, `tensor.reshape`, `tensor.transpose`, `tensor.softmax`, `tensor.sum`, `tensor.max`, `tensor.slice`
+
+### 13.5 Collections (14)
+
+`length`, `at`, `append`, `head`, `tail`, `empty?`, `cons`, `at-or`, `set-at`, `list-contains?`, `reverse`, `concat`, `flatten`, `range`
+
+### 13.6 String (15)
+
+`str`, `char-at`, `substring`, `split`, `join`, `contains`, `starts-with`, `ends-with`, `trim`, `to-upper`, `to-lower`, `replace`, `index-of`, `chars`, `char-count`
+
+### 13.7 I/O and Display (5)
+
+`print`, `println`, `type-of`, `shape`, `valid`
+
+### 13.8 Map (10)
+
+`map-new`, `map-from`, `map-get`, `map-get-or`, `map-set`, `map-has`, `map-remove`, `map-keys`, `map-values`, `map-size`
+
+### 13.9 File I/O (13)
+
+`read-file`, `write-file`, `file-exists?`, `read-lines`, `get-args`, `append-file`, `delete-file`, `delete-dir`, `rename-file`, `create-dir`, `read-dir`, `file-size`, `is-dir?`
+
+### 13.10 Type Conversion (6)
+
+`int-to-string`, `float-to-string`, `string-to-int`, `string-to-float`, `char-code`, `char-from-code`
+
+### 13.11 Error Handling (2)
+
+`panic`, `assert`
+
+### 13.12 System (6)
+
+`shell-exec`, `time-now`, `sleep`, `format-time`, `getenv`, `get-args`
+
+### 13.13 Network/JSON (3)
+
+`http-request` (supports GET/POST/PUT/DELETE/PATCH/HEAD), `json-parse`, `json-stringify`
+
+### 13.14 Float Math (15)
+
+`sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `floor`, `ceil`, `round`, `float-to-int`, `int-to-float`, `infinity`, `nan`, `is-nan?`, `is-infinite?`
+
+### 13.15 Utility (2)
+
+`format`, `exit`
+
+### 13.16 Path (v0.3.0) (5)
+
+`path-join`, `path-parent`, `path-filename`, `path-extension`, `is-absolute?`
+
+```clojure
+(path-join "/home" "user" "file.txt")  ;; → "/home/user/file.txt"
+(path-parent "/home/user/file.txt")    ;; → "/home/user"
+(path-filename "/home/user/file.txt")  ;; → "file.txt"
+(path-extension "/home/user/file.txt") ;; → "txt"
+(is-absolute? "/home/user")            ;; → true
+```
+
+### 13.17 Regex (v0.3.0) (4)
+
+`regex-match`, `regex-find-all`, `regex-replace`, `regex-split`
+
+```clojure
+(regex-match "\\d+" "abc123def")       ;; → "123"
+(regex-find-all "\\d+" "a1b2c3")       ;; → ["1" "2" "3"]
+(regex-replace "\\d+" "a1b2" "X")      ;; → "aXbX"
+(regex-split "\\s+" "hello  world")    ;; → ["hello" "world"]
+```
+
+### 13.18 Crypto (v0.3.0) (5)
+
+`sha256`, `hmac-sha256`, `base64-encode`, `base64-decode`, `random-bytes`
+
+```clojure
+(sha256 "hello")                       ;; → hex string of SHA-256 hash
+(hmac-sha256 "key" "message")          ;; → hex string of HMAC-SHA256
+(base64-encode "hello")                ;; → "aGVsbG8="
+(base64-decode "aGVsbG8=")            ;; → "hello"
+(random-bytes 16)                      ;; → list of 16 random byte values
+```
+
+---
+
+## 14. Implementation Roadmap
+
+### 14.1 Phase 1: Interpreter (Rust)
 
 Build a tree-walking interpreter in Rust that validates the language design:
 
@@ -802,7 +974,7 @@ Build a tree-walking interpreter in Rust that validates the language design:
 
 **Target:** Wire into an existing multi-agent system (e.g., Claude + Qwen3 via LiteLLM) as the inter-agent message format. Validate that agents can generate, parse, and execute AIRL task expressions.
 
-### 11.2 Phase 2: MLIR Compilation
+### 14.2 Phase 2: MLIR Compilation
 
 Add a compilation path for performance-critical operations:
 
@@ -812,7 +984,7 @@ Add a compilation path for performance-critical operations:
 - GPU kernel compilation targeting CUDA and ROCm
 - Z3 SMT solver integration for `:verify proven` mode
 
-### 11.3 Phase 3: Self-Hosting
+### 14.3 Phase 3: Self-Hosting
 
 Write the AIRL compiler in AIRL itself:
 
@@ -820,7 +992,7 @@ Write the AIRL compiler in AIRL itself:
 - Self-compiling compiler: AIRL compiler compiles itself
 - At this point, an AI system can modify and improve the language toolchain
 
-### 11.4 First Compiler: Rust
+### 14.4 First Compiler: Rust
 
 The Phase 1 implementation language is Rust, chosen for the following reasons:
 

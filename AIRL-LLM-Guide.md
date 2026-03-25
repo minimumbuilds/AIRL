@@ -38,7 +38,7 @@ Run with `cargo run -- run hello.airl`. Type-check and verify with `cargo run --
 | `set!`, `var`, `mut x =` | Variable mutation/reassignment | New `let` bindings (immutable) |
 | `return` | Early return | The body expression IS the return value |
 | `class`, `def`, `import` | OOP or Python-style definitions | `defn` for functions, `deftype` for types |
-| `char-code`, `ord`, `chr` | Character-to-integer conversion | `chars` to split string, then string comparison |
+| `ord`, `chr` | Character-to-integer (Python-style) | `char-code` / `char-from-code` for char↔integer conversion |
 | `begin`, `progn` | Other sequencing forms | `do` for sequencing |
 | `+=`, `-=`, `++`, `--` | Compound assignment | Compute new value in `let` or `fold` |
 
@@ -369,6 +369,13 @@ All take 2 arguments, return `Bool`. Work on Int, UInt, Float, and String.
 | `tail` | `(tail list)` → List | All elements except the first. Errors on empty list |
 | `empty?` | `(empty? list)` → Bool | **List only.** Returns `true` if list is empty. For strings use `(= s "")` |
 | `cons` | `(cons element list)` → List | Prepend element to front of list |
+| `at-or` | `(at-or list index default)` → element | Index with default (returns default on out of bounds) |
+| `set-at` | `(set-at list index value)` → List | Return new list with element at index replaced |
+| `list-contains?` | `(list-contains? list elem)` → Bool | Check if list contains element |
+| `reverse` | `(reverse list)` → List | Reverse a list (native builtin) |
+| `concat` | `(concat list1 list2)` → List | Concatenate two lists (native builtin) |
+| `flatten` | `(flatten list-of-lists)` → List | Flatten one level of nesting (native builtin) |
+| `range` | `(range start end)` → List | Integers `[start, end)` (native builtin) |
 
 ```lisp
 (length [1 2 3])      ;; → 3
@@ -385,7 +392,7 @@ All take 2 arguments, return `Bool`. Work on Int, UInt, Float, and String.
 
 `nil?`, `null?`, `list`, `try`, `catch`, `throw`, `ord`, `chr`, `char-at-int`, `string-ref`, `number->string`, `string->number`, `typeof`, `instanceof`, `require`, `import`
 
-Use `char-code` / `char-from-code` for character↔integer conversion. Use `take` / `drop` from stdlib for list slicing. If you need key-value associations, use `Map` (not lists of pairs). If you need to parse a number from a string, use `string-to-int` or `string-to-float`. If you need to check string emptiness, use `(= s "")`.
+Use `char-code` / `char-from-code` for character↔integer conversion. Use `take` / `drop` from stdlib for list slicing. If you need key-value associations, use `Map` (not lists of pairs). If you need to parse a number from a string, use `string-to-int` or `string-to-float`. If you need to check string emptiness, use `(= s "")`. For character count (Unicode-aware), use `(char-count s)` instead of `(length s)` (which returns byte length).
 
 ### Utility
 
@@ -393,9 +400,114 @@ Use `char-code` / `char-from-code` for character↔integer conversion. Use `take
 |----------|-------|-------------|
 | `str` | variadic | Concatenate all arguments into one String. Strings are included as-is (no quotes); all other types are auto-coerced via Display. `(str "count: " 42 " done")` → `"count: 42 done"` |
 | `print` | variadic | Print all arguments to stdout, returns Unit |
+| `println` | variadic | Print all arguments to stdout followed by a newline, returns Unit |
 | `type-of` | 1 | Returns type name as String (e.g., `"Int"`, `"Bool"`) |
 | `shape` | 1 | Returns tensor shape as List of Int |
 | `valid` | 1 | Always returns `true`. Used as a minimal contract guard |
+| `format` | variadic | Format string with `{}` placeholders: `(format "Hello, {}!" "world")` → `"Hello, world!"` |
+| `exit` | 1 | Exit the program with the given integer exit code |
+| `char-count` | 1 | Returns Unicode character count of a string (not byte length) |
+
+### Type Conversion
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `int-to-string` | `(int-to-string n)` → Str | Convert integer to string |
+| `float-to-string` | `(float-to-string f)` → Str | Convert float to string |
+| `string-to-int` | `(string-to-int s)` → Int | Parse string as integer (panics on invalid input) |
+| `string-to-float` | `(string-to-float s)` → Float | Parse string as float (panics on invalid input) |
+| `char-code` | `(char-code s)` → Int | First character's Unicode code point |
+| `char-from-code` | `(char-from-code n)` → Str | Unicode code point to single-character string |
+
+### Error Handling
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `panic` | `(panic message)` | Halt execution with error message |
+| `assert` | `(assert condition)` | Panic if condition is `false` |
+
+### Float Math
+
+All float math builtins operate on `f64` values. Integer arguments are promoted to `f64`.
+
+| Function | Description |
+|----------|-------------|
+| `sqrt` | Square root |
+| `sin`, `cos`, `tan` | Trigonometric functions (radians) |
+| `log` | Natural logarithm |
+| `exp` | e^x |
+| `floor`, `ceil`, `round` | Rounding operations |
+| `float-to-int` | Truncate f64 to i64 |
+| `int-to-float` | Promote i64 to f64 |
+| `infinity` | Returns positive infinity |
+| `nan` | Returns NaN |
+| `is-nan?` | Test if value is NaN |
+| `is-infinite?` | Test if value is infinite |
+
+### System
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `shell-exec` | `(shell-exec cmd)` → Str | Execute a shell command, return stdout |
+| `time-now` | `(time-now)` → Int | Current time as epoch milliseconds |
+| `sleep` | `(sleep ms)` → Nil | Pause execution for `ms` milliseconds |
+| `format-time` | `(format-time epoch-ms fmt)` → Str | Format epoch millis with strftime pattern |
+| `getenv` | `(getenv name)` → Str/Nil | Read environment variable |
+| `get-args` | `(get-args)` → List | Command-line arguments as list of strings |
+
+### Network/JSON
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `http-request` | `(http-request method url headers body)` → Map | HTTP request. Method: `"GET"`, `"POST"`, `"PUT"`, `"DELETE"`, `"PATCH"`, `"HEAD"` |
+| `json-parse` | `(json-parse str)` → any | Parse JSON string into AIRL value |
+| `json-stringify` | `(json-stringify val)` → Str | Serialize AIRL value to JSON string |
+
+### File I/O
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `read-file` | `(read-file path)` → Str | Read entire file as string |
+| `write-file` | `(write-file path content)` → Nil | Write string to file (overwrites) |
+| `append-file` | `(append-file path content)` → Nil | Append string to file |
+| `file-exists?` | `(file-exists? path)` → Bool | Check if file exists |
+| `read-lines` | `(read-lines path)` → List | Read file as list of lines |
+| `delete-file` | `(delete-file path)` → Nil | Delete a file |
+| `delete-dir` | `(delete-dir path)` → Nil | Delete a directory |
+| `rename-file` | `(rename-file old new)` → Nil | Rename/move a file |
+| `create-dir` | `(create-dir path)` → Nil | Create a directory (recursive) |
+| `read-dir` | `(read-dir path)` → List | List directory entries |
+| `file-size` | `(file-size path)` → Int | File size in bytes |
+| `is-dir?` | `(is-dir? path)` → Bool | Check if path is a directory |
+
+### Path (v0.3.0)
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `path-join` | `(path-join parts...)` → Str | Join path components |
+| `path-parent` | `(path-parent path)` → Str | Parent directory |
+| `path-filename` | `(path-filename path)` → Str | Filename component |
+| `path-extension` | `(path-extension path)` → Str | File extension |
+| `is-absolute?` | `(is-absolute? path)` → Bool | Is the path absolute? |
+
+### Regex (v0.3.0)
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `regex-match` | `(regex-match pattern str)` → Str/Nil | First match, or nil |
+| `regex-find-all` | `(regex-find-all pattern str)` → List | All matches |
+| `regex-replace` | `(regex-replace pattern str replacement)` → Str | Replace all matches |
+| `regex-split` | `(regex-split pattern str)` → List | Split by pattern |
+
+### Crypto (v0.3.0)
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `sha256` | `(sha256 str)` → Str | SHA-256 hash (hex string) |
+| `hmac-sha256` | `(hmac-sha256 key message)` → Str | HMAC-SHA256 (hex string) |
+| `base64-encode` | `(base64-encode str)` → Str | Base64 encode |
+| `base64-decode` | `(base64-decode str)` → Str | Base64 decode |
+| `random-bytes` | `(random-bytes n)` → List | List of n random byte values (0-255) |
 
 ### Tensor Operations
 
@@ -721,6 +833,29 @@ Returns the name of the first spawned agent:
 
 ---
 
+## 10a. Concurrency Model
+
+AIRL's parallelism is **agent-level only**: process isolation + message passing. There are no thread-level concurrency primitives (no threads, channels, mutexes, atomics, or async/await within a single program).
+
+All concurrent primitives: `spawn-agent`, `send`, `send-async`, `await`, `parallel`, `broadcast`.
+
+Fine-grained parallelism within a computation requires spawning agent processes. This is a deliberate design choice for safety and verifiability — no shared mutable state means no data races and no need for synchronization primitives.
+
+---
+
+## 10b. Testing
+
+AIRL currently has no test runner, no `deftest` form, and no test discovery.
+
+**Current capabilities:**
+- `(assert condition)` — panics if `condition` is `false`
+- Contract system (`:requires`, `:ensures`, `:invariant`) — runtime checks or Z3-proven
+- Tests are run via external tooling: Rust integration tests invoke `airl run <file>` and check exit codes
+
+**Planned:** `(deftest name body)` form and `airl test <file>` CLI command.
+
+---
+
 ## 11. Standard Library (Collections)
 
 AIRL includes a standard library of 15 collection functions, written in pure AIRL and auto-loaded as a prelude before user code. No imports needed — these are always available.
@@ -970,7 +1105,7 @@ Hash map with string keys and arbitrary values. O(1) lookups backed by Rust Hash
 (map-filter (fn [k v] (> v 10)) m)               ;; keep matching entries
 ```
 
-**Note:** Keys are always strings. See `stdlib/map.md` for the full reference including patterns for symbol tables and frequency counters.
+**Note:** Map keys are **string-only**. Passing a non-string key is a runtime error. For integer keys, use `(int-to-string n)` as a workaround. Non-string key support (integer, boolean, composite keys) is a planned future enhancement. This restriction also applies to Sets (implemented as maps with `true` values). See `stdlib/map.md` for the full reference including patterns for symbol tables and frequency counters.
 
 ---
 
@@ -1248,4 +1383,4 @@ If you are tempted to use a loop, here is how to translate common imperative pat
 
 18. **`if` has exactly 3 subforms.** `(if cond then else)` — condition, then-branch, else-branch. No more, no less. If you need multiple statements in a branch, wrap them in `do`: `(if cond (do a b c) else-expr)`.
 
-19. **No `char-code`/`ord`/`chr`.** AIRL has no character-to-integer conversion builtins. For character-level operations, use `(chars s)` to split a string into single-character strings, then compare with string equality: `(= c "a")`.
+19. **Use `char-code`/`char-from-code`, not `ord`/`chr`.** AIRL uses `(char-code s)` to get the Unicode code point of the first character, and `(char-from-code n)` to convert a code point back to a single-character string. Python-style `ord`/`chr` do not exist.
