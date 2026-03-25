@@ -1,0 +1,6 @@
+;; EXPECT: 42
+;; Basic thread-spawn and thread-join
+(let (h : i64 (thread-spawn (fn [] 42)))
+  (match (thread-join h)
+    (Ok v) v
+    (Err _) -1))

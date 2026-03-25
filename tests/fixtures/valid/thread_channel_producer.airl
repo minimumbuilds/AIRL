@@ -1,0 +1,29 @@
+;; EXPECT: 55
+;; Producer thread sends 1..10 through channel, main thread sums them
+
+(defn send-range
+  :sig [(tx : i64) (i : i64) (end : i64) -> i64]
+  :requires [(valid tx)]
+  :ensures [(valid result)]
+  :body
+    (if (> i end)
+      (do (channel-close tx) 0)
+      (do (channel-send tx i) (send-range tx (+ i 1) end))))
+
+(defn recv-sum
+  :sig [(rx : i64) (acc : i64) (remaining : i64) -> i64]
+  :requires [(valid rx)]
+  :ensures [(valid result)]
+  :body
+    (if (<= remaining 0)
+      acc
+      (match (channel-recv rx)
+        (Ok v) (recv-sum rx (+ acc v) (- remaining 1))
+        (Err _) acc)))
+
+(let (ch : List (channel-new))
+  (let (tx : i64 (at ch 0))
+    (let (rx : i64 (at ch 1))
+      (do
+        (thread-spawn (fn [] (send-range tx 1 10)))
+        (recv-sum rx 0 10)))))

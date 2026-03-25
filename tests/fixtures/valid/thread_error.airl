@@ -1,0 +1,6 @@
+;; EXPECT: "got error"
+;; Thread that errors should return Err on join
+(let (h : i64 (thread-spawn (fn [] (/ 1 0))))
+  (match (thread-join h)
+    (Ok _) "no error"
+    (Err _) "got error"))

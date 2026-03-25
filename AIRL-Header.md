@@ -294,6 +294,21 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (json-stringify v) -> Str
 ```
 
+### Thread (thread-per-task, message-passing only)
+```
+(thread-spawn closure) -> Int                       ; spawn thread running 0-arg closure, returns handle
+(thread-join handle) -> Result[any, Str]            ; block until done. Ok(value) or Err(msg)
+```
+
+### Channel (unbounded, std::sync::mpsc)
+```
+(channel-new) -> [Int Int]                          ; returns [sender-handle receiver-handle]
+(channel-send tx value) -> Result[Bool, Str]        ; send value. Err if closed
+(channel-recv rx) -> Result[any, Str]               ; blocking recv. Err if closed
+(channel-recv-timeout rx ms) -> Result[any, Str]    ; recv with timeout. Err "timeout" or "channel closed"
+(channel-close handle) -> Bool                      ; close sender or receiver
+```
+
 ### Bytes (big-endian, IntList = byte sequences)
 ```
 (bytes-from-int16 n) -> IntList       ; i16 to 2 bytes BE

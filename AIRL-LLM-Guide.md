@@ -554,6 +554,40 @@ Handle-based TCP networking. Connections are managed via integer handles. All op
     (Err e) (print "connect error:" e)))
 ```
 
+### Concurrency (v0.5.0)
+
+Thread-per-task model with message-passing channels. No shared mutable state.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `thread-spawn` | `(thread-spawn closure)` → Int | Spawn OS thread running 0-arg closure, returns handle |
+| `thread-join` | `(thread-join handle)` → Result | Block until done. Ok(value) or Err(error-msg) |
+| `channel-new` | `(channel-new)` → [Int Int] | Create unbounded channel, returns [sender receiver] handles |
+| `channel-send` | `(channel-send tx value)` → Result | Send value. Err if channel closed |
+| `channel-recv` | `(channel-recv rx)` → Result | Blocking receive. Err if channel closed |
+| `channel-recv-timeout` | `(channel-recv-timeout rx ms)` → Result | Receive with timeout. Err "timeout" or "channel closed" |
+| `channel-close` | `(channel-close handle)` → Bool | Close sender or receiver endpoint |
+
+```lisp
+;; Spawn a thread, capture variables from enclosing scope
+(let (x : i64 10)
+  (let (h : i64 (thread-spawn (fn [] (+ x 5))))
+    (match (thread-join h)
+      (Ok v) v       ;; 15
+      (Err e) -1)))
+
+;; Producer/consumer via channels
+(let (ch : List (channel-new))
+  (let (tx : i64 (at ch 0))
+    (let (rx : i64 (at ch 1))
+      (do
+        (thread-spawn (fn []
+          (do (channel-send tx "hello") (channel-close tx))))
+        (match (channel-recv rx)
+          (Ok v) v       ;; "hello"
+          (Err _) "failed"))))))
+```
+
 ### Tensor Operations
 
 All tensors are f32 internally. Shapes are specified as bracket lists of integers.

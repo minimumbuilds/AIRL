@@ -45,6 +45,7 @@ impl Builtins {
         b.register_vm_aware();
         b.register_bytes();
         b.register_tcp();
+        b.register_threads();
         b
     }
 
@@ -1769,6 +1770,19 @@ impl Builtins {
         self.register("tcp-recv-exact", builtin_tcp_recv_exact);
         self.register("tcp-set-timeout", builtin_tcp_set_timeout);
     }
+
+    fn register_threads(&mut self) {
+        // thread-spawn is handled specially in bytecode_vm.rs CallBuiltin dispatch
+        // but must be registered so the bytecode compiler emits CallBuiltin for it
+        self.register("thread-spawn", |_| Err(RuntimeError::Custom(
+            "thread-spawn: must be called through VM dispatch".into())));
+        self.register("thread-join", builtin_thread_join);
+        self.register("channel-new", builtin_channel_new);
+        self.register("channel-send", builtin_channel_send);
+        self.register("channel-recv", builtin_channel_recv);
+        self.register("channel-recv-timeout", builtin_channel_recv_timeout);
+        self.register("channel-close", builtin_channel_close);
+    }
 }
 
 // ── Closure pattern detectors for fast-path specialization ────────
@@ -3318,6 +3332,134 @@ fn builtin_tcp_set_timeout(args: &[Value]) -> Result<Value, RuntimeError> {
             format!("tcp-set-timeout: invalid handle {}", handle)
         )))),
     }
+}
+
+// ── Thread and channel builtin implementations ────────────────────────────────
+
+pub static NEXT_THREAD_HANDLE: AtomicI64 = AtomicI64::new(1);
+
+pub fn thread_handles() -> &'static std::sync::Mutex<HashMap<i64, std::thread::JoinHandle<Result<Value, String>>>> {
+    use std::sync::{Mutex, OnceLock};
+    static HANDLES: OnceLock<Mutex<HashMap<i64, std::thread::JoinHandle<Result<Value, String>>>>> = OnceLock::new();
+    HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+static NEXT_CHANNEL_HANDLE: AtomicI64 = AtomicI64::new(1);
+
+fn channel_senders() -> &'static std::sync::Mutex<HashMap<i64, std::sync::mpsc::Sender<Value>>> {
+    use std::sync::{Mutex, OnceLock, mpsc};
+    static SENDERS: OnceLock<Mutex<HashMap<i64, mpsc::Sender<Value>>>> = OnceLock::new();
+    SENDERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn channel_receivers() -> &'static std::sync::Mutex<HashMap<i64, std::sync::mpsc::Receiver<Value>>> {
+    use std::sync::{Mutex, OnceLock, mpsc};
+    static RECEIVERS: OnceLock<Mutex<HashMap<i64, mpsc::Receiver<Value>>>> = OnceLock::new();
+    RECEIVERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn builtin_thread_join(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("thread-join", args, 1)?;
+    let handle_id = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError("thread-join: handle must be Int".into())),
+    };
+    let join_handle = thread_handles().lock().unwrap().remove(&handle_id)
+        .ok_or_else(|| RuntimeError::Custom(
+            format!("thread-join: invalid or already-joined handle {}", handle_id)
+        ))?;
+    match join_handle.join() {
+        Ok(Ok(val)) => Ok(Value::Variant("Ok".into(), Box::new(val))),
+        Ok(Err(msg)) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(msg)))),
+        Err(_) => Ok(Value::Variant("Err".into(), Box::new(Value::Str("thread panicked".into())))),
+    }
+}
+
+fn builtin_channel_new(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("channel-new", args, 0)?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let tx_id = NEXT_CHANNEL_HANDLE.fetch_add(1, Ordering::SeqCst);
+    let rx_id = NEXT_CHANNEL_HANDLE.fetch_add(1, Ordering::SeqCst);
+    channel_senders().lock().unwrap().insert(tx_id, tx);
+    channel_receivers().lock().unwrap().insert(rx_id, rx);
+    Ok(Value::List(vec![Value::Int(tx_id), Value::Int(rx_id)]))
+}
+
+fn builtin_channel_send(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("channel-send", args, 2)?;
+    let tx_id = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError("channel-send: handle must be Int".into())),
+    };
+    let value = args[1].clone();
+    let senders = channel_senders().lock().unwrap();
+    match senders.get(&tx_id) {
+        Some(tx) => match tx.send(value) {
+            Ok(()) => Ok(Value::Variant("Ok".into(), Box::new(Value::Bool(true)))),
+            Err(_) => Ok(Value::Variant("Err".into(), Box::new(Value::Str("channel closed".into())))),
+        },
+        None => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+            format!("channel-send: invalid sender handle {}", tx_id)
+        )))),
+    }
+}
+
+fn builtin_channel_recv(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("channel-recv", args, 1)?;
+    let rx_id = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError("channel-recv: handle must be Int".into())),
+    };
+    let receivers = channel_receivers().lock().unwrap();
+    match receivers.get(&rx_id) {
+        Some(rx) => match rx.recv() {
+            Ok(val) => Ok(Value::Variant("Ok".into(), Box::new(val))),
+            Err(_) => Ok(Value::Variant("Err".into(), Box::new(Value::Str("channel closed".into())))),
+        },
+        None => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+            format!("channel-recv: invalid receiver handle {}", rx_id)
+        )))),
+    }
+}
+
+fn builtin_channel_recv_timeout(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("channel-recv-timeout", args, 2)?;
+    let rx_id = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError("channel-recv-timeout: handle must be Int".into())),
+    };
+    let timeout_ms = match &args[1] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError("channel-recv-timeout: timeout must be Int".into())),
+    };
+    let receivers = channel_receivers().lock().unwrap();
+    match receivers.get(&rx_id) {
+        Some(rx) => {
+            let duration = std::time::Duration::from_millis(timeout_ms as u64);
+            match rx.recv_timeout(duration) {
+                Ok(val) => Ok(Value::Variant("Ok".into(), Box::new(val))),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) =>
+                    Ok(Value::Variant("Err".into(), Box::new(Value::Str("timeout".into())))),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) =>
+                    Ok(Value::Variant("Err".into(), Box::new(Value::Str("channel closed".into())))),
+            }
+        }
+        None => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+            format!("channel-recv-timeout: invalid receiver handle {}", rx_id)
+        )))),
+    }
+}
+
+fn builtin_channel_close(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("channel-close", args, 1)?;
+    let handle_id = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError("channel-close: handle must be Int".into())),
+    };
+    // Try removing from senders first, then receivers
+    let removed_tx = channel_senders().lock().unwrap().remove(&handle_id).is_some();
+    let removed_rx = channel_receivers().lock().unwrap().remove(&handle_id).is_some();
+    Ok(Value::Bool(removed_tx || removed_rx))
 }
 
 #[cfg(test)]

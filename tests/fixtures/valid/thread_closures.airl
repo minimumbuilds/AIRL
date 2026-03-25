@@ -1,0 +1,7 @@
+;; EXPECT: 15
+;; Thread captures variables from enclosing scope
+(let (x : i64 10)
+  (let (h : i64 (thread-spawn (fn [] (+ x 5))))
+    (match (thread-join h)
+      (Ok v) v
+      (Err _) -1)))

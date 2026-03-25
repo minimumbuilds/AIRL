@@ -60,7 +60,7 @@ pub struct BytecodeVm {
     call_stack: Vec<CallFrame>,
     recursion_depth: usize,
     #[cfg(feature = "jit")]
-    jit_full: Option<crate::bytecode_jit_full::BytecodeJitFull>,
+    jit_full: Option<std::sync::Arc<crate::bytecode_jit_full::BytecodeJitFull>>,
 }
 
 impl BytecodeVm {
@@ -82,19 +82,34 @@ impl BytecodeVm {
             builtins: Builtins::new(),
             call_stack: Vec::new(),
             recursion_depth: 0,
-            jit_full: crate::bytecode_jit_full::BytecodeJitFull::new().ok(),
+            jit_full: crate::bytecode_jit_full::BytecodeJitFull::new().ok().map(std::sync::Arc::new),
         }
     }
 
     #[cfg(feature = "jit")]
     pub fn jit_full_compile_all(&mut self) {
         if let Some(ref mut jit) = self.jit_full {
+            let jit = std::sync::Arc::get_mut(jit)
+                .expect("jit_full_compile_all: Arc must have single owner during compilation");
             let names: Vec<String> = self.functions.keys().cloned().collect();
             for name in &names {
                 if let Some(func) = self.functions.get(name) {
                     jit.try_compile_full(func, &self.functions);
                 }
             }
+        }
+    }
+
+    /// Create a child VM for thread-spawn: clones function registry,
+    /// fresh builtins and call stack, shares JIT via Arc.
+    pub fn spawn_child(&self) -> BytecodeVm {
+        BytecodeVm {
+            functions: self.functions.clone(),
+            builtins: Builtins::new(),
+            call_stack: Vec::new(),
+            recursion_depth: 0,
+            #[cfg(feature = "jit")]
+            jit_full: self.jit_full.clone(),
         }
     }
 
@@ -565,8 +580,30 @@ impl BytecodeVm {
                         }
                     }
 
+                    // Special dispatch: thread-spawn needs to clone the VM
+                    if name == "thread-spawn" {
+                        use crate::builtins::{NEXT_THREAD_HANDLE, thread_handles};
+                        let closure = args.into_iter().next()
+                            .ok_or_else(|| RuntimeError::Custom("thread-spawn: requires 1 argument".into()))?;
+                        let mut child_vm = self.spawn_child();
+                        let handle = std::thread::Builder::new()
+                            .stack_size(64 * 1024 * 1024)
+                            .spawn(move || -> Result<Value, String> {
+                                match closure {
+                                    Value::BytecodeClosure(bc) => {
+                                        child_vm.call_by_name(&bc.func_name, bc.captured)
+                                            .map_err(|e| format!("{}", e))
+                                    }
+                                    _ => Err("thread-spawn: argument must be a closure".into()),
+                                }
+                            })
+                            .map_err(|e| RuntimeError::Custom(format!("thread-spawn: {}", e)))?;
+                        let id = NEXT_THREAD_HANDLE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        thread_handles().lock().unwrap().insert(id, handle);
+                        self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = Value::Int(id);
+                    }
                     // Try VM-aware builtins first (map, filter, fold, sort)
-                    if let Some(f) = self.builtins.get_with_vm(&name) {
+                    else if let Some(f) = self.builtins.get_with_vm(&name) {
                         let f = *f; // Copy fn pointer to release borrow on self
                         let result = f(self, &args)?;
                         self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
@@ -593,8 +630,30 @@ impl BytecodeVm {
                         let frame = self.call_stack.last().unwrap();
                         (0..argc).map(|i| frame.registers[instr.dst as usize + 1 + i].clone()).collect()
                     };
+                    // Special dispatch: thread-spawn needs to clone the VM
+                    if name == "thread-spawn" {
+                        use crate::builtins::{NEXT_THREAD_HANDLE, thread_handles};
+                        let closure = args.into_iter().next()
+                            .ok_or_else(|| RuntimeError::Custom("thread-spawn: requires 1 argument".into()))?;
+                        let mut child_vm = self.spawn_child();
+                        let handle = std::thread::Builder::new()
+                            .stack_size(64 * 1024 * 1024)
+                            .spawn(move || -> Result<Value, String> {
+                                match closure {
+                                    Value::BytecodeClosure(bc) => {
+                                        child_vm.call_by_name(&bc.func_name, bc.captured)
+                                            .map_err(|e| format!("{}", e))
+                                    }
+                                    _ => Err("thread-spawn: argument must be a closure".into()),
+                                }
+                            })
+                            .map_err(|e| RuntimeError::Custom(format!("thread-spawn: {}", e)))?;
+                        let id = NEXT_THREAD_HANDLE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        thread_handles().lock().unwrap().insert(id, handle);
+                        self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = Value::Int(id);
+                    }
                     // Try VM-aware builtins first (map, filter, fold, sort)
-                    if let Some(f) = self.builtins.get_with_vm(&name) {
+                    else if let Some(f) = self.builtins.get_with_vm(&name) {
                         let f = *f; // Copy fn pointer to release borrow on self
                         let result = f(self, &args)?;
                         self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
@@ -632,7 +691,27 @@ impl BytecodeVm {
                         }
                         Value::IRFuncRef(ref name) => {
                             let name = name.clone();
-                            if let Some(f) = self.builtins.get_with_vm(&name) {
+                            if name == "thread-spawn" {
+                                use crate::builtins::{NEXT_THREAD_HANDLE, thread_handles};
+                                let closure = args.into_iter().next()
+                                    .ok_or_else(|| RuntimeError::Custom("thread-spawn: requires 1 argument".into()))?;
+                                let mut child_vm = self.spawn_child();
+                                let handle = std::thread::Builder::new()
+                                    .stack_size(64 * 1024 * 1024)
+                                    .spawn(move || -> Result<Value, String> {
+                                        match closure {
+                                            Value::BytecodeClosure(bc) => {
+                                                child_vm.call_by_name(&bc.func_name, bc.captured)
+                                                    .map_err(|e| format!("{}", e))
+                                            }
+                                            _ => Err("thread-spawn: argument must be a closure".into()),
+                                        }
+                                    })
+                                    .map_err(|e| RuntimeError::Custom(format!("thread-spawn: {}", e)))?;
+                                let id = NEXT_THREAD_HANDLE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                thread_handles().lock().unwrap().insert(id, handle);
+                                self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = Value::Int(id);
+                            } else if let Some(f) = self.builtins.get_with_vm(&name) {
                                 let f = *f;
                                 let result = f(self, &args)?;
                                 self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;

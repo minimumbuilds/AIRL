@@ -114,6 +114,15 @@ impl TypeChecker {
             "json-parse", "json-stringify", "http-request",
             "shell-exec", "time-now", "sleep", "format-time", "getenv",
             "run-bytecode", "compile-to-executable",
+            // Byte encoding
+            "bytes-from-int16", "bytes-from-int32", "bytes-from-int64",
+            "bytes-to-int16", "bytes-to-int32", "bytes-to-int64",
+            "bytes-from-string", "bytes-to-string", "bytes-concat", "bytes-slice", "crc32c",
+            // TCP sockets
+            "tcp-connect", "tcp-close", "tcp-send", "tcp-recv", "tcp-recv-exact", "tcp-set-timeout",
+            // Threading and channels
+            "thread-spawn", "thread-join",
+            "channel-new", "channel-send", "channel-recv", "channel-recv-timeout", "channel-close",
         ] {
             self.env.bind(name.to_string(), Ty::TypeVar("builtin".to_string()));
         }

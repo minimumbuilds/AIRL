@@ -142,6 +142,12 @@ The stdlib is 5 modules (60 functions total) — mostly pure AIRL, with Rust bui
 - `tcp-recv` — receive up to max-bytes. `tcp-recv-exact` — receive exactly n bytes or error
 - `tcp-set-timeout` — set read/write timeout in milliseconds (≤0 = no timeout)
 
+**Thread/channel builtins** (7) in `crates/airl-runtime/src/builtins.rs`:
+- `thread-spawn` — `(thread-spawn closure)` → Int. Spawn thread running 0-arg closure, returns handle. Each thread gets its own BytecodeVm with shared JIT via Arc.
+- `thread-join` — `(thread-join handle)` → Result. Block until done. Ok(value) or Err(msg).
+- `channel-new` — `(channel-new)` → [sender-handle receiver-handle]. Unbounded mpsc channel.
+- `channel-send`, `channel-recv`, `channel-recv-timeout`, `channel-close` — message-passing operations.
+
 **System builtins** (6) in `crates/airl-runtime/src/builtins.rs`:
 - `shell-exec` — `(shell-exec cmd args-list)` → Result with stdout/stderr/exit-code
 - `time-now` — milliseconds since epoch → Int
@@ -311,6 +317,7 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **AIRL Header File** — Token-efficient LLM reference (`AIRL-Header.md`, ~360 lines / ~3K tokens) replacing 7-file pre-flight checklist (~2,105 lines / ~15K tokens). 5.4x compression with zero information loss on critical semantics.
 - **Byte Encoding Builtins** — 11 builtins for binary data: `bytes-from-int16`/`int32`/`int64` (big-endian encode), `bytes-to-int16`/`int32`/`int64` (decode from offset), `bytes-from-string`/`bytes-to-string` (UTF-8 encode/decode), `bytes-concat`, `bytes-slice`, `crc32c` (CRC32C checksum). Byte sequences represented as `IntList` (list of integers 0-255).
 - **TCP Socket Builtins** — 6 builtins for handle-based TCP networking: `tcp-connect` (connect to host:port, returns handle), `tcp-close`, `tcp-send` (send byte list), `tcp-recv` (receive up to N bytes), `tcp-recv-exact` (receive exactly N bytes), `tcp-set-timeout`. All return `Result`. Thread-safe global handle map using `Mutex` + `OnceLock`.
+- **Thread-per-Task Concurrency (v0.5.0)** — 7 builtins for OS-level threading with message-passing channels. `thread-spawn` creates a child BytecodeVm (cloned function registry, fresh builtins/call stack, shared JIT via `Arc<BytecodeJitFull>`), spawns it on a new OS thread with 64MB stack. `thread-join` returns `Result[Value, Str]` (propagates runtime errors as Err). Channels use `std::sync::mpsc` (unbounded, single consumer). `channel-new` returns `[sender receiver]` handle pair. `channel-send`/`channel-recv`/`channel-recv-timeout`/`channel-close` for message passing. No shared mutable state — channels are the only inter-thread communication. Handle-based design follows TCP pattern (global `Mutex<HashMap>` registries with `AtomicI64` counters).
 
 ---
 
