@@ -111,7 +111,7 @@ impl TypeChecker {
             "floor", "ceil", "round", "float-to-int", "int-to-float",
             "infinity", "nan", "is-nan?", "is-infinite?",
             "panic", "assert",
-            "json-parse", "json-stringify", "http-post", "http-request",
+            "json-parse", "json-stringify", "http-request",
             "shell-exec", "time-now", "sleep", "format-time", "getenv",
             "run-bytecode", "compile-to-executable",
         ] {

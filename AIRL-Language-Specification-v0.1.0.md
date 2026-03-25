@@ -114,6 +114,12 @@ AIRL employs a dependent type system with linear ownership semantics. Types are 
 | `Unit` | Zero-information type | 0 bytes |
 | `Never` | Uninhabited type (divergence) | Cannot exist |
 
+**Float type usage notes:**
+
+- Scalar float math builtins (`sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `floor`, `ceil`, `round`) operate on `f64` values only. Passing an integer argument is accepted (it is promoted to `f64`), but no other float widths are supported for scalar math.
+- `f16` and `bf16` are **tensor-element types** and cannot be used with scalar float math builtins. They exist solely as storage formats for tensor data.
+- `f32` is used internally by tensor operations (e.g., `tensor.zeros f32 [N]`) and is not directly usable with scalar math builtins.
+
 ### 3.3 Compound Types
 
 #### 3.3.1 Tensor Types

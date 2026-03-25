@@ -27,6 +27,9 @@ impl Builtins {
         b.register_bytecode();
         b.register_system();
         b.register_float_math();
+        b.register_path();
+        b.register_regex();
+        b.register_crypto();
         b
     }
 
@@ -103,6 +106,10 @@ impl Builtins {
         self.register("at-or", builtin_at_or);
         self.register("set-at", builtin_set_at);
         self.register("list-contains?", builtin_list_contains);
+        self.register("reverse", builtin_reverse);
+        self.register("concat", builtin_concat);
+        self.register("flatten", builtin_flatten);
+        self.register("range", builtin_range);
     }
 
     // ── String ──────────────────────────────────────────
@@ -662,6 +669,77 @@ fn builtin_cons(args: &[Value]) -> Result<Value, RuntimeError> {
             type_name(&args[1])
         ))),
     }
+}
+
+// ── Native list builtins (shadow stdlib recursive versions) ──
+
+fn builtin_reverse(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("reverse", args, 1)?;
+    match &args[0] {
+        Value::List(xs) => {
+            let mut reversed = xs.clone();
+            reversed.reverse();
+            Ok(Value::List(reversed))
+        }
+        _ => Err(RuntimeError::TypeError(
+            "reverse: argument must be a list".into(),
+        )),
+    }
+}
+
+fn builtin_concat(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("concat", args, 2)?;
+    match (&args[0], &args[1]) {
+        (Value::List(xs), Value::List(ys)) => {
+            let mut result = xs.clone();
+            result.extend(ys.iter().cloned());
+            Ok(Value::List(result))
+        }
+        _ => Err(RuntimeError::TypeError(
+            "concat: both arguments must be lists".into(),
+        )),
+    }
+}
+
+fn builtin_flatten(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("flatten", args, 1)?;
+    match &args[0] {
+        Value::List(xss) => {
+            let mut result = Vec::new();
+            for xs in xss {
+                match xs {
+                    Value::List(inner) => result.extend(inner.iter().cloned()),
+                    other => result.push(other.clone()),
+                }
+            }
+            Ok(Value::List(result))
+        }
+        _ => Err(RuntimeError::TypeError(
+            "flatten: argument must be a list".into(),
+        )),
+    }
+}
+
+fn builtin_range(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("range", args, 2)?;
+    let start = match &args[0] {
+        Value::Int(n) => *n,
+        _ => {
+            return Err(RuntimeError::TypeError(
+                "range: start must be integer".into(),
+            ))
+        }
+    };
+    let end = match &args[1] {
+        Value::Int(n) => *n,
+        _ => {
+            return Err(RuntimeError::TypeError(
+                "range: end must be integer".into(),
+            ))
+        }
+    };
+    let result: Vec<Value> = (start..end).map(Value::Int).collect();
+    Ok(Value::List(result))
 }
 
 // ── Utility implementations ─────────────────────────────
@@ -1357,10 +1435,11 @@ impl Builtins {
         self.register("format-time", builtin_format_time);
         self.register("getenv", builtin_getenv);
         self.register("http-request", builtin_http_request);
-        self.register("http-post", builtin_http_post); // deprecated: use http-request
         self.register("json-parse", builtin_json_parse);
         self.register("json-stringify", builtin_json_stringify);
         self.register("shell-exec", builtin_shell_exec);
+        self.register("format", builtin_format);
+        self.register("exit", builtin_exit);
     }
 
     // ── Float Math ──────────────────────────────────────
@@ -1385,6 +1464,35 @@ impl Builtins {
         self.register("nan", builtin_nan);
         self.register("is-nan?", builtin_is_nan);
         self.register("is-infinite?", builtin_is_infinite);
+    }
+
+    // ── Path ────────────────────────────────────────────
+
+    fn register_path(&mut self) {
+        self.register("path-join", builtin_path_join);
+        self.register("path-parent", builtin_path_parent);
+        self.register("path-filename", builtin_path_filename);
+        self.register("path-extension", builtin_path_extension);
+        self.register("is-absolute?", builtin_is_absolute);
+    }
+
+    // ── Regex ───────────────────────────────────────────
+
+    fn register_regex(&mut self) {
+        self.register("regex-match", builtin_regex_match);
+        self.register("regex-find-all", builtin_regex_find_all);
+        self.register("regex-replace", builtin_regex_replace);
+        self.register("regex-split", builtin_regex_split);
+    }
+
+    // ── Crypto ──────────────────────────────────────────
+
+    fn register_crypto(&mut self) {
+        self.register("sha256", builtin_sha256);
+        self.register("hmac-sha256", builtin_hmac_sha256);
+        self.register("base64-encode", builtin_base64_encode);
+        self.register("base64-decode", builtin_base64_decode);
+        self.register("random-bytes", builtin_random_bytes);
     }
 }
 
@@ -1622,44 +1730,6 @@ fn builtin_http_request(args: &[Value]) -> Result<Value, RuntimeError> {
     }
 }
 
-/// Deprecated: use (http-request "POST" url body headers) instead.
-fn builtin_http_post(args: &[Value]) -> Result<Value, RuntimeError> {
-    expect_arity("http-post", args, 3)?;
-    let url = match &args[0] {
-        Value::Str(s) => s.clone(),
-        _ => return Err(RuntimeError::TypeError("http-post: url must be string".into())),
-    };
-    let body = match &args[1] {
-        Value::Str(s) => s.clone(),
-        _ => return Err(RuntimeError::TypeError("http-post: body must be string".into())),
-    };
-    let headers = match &args[2] {
-        Value::Map(m) => m.clone(),
-        _ => return Err(RuntimeError::TypeError("http-post: headers must be map".into())),
-    };
-
-    let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(300))
-        .build();
-
-    let mut req = agent.post(&url);
-    for (k, v) in &headers {
-        if let Value::Str(val) = v {
-            req = req.set(k, val);
-        }
-    }
-
-    match req.send_string(&body) {
-        Ok(response) => {
-            match response.into_string() {
-                Ok(text) => Ok(Value::Variant("Ok".into(), Box::new(Value::Str(text)))),
-                Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(e.to_string())))),
-            }
-        }
-        Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(e.to_string())))),
-    }
-}
-
 fn builtin_json_parse(args: &[Value]) -> Result<Value, RuntimeError> {
     expect_arity("json-parse", args, 1)?;
     let text = match &args[0] {
@@ -1850,6 +1920,336 @@ fn builtin_is_infinite(args: &[Value]) -> Result<Value, RuntimeError> {
         Value::Float(f) => Ok(Value::Bool(f.is_infinite())),
         _ => Ok(Value::Bool(false)),
     }
+}
+
+// ── Path implementations ─────────────────────────────────────────────────────
+
+fn builtin_path_join(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("path-join", args, 1)?;
+    let parts = match &args[0] {
+        Value::List(items) => items,
+        _ => return Err(RuntimeError::TypeError(
+            "`path-join` expects a List of strings".into(),
+        )),
+    };
+    let mut buf = std::path::PathBuf::new();
+    for part in parts {
+        match part {
+            Value::Str(s) => buf.push(s),
+            _ => return Err(RuntimeError::TypeError(
+                "`path-join`: all parts must be strings".into(),
+            )),
+        }
+    }
+    Ok(Value::Str(buf.to_string_lossy().into_owned()))
+}
+
+fn builtin_path_parent(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("path-parent", args, 1)?;
+    let path = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`path-parent` expects a Str argument".into(),
+        )),
+    };
+    let p = std::path::Path::new(&path);
+    match p.parent() {
+        Some(parent) => Ok(Value::Str(parent.to_string_lossy().into_owned())),
+        None => Ok(Value::Str(String::new())),
+    }
+}
+
+fn builtin_path_filename(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("path-filename", args, 1)?;
+    let path = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`path-filename` expects a Str argument".into(),
+        )),
+    };
+    let p = std::path::Path::new(&path);
+    match p.file_name() {
+        Some(name) => Ok(Value::Str(name.to_string_lossy().into_owned())),
+        None => Ok(Value::Str(String::new())),
+    }
+}
+
+fn builtin_path_extension(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("path-extension", args, 1)?;
+    let path = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`path-extension` expects a Str argument".into(),
+        )),
+    };
+    let p = std::path::Path::new(&path);
+    match p.extension() {
+        Some(ext) => Ok(Value::Str(ext.to_string_lossy().into_owned())),
+        None => Ok(Value::Str(String::new())),
+    }
+}
+
+fn builtin_is_absolute(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("is-absolute?", args, 1)?;
+    let path = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`is-absolute?` expects a Str argument".into(),
+        )),
+    };
+    Ok(Value::Bool(std::path::Path::new(&path).is_absolute()))
+}
+
+// ── Regex implementations ────────────────────────────────────────────────────
+
+fn builtin_regex_match(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("regex-match", args, 2)?;
+    let pattern = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`regex-match` expects (Str, Str)".into(),
+        )),
+    };
+    let string = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`regex-match` expects (Str, Str)".into(),
+        )),
+    };
+    let anchored = format!("^(?:{})$", pattern);
+    match regex::Regex::new(&anchored) {
+        Ok(re) => Ok(Value::Bool(re.is_match(&string))),
+        Err(e) => Err(RuntimeError::Custom(format!("regex-match: {}", e))),
+    }
+}
+
+fn builtin_regex_find_all(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("regex-find-all", args, 2)?;
+    let pattern = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`regex-find-all` expects (Str, Str)".into(),
+        )),
+    };
+    let string = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`regex-find-all` expects (Str, Str)".into(),
+        )),
+    };
+    match regex::Regex::new(&pattern) {
+        Ok(re) => {
+            let matches: Vec<Value> = re
+                .find_iter(&string)
+                .map(|m| Value::Str(m.as_str().to_string()))
+                .collect();
+            Ok(Value::List(matches))
+        }
+        Err(e) => Err(RuntimeError::Custom(format!("regex-find-all: {}", e))),
+    }
+}
+
+fn builtin_regex_replace(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("regex-replace", args, 3)?;
+    let pattern = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`regex-replace` expects (Str, Str, Str)".into(),
+        )),
+    };
+    let string = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`regex-replace` expects (Str, Str, Str)".into(),
+        )),
+    };
+    let replacement = match &args[2] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`regex-replace` expects (Str, Str, Str)".into(),
+        )),
+    };
+    match regex::Regex::new(&pattern) {
+        Ok(re) => Ok(Value::Str(re.replace_all(&string, replacement.as_str()).into_owned())),
+        Err(e) => Err(RuntimeError::Custom(format!("regex-replace: {}", e))),
+    }
+}
+
+fn builtin_regex_split(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("regex-split", args, 2)?;
+    let pattern = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`regex-split` expects (Str, Str)".into(),
+        )),
+    };
+    let string = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`regex-split` expects (Str, Str)".into(),
+        )),
+    };
+    match regex::Regex::new(&pattern) {
+        Ok(re) => {
+            let parts: Vec<Value> = re
+                .split(&string)
+                .map(|s| Value::Str(s.to_string()))
+                .collect();
+            Ok(Value::List(parts))
+        }
+        Err(e) => Err(RuntimeError::Custom(format!("regex-split: {}", e))),
+    }
+}
+
+// ── Crypto implementations ───────────────────────────────────────────────────
+
+fn builtin_sha256(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("sha256", args, 1)?;
+    let data = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`sha256` expects a Str argument".into(),
+        )),
+    };
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(data.as_bytes());
+    let result = hasher.finalize();
+    let hex: String = result.iter().map(|b| format!("{:02x}", b)).collect();
+    Ok(Value::Str(hex))
+}
+
+fn builtin_hmac_sha256(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("hmac-sha256", args, 2)?;
+    let key = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`hmac-sha256` expects (Str, Str)".into(),
+        )),
+    };
+    let data = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`hmac-sha256` expects (Str, Str)".into(),
+        )),
+    };
+    use hmac::{Hmac, Mac};
+    type HmacSha256 = Hmac<sha2::Sha256>;
+    let mut mac = HmacSha256::new_from_slice(key.as_bytes())
+        .map_err(|e| RuntimeError::Custom(format!("hmac-sha256: {}", e)))?;
+    mac.update(data.as_bytes());
+    let result = mac.finalize().into_bytes();
+    let hex: String = result.iter().map(|b| format!("{:02x}", b)).collect();
+    Ok(Value::Str(hex))
+}
+
+fn builtin_base64_encode(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("base64-encode", args, 1)?;
+    let data = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`base64-encode` expects a Str argument".into(),
+        )),
+    };
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(data.as_bytes());
+    Ok(Value::Str(encoded))
+}
+
+fn builtin_base64_decode(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("base64-decode", args, 1)?;
+    let data = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`base64-decode` expects a Str argument".into(),
+        )),
+    };
+    use base64::Engine;
+    match base64::engine::general_purpose::STANDARD.decode(data.as_bytes()) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(s) => Ok(Value::Variant("Ok".into(), Box::new(Value::Str(s)))),
+            Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+                format!("base64-decode: invalid UTF-8: {}", e),
+            )))),
+        },
+        Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+            format!("base64-decode: {}", e),
+        )))),
+    }
+}
+
+fn builtin_random_bytes(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("random-bytes", args, 1)?;
+    let n = match &args[0] {
+        Value::Int(n) if *n >= 0 => *n as usize,
+        Value::Int(_) => return Err(RuntimeError::Custom(
+            "random-bytes: count must be non-negative".into(),
+        )),
+        _ => return Err(RuntimeError::TypeError(
+            "`random-bytes` expects an Int argument".into(),
+        )),
+    };
+    use rand::RngCore;
+    let mut buf = vec![0u8; n];
+    rand::thread_rng().fill_bytes(&mut buf);
+    let hex: String = buf.iter().map(|b| format!("{:02x}", b)).collect();
+    Ok(Value::Str(hex))
+}
+
+// ── Format + Exit implementations ────────────────────────────────────────────
+
+/// `(format template args...)` — replace `{}` placeholders left to right.
+/// Variadic: first arg is template, rest are substitution values.
+fn builtin_format(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.is_empty() {
+        return Err(RuntimeError::TypeError(
+            "`format` expects at least 1 argument (template string)".into(),
+        ));
+    }
+    let template = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError(
+            "`format`: first argument must be a string template".into(),
+        )),
+    };
+    let mut result = String::new();
+    let mut arg_idx = 1; // start from second arg
+    let mut chars = template.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '{' {
+            if chars.peek() == Some(&'}') {
+                chars.next(); // consume '}'
+                if arg_idx < args.len() {
+                    // Stringify the same way as `str` builtin
+                    match &args[arg_idx] {
+                        Value::Str(s) => result.push_str(s),
+                        other => result.push_str(&format!("{}", other)),
+                    }
+                    arg_idx += 1;
+                } else {
+                    // Not enough args — leave placeholder as-is
+                    result.push_str("{}");
+                }
+            } else {
+                result.push(ch);
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    Ok(Value::Str(result))
+}
+
+/// `(exit code)` — terminate the process with the given exit code.
+fn builtin_exit(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("exit", args, 1)?;
+    let code = match &args[0] {
+        Value::Int(n) => *n as i32,
+        _ => return Err(RuntimeError::TypeError(
+            "`exit` expects an Int argument".into(),
+        )),
+    };
+    std::process::exit(code);
 }
 
 #[cfg(test)]
@@ -2453,5 +2853,578 @@ mod tests {
         let result = call(&b, "is-dir?", &[Value::Str(tmp.clone())]).unwrap();
         assert_eq!(result, Value::Bool(false));
         std::fs::remove_file(&tmp).ok();
+    }
+
+    // ── Native list builtins ────────────────────────────────
+
+    #[test]
+    fn reverse_list() {
+        let b = builtins();
+        let input = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let result = call(&b, "reverse", &[input]).unwrap();
+        assert_eq!(
+            result,
+            Value::List(vec![Value::Int(3), Value::Int(2), Value::Int(1)])
+        );
+    }
+
+    #[test]
+    fn reverse_empty() {
+        let b = builtins();
+        let result = call(&b, "reverse", &[Value::List(vec![])]).unwrap();
+        assert_eq!(result, Value::List(vec![]));
+    }
+
+    #[test]
+    fn reverse_type_error() {
+        let b = builtins();
+        assert!(call(&b, "reverse", &[Value::Int(42)]).is_err());
+    }
+
+    #[test]
+    fn concat_lists() {
+        let b = builtins();
+        let xs = Value::List(vec![Value::Int(1), Value::Int(2)]);
+        let ys = Value::List(vec![Value::Int(3), Value::Int(4)]);
+        let result = call(&b, "concat", &[xs, ys]).unwrap();
+        assert_eq!(
+            result,
+            Value::List(vec![
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(3),
+                Value::Int(4)
+            ])
+        );
+    }
+
+    #[test]
+    fn concat_empty() {
+        let b = builtins();
+        let xs = Value::List(vec![Value::Int(1)]);
+        let ys = Value::List(vec![]);
+        let result = call(&b, "concat", &[xs, ys]).unwrap();
+        assert_eq!(result, Value::List(vec![Value::Int(1)]));
+    }
+
+    #[test]
+    fn concat_type_error() {
+        let b = builtins();
+        assert!(call(&b, "concat", &[Value::Int(1), Value::List(vec![])]).is_err());
+    }
+
+    #[test]
+    fn flatten_nested_lists() {
+        let b = builtins();
+        let input = Value::List(vec![
+            Value::List(vec![Value::Int(1), Value::Int(2)]),
+            Value::List(vec![Value::Int(3), Value::Int(4)]),
+        ]);
+        let result = call(&b, "flatten", &[input]).unwrap();
+        assert_eq!(
+            result,
+            Value::List(vec![
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(3),
+                Value::Int(4)
+            ])
+        );
+    }
+
+    #[test]
+    fn flatten_mixed() {
+        let b = builtins();
+        let input = Value::List(vec![
+            Value::List(vec![Value::Int(1)]),
+            Value::Int(2),
+            Value::List(vec![Value::Int(3)]),
+        ]);
+        let result = call(&b, "flatten", &[input]).unwrap();
+        assert_eq!(
+            result,
+            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+        );
+    }
+
+    #[test]
+    fn flatten_empty() {
+        let b = builtins();
+        let result = call(&b, "flatten", &[Value::List(vec![])]).unwrap();
+        assert_eq!(result, Value::List(vec![]));
+    }
+
+    #[test]
+    fn range_basic() {
+        let b = builtins();
+        let result = call(&b, "range", &[Value::Int(0), Value::Int(5)]).unwrap();
+        assert_eq!(
+            result,
+            Value::List(vec![
+                Value::Int(0),
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(3),
+                Value::Int(4)
+            ])
+        );
+    }
+
+    #[test]
+    fn range_empty() {
+        let b = builtins();
+        let result = call(&b, "range", &[Value::Int(5), Value::Int(5)]).unwrap();
+        assert_eq!(result, Value::List(vec![]));
+    }
+
+    #[test]
+    fn range_negative_empty() {
+        let b = builtins();
+        let result = call(&b, "range", &[Value::Int(5), Value::Int(3)]).unwrap();
+        assert_eq!(result, Value::List(vec![]));
+    }
+
+    #[test]
+    fn range_type_error() {
+        let b = builtins();
+        assert!(call(&b, "range", &[Value::Float(0.0), Value::Int(5)]).is_err());
+    }
+
+    // ── Float Math Builtins ────────────────────────────
+
+    #[test]
+    fn sqrt_positive() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "sqrt", &[Value::Float(4.0)]).unwrap(),
+            Value::Float(2.0)
+        );
+    }
+
+    #[test]
+    fn sqrt_negative_is_nan() {
+        let b = builtins();
+        let result = call(&b, "sqrt", &[Value::Float(-1.0)]).unwrap();
+        match result {
+            Value::Float(f) => assert!(f.is_nan(), "sqrt(-1.0) should be NaN"),
+            _ => panic!("sqrt should return Float"),
+        }
+    }
+
+    #[test]
+    fn sin_zero() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "sin", &[Value::Float(0.0)]).unwrap(),
+            Value::Float(0.0)
+        );
+    }
+
+    #[test]
+    fn cos_zero() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "cos", &[Value::Float(0.0)]).unwrap(),
+            Value::Float(1.0)
+        );
+    }
+
+    #[test]
+    fn tan_zero() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "tan", &[Value::Float(0.0)]).unwrap(),
+            Value::Float(0.0)
+        );
+    }
+
+    #[test]
+    fn log_one() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "log", &[Value::Float(1.0)]).unwrap(),
+            Value::Float(0.0)
+        );
+    }
+
+    #[test]
+    fn log_zero_is_neg_infinity() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "log", &[Value::Float(0.0)]).unwrap(),
+            Value::Float(f64::NEG_INFINITY)
+        );
+    }
+
+    #[test]
+    fn exp_zero() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "exp", &[Value::Float(0.0)]).unwrap(),
+            Value::Float(1.0)
+        );
+    }
+
+    #[test]
+    fn floor_float() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "floor", &[Value::Float(3.7)]).unwrap(),
+            Value::Int(3)
+        );
+    }
+
+    #[test]
+    fn ceil_float() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "ceil", &[Value::Float(3.2)]).unwrap(),
+            Value::Int(4)
+        );
+    }
+
+    #[test]
+    fn round_float() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "round", &[Value::Float(3.5)]).unwrap(),
+            Value::Int(4)
+        );
+    }
+
+    #[test]
+    fn float_to_int_truncates() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "float-to-int", &[Value::Float(3.14)]).unwrap(),
+            Value::Int(3)
+        );
+    }
+
+    #[test]
+    fn int_to_float_converts() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "int-to-float", &[Value::Int(3)]).unwrap(),
+            Value::Float(3.0)
+        );
+    }
+
+    #[test]
+    fn is_nan_true() {
+        let b = builtins();
+        let nan = call(&b, "nan", &[]).unwrap();
+        assert_eq!(
+            call(&b, "is-nan?", &[nan]).unwrap(),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn is_nan_false() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "is-nan?", &[Value::Float(1.0)]).unwrap(),
+            Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn is_infinite_true() {
+        let b = builtins();
+        let inf = call(&b, "infinity", &[]).unwrap();
+        assert_eq!(
+            call(&b, "is-infinite?", &[inf]).unwrap(),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn is_infinite_false() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "is-infinite?", &[Value::Float(1.0)]).unwrap(),
+            Value::Bool(false)
+        );
+    }
+
+    // ── Path tests ──────────────────────────────────────
+
+    #[test]
+    fn path_join_basic() {
+        let b = builtins();
+        let parts = Value::List(vec![
+            Value::Str("home".into()),
+            Value::Str("user".into()),
+            Value::Str("file.txt".into()),
+        ]);
+        let result = call(&b, "path-join", &[parts]).unwrap();
+        // On Unix: "home/user/file.txt"
+        if let Value::Str(s) = &result {
+            assert!(s.contains("user"));
+            assert!(s.contains("file.txt"));
+        } else {
+            panic!("expected Str");
+        }
+    }
+
+    #[test]
+    fn path_parent_basic() {
+        let b = builtins();
+        let result = call(&b, "path-parent", &[Value::Str("/home/user/file.txt".into())]).unwrap();
+        assert_eq!(result, Value::Str("/home/user".into()));
+    }
+
+    #[test]
+    fn path_parent_no_parent() {
+        let b = builtins();
+        let result = call(&b, "path-parent", &[Value::Str("/".into())]).unwrap();
+        assert_eq!(result, Value::Str("".into()));
+    }
+
+    #[test]
+    fn path_filename_basic() {
+        let b = builtins();
+        let result = call(&b, "path-filename", &[Value::Str("/home/user/file.txt".into())]).unwrap();
+        assert_eq!(result, Value::Str("file.txt".into()));
+    }
+
+    #[test]
+    fn path_extension_basic() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "path-extension", &[Value::Str("file.txt".into())]).unwrap(),
+            Value::Str("txt".into())
+        );
+        assert_eq!(
+            call(&b, "path-extension", &[Value::Str("file".into())]).unwrap(),
+            Value::Str("".into())
+        );
+    }
+
+    #[test]
+    fn is_absolute_path() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "is-absolute?", &[Value::Str("/usr/bin".into())]).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            call(&b, "is-absolute?", &[Value::Str("relative/path".into())]).unwrap(),
+            Value::Bool(false)
+        );
+    }
+
+    // ── Regex tests ─────────────────────────────────────
+
+    #[test]
+    fn regex_match_full() {
+        let b = builtins();
+        assert_eq!(
+            call(&b, "regex-match", &[Value::Str(r"\d+".into()), Value::Str("12345".into())]).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            call(&b, "regex-match", &[Value::Str(r"\d+".into()), Value::Str("abc".into())]).unwrap(),
+            Value::Bool(false)
+        );
+        // partial match should fail (full-string match)
+        assert_eq!(
+            call(&b, "regex-match", &[Value::Str(r"\d+".into()), Value::Str("abc123".into())]).unwrap(),
+            Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn regex_find_all_basic() {
+        let b = builtins();
+        let result = call(&b, "regex-find-all", &[
+            Value::Str(r"\d+".into()),
+            Value::Str("abc 123 def 456".into()),
+        ]).unwrap();
+        assert_eq!(result, Value::List(vec![
+            Value::Str("123".into()),
+            Value::Str("456".into()),
+        ]));
+    }
+
+    #[test]
+    fn regex_replace_basic() {
+        let b = builtins();
+        let result = call(&b, "regex-replace", &[
+            Value::Str(r"\d+".into()),
+            Value::Str("abc 123 def 456".into()),
+            Value::Str("NUM".into()),
+        ]).unwrap();
+        assert_eq!(result, Value::Str("abc NUM def NUM".into()));
+    }
+
+    #[test]
+    fn regex_split_basic() {
+        let b = builtins();
+        let result = call(&b, "regex-split", &[
+            Value::Str(r"\s+".into()),
+            Value::Str("hello   world   test".into()),
+        ]).unwrap();
+        assert_eq!(result, Value::List(vec![
+            Value::Str("hello".into()),
+            Value::Str("world".into()),
+            Value::Str("test".into()),
+        ]));
+    }
+
+    #[test]
+    fn regex_invalid_pattern() {
+        let b = builtins();
+        let result = call(&b, "regex-match", &[
+            Value::Str(r"[invalid".into()),
+            Value::Str("test".into()),
+        ]);
+        assert!(result.is_err());
+    }
+
+    // ── Crypto tests ────────────────────────────────────
+
+    #[test]
+    fn sha256_known_hash() {
+        let b = builtins();
+        // SHA-256 of empty string
+        let result = call(&b, "sha256", &[Value::Str("".into())]).unwrap();
+        assert_eq!(result, Value::Str(
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into()
+        ));
+    }
+
+    #[test]
+    fn sha256_hello() {
+        let b = builtins();
+        let result = call(&b, "sha256", &[Value::Str("hello".into())]).unwrap();
+        assert_eq!(result, Value::Str(
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824".into()
+        ));
+    }
+
+    #[test]
+    fn hmac_sha256_basic() {
+        let b = builtins();
+        let result = call(&b, "hmac-sha256", &[
+            Value::Str("key".into()),
+            Value::Str("data".into()),
+        ]).unwrap();
+        // Known HMAC-SHA256("key", "data")
+        if let Value::Str(s) = &result {
+            assert_eq!(s.len(), 64); // 32 bytes in hex
+        } else {
+            panic!("expected Str");
+        }
+    }
+
+    #[test]
+    fn base64_encode_decode_roundtrip() {
+        let b = builtins();
+        let encoded = call(&b, "base64-encode", &[Value::Str("hello world".into())]).unwrap();
+        assert_eq!(encoded, Value::Str("aGVsbG8gd29ybGQ=".into()));
+
+        let decoded = call(&b, "base64-decode", &[Value::Str("aGVsbG8gd29ybGQ=".into())]).unwrap();
+        assert_eq!(decoded, Value::Variant("Ok".into(), Box::new(Value::Str("hello world".into()))));
+    }
+
+    #[test]
+    fn base64_decode_invalid() {
+        let b = builtins();
+        let result = call(&b, "base64-decode", &[Value::Str("!!!invalid!!!".into())]).unwrap();
+        assert!(matches!(result, Value::Variant(ref tag, _) if tag == "Err"));
+    }
+
+    #[test]
+    fn random_bytes_length() {
+        let b = builtins();
+        let result = call(&b, "random-bytes", &[Value::Int(16)]).unwrap();
+        if let Value::Str(s) = &result {
+            assert_eq!(s.len(), 32); // 16 bytes = 32 hex chars
+        } else {
+            panic!("expected Str");
+        }
+    }
+
+    #[test]
+    fn random_bytes_zero() {
+        let b = builtins();
+        let result = call(&b, "random-bytes", &[Value::Int(0)]).unwrap();
+        assert_eq!(result, Value::Str("".into()));
+    }
+
+    // ── Format tests ────────────────────────────────────
+
+    #[test]
+    fn format_basic() {
+        let b = builtins();
+        let result = call(&b, "format", &[
+            Value::Str("Hello, {}! You are {} years old.".into()),
+            Value::Str("Alice".into()),
+            Value::Int(30),
+        ]).unwrap();
+        assert_eq!(result, Value::Str("Hello, Alice! You are 30 years old.".into()));
+    }
+
+    #[test]
+    fn format_no_placeholders() {
+        let b = builtins();
+        let result = call(&b, "format", &[
+            Value::Str("no placeholders here".into()),
+        ]).unwrap();
+        assert_eq!(result, Value::Str("no placeholders here".into()));
+    }
+
+    #[test]
+    fn format_excess_placeholders() {
+        let b = builtins();
+        let result = call(&b, "format", &[
+            Value::Str("{} and {}".into()),
+            Value::Str("one".into()),
+        ]).unwrap();
+        assert_eq!(result, Value::Str("one and {}".into()));
+    }
+
+    #[test]
+    fn format_no_args_error() {
+        let b = builtins();
+        let result = call(&b, "format", &[]);
+        assert!(result.is_err());
+    }
+
+    // ── Exit test (registration only) ───────────────────
+
+    #[test]
+    fn exit_is_registered() {
+        let b = builtins();
+        assert!(b.has("exit"));
+    }
+
+    // ── Registration tests for new builtins ─────────────
+
+    #[test]
+    fn new_builtins_registered() {
+        let b = builtins();
+        // Path
+        assert!(b.has("path-join"));
+        assert!(b.has("path-parent"));
+        assert!(b.has("path-filename"));
+        assert!(b.has("path-extension"));
+        assert!(b.has("is-absolute?"));
+        // Regex
+        assert!(b.has("regex-match"));
+        assert!(b.has("regex-find-all"));
+        assert!(b.has("regex-replace"));
+        assert!(b.has("regex-split"));
+        // Crypto
+        assert!(b.has("sha256"));
+        assert!(b.has("hmac-sha256"));
+        assert!(b.has("base64-encode"));
+        assert!(b.has("base64-decode"));
+        assert!(b.has("random-bytes"));
+        // Format + Exit
+        assert!(b.has("format"));
+        assert!(b.has("exit"));
     }
 }

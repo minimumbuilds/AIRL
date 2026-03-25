@@ -383,9 +383,9 @@ All take 2 arguments, return `Bool`. Work on Int, UInt, Float, and String.
 
 **Functions that do NOT exist in AIRL** — do not use these:
 
-`nil?`, `null?`, `take`, `drop`, `list`, `try`, `catch`, `throw`, `concat`, `char-code`, `ord`, `chr`, `char-from-code`, `char-at-int`, `string-ref`, `number->string`, `string->number`, `typeof`, `instanceof`, `require`, `import`
+`nil?`, `null?`, `list`, `try`, `catch`, `throw`, `ord`, `chr`, `char-at-int`, `string-ref`, `number->string`, `string->number`, `typeof`, `instanceof`, `require`, `import`
 
-If you need key-value associations, use `Map` (not lists of pairs). If you need to parse a number from a string, use `string-to-int`. If you need to check string emptiness, use `(= s "")`.
+Use `char-code` / `char-from-code` for character↔integer conversion. Use `take` / `drop` from stdlib for list slicing. If you need key-value associations, use `Map` (not lists of pairs). If you need to parse a number from a string, use `string-to-int` or `string-to-float`. If you need to check string emptiness, use `(= s "")`.
 
 ### Utility
 

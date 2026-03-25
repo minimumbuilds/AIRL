@@ -172,7 +172,6 @@ RtValue* airl_write_file(RtValue* path, RtValue* content);
 RtValue* airl_file_exists(RtValue* path);
 
 /* HTTP */
-RtValue* airl_http_post(RtValue* url, RtValue* body, RtValue* headers);
 RtValue* airl_http_request(RtValue* method, RtValue* url, RtValue* body, RtValue* headers);
 
 /* JSON */

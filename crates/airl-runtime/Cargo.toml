@@ -23,6 +23,11 @@ target-lexicon = { version = "0.13", optional = true }
 object = { version = "0.36", optional = true }
 serde_json = "1"
 ureq = "2"
+regex = "1"
+sha2 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
+rand = "0.8"
 
 [features]
 mlir = ["airl-mlir"]

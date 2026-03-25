@@ -165,7 +165,6 @@ pub struct RuntimeImports {
     pub getenv: FuncId,
 
     // HTTP
-    pub http_post: FuncId,
     pub http_request: FuncId,
 
     // JSON
@@ -496,7 +495,6 @@ impl BytecodeAot {
         let getenv = declare_import(m, "airl_getenv", s1.clone());
 
         // HTTP
-        let http_post = declare_import(m, "airl_http_post", sig_3_ptr(m));
         let http_request = declare_import(m, "airl_http_request", sig_4_ptr(m));
 
         // JSON
@@ -537,7 +535,7 @@ impl BytecodeAot {
             char_code, char_from_code,
             sqrt, sin, cos, tan, log, exp, floor, ceil, round,
             float_to_int, int_to_float, infinity, nan_ctor, is_nan, is_infinite,
-            time_now, getenv, http_post, http_request, json_parse, json_stringify, shell_exec,
+            time_now, getenv, http_request, json_parse, json_stringify, shell_exec,
             contract_fail,
         }
     }
@@ -656,7 +654,6 @@ impl BytecodeAot {
         m.insert("getenv".into(), rt.getenv);
 
         // HTTP
-        m.insert("http-post".into(), rt.http_post);
         m.insert("http-request".into(), rt.http_request);
 
         // JSON
@@ -701,9 +698,32 @@ impl BytecodeAot {
                 // Disqualifying opcodes — require non-primitive Value types
                 Op::MakeList | Op::MakeVariant | Op::MakeVariant0 |
                 Op::MakeClosure | Op::MatchTag | Op::JumpIfNoMatch |
-                Op::MatchWild | Op::TryUnwrap | Op::CallBuiltin | Op::CallReg => {
+                Op::MatchWild | Op::TryUnwrap | Op::CallReg => {
                     ineligible_cache.insert(func.name.clone());
                     return false;
+                }
+                // CallBuiltin — whitelist pure arithmetic/comparison/logic builtins
+                // that can be inlined as native instructions in the unboxed path.
+                Op::CallBuiltin => {
+                    let name_idx = instr.a as usize;
+                    let is_whitelisted = if name_idx < func.constants.len() {
+                        if let Value::Str(s) = &func.constants[name_idx] {
+                            matches!(s.as_str(),
+                                "+" | "-" | "*" | "/" | "%" |
+                                "=" | "!=" | "<" | ">" | "<=" | ">=" |
+                                "and" | "or" | "not" | "xor" |
+                                "valid"
+                            )
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    if !is_whitelisted {
+                        ineligible_cache.insert(func.name.clone());
+                        return false;
+                    }
                 }
                 // Ownership tracking — disqualify from unboxed
                 Op::MarkMoved | Op::CheckNotMoved => {
@@ -754,9 +774,22 @@ impl BytecodeAot {
                             return false;
                         }
                     } else {
-                        // Unknown function (builtin like "print") — ineligible
-                        ineligible_cache.insert(func.name.clone());
-                        return false;
+                        // Not a user-defined function — check if it's a whitelisted
+                        // pure runtime builtin that can be called from unboxed code.
+                        // These builtins operate on boxed Values so they require
+                        // marshaling at the call boundary, but the function as a whole
+                        // can still benefit from unboxed compilation for everything else.
+                        // Currently we only whitelist `valid` (used in contract clauses).
+                        let is_safe_builtin = matches!(name.as_str(),
+                            "+" | "-" | "*" | "/" | "%" |
+                            "=" | "!=" | "<" | ">" | "<=" | ">=" |
+                            "and" | "or" | "not" | "xor" |
+                            "valid"
+                        );
+                        if !is_safe_builtin {
+                            ineligible_cache.insert(func.name.clone());
+                            return false;
+                        }
                     }
                 }
                 Op::TailCall => {
@@ -887,12 +920,24 @@ impl BytecodeAot {
 
         let mut builder_ctx = FunctionBuilderContext::new();
 
+        // Set of builtin names that will be inlined as native ops (no call needed).
+        let inlined_builtins: HashSet<&str> = [
+            "+", "-", "*", "/", "%",
+            "=", "!=", "<", ">", "<=", ">=",
+            "and", "or", "not", "xor",
+            "valid",
+        ].into_iter().collect();
+
         // Pre-declare call targets with I64 signatures (not PTR).
+        // Skip builtins that will be inlined as native instructions.
         let mut call_targets: HashMap<String, cranelift_module::FuncId> = HashMap::new();
         for instr in &func.instructions {
             if instr.op == Op::Call {
                 if let Value::Str(callee_name) = &func.constants[instr.a as usize] {
-                    if callee_name != &func.name && !call_targets.contains_key(callee_name) {
+                    if callee_name != &func.name
+                        && !call_targets.contains_key(callee_name)
+                        && !inlined_builtins.contains(callee_name.as_str())
+                    {
                         let argc = instr.b as usize;
                         let mut call_sig = self.module.make_signature();
                         for _ in 0..argc {
@@ -1203,23 +1248,153 @@ impl BytecodeAot {
                     let argc = instr.b as usize;
                     let dst = instr.dst as usize;
 
-                    let callee_func_id = if callee_name == func.name {
-                        func_id
-                    } else if let Some(&id) = call_targets.get(&callee_name) {
-                        id
+                    // Check if this is a whitelisted builtin that should be inlined
+                    if inlined_builtins.contains(callee_name.as_str()) {
+                        // Inline the builtin as native instructions (same logic as CallBuiltin)
+                        match callee_name.as_str() {
+                            "+" | "-" | "*" | "/" => {
+                                let a = dst + 1;
+                                let b = dst + 2;
+                                let is_float = type_hints.get(a).copied() == Some(TypeHint::Float)
+                                    || type_hints.get(b).copied() == Some(TypeHint::Float);
+                                let va = builder.use_var(vars[a]);
+                                let vb = builder.use_var(vars[b]);
+                                let result = if is_float {
+                                    let fa = builder.ins().bitcast(types::F64, MemFlags::new(), va);
+                                    let fb = builder.ins().bitcast(types::F64, MemFlags::new(), vb);
+                                    let fr = match callee_name.as_str() {
+                                        "+" => builder.ins().fadd(fa, fb),
+                                        "-" => builder.ins().fsub(fa, fb),
+                                        "*" => builder.ins().fmul(fa, fb),
+                                        "/" => builder.ins().fdiv(fa, fb),
+                                        _ => unreachable!(),
+                                    };
+                                    type_hints[dst] = TypeHint::Float;
+                                    builder.ins().bitcast(types::I64, MemFlags::new(), fr)
+                                } else {
+                                    type_hints[dst] = TypeHint::Int;
+                                    match callee_name.as_str() {
+                                        "+" => builder.ins().iadd(va, vb),
+                                        "-" => builder.ins().isub(va, vb),
+                                        "*" => builder.ins().imul(va, vb),
+                                        "/" => builder.ins().sdiv(va, vb),
+                                        _ => unreachable!(),
+                                    }
+                                };
+                                builder.def_var(vars[dst], result);
+                            }
+                            "%" => {
+                                let a = dst + 1;
+                                let b = dst + 2;
+                                type_hints[dst] = TypeHint::Int;
+                                let va = builder.use_var(vars[a]);
+                                let vb = builder.use_var(vars[b]);
+                                let result = builder.ins().srem(va, vb);
+                                builder.def_var(vars[dst], result);
+                            }
+                            "=" | "!=" | "<" | ">" | "<=" | ">=" => {
+                                let a = dst + 1;
+                                let b = dst + 2;
+                                let is_float = type_hints.get(a).copied() == Some(TypeHint::Float)
+                                    || type_hints.get(b).copied() == Some(TypeHint::Float);
+                                let va = builder.use_var(vars[a]);
+                                let vb = builder.use_var(vars[b]);
+                                let cmp_i8 = if is_float {
+                                    let fa = builder.ins().bitcast(types::F64, MemFlags::new(), va);
+                                    let fb = builder.ins().bitcast(types::F64, MemFlags::new(), vb);
+                                    let fcc = match callee_name.as_str() {
+                                        "="  => FloatCC::Equal,
+                                        "!=" => FloatCC::NotEqual,
+                                        "<"  => FloatCC::LessThan,
+                                        ">"  => FloatCC::GreaterThan,
+                                        "<=" => FloatCC::LessThanOrEqual,
+                                        ">=" => FloatCC::GreaterThanOrEqual,
+                                        _ => unreachable!(),
+                                    };
+                                    builder.ins().fcmp(fcc, fa, fb)
+                                } else {
+                                    let icc = match callee_name.as_str() {
+                                        "="  => IntCC::Equal,
+                                        "!=" => IntCC::NotEqual,
+                                        "<"  => IntCC::SignedLessThan,
+                                        ">"  => IntCC::SignedGreaterThan,
+                                        "<=" => IntCC::SignedLessThanOrEqual,
+                                        ">=" => IntCC::SignedGreaterThanOrEqual,
+                                        _ => unreachable!(),
+                                    };
+                                    builder.ins().icmp(icc, va, vb)
+                                };
+                                let result = builder.ins().uextend(types::I64, cmp_i8);
+                                type_hints[dst] = TypeHint::Bool;
+                                builder.def_var(vars[dst], result);
+                            }
+                            "not" => {
+                                let a = dst + 1;
+                                type_hints[dst] = TypeHint::Bool;
+                                let va = builder.use_var(vars[a]);
+                                let one = builder.ins().iconst(types::I64, 1);
+                                let result = builder.ins().isub(one, va);
+                                builder.def_var(vars[dst], result);
+                            }
+                            "and" => {
+                                let a = dst + 1;
+                                let b = dst + 2;
+                                type_hints[dst] = TypeHint::Bool;
+                                let va = builder.use_var(vars[a]);
+                                let vb = builder.use_var(vars[b]);
+                                let result = builder.ins().band(va, vb);
+                                builder.def_var(vars[dst], result);
+                            }
+                            "or" => {
+                                let a = dst + 1;
+                                let b = dst + 2;
+                                type_hints[dst] = TypeHint::Bool;
+                                let va = builder.use_var(vars[a]);
+                                let vb = builder.use_var(vars[b]);
+                                let result = builder.ins().bor(va, vb);
+                                builder.def_var(vars[dst], result);
+                            }
+                            "xor" => {
+                                let a = dst + 1;
+                                let b = dst + 2;
+                                type_hints[dst] = TypeHint::Bool;
+                                let va = builder.use_var(vars[a]);
+                                let vb = builder.use_var(vars[b]);
+                                let result = builder.ins().bxor(va, vb);
+                                builder.def_var(vars[dst], result);
+                            }
+                            "valid" => {
+                                type_hints[dst] = TypeHint::Bool;
+                                let one = builder.ins().iconst(types::I64, 1);
+                                builder.def_var(vars[dst], one);
+                            }
+                            _ => {
+                                return Err(format!(
+                                    "Op::Call to inlined builtin '{}' not handled in unboxed codegen",
+                                    callee_name
+                                ));
+                            }
+                        }
                     } else {
-                        return Err(format!("call target '{}' not declared", callee_name));
-                    };
-                    let func_ref = self.module.declare_func_in_func(callee_func_id, builder.func);
+                        // Regular function call (user-defined or self-call)
+                        let callee_func_id = if callee_name == func.name {
+                            func_id
+                        } else if let Some(&id) = call_targets.get(&callee_name) {
+                            id
+                        } else {
+                            return Err(format!("call target '{}' not declared", callee_name));
+                        };
+                        let func_ref = self.module.declare_func_in_func(callee_func_id, builder.func);
 
-                    let mut call_args = Vec::new();
-                    for j in 0..argc {
-                        let arg = builder.use_var(vars[dst + 1 + j]);
-                        call_args.push(arg);
+                        let mut call_args = Vec::new();
+                        for j in 0..argc {
+                            let arg = builder.use_var(vars[dst + 1 + j]);
+                            call_args.push(arg);
+                        }
+                        let call = builder.ins().call(func_ref, &call_args);
+                        let result = builder.inst_results(call)[0];
+                        builder.def_var(vars[dst], result);
                     }
-                    let call = builder.ins().call(func_ref, &call_args);
-                    let result = builder.inst_results(call)[0];
-                    builder.def_var(vars[dst], result);
                     last_was_terminator = false;
                 }
                 Op::TailCall => {
@@ -1263,6 +1438,167 @@ impl BytecodeAot {
 
                     // Continue block: contract passed
                     builder.switch_to_block(cont_block);
+                    last_was_terminator = false;
+                }
+
+                // ── CallBuiltin (whitelisted arithmetic/comparison/logic) ──
+                // These are inlined as native instructions, identical to the
+                // direct Op::Add/Sub/Eq/etc. paths above.
+                Op::CallBuiltin => {
+                    let name_idx = instr.a as usize;
+                    let argc = instr.b as usize;
+                    let dst = instr.dst as usize;
+                    let builtin_name = match &func.constants[name_idx] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err("callbuiltin: name must be string in unboxed path".into()),
+                    };
+
+                    match builtin_name.as_str() {
+                        // ── Binary arithmetic ────────────────────────────
+                        "+" | "-" | "*" | "/" => {
+                            if argc != 2 { return Err(format!("CallBuiltin '{}': expected 2 args, got {}", builtin_name, argc)); }
+                            let a = dst + 1;
+                            let b = dst + 2;
+                            let is_float = type_hints.get(a).copied() == Some(TypeHint::Float)
+                                || type_hints.get(b).copied() == Some(TypeHint::Float);
+                            let va = builder.use_var(vars[a]);
+                            let vb = builder.use_var(vars[b]);
+                            let result = if is_float {
+                                let fa = builder.ins().bitcast(types::F64, MemFlags::new(), va);
+                                let fb = builder.ins().bitcast(types::F64, MemFlags::new(), vb);
+                                let fr = match builtin_name.as_str() {
+                                    "+" => builder.ins().fadd(fa, fb),
+                                    "-" => builder.ins().fsub(fa, fb),
+                                    "*" => builder.ins().fmul(fa, fb),
+                                    "/" => builder.ins().fdiv(fa, fb),
+                                    _ => unreachable!(),
+                                };
+                                type_hints[dst] = TypeHint::Float;
+                                builder.ins().bitcast(types::I64, MemFlags::new(), fr)
+                            } else {
+                                type_hints[dst] = TypeHint::Int;
+                                match builtin_name.as_str() {
+                                    "+" => builder.ins().iadd(va, vb),
+                                    "-" => builder.ins().isub(va, vb),
+                                    "*" => builder.ins().imul(va, vb),
+                                    "/" => builder.ins().sdiv(va, vb),
+                                    _ => unreachable!(),
+                                }
+                            };
+                            builder.def_var(vars[dst], result);
+                        }
+                        "%" => {
+                            if argc != 2 { return Err(format!("CallBuiltin '%': expected 2 args, got {}", argc)); }
+                            let a = dst + 1;
+                            let b = dst + 2;
+                            type_hints[dst] = TypeHint::Int;
+                            let va = builder.use_var(vars[a]);
+                            let vb = builder.use_var(vars[b]);
+                            let result = builder.ins().srem(va, vb);
+                            builder.def_var(vars[dst], result);
+                        }
+
+                        // ── Comparisons ──────────────────────────────────
+                        "=" | "!=" | "<" | ">" | "<=" | ">=" => {
+                            if argc != 2 { return Err(format!("CallBuiltin '{}': expected 2 args, got {}", builtin_name, argc)); }
+                            let a = dst + 1;
+                            let b = dst + 2;
+                            let is_float = type_hints.get(a).copied() == Some(TypeHint::Float)
+                                || type_hints.get(b).copied() == Some(TypeHint::Float);
+                            let va = builder.use_var(vars[a]);
+                            let vb = builder.use_var(vars[b]);
+                            let cmp_i8 = if is_float {
+                                let fa = builder.ins().bitcast(types::F64, MemFlags::new(), va);
+                                let fb = builder.ins().bitcast(types::F64, MemFlags::new(), vb);
+                                let fcc = match builtin_name.as_str() {
+                                    "="  => FloatCC::Equal,
+                                    "!=" => FloatCC::NotEqual,
+                                    "<"  => FloatCC::LessThan,
+                                    ">"  => FloatCC::GreaterThan,
+                                    "<=" => FloatCC::LessThanOrEqual,
+                                    ">=" => FloatCC::GreaterThanOrEqual,
+                                    _ => unreachable!(),
+                                };
+                                builder.ins().fcmp(fcc, fa, fb)
+                            } else {
+                                let icc = match builtin_name.as_str() {
+                                    "="  => IntCC::Equal,
+                                    "!=" => IntCC::NotEqual,
+                                    "<"  => IntCC::SignedLessThan,
+                                    ">"  => IntCC::SignedGreaterThan,
+                                    "<=" => IntCC::SignedLessThanOrEqual,
+                                    ">=" => IntCC::SignedGreaterThanOrEqual,
+                                    _ => unreachable!(),
+                                };
+                                builder.ins().icmp(icc, va, vb)
+                            };
+                            let result = builder.ins().uextend(types::I64, cmp_i8);
+                            type_hints[dst] = TypeHint::Bool;
+                            builder.def_var(vars[dst], result);
+                        }
+
+                        // ── Logic ────────────────────────────────────────
+                        "not" => {
+                            if argc != 1 { return Err(format!("CallBuiltin 'not': expected 1 arg, got {}", argc)); }
+                            let a = dst + 1;
+                            type_hints[dst] = TypeHint::Bool;
+                            let va = builder.use_var(vars[a]);
+                            let one = builder.ins().iconst(types::I64, 1);
+                            let result = builder.ins().isub(one, va);
+                            builder.def_var(vars[dst], result);
+                        }
+                        "and" => {
+                            if argc != 2 { return Err(format!("CallBuiltin 'and': expected 2 args, got {}", argc)); }
+                            let a = dst + 1;
+                            let b = dst + 2;
+                            type_hints[dst] = TypeHint::Bool;
+                            let va = builder.use_var(vars[a]);
+                            let vb = builder.use_var(vars[b]);
+                            let result = builder.ins().band(va, vb);
+                            builder.def_var(vars[dst], result);
+                        }
+                        "or" => {
+                            if argc != 2 { return Err(format!("CallBuiltin 'or': expected 2 args, got {}", argc)); }
+                            let a = dst + 1;
+                            let b = dst + 2;
+                            type_hints[dst] = TypeHint::Bool;
+                            let va = builder.use_var(vars[a]);
+                            let vb = builder.use_var(vars[b]);
+                            let result = builder.ins().bor(va, vb);
+                            builder.def_var(vars[dst], result);
+                        }
+                        "xor" => {
+                            if argc != 2 { return Err(format!("CallBuiltin 'xor': expected 2 args, got {}", argc)); }
+                            let a = dst + 1;
+                            let b = dst + 2;
+                            type_hints[dst] = TypeHint::Bool;
+                            let va = builder.use_var(vars[a]);
+                            let vb = builder.use_var(vars[b]);
+                            let result = builder.ins().bxor(va, vb);
+                            builder.def_var(vars[dst], result);
+                        }
+
+                        // ── valid (contract helper) ──────────────────────
+                        // `valid` checks if a value is non-nil. In unboxed context,
+                        // any non-zero i64 is "valid". Returns 1 (true) or 0 (false).
+                        "valid" => {
+                            if argc != 1 { return Err(format!("CallBuiltin 'valid': expected 1 arg, got {}", argc)); }
+                            // In the unboxed tier, all values are raw i64. A value is
+                            // "valid" if it's anything — since unboxed values can't be
+                            // nil in the traditional sense, we always return true.
+                            // This is safe because if we got here, the value exists.
+                            type_hints[dst] = TypeHint::Bool;
+                            let one = builder.ins().iconst(types::I64, 1);
+                            builder.def_var(vars[dst], one);
+                        }
+
+                        _ => {
+                            return Err(format!(
+                                "CallBuiltin '{}' is not supported in unboxed AOT (should have been rejected by is_eligible)",
+                                builtin_name
+                            ));
+                        }
+                    }
                     last_was_terminator = false;
                 }
 
@@ -2627,15 +2963,12 @@ mod tests {
         let aot = BytecodeAot::new().unwrap();
         let mut eligible = HashSet::new();
         let mut ineligible = HashSet::new();
-        // The + call compiles to an Add opcode, not CallBuiltin, because
-        // the bytecode compiler inlines primitive ops. Check eligibility.
+        // The + call compiles to an Add opcode (the bytecode compiler inlines
+        // primitive ops). Either way — direct Op::Add or CallBuiltin("+") —
+        // the function should be eligible for unboxed compilation.
         let result = aot.is_eligible(&func, &all, &mut eligible, &mut ineligible);
-        // If the compiler emits a CallBuiltin for "+", it's ineligible.
-        // If it emits an Add opcode, it's eligible.
-        // Either way the test validates the check runs without panicking.
-        // Check that the function was cached in one of the sets.
-        assert!(eligible.contains("add") || ineligible.contains("add"),
-            "function should be cached after eligibility check");
+        assert!(result, "add function should be eligible for unboxed compilation");
+        assert!(eligible.contains("add"), "function should be cached as eligible");
         // Verify round-trip: second call uses cache
         let result2 = aot.is_eligible(&func, &all, &mut eligible, &mut ineligible);
         assert_eq!(result, result2);
@@ -2716,5 +3049,317 @@ mod tests {
         assert!(!aot.eligible_funcs.contains("make-list"));
         // inc might be eligible (depends on whether + compiles to Add or CallBuiltin)
         assert!(aot.compiled_funcs.contains_key("inc"));
+    }
+
+    #[test]
+    fn callbuiltin_arithmetic_is_eligible() {
+        // Manually construct a function that uses CallBuiltin for "+".
+        // This simulates the case where the bytecode compiler emits CallBuiltin
+        // instead of a direct Op::Add (e.g., from a different compilation path).
+        let func = BytecodeFunc {
+            name: "add_via_builtin".into(),
+            arity: 2,
+            register_count: 6,
+            capture_count: 0,
+            instructions: vec![
+                // Move args into call slots: dst=2, args at 3,4
+                Instruction::new(Op::Move, 3, 0, 0),     // arg a → slot 3
+                Instruction::new(Op::Move, 4, 1, 0),     // arg b → slot 4
+                Instruction::new(Op::CallBuiltin, 2, 0, 2), // CallBuiltin("+", 2) → r2
+                Instruction::new(Op::Return, 0, 2, 0),   // return r2
+            ],
+            constants: vec![Value::Str("+".into())],
+        };
+        let all = HashMap::new();
+        let aot = BytecodeAot::new().unwrap();
+        let mut eligible = HashSet::new();
+        let mut ineligible = HashSet::new();
+        let result = aot.is_eligible(&func, &all, &mut eligible, &mut ineligible);
+        assert!(result, "function using CallBuiltin('+') should be eligible");
+        assert!(eligible.contains("add_via_builtin"));
+    }
+
+    #[test]
+    fn callbuiltin_non_arithmetic_is_ineligible() {
+        // A function that uses CallBuiltin for "head" (list op) should be ineligible.
+        let func = BytecodeFunc {
+            name: "get_head".into(),
+            arity: 1,
+            register_count: 4,
+            capture_count: 0,
+            instructions: vec![
+                Instruction::new(Op::Move, 2, 0, 0),
+                Instruction::new(Op::CallBuiltin, 1, 0, 1), // CallBuiltin("head", 1)
+                Instruction::new(Op::Return, 0, 1, 0),
+            ],
+            constants: vec![Value::Str("head".into())],
+        };
+        let all = HashMap::new();
+        let aot = BytecodeAot::new().unwrap();
+        let mut eligible = HashSet::new();
+        let mut ineligible = HashSet::new();
+        let result = aot.is_eligible(&func, &all, &mut eligible, &mut ineligible);
+        assert!(!result, "function using CallBuiltin('head') should be ineligible");
+        assert!(ineligible.contains("get_head"));
+    }
+
+    #[test]
+    fn callbuiltin_arithmetic_compiles_unboxed() {
+        // Verify that CallBuiltin("+") can be compiled in the unboxed path.
+        let func = BytecodeFunc {
+            name: "add_builtin".into(),
+            arity: 2,
+            register_count: 6,
+            capture_count: 0,
+            instructions: vec![
+                Instruction::new(Op::Move, 3, 0, 0),
+                Instruction::new(Op::Move, 4, 1, 0),
+                Instruction::new(Op::CallBuiltin, 2, 0, 2), // CallBuiltin("+", 2) → r2
+                Instruction::new(Op::Return, 0, 2, 0),
+            ],
+            constants: vec![Value::Str("+".into())],
+        };
+        let all = HashMap::new();
+        let mut aot = BytecodeAot::new().unwrap();
+        let result = aot.compile_func_unboxed(&func, &all);
+        assert!(result.is_ok(), "compile_func_unboxed with CallBuiltin('+') failed: {:?}", result.err());
+        assert!(aot.eligible_funcs.contains("add_builtin"));
+    }
+
+    #[test]
+    fn contract_assertions_are_eligible() {
+        // (defn guarded (n) :requires [(>= n 0)] :body n)
+        // Construct bytecode with AssertRequires + comparison.
+        let func = BytecodeFunc {
+            name: "guarded".into(),
+            arity: 1,
+            register_count: 4,
+            capture_count: 0,
+            instructions: vec![
+                // Compare: n >= 0
+                Instruction::new(Op::LoadConst, 1, 0, 0), // r1 = 0
+                Instruction::new(Op::Ge, 2, 0, 1),        // r2 = (n >= 0)
+                // Contract check
+                Instruction::new(Op::AssertRequires, 1, 2, 1), // requires r2; fn_name_idx=1, clause_idx=1
+                // Return n
+                Instruction::new(Op::Return, 0, 0, 0),
+            ],
+            constants: vec![
+                Value::Int(0),                         // const 0: the zero literal
+                Value::Str("(>= n 0)".into()),         // const 1: clause source
+            ],
+        };
+        let all: HashMap<String, BytecodeFunc> = [
+            ("guarded".into(), func.clone()),
+        ].into_iter().collect();
+        let aot = BytecodeAot::new().unwrap();
+        let mut eligible = HashSet::new();
+        let mut ineligible = HashSet::new();
+        let result = aot.is_eligible(&func, &all, &mut eligible, &mut ineligible);
+        assert!(result, "function with contract assertions should be eligible");
+    }
+
+    #[test]
+    fn contract_assertions_compile_unboxed() {
+        // Same as above but verify it actually compiles.
+        let func = BytecodeFunc {
+            name: "guarded2".into(),
+            arity: 1,
+            register_count: 4,
+            capture_count: 0,
+            instructions: vec![
+                Instruction::new(Op::LoadConst, 1, 0, 0),
+                Instruction::new(Op::Ge, 2, 0, 1),
+                Instruction::new(Op::AssertRequires, 1, 2, 1),
+                Instruction::new(Op::Return, 0, 0, 0),
+            ],
+            constants: vec![
+                Value::Int(0),
+                Value::Str("(>= n 0)".into()),
+            ],
+        };
+        let all = HashMap::new();
+        let mut aot = BytecodeAot::new().unwrap();
+        let result = aot.compile_func_unboxed(&func, &all);
+        assert!(result.is_ok(), "contract assertions in unboxed path failed: {:?}", result.err());
+        assert!(aot.eligible_funcs.contains("guarded2"));
+    }
+
+    #[test]
+    fn fib_with_contracts_is_eligible() {
+        use crate::bytecode_compiler::BytecodeCompiler;
+        use crate::ir::*;
+        // Build fib: (defn fib (n) (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2)))))
+        let mut compiler = BytecodeCompiler::new();
+        let fib_body = IRNode::If(
+            Box::new(IRNode::Call("<=".into(), vec![
+                IRNode::Load("n".into()),
+                IRNode::Int(1),
+            ])),
+            Box::new(IRNode::Load("n".into())),
+            Box::new(IRNode::Call("+".into(), vec![
+                IRNode::Call("fib".into(), vec![
+                    IRNode::Call("-".into(), vec![
+                        IRNode::Load("n".into()),
+                        IRNode::Int(1),
+                    ]),
+                ]),
+                IRNode::Call("fib".into(), vec![
+                    IRNode::Call("-".into(), vec![
+                        IRNode::Load("n".into()),
+                        IRNode::Int(2),
+                    ]),
+                ]),
+            ])),
+        );
+        let func = compiler.compile_function("fib", &["n".into()], &fib_body);
+        let all: HashMap<String, BytecodeFunc> = [
+            ("fib".into(), func.clone()),
+        ].into_iter().collect();
+        let aot = BytecodeAot::new().unwrap();
+        let mut eligible = HashSet::new();
+        let mut ineligible = HashSet::new();
+        let result = aot.is_eligible(&func, &all, &mut eligible, &mut ineligible);
+        assert!(result, "fib function should be eligible for unboxed compilation");
+    }
+
+    #[test]
+    fn fib_compiles_unboxed() {
+        use crate::bytecode_compiler::BytecodeCompiler;
+        use crate::ir::*;
+        let mut compiler = BytecodeCompiler::new();
+        let fib_body = IRNode::If(
+            Box::new(IRNode::Call("<=".into(), vec![
+                IRNode::Load("n".into()),
+                IRNode::Int(1),
+            ])),
+            Box::new(IRNode::Load("n".into())),
+            Box::new(IRNode::Call("+".into(), vec![
+                IRNode::Call("fib".into(), vec![
+                    IRNode::Call("-".into(), vec![
+                        IRNode::Load("n".into()),
+                        IRNode::Int(1),
+                    ]),
+                ]),
+                IRNode::Call("fib".into(), vec![
+                    IRNode::Call("-".into(), vec![
+                        IRNode::Load("n".into()),
+                        IRNode::Int(2),
+                    ]),
+                ]),
+            ])),
+        );
+        let func = compiler.compile_function("fib", &["n".into()], &fib_body);
+        let all: HashMap<String, BytecodeFunc> = [
+            ("fib".into(), func.clone()),
+        ].into_iter().collect();
+        let mut aot = BytecodeAot::new().unwrap();
+        let mut eligible = HashSet::new();
+        let mut ineligible = HashSet::new();
+        let is_elig = aot.is_eligible(&func, &all, &mut eligible, &mut ineligible);
+        assert!(is_elig, "fib should be eligible");
+        let result = aot.compile_func_unboxed(&func, &all);
+        assert!(result.is_ok(), "fib unboxed compilation failed: {:?}", result.err());
+        assert!(aot.eligible_funcs.contains("fib"));
+    }
+
+    #[test]
+    fn call_to_valid_builtin_is_eligible() {
+        // Function that calls "valid" (used in contract requires clauses).
+        // valid is a runtime builtin, not in all_functions, but it's whitelisted.
+        let func = BytecodeFunc {
+            name: "check_valid".into(),
+            arity: 1,
+            register_count: 4,
+            capture_count: 0,
+            instructions: vec![
+                // Call valid(a) — emitted as Op::Call since "valid" is not in direct_op
+                Instruction::new(Op::Move, 2, 0, 0),          // r2 = a (arg slot)
+                Instruction::new(Op::Call, 1, 0, 1),           // r1 = valid(r2); name_idx=0, argc=1
+                Instruction::new(Op::AssertRequires, 1, 1, 1), // requires r1
+                Instruction::new(Op::Return, 0, 0, 0),
+            ],
+            constants: vec![
+                Value::Str("valid".into()),
+                Value::Str("(valid a)".into()),
+            ],
+        };
+        let all = HashMap::new();
+        let aot = BytecodeAot::new().unwrap();
+        let mut eligible = HashSet::new();
+        let mut ineligible = HashSet::new();
+        let result = aot.is_eligible(&func, &all, &mut eligible, &mut ineligible);
+        assert!(result, "function calling 'valid' should be eligible");
+    }
+
+    #[test]
+    fn call_to_print_builtin_is_ineligible() {
+        // Function that calls "print" — should still be ineligible.
+        let func = BytecodeFunc {
+            name: "printer".into(),
+            arity: 1,
+            register_count: 4,
+            capture_count: 0,
+            instructions: vec![
+                Instruction::new(Op::Move, 2, 0, 0),
+                Instruction::new(Op::Call, 1, 0, 1),  // Call("print", 1)
+                Instruction::new(Op::Return, 0, 1, 0),
+            ],
+            constants: vec![Value::Str("print".into())],
+        };
+        let all = HashMap::new();
+        let aot = BytecodeAot::new().unwrap();
+        let mut eligible = HashSet::new();
+        let mut ineligible = HashSet::new();
+        let result = aot.is_eligible(&func, &all, &mut eligible, &mut ineligible);
+        assert!(!result, "function calling 'print' should be ineligible");
+    }
+
+    #[test]
+    fn callbuiltin_comparison_compiles_unboxed() {
+        // Verify all comparison builtins compile in unboxed path.
+        for (op_name, _) in [("=", 2), ("!=", 2), ("<", 2), (">", 2), ("<=", 2), (">=", 2)] {
+            let func = BytecodeFunc {
+                name: format!("cmp_{}", op_name),
+                arity: 2,
+                register_count: 6,
+                capture_count: 0,
+                instructions: vec![
+                    Instruction::new(Op::Move, 3, 0, 0),
+                    Instruction::new(Op::Move, 4, 1, 0),
+                    Instruction::new(Op::CallBuiltin, 2, 0, 2),
+                    Instruction::new(Op::Return, 0, 2, 0),
+                ],
+                constants: vec![Value::Str(op_name.into())],
+            };
+            let all = HashMap::new();
+            let mut aot = BytecodeAot::new().unwrap();
+            let result = aot.compile_func_unboxed(&func, &all);
+            assert!(result.is_ok(), "CallBuiltin('{}') unboxed compilation failed: {:?}", op_name, result.err());
+        }
+    }
+
+    #[test]
+    fn callbuiltin_logic_compiles_unboxed() {
+        // Verify logic builtins (and, or, xor) compile in unboxed path.
+        for op_name in ["and", "or", "xor"] {
+            let func = BytecodeFunc {
+                name: format!("logic_{}", op_name),
+                arity: 2,
+                register_count: 6,
+                capture_count: 0,
+                instructions: vec![
+                    Instruction::new(Op::Move, 3, 0, 0),
+                    Instruction::new(Op::Move, 4, 1, 0),
+                    Instruction::new(Op::CallBuiltin, 2, 0, 2),
+                    Instruction::new(Op::Return, 0, 2, 0),
+                ],
+                constants: vec![Value::Str(op_name.into())],
+            };
+            let all = HashMap::new();
+            let mut aot = BytecodeAot::new().unwrap();
+            let result = aot.compile_func_unboxed(&func, &all);
+            assert!(result.is_ok(), "CallBuiltin('{}') unboxed compilation failed: {:?}", op_name, result.err());
+        }
     }
 }

@@ -56,15 +56,17 @@
   :ensures [(valid result)]
   :body (not (= (% x 2) 0)))
 
-;; ── pow : integer exponentiation ──
+;; ── pow : integer exponentiation (O(log n) by squaring) ──
 (defn pow
   :sig [(base : i64) (exp : i64) -> i64]
-  :intent "Raise base to the power of exp (non-negative exponent)"
+  :intent "Integer exponentiation using fast squaring"
   :requires [(>= exp 0)]
   :ensures [(valid result)]
-  :body (if (= exp 0)
-          1
-          (* base (pow base (- exp 1)))))
+  :body (if (= exp 0) 1
+          (if (even? exp)
+            (let (half : i64 (pow base (/ exp 2)))
+              (* half half))
+            (* base (pow base (- exp 1))))))
 
 ;; ── gcd : greatest common divisor ──
 (defn gcd
