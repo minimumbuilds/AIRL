@@ -112,7 +112,7 @@ impl TypeChecker {
             "infinity", "nan", "is-nan?", "is-infinite?",
             "panic", "assert",
             "json-parse", "json-stringify", "http-post", "http-request",
-            "shell-exec", "time-now", "getenv",
+            "shell-exec", "time-now", "sleep", "format-time", "getenv",
             "run-bytecode", "compile-to-executable",
         ] {
             self.env.bind(name.to_string(), Ty::TypeVar("builtin".to_string()));

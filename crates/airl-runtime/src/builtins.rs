@@ -1353,6 +1353,8 @@ impl Builtins {
         self.register("panic", builtin_panic);
         self.register("assert", builtin_assert);
         self.register("time-now", builtin_time_now);
+        self.register("sleep", builtin_sleep);
+        self.register("format-time", builtin_format_time);
         self.register("getenv", builtin_getenv);
         self.register("http-request", builtin_http_request);
         self.register("http-post", builtin_http_post); // deprecated: use http-request
@@ -1489,6 +1491,66 @@ fn builtin_time_now(args: &[Value]) -> Result<Value, RuntimeError> {
         .unwrap()
         .as_millis() as i64;
     Ok(Value::Int(millis))
+}
+
+/// `(sleep ms)` — pause execution for the given number of milliseconds.
+fn builtin_sleep(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("sleep", args, 1)?;
+    let ms = match &args[0] {
+        Value::Int(n) => {
+            if *n < 0 {
+                return Err(RuntimeError::Custom("sleep: duration must be non-negative".into()));
+            }
+            *n as u64
+        }
+        _ => return Err(RuntimeError::TypeError("sleep: expected integer (milliseconds)".into())),
+    };
+    std::thread::sleep(std::time::Duration::from_millis(ms));
+    Ok(Value::Nil)
+}
+
+/// `(format-time millis fmt)` — format a Unix timestamp (millis since epoch).
+/// Supports: %Y (year), %m (month), %d (day), %H (hour), %M (minute), %S (second).
+/// Uses UTC. No external dependency — manual formatting from timestamp arithmetic.
+fn builtin_format_time(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("format-time", args, 2)?;
+    let millis = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError("format-time: first arg must be integer (millis)".into())),
+    };
+    let fmt = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("format-time: second arg must be format string".into())),
+    };
+
+    // Convert millis to components (UTC)
+    let secs = millis / 1000;
+    let sec = (secs % 60) as u32;
+    let min = ((secs / 60) % 60) as u32;
+    let hour = ((secs / 3600) % 24) as u32;
+
+    // Days since epoch → year/month/day (civil calendar, Howard Hinnant algorithm)
+    let mut days = (secs / 86400) as i64;
+    days += 719468; // shift epoch from 1970-01-01 to 0000-03-01
+    let era = if days >= 0 { days } else { days - 146096 } / 146097;
+    let doe = (days - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+
+    let result = fmt
+        .replace("%Y", &format!("{:04}", year))
+        .replace("%m", &format!("{:02}", m))
+        .replace("%d", &format!("{:02}", d))
+        .replace("%H", &format!("{:02}", hour))
+        .replace("%M", &format!("{:02}", min))
+        .replace("%S", &format!("{:02}", sec));
+
+    Ok(Value::Str(result))
 }
 
 fn builtin_getenv(args: &[Value]) -> Result<Value, RuntimeError> {
