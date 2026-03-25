@@ -1,0 +1,124 @@
+;; bootstrap/g3_compiler.airl — G3 Self-Hosted AIRL Compiler
+;;
+;; Compiles AIRL source files to native binaries using the bootstrap
+;; front-end (lexer, parser, bc_compiler) and the Cranelift AOT backend.
+;;
+;; Usage:
+;;   airl run --load bootstrap/lexer.airl \
+;;            --load bootstrap/parser.airl \
+;;            --load bootstrap/bc_compiler.airl \
+;;            bootstrap/g3_compiler.airl -- <input.airl> [-o <output>]
+;;
+;; Requires: --features jit,aot on the host airl binary.
+
+;; ── Compile a single source string to BCFunc list ────────────
+
+(defn g3-compile-source
+  :sig [(source : String) (label : String) -> _]
+  :intent "Compile source string to list of BCFunc values"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err e) (Err (str "lex error (" label "): " e))
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err (str "parse error (" label "): " e))
+          (Ok sexprs)
+            (match (parse-program sexprs)
+              (Err e) (Err (str "program error (" label "): " e))
+              (Ok ast-nodes)
+                (bc-compile-program ast-nodes)))))
+
+;; ── Compile stdlib modules ───────────────────────────────
+
+(defn g3-compile-stdlib
+  :sig [-> _]
+  :intent "Compile all stdlib modules to BCFunc lists, return combined list"
+  :requires [(valid 1)]
+  :ensures [(valid result)]
+  :body
+    (let (stdlib-files : List ["stdlib/prelude.airl"
+                               "stdlib/math.airl"
+                               "stdlib/result.airl"
+                               "stdlib/string.airl"
+                               "stdlib/map.airl"
+                               "stdlib/set.airl"])
+      (fold (fn [acc path]
+              (match acc
+                (Err e) (Err e)
+                (Ok funcs-so-far)
+                  (let (source : String (read-file path))
+                    (match (g3-compile-source source path)
+                      (Err e) (Err e)
+                      ;; Keep only named functions from stdlib, skip __main__
+                      (Ok new-funcs) (Ok (concat funcs-so-far
+                        (filter (fn [f]
+                          (match f
+                            (BCFunc name _ _ _ _ _) (if (= name "__main__") false true)
+                            _ true))
+                          new-funcs)))))))
+            (Ok [])
+            stdlib-files)))
+
+;; ── Parse CLI arguments ──────────────────────────────────
+
+(defn g3-parse-args
+  :sig [(args : List) -> _]
+  :intent "Parse CLI args into [input-files output-path]"
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body
+    (let (result : _ (fold (fn [acc arg]
+            (let (files : _ (at acc 0))
+              (let (output : _ (at acc 1))
+                (let (expect-o : _ (at acc 2))
+                  (if (= expect-o 1)
+                    [files arg 0]
+                    (if (= arg "-o")
+                      [files output 1]
+                      [(append files arg) output 0]))))))
+          [[] "a.out" 0]
+          args))
+      [(at result 0) (at result 1)]))
+
+;; ── Main entry point ─────────────────────────────────────
+
+(let (raw-args : List (get-args))
+  ;; Skip args before "--" (those are airl's own args)
+  (let (user-args : _ (let (found-sep : _ (fold (fn [acc a]
+          (match acc
+            (Ok args) (Ok (append args a))
+            (Err _) (if (= a "--") (Ok []) (Err "skip"))))
+          (Err "skip")
+          raw-args))
+        (match found-sep
+          (Ok args) args
+          (Err _) raw-args)))
+    (if (empty? user-args)
+      (do (print "Usage: g3_compiler.airl -- <input.airl ...> [-o output]\n")
+          (exit 1))
+      (let (parsed : _ (g3-parse-args user-args))
+        (let (input-files : List (at parsed 0))
+          (let (output-path : String (at parsed 1))
+            (do
+              ;; Step 1: Compile stdlib
+              (print "Compiling stdlib...\n")
+              (match (g3-compile-stdlib)
+                (Err e) (do (print "Stdlib error: " e "\n") (exit 1))
+                (Ok stdlib-funcs)
+                  ;; Step 2: Compile user source files
+                  (let (all-source : String (fold (fn [acc path]
+                          (str acc (read-file path) "\n"))
+                        "" input-files))
+                    (do
+                      (print "Compiling " (length input-files) " source file(s)...\n")
+                      (match (g3-compile-source all-source "user")
+                        (Err e) (do (print "Compile error: " e "\n") (exit 1))
+                        (Ok user-funcs)
+                          ;; Step 3: Combine and AOT compile
+                          (let (all-funcs : List (concat stdlib-funcs user-funcs))
+                            (do
+                              (print "AOT compiling " (length all-funcs) " functions -> " output-path "\n")
+                              (compile-bytecode-to-executable all-funcs output-path)
+                              (print "Done: " output-path "\n"))))))))))))))
