@@ -509,6 +509,51 @@ All float math builtins operate on `f64` values. Integer arguments are promoted 
 | `base64-decode` | `(base64-decode str)` → Str | Base64 decode |
 | `random-bytes` | `(random-bytes n)` → List | List of n random byte values (0-255) |
 
+### Byte Encoding (v0.4.0)
+
+Binary data is represented as `IntList` (list of integers 0-255). All integer encoding uses big-endian byte order.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `bytes-from-int16` | `(bytes-from-int16 n)` → IntList | Encode i16 as 2 bytes (big-endian) |
+| `bytes-from-int32` | `(bytes-from-int32 n)` → IntList | Encode i32 as 4 bytes (big-endian) |
+| `bytes-from-int64` | `(bytes-from-int64 n)` → IntList | Encode i64 as 8 bytes (big-endian) |
+| `bytes-to-int16` | `(bytes-to-int16 buf offset)` → Int | Decode i16 from byte list at offset |
+| `bytes-to-int32` | `(bytes-to-int32 buf offset)` → Int | Decode i32 from byte list at offset |
+| `bytes-to-int64` | `(bytes-to-int64 buf offset)` → Int | Decode i64 from byte list at offset |
+| `bytes-from-string` | `(bytes-from-string s)` → IntList | UTF-8 encode string to bytes |
+| `bytes-to-string` | `(bytes-to-string buf offset len)` → Str | UTF-8 decode bytes to string |
+| `bytes-concat` | `(bytes-concat a b)` → IntList | Concatenate two byte lists |
+| `bytes-slice` | `(bytes-slice buf offset len)` → IntList | Extract slice with bounds check |
+| `crc32c` | `(crc32c buf)` → Int | CRC32C (Castagnoli) checksum |
+
+### TCP Sockets (v0.4.0)
+
+Handle-based TCP networking. Connections are managed via integer handles. All operations return `Result`.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `tcp-connect` | `(tcp-connect host port)` → Result[Int, Str] | Connect to host:port, returns handle |
+| `tcp-close` | `(tcp-close handle)` → Result[Nil, Str] | Close a connection |
+| `tcp-send` | `(tcp-send handle data)` → Result[Int, Str] | Send byte list, returns bytes sent |
+| `tcp-recv` | `(tcp-recv handle max-bytes)` → Result[IntList, Str] | Receive up to max-bytes |
+| `tcp-recv-exact` | `(tcp-recv-exact handle n)` → Result[IntList, Str] | Receive exactly n bytes or error |
+| `tcp-set-timeout` | `(tcp-set-timeout handle ms)` → Result[Nil, Str] | Set read/write timeout (ms ≤ 0 = none) |
+
+```lisp
+;; TCP client example
+(let (conn : _ (tcp-connect "127.0.0.1" 8080))
+  (match conn
+    (Ok handle) (do
+      (tcp-send handle (bytes-from-string "GET / HTTP/1.0\r\n\r\n"))
+      (let (response : _ (tcp-recv handle 4096))
+        (match response
+          (Ok data) (print (bytes-to-string data 0 (length data)))
+          (Err e) (print "recv error:" e)))
+      (tcp-close handle))
+    (Err e) (print "connect error:" e)))
+```
+
 ### Tensor Operations
 
 All tensors are f32 internally. Shapes are specified as bracket lists of integers.

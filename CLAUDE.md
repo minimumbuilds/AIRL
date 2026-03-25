@@ -128,6 +128,20 @@ The stdlib is 5 modules (60 functions total) — mostly pure AIRL, with Rust bui
 - `http-request` — `(http-request method url body headers)` → Result[Str, Str]. Supports GET, POST, PUT, DELETE, PATCH, HEAD.
 - `json-parse`, `json-stringify` — JSON ↔ AIRL value conversion
 
+**Byte encoding builtins** (11) in `crates/airl-runtime/src/builtins.rs`:
+- `bytes-from-int16`, `bytes-from-int32`, `bytes-from-int64` — integer to big-endian byte list (IntList)
+- `bytes-to-int16`, `bytes-to-int32`, `bytes-to-int64` — decode integer from byte list at offset
+- `bytes-from-string` — UTF-8 encode string to bytes. `bytes-to-string` — UTF-8 decode bytes to string
+- `bytes-concat` — concatenate byte lists. `bytes-slice` — extract slice with bounds check
+- `crc32c` — CRC32C (Castagnoli) checksum
+
+**TCP socket builtins** (6) in `crates/airl-runtime/src/builtins.rs`:
+- `tcp-connect` — `(tcp-connect host port)` → Result[Int, Str]. Returns handle for connection.
+- `tcp-close` — close connection by handle
+- `tcp-send` — `(tcp-send handle data)` send IntList bytes, returns bytes sent
+- `tcp-recv` — receive up to max-bytes. `tcp-recv-exact` — receive exactly n bytes or error
+- `tcp-set-timeout` — set read/write timeout in milliseconds (≤0 = no timeout)
+
 **System builtins** (6) in `crates/airl-runtime/src/builtins.rs`:
 - `shell-exec` — `(shell-exec cmd args-list)` → Result with stdout/stderr/exit-code
 - `time-now` — milliseconds since epoch → Int
@@ -295,6 +309,8 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **v0.4.0 Pattern Detection** — Compound predicate detection for filter specialization (e.g., `(fn [x] (and (> x 0) (< x 10)))` compiled to native branch chain). Closure pattern detection for fold/map/filter (recognizes common lambda shapes and emits specialized native loops).
 - **JIT-Full Bug Fixes** — All 5 JIT-full bugs resolved: variant tag string corruption (intern strings to stable storage), Cranelift verifier errors (proper block terminators), closure dispatch (compile MakeClosure targets in dependency pass), MakeClosure captures (read capture_count from function metadata), variadic print arity (airl_print_values runtime function).
 - **AIRL Header File** — Token-efficient LLM reference (`AIRL-Header.md`, ~360 lines / ~3K tokens) replacing 7-file pre-flight checklist (~2,105 lines / ~15K tokens). 5.4x compression with zero information loss on critical semantics.
+- **Byte Encoding Builtins** — 11 builtins for binary data: `bytes-from-int16`/`int32`/`int64` (big-endian encode), `bytes-to-int16`/`int32`/`int64` (decode from offset), `bytes-from-string`/`bytes-to-string` (UTF-8 encode/decode), `bytes-concat`, `bytes-slice`, `crc32c` (CRC32C checksum). Byte sequences represented as `IntList` (list of integers 0-255).
+- **TCP Socket Builtins** — 6 builtins for handle-based TCP networking: `tcp-connect` (connect to host:port, returns handle), `tcp-close`, `tcp-send` (send byte list), `tcp-recv` (receive up to N bytes), `tcp-recv-exact` (receive exactly N bytes), `tcp-set-timeout`. All return `Result`. Thread-safe global handle map using `Mutex` + `OnceLock`.
 
 ---
 

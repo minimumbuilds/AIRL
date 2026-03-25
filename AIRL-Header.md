@@ -294,6 +294,31 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (json-stringify v) -> Str
 ```
 
+### Bytes (big-endian, IntList = byte sequences)
+```
+(bytes-from-int16 n) -> IntList       ; i16 to 2 bytes BE
+(bytes-from-int32 n) -> IntList       ; i32 to 4 bytes BE
+(bytes-from-int64 n) -> IntList       ; i64 to 8 bytes BE
+(bytes-to-int16 buf offset) -> Int    ; read i16 from byte list at offset
+(bytes-to-int32 buf offset) -> Int    ; read i32 from byte list at offset
+(bytes-to-int64 buf offset) -> Int    ; read i64 from byte list at offset
+(bytes-from-string s) -> IntList      ; UTF-8 encode string to bytes
+(bytes-to-string buf offset len) -> Str ; UTF-8 decode bytes to string
+(bytes-concat a b) -> IntList         ; concatenate two byte lists
+(bytes-slice buf offset len) -> IntList ; extract slice with bounds check
+(crc32c buf) -> Int                   ; CRC32C checksum
+```
+
+### TCP (handle-based, all return Result)
+```
+(tcp-connect host port) -> Result[Int, Str]        ; connect, returns handle
+(tcp-close handle) -> Result[Nil, Str]             ; close connection
+(tcp-send handle data) -> Result[Int, Str]         ; send IntList, returns bytes sent
+(tcp-recv handle max-bytes) -> Result[IntList, Str] ; recv up to max-bytes
+(tcp-recv-exact handle n) -> Result[IntList, Str]  ; recv exactly n bytes or error
+(tcp-set-timeout handle ms) -> Result[Nil, Str]    ; ms<=0 = no timeout
+```
+
 ### Tensor (all f32 internally, shapes are [dim ...] int lists)
 ```
 (tensor.zeros [dims])  (tensor.ones [dims])  (tensor.rand [dims] seed)  (tensor.identity n)

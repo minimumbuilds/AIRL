@@ -43,6 +43,8 @@ impl Builtins {
         b.register_regex();
         b.register_crypto();
         b.register_vm_aware();
+        b.register_bytes();
+        b.register_tcp();
         b
     }
 
@@ -1740,6 +1742,33 @@ impl Builtins {
         self.register_with_vm("all", builtin_all_vm);
         self.register_with_vm("find", builtin_find_vm);
     }
+
+    // ── Byte encoding builtins ──────────────────────────
+
+    fn register_bytes(&mut self) {
+        self.register("bytes-from-int16", builtin_bytes_from_int16);
+        self.register("bytes-from-int32", builtin_bytes_from_int32);
+        self.register("bytes-from-int64", builtin_bytes_from_int64);
+        self.register("bytes-to-int16", builtin_bytes_to_int16);
+        self.register("bytes-to-int32", builtin_bytes_to_int32);
+        self.register("bytes-to-int64", builtin_bytes_to_int64);
+        self.register("bytes-from-string", builtin_bytes_from_string);
+        self.register("bytes-to-string", builtin_bytes_to_string);
+        self.register("bytes-concat", builtin_bytes_concat);
+        self.register("bytes-slice", builtin_bytes_slice);
+        self.register("crc32c", builtin_crc32c);
+    }
+
+    // ── TCP socket builtins ─────────────────────────────
+
+    fn register_tcp(&mut self) {
+        self.register("tcp-connect", builtin_tcp_connect);
+        self.register("tcp-close", builtin_tcp_close);
+        self.register("tcp-send", builtin_tcp_send);
+        self.register("tcp-recv", builtin_tcp_recv);
+        self.register("tcp-recv-exact", builtin_tcp_recv_exact);
+        self.register("tcp-set-timeout", builtin_tcp_set_timeout);
+    }
 }
 
 // ── Closure pattern detectors for fast-path specialization ────────
@@ -2935,6 +2964,360 @@ fn builtin_exit(args: &[Value]) -> Result<Value, RuntimeError> {
         )),
     };
     std::process::exit(code);
+}
+
+// ── Byte encoding builtin implementations ────────────────────────────────────
+
+/// Helper: extract an IntList (or List of Ints) as Vec<i64>
+fn extract_byte_list(name: &str, val: &Value) -> Result<Vec<i64>, RuntimeError> {
+    match val {
+        Value::IntList(xs) => Ok(xs.clone()),
+        Value::List(xs) => {
+            let mut result = Vec::with_capacity(xs.len());
+            for v in xs {
+                match v {
+                    Value::Int(n) => result.push(*n),
+                    _ => return Err(RuntimeError::TypeError(
+                        format!("`{}`: byte list must contain only integers", name),
+                    )),
+                }
+            }
+            Ok(result)
+        }
+        _ => Err(RuntimeError::TypeError(
+            format!("`{}`: expected a byte list (IntList)", name),
+        )),
+    }
+}
+
+fn builtin_bytes_from_int16(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("bytes-from-int16", args, 1)?;
+    let n = match &args[0] {
+        Value::Int(n) => *n as i16,
+        _ => return Err(RuntimeError::TypeError("`bytes-from-int16` expects Int".into())),
+    };
+    let bytes = n.to_be_bytes();
+    Ok(Value::IntList(bytes.iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_bytes_from_int32(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("bytes-from-int32", args, 1)?;
+    let n = match &args[0] {
+        Value::Int(n) => *n as i32,
+        _ => return Err(RuntimeError::TypeError("`bytes-from-int32` expects Int".into())),
+    };
+    let bytes = n.to_be_bytes();
+    Ok(Value::IntList(bytes.iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_bytes_from_int64(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("bytes-from-int64", args, 1)?;
+    let n = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError("`bytes-from-int64` expects Int".into())),
+    };
+    let bytes = n.to_be_bytes();
+    Ok(Value::IntList(bytes.iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_bytes_to_int16(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("bytes-to-int16", args, 2)?;
+    let buf = extract_byte_list("bytes-to-int16", &args[0])?;
+    let offset = match &args[1] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(RuntimeError::TypeError("`bytes-to-int16`: offset must be Int".into())),
+    };
+    if offset + 2 > buf.len() {
+        return Err(RuntimeError::Custom(format!(
+            "`bytes-to-int16`: need 2 bytes at offset {}, buf length {}", offset, buf.len()
+        )));
+    }
+    let val = ((buf[offset] as i16) << 8) | (buf[offset + 1] as i16);
+    Ok(Value::Int(val as i64))
+}
+
+fn builtin_bytes_to_int32(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("bytes-to-int32", args, 2)?;
+    let buf = extract_byte_list("bytes-to-int32", &args[0])?;
+    let offset = match &args[1] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(RuntimeError::TypeError("`bytes-to-int32`: offset must be Int".into())),
+    };
+    if offset + 4 > buf.len() {
+        return Err(RuntimeError::Custom(format!(
+            "`bytes-to-int32`: need 4 bytes at offset {}, buf length {}", offset, buf.len()
+        )));
+    }
+    let val = ((buf[offset] as i32) << 24)
+        | ((buf[offset + 1] as i32) << 16)
+        | ((buf[offset + 2] as i32) << 8)
+        | (buf[offset + 3] as i32);
+    Ok(Value::Int(val as i64))
+}
+
+fn builtin_bytes_to_int64(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("bytes-to-int64", args, 2)?;
+    let buf = extract_byte_list("bytes-to-int64", &args[0])?;
+    let offset = match &args[1] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(RuntimeError::TypeError("`bytes-to-int64`: offset must be Int".into())),
+    };
+    if offset + 8 > buf.len() {
+        return Err(RuntimeError::Custom(format!(
+            "`bytes-to-int64`: need 8 bytes at offset {}, buf length {}", offset, buf.len()
+        )));
+    }
+    let mut val: i64 = 0;
+    for i in 0..8 {
+        val = (val << 8) | (buf[offset + i] & 0xFF);
+    }
+    Ok(Value::Int(val))
+}
+
+fn builtin_bytes_from_string(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("bytes-from-string", args, 1)?;
+    let s = match &args[0] {
+        Value::Str(s) => s,
+        _ => return Err(RuntimeError::TypeError("`bytes-from-string` expects String".into())),
+    };
+    Ok(Value::IntList(s.as_bytes().iter().map(|b| *b as i64).collect()))
+}
+
+fn builtin_bytes_to_string(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("bytes-to-string", args, 3)?;
+    let buf = extract_byte_list("bytes-to-string", &args[0])?;
+    let offset = match &args[1] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(RuntimeError::TypeError("`bytes-to-string`: offset must be Int".into())),
+    };
+    let len = match &args[2] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(RuntimeError::TypeError("`bytes-to-string`: len must be Int".into())),
+    };
+    if offset + len > buf.len() {
+        return Err(RuntimeError::Custom(format!(
+            "`bytes-to-string`: need {} bytes at offset {}, buf length {}", len, offset, buf.len()
+        )));
+    }
+    let bytes: Vec<u8> = buf[offset..offset + len].iter().map(|b| *b as u8).collect();
+    match String::from_utf8(bytes) {
+        Ok(s) => Ok(Value::Str(s)),
+        Err(e) => Err(RuntimeError::Custom(format!("`bytes-to-string`: invalid UTF-8: {}", e))),
+    }
+}
+
+fn builtin_bytes_concat(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("bytes-concat", args, 2)?;
+    let mut a = extract_byte_list("bytes-concat", &args[0])?;
+    let b = extract_byte_list("bytes-concat", &args[1])?;
+    a.extend_from_slice(&b);
+    Ok(Value::IntList(a))
+}
+
+fn builtin_bytes_slice(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("bytes-slice", args, 3)?;
+    let buf = extract_byte_list("bytes-slice", &args[0])?;
+    let offset = match &args[1] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(RuntimeError::TypeError("`bytes-slice`: offset must be Int".into())),
+    };
+    let len = match &args[2] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(RuntimeError::TypeError("`bytes-slice`: len must be Int".into())),
+    };
+    if offset + len > buf.len() {
+        return Err(RuntimeError::Custom(format!(
+            "`bytes-slice`: need {} bytes at offset {}, buf length {}", len, offset, buf.len()
+        )));
+    }
+    Ok(Value::IntList(buf[offset..offset + len].to_vec()))
+}
+
+fn builtin_crc32c(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("crc32c", args, 1)?;
+    let buf = extract_byte_list("crc32c", &args[0])?;
+    let bytes: Vec<u8> = buf.iter().map(|b| *b as u8).collect();
+    let checksum = crc32c::crc32c(&bytes);
+    Ok(Value::Int(checksum as i64))
+}
+
+// ── TCP socket builtin implementations ───────────────────────────────────────
+
+use std::net::TcpStream;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::io::{Read as IoRead, Write as IoWrite};
+
+static NEXT_TCP_HANDLE: AtomicI64 = AtomicI64::new(1);
+
+fn tcp_handles() -> &'static std::sync::Mutex<HashMap<i64, TcpStream>> {
+    use std::sync::{Mutex, OnceLock};
+    static HANDLES: OnceLock<Mutex<HashMap<i64, TcpStream>>> = OnceLock::new();
+    HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn builtin_tcp_connect(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("tcp-connect", args, 2)?;
+    let host = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::TypeError("`tcp-connect`: host must be String".into())),
+    };
+    let port = match &args[1] {
+        Value::Int(n) => *n as u16,
+        _ => return Err(RuntimeError::TypeError("`tcp-connect`: port must be Int".into())),
+    };
+    let addr = format!("{}:{}", host, port);
+    match TcpStream::connect(&addr) {
+        Ok(stream) => {
+            let handle = NEXT_TCP_HANDLE.fetch_add(1, Ordering::SeqCst);
+            tcp_handles().lock().unwrap().insert(handle, stream);
+            Ok(Value::Variant("Ok".into(), Box::new(Value::Int(handle))))
+        }
+        Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+            format!("tcp-connect: {}", e)
+        )))),
+    }
+}
+
+fn builtin_tcp_close(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("tcp-close", args, 1)?;
+    let handle = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError("`tcp-close`: handle must be Int".into())),
+    };
+    match tcp_handles().lock().unwrap().remove(&handle) {
+        Some(_stream) => Ok(Value::Variant("Ok".into(), Box::new(Value::Nil))),
+        None => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+            format!("tcp-close: invalid handle {}", handle)
+        )))),
+    }
+}
+
+fn builtin_tcp_send(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("tcp-send", args, 2)?;
+    let handle = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError("`tcp-send`: handle must be Int".into())),
+    };
+    let data = extract_byte_list("tcp-send", &args[1])?;
+    let bytes: Vec<u8> = data.iter().map(|b| *b as u8).collect();
+
+    let mut handles = tcp_handles().lock().unwrap();
+    match handles.get_mut(&handle) {
+        Some(stream) => {
+            match stream.write_all(&bytes) {
+                Ok(()) => Ok(Value::Variant("Ok".into(), Box::new(Value::Int(bytes.len() as i64)))),
+                Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+                    format!("tcp-send: {}", e)
+                )))),
+            }
+        }
+        None => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+            format!("tcp-send: invalid handle {}", handle)
+        )))),
+    }
+}
+
+fn builtin_tcp_recv(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("tcp-recv", args, 2)?;
+    let handle = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError("`tcp-recv`: handle must be Int".into())),
+    };
+    let max_bytes = match &args[1] {
+        Value::Int(n) if *n > 0 => *n as usize,
+        Value::Int(_) => return Err(RuntimeError::Custom("`tcp-recv`: max-bytes must be positive".into())),
+        _ => return Err(RuntimeError::TypeError("`tcp-recv`: max-bytes must be Int".into())),
+    };
+
+    let mut handles = tcp_handles().lock().unwrap();
+    match handles.get_mut(&handle) {
+        Some(stream) => {
+            let mut buf = vec![0u8; max_bytes];
+            match stream.read(&mut buf) {
+                Ok(n) => {
+                    buf.truncate(n);
+                    Ok(Value::Variant("Ok".into(), Box::new(
+                        Value::IntList(buf.iter().map(|b| *b as i64).collect())
+                    )))
+                }
+                Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+                    format!("tcp-recv: {}", e)
+                )))),
+            }
+        }
+        None => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+            format!("tcp-recv: invalid handle {}", handle)
+        )))),
+    }
+}
+
+fn builtin_tcp_recv_exact(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("tcp-recv-exact", args, 2)?;
+    let handle = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError("`tcp-recv-exact`: handle must be Int".into())),
+    };
+    let n = match &args[1] {
+        Value::Int(n) if *n > 0 => *n as usize,
+        Value::Int(_) => return Err(RuntimeError::Custom("`tcp-recv-exact`: n must be positive".into())),
+        _ => return Err(RuntimeError::TypeError("`tcp-recv-exact`: n must be Int".into())),
+    };
+
+    let mut handles = tcp_handles().lock().unwrap();
+    match handles.get_mut(&handle) {
+        Some(stream) => {
+            let mut buf = vec![0u8; n];
+            match stream.read_exact(&mut buf) {
+                Ok(()) => Ok(Value::Variant("Ok".into(), Box::new(
+                    Value::IntList(buf.iter().map(|b| *b as i64).collect())
+                ))),
+                Err(e) => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+                    format!("tcp-recv-exact: {}", e)
+                )))),
+            }
+        }
+        None => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+            format!("tcp-recv-exact: invalid handle {}", handle)
+        )))),
+    }
+}
+
+fn builtin_tcp_set_timeout(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("tcp-set-timeout", args, 2)?;
+    let handle = match &args[0] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError("`tcp-set-timeout`: handle must be Int".into())),
+    };
+    let ms = match &args[1] {
+        Value::Int(n) => *n,
+        _ => return Err(RuntimeError::TypeError("`tcp-set-timeout`: ms must be Int".into())),
+    };
+
+    let timeout = if ms > 0 {
+        Some(std::time::Duration::from_millis(ms as u64))
+    } else {
+        None
+    };
+
+    let handles = tcp_handles().lock().unwrap();
+    match handles.get(&handle) {
+        Some(stream) => {
+            if let Err(e) = stream.set_read_timeout(timeout) {
+                return Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+                    format!("tcp-set-timeout: {}", e)
+                ))));
+            }
+            if let Err(e) = stream.set_write_timeout(timeout) {
+                return Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+                    format!("tcp-set-timeout: {}", e)
+                ))));
+            }
+            Ok(Value::Variant("Ok".into(), Box::new(Value::Nil)))
+        }
+        None => Ok(Value::Variant("Err".into(), Box::new(Value::Str(
+            format!("tcp-set-timeout: invalid handle {}", handle)
+        )))),
+    }
 }
 
 #[cfg(test)]

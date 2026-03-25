@@ -183,6 +183,62 @@ RtValue* airl_json_stringify(RtValue* value);
 /* Process */
 RtValue* airl_shell_exec(RtValue* command, RtValue* args);
 
+/* Misc builtins (airl_rt_misc.c) */
+RtValue* airl_char_count(RtValue* s);
+RtValue* airl_str_variadic(RtValue** args, int64_t argc);
+RtValue* airl_format_variadic(RtValue** args, int64_t argc);
+RtValue* airl_assert(RtValue* cond, RtValue* msg);
+RtValue* airl_panic(RtValue* msg);
+RtValue* airl_exit(RtValue* code);
+RtValue* airl_sleep(RtValue* ms);
+RtValue* airl_format_time(RtValue* ms_val, RtValue* fmt_val);
+RtValue* airl_read_lines(RtValue* path);
+RtValue* airl_concat_lists(RtValue* a, RtValue* b);
+RtValue* airl_range(RtValue* start, RtValue* end);
+RtValue* airl_reverse_list(RtValue* list);
+RtValue* airl_take(RtValue* n_val, RtValue* list);
+RtValue* airl_drop(RtValue* n_val, RtValue* list);
+RtValue* airl_zip(RtValue* a, RtValue* b);
+RtValue* airl_flatten(RtValue* list);
+RtValue* airl_enumerate(RtValue* list);
+RtValue* airl_path_join(RtValue* parts);
+RtValue* airl_path_parent(RtValue* path);
+RtValue* airl_path_filename(RtValue* path);
+RtValue* airl_path_extension(RtValue* path);
+RtValue* airl_is_absolute(RtValue* path);
+RtValue* airl_regex_match(RtValue* pat, RtValue* s);
+RtValue* airl_regex_find_all(RtValue* pat, RtValue* s);
+RtValue* airl_regex_replace(RtValue* pat, RtValue* s, RtValue* replacement);
+RtValue* airl_regex_split(RtValue* pat, RtValue* s);
+RtValue* airl_sha256(RtValue* s);
+RtValue* airl_hmac_sha256(RtValue* key, RtValue* msg);
+RtValue* airl_base64_encode(RtValue* s);
+RtValue* airl_base64_decode(RtValue* s);
+RtValue* airl_random_bytes(RtValue* n);
+RtValue* airl_string_to_float(RtValue* s);
+RtValue* airl_println(RtValue* v);
+
+/* Byte encoding */
+RtValue* airl_bytes_from_int16(RtValue* n);
+RtValue* airl_bytes_from_int32(RtValue* n);
+RtValue* airl_bytes_from_int64(RtValue* n);
+RtValue* airl_bytes_to_int16(RtValue* buf, RtValue* offset);
+RtValue* airl_bytes_to_int32(RtValue* buf, RtValue* offset);
+RtValue* airl_bytes_to_int64(RtValue* buf, RtValue* offset);
+RtValue* airl_bytes_from_string(RtValue* s);
+RtValue* airl_bytes_to_string(RtValue* buf, RtValue* offset, RtValue* len);
+RtValue* airl_bytes_concat(RtValue* a, RtValue* b);
+RtValue* airl_bytes_slice(RtValue* buf, RtValue* offset, RtValue* len);
+RtValue* airl_crc32c(RtValue* buf);
+
+/* TCP sockets */
+RtValue* airl_tcp_connect(RtValue* host, RtValue* port);
+RtValue* airl_tcp_close(RtValue* handle);
+RtValue* airl_tcp_send(RtValue* handle, RtValue* data);
+RtValue* airl_tcp_recv(RtValue* handle, RtValue* max_bytes);
+RtValue* airl_tcp_recv_exact(RtValue* handle, RtValue* count);
+RtValue* airl_tcp_set_timeout(RtValue* handle, RtValue* ms);
+
 /* Contract failure */
 int64_t airl_jit_contract_fail(int64_t kind, int64_t fn_idx, int64_t clause_idx);
 

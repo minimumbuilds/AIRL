@@ -174,6 +174,60 @@ pub struct RuntimeImports {
     // Process
     pub shell_exec: FuncId,
 
+    // Misc builtins
+    pub char_count: FuncId,
+    pub str_variadic: FuncId,
+    pub format_variadic: FuncId,
+    pub assert_fn: FuncId,
+    pub panic_fn: FuncId,
+    pub exit_fn: FuncId,
+    pub sleep_fn: FuncId,
+    pub format_time: FuncId,
+    pub read_lines: FuncId,
+    pub concat_lists: FuncId,
+    pub range_fn: FuncId,
+    pub reverse_list: FuncId,
+    pub take_fn: FuncId,
+    pub drop_fn: FuncId,
+    pub zip_fn: FuncId,
+    pub flatten_fn: FuncId,
+    pub enumerate_fn: FuncId,
+    pub path_join: FuncId,
+    pub path_parent: FuncId,
+    pub path_filename: FuncId,
+    pub path_extension: FuncId,
+    pub is_absolute: FuncId,
+    pub regex_match: FuncId,
+    pub regex_find_all: FuncId,
+    pub regex_replace: FuncId,
+    pub regex_split: FuncId,
+    pub sha256: FuncId,
+    pub hmac_sha256: FuncId,
+    pub base64_encode: FuncId,
+    pub base64_decode: FuncId,
+    pub random_bytes: FuncId,
+
+    // Byte encoding
+    pub bytes_from_int16: FuncId,
+    pub bytes_from_int32: FuncId,
+    pub bytes_from_int64: FuncId,
+    pub bytes_to_int16: FuncId,
+    pub bytes_to_int32: FuncId,
+    pub bytes_to_int64: FuncId,
+    pub bytes_from_string: FuncId,
+    pub bytes_to_string: FuncId,
+    pub bytes_concat: FuncId,
+    pub bytes_slice: FuncId,
+    pub crc32c: FuncId,
+
+    // TCP sockets
+    pub tcp_connect: FuncId,
+    pub tcp_close: FuncId,
+    pub tcp_send: FuncId,
+    pub tcp_recv: FuncId,
+    pub tcp_recv_exact: FuncId,
+    pub tcp_set_timeout: FuncId,
+
     // Contract failure
     pub contract_fail: FuncId,
 }
@@ -504,6 +558,60 @@ impl BytecodeAot {
         // Process
         let shell_exec = declare_import(m, "airl_shell_exec", s2.clone());
 
+        // Misc builtins
+        let char_count = declare_import(m, "airl_char_count", s1.clone());
+        let str_variadic = declare_import(m, "airl_str_variadic", sig_ptr_i64_ret_ptr(m));
+        let format_variadic = declare_import(m, "airl_format_variadic", sig_ptr_i64_ret_ptr(m));
+        let assert_fn = declare_import(m, "airl_assert", s2.clone());
+        let panic_fn = declare_import(m, "airl_panic", s1.clone());
+        let exit_fn = declare_import(m, "airl_exit", s1.clone());
+        let sleep_fn = declare_import(m, "airl_sleep", s1.clone());
+        let format_time = declare_import(m, "airl_format_time", s2.clone());
+        let read_lines = declare_import(m, "airl_read_lines", s1.clone());
+        let concat_lists = declare_import(m, "airl_concat_lists", s2.clone());
+        let range_fn = declare_import(m, "airl_range", s2.clone());
+        let reverse_list = declare_import(m, "airl_reverse_list", s1.clone());
+        let take_fn = declare_import(m, "airl_take", s2.clone());
+        let drop_fn = declare_import(m, "airl_drop", s2.clone());
+        let zip_fn = declare_import(m, "airl_zip", s2.clone());
+        let flatten_fn = declare_import(m, "airl_flatten", s1.clone());
+        let enumerate_fn = declare_import(m, "airl_enumerate", s1.clone());
+        let path_join = declare_import(m, "airl_path_join", s1.clone());
+        let path_parent = declare_import(m, "airl_path_parent", s1.clone());
+        let path_filename = declare_import(m, "airl_path_filename", s1.clone());
+        let path_extension = declare_import(m, "airl_path_extension", s1.clone());
+        let is_absolute = declare_import(m, "airl_is_absolute", s1.clone());
+        let regex_match = declare_import(m, "airl_regex_match", s2.clone());
+        let regex_find_all = declare_import(m, "airl_regex_find_all", s2.clone());
+        let regex_replace = declare_import(m, "airl_regex_replace", sig_3_ptr(m));
+        let regex_split = declare_import(m, "airl_regex_split", s2.clone());
+        let sha256 = declare_import(m, "airl_sha256", s1.clone());
+        let hmac_sha256 = declare_import(m, "airl_hmac_sha256", s2.clone());
+        let base64_encode = declare_import(m, "airl_base64_encode", s1.clone());
+        let base64_decode = declare_import(m, "airl_base64_decode", s1.clone());
+        let random_bytes = declare_import(m, "airl_random_bytes", s1.clone());
+
+        // Byte encoding
+        let bytes_from_int16 = declare_import(m, "airl_bytes_from_int16", s1.clone());
+        let bytes_from_int32 = declare_import(m, "airl_bytes_from_int32", s1.clone());
+        let bytes_from_int64 = declare_import(m, "airl_bytes_from_int64", s1.clone());
+        let bytes_to_int16 = declare_import(m, "airl_bytes_to_int16", s2.clone());
+        let bytes_to_int32 = declare_import(m, "airl_bytes_to_int32", s2.clone());
+        let bytes_to_int64 = declare_import(m, "airl_bytes_to_int64", s2.clone());
+        let bytes_from_string = declare_import(m, "airl_bytes_from_string", s1.clone());
+        let bytes_to_string = declare_import(m, "airl_bytes_to_string", sig_3_ptr(m));
+        let bytes_concat = declare_import(m, "airl_bytes_concat", s2.clone());
+        let bytes_slice = declare_import(m, "airl_bytes_slice", sig_3_ptr(m));
+        let crc32c = declare_import(m, "airl_crc32c", s1.clone());
+
+        // TCP sockets
+        let tcp_connect = declare_import(m, "airl_tcp_connect", s2.clone());
+        let tcp_close = declare_import(m, "airl_tcp_close", s1.clone());
+        let tcp_send = declare_import(m, "airl_tcp_send", s2.clone());
+        let tcp_recv = declare_import(m, "airl_tcp_recv", s2.clone());
+        let tcp_recv_exact = declare_import(m, "airl_tcp_recv_exact", s2.clone());
+        let tcp_set_timeout = declare_import(m, "airl_tcp_set_timeout", s2.clone());
+
         // Contract failure: (kind: i64, fn_name_idx: i64, clause_idx: i64) -> i64
         let mut cf_sig = m.make_signature();
         cf_sig.params.push(AbiParam::new(types::I64));
@@ -536,6 +644,17 @@ impl BytecodeAot {
             sqrt, sin, cos, tan, log, exp, floor, ceil, round,
             float_to_int, int_to_float, infinity, nan_ctor, is_nan, is_infinite,
             time_now, getenv, http_request, json_parse, json_stringify, shell_exec,
+            char_count, str_variadic, format_variadic,
+            assert_fn, panic_fn, exit_fn, sleep_fn, format_time, read_lines,
+            concat_lists, range_fn, reverse_list, take_fn, drop_fn, zip_fn,
+            flatten_fn, enumerate_fn,
+            path_join, path_parent, path_filename, path_extension, is_absolute,
+            regex_match, regex_find_all, regex_replace, regex_split,
+            sha256, hmac_sha256, base64_encode, base64_decode, random_bytes,
+            bytes_from_int16, bytes_from_int32, bytes_from_int64,
+            bytes_to_int16, bytes_to_int32, bytes_to_int64,
+            bytes_from_string, bytes_to_string, bytes_concat, bytes_slice, crc32c,
+            tcp_connect, tcp_close, tcp_send, tcp_recv, tcp_recv_exact, tcp_set_timeout,
             contract_fail,
         }
     }
@@ -662,6 +781,62 @@ impl BytecodeAot {
 
         // Process
         m.insert("shell-exec".into(), rt.shell_exec);
+
+        // Misc builtins
+        m.insert("char-count".into(),    rt.char_count);
+        m.insert("assert".into(),        rt.assert_fn);
+        m.insert("panic".into(),         rt.panic_fn);
+        m.insert("exit".into(),          rt.exit_fn);
+        m.insert("sleep".into(),         rt.sleep_fn);
+        m.insert("format-time".into(),   rt.format_time);
+        m.insert("read-lines".into(),    rt.read_lines);
+        m.insert("concat".into(),        rt.concat_lists);
+        m.insert("range".into(),         rt.range_fn);
+        m.insert("reverse".into(),       rt.reverse_list);
+        m.insert("take".into(),          rt.take_fn);
+        m.insert("drop".into(),          rt.drop_fn);
+        m.insert("zip".into(),           rt.zip_fn);
+        m.insert("flatten".into(),       rt.flatten_fn);
+        m.insert("enumerate".into(),     rt.enumerate_fn);
+        m.insert("path-join".into(),     rt.path_join);
+        m.insert("path-parent".into(),   rt.path_parent);
+        m.insert("path-filename".into(), rt.path_filename);
+        m.insert("path-extension".into(),rt.path_extension);
+        m.insert("is-absolute?".into(),  rt.is_absolute);
+        m.insert("regex-match".into(),   rt.regex_match);
+        m.insert("regex-find-all".into(),rt.regex_find_all);
+        m.insert("regex-replace".into(), rt.regex_replace);
+        m.insert("regex-split".into(),   rt.regex_split);
+        m.insert("sha256".into(),        rt.sha256);
+        m.insert("hmac-sha256".into(),   rt.hmac_sha256);
+        m.insert("base64-encode".into(), rt.base64_encode);
+        m.insert("base64-decode".into(), rt.base64_decode);
+        m.insert("random-bytes".into(),  rt.random_bytes);
+        // str and format are variadic — handled specially in compile_func like print
+        // They use (ptr*, i64) -> ptr signature (same as print_values)
+        m.insert("str".into(),            rt.str_variadic);
+        m.insert("format".into(),         rt.format_variadic);
+
+        // Byte encoding
+        m.insert("bytes-from-int16".into(),  rt.bytes_from_int16);
+        m.insert("bytes-from-int32".into(),  rt.bytes_from_int32);
+        m.insert("bytes-from-int64".into(),  rt.bytes_from_int64);
+        m.insert("bytes-to-int16".into(),    rt.bytes_to_int16);
+        m.insert("bytes-to-int32".into(),    rt.bytes_to_int32);
+        m.insert("bytes-to-int64".into(),    rt.bytes_to_int64);
+        m.insert("bytes-from-string".into(), rt.bytes_from_string);
+        m.insert("bytes-to-string".into(),   rt.bytes_to_string);
+        m.insert("bytes-concat".into(),      rt.bytes_concat);
+        m.insert("bytes-slice".into(),       rt.bytes_slice);
+        m.insert("crc32c".into(),            rt.crc32c);
+
+        // TCP sockets
+        m.insert("tcp-connect".into(),     rt.tcp_connect);
+        m.insert("tcp-close".into(),       rt.tcp_close);
+        m.insert("tcp-send".into(),        rt.tcp_send);
+        m.insert("tcp-recv".into(),        rt.tcp_recv);
+        m.insert("tcp-recv-exact".into(),  rt.tcp_recv_exact);
+        m.insert("tcp-set-timeout".into(), rt.tcp_set_timeout);
 
         m
     }
@@ -1686,9 +1861,10 @@ impl BytecodeAot {
                 if let Value::Str(callee_name) = &func.constants[instr.a as usize] {
                     if callee_name != &func.name && !call_targets.contains_key(callee_name) {
                         let argc = instr.b as usize;
-                        let is_variadic_print = callee_name == "print" && argc != 1;
-                        if is_variadic_print {
-                            // handled inline
+                        let is_variadic_special = (callee_name == "print" && argc != 1)
+                            || callee_name == "str" || callee_name == "format";
+                        if is_variadic_special {
+                            // handled inline via stack slot + variadic call
                         } else if let Some(&builtin_id) = self.builtin_map.get(callee_name.as_str()) {
                             call_targets.insert(callee_name.clone(), builtin_id);
                         } else if self.eligible_funcs.contains(callee_name) {
@@ -2094,7 +2270,19 @@ impl BytecodeAot {
                     let argc = instr.b as usize;
                     let dst = instr.dst as usize;
 
-                    if callee_name == "print" && argc != 1 && !call_targets.contains_key("print") {
+                    // Variadic builtins: print (multi-arg), str, format
+                    // These use (ptr_to_args, count) -> ptr calling convention
+                    let variadic_func_id = if callee_name == "print" && argc != 1 && !call_targets.contains_key("print") {
+                        Some(self.rt.print_values)
+                    } else if callee_name == "str" {
+                        Some(self.rt.str_variadic)
+                    } else if callee_name == "format" {
+                        Some(self.rt.format_variadic)
+                    } else {
+                        None
+                    };
+
+                    if let Some(var_func) = variadic_func_id {
                         let slot = builder.create_sized_stack_slot(StackSlotData::new(
                             ir::StackSlotKind::ExplicitSlot,
                             (argc as u32) * 8,
@@ -2106,8 +2294,8 @@ impl BytecodeAot {
                         }
                         let slot_addr = builder.ins().stack_addr(PTR, slot, 0);
                         let count_val = builder.ins().iconst(types::I64, argc as i64);
-                        let pv_ref = self.module.declare_func_in_func(self.rt.print_values, builder.func);
-                        let call = builder.ins().call(pv_ref, &[slot_addr, count_val]);
+                        let var_ref = self.module.declare_func_in_func(var_func, builder.func);
+                        let call = builder.ins().call(var_ref, &[slot_addr, count_val]);
                         let result = builder.inst_results(call)[0];
                         builder.def_var(vars[dst], result);
                         last_was_terminator = false;
