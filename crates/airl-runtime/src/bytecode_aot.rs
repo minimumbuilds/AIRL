@@ -398,6 +398,9 @@ pub struct BytecodeAot {
     /// Return type hints for eligible (unboxed) functions, used for
     /// reboxing when a boxed caller invokes an unboxed callee.
     eligible_return_hints: HashMap<String, TypeHint>,
+    /// Functions referenced by MakeClosure — must be compiled boxed
+    /// because airl_call_closure invokes them with *mut RtValue args.
+    closure_targets: HashSet<String>,
 }
 
 impl BytecodeAot {
@@ -429,6 +432,7 @@ impl BytecodeAot {
             compiled_funcs: HashMap::new(),
             eligible_funcs: HashSet::new(),
             eligible_return_hints: HashMap::new(),
+            closure_targets: HashSet::new(),
         })
     }
 
@@ -1118,6 +1122,17 @@ impl BytecodeAot {
         funcs: &[BytecodeFunc],
         all_functions: &HashMap<String, BytecodeFunc>,
     ) -> Result<(), String> {
+        // Pre-scan: identify functions referenced by MakeClosure.
+        // These must be compiled boxed (airl_call_closure uses RtValue* ABI).
+        for func in all_functions.values() {
+            for instr in &func.instructions {
+                if instr.op == Op::MakeClosure {
+                    if let Some(Value::Str(target)) = func.constants.get(instr.a as usize) {
+                        self.closure_targets.insert(target.clone());
+                    }
+                }
+            }
+        }
         let mut in_progress = HashSet::new();
         let mut eligible_cache = HashSet::new();
         let mut ineligible_cache = HashSet::new();
@@ -1164,12 +1179,16 @@ impl BytecodeAot {
             }
         }
 
-        // Two-tier dispatch: eligible functions get unboxed compilation
-        let is_eligible = self.is_eligible(func, all_functions, eligible_cache, ineligible_cache);
+        // Two-tier dispatch: eligible functions get unboxed compilation.
+        // Exception: closure targets (referenced by MakeClosure) are always boxed
+        // because airl_call_closure calls them with *mut RtValue arguments.
+        let is_closure_target = self.closure_targets.contains(&name);
+        let is_eligible = !is_closure_target && self.is_eligible(func, all_functions, eligible_cache, ineligible_cache);
 
         if std::env::var("AIRL_AOT_DEBUG").as_deref() == Ok("1") {
-            eprintln!("[AOT] compiling {} ({} instrs, {})", name, func.instructions.len(),
-                if is_eligible { "unboxed" } else { "boxed" });
+            eprintln!("[AOT] compiling {} ({} instrs, {}{})", name, func.instructions.len(),
+                if is_eligible { "unboxed" } else { "boxed" },
+                if is_closure_target { ", closure-target" } else { "" });
         }
 
         if is_eligible {
