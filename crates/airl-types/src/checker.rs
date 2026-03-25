@@ -110,6 +110,7 @@ impl TypeChecker {
             "sqrt", "sin", "cos", "tan", "log", "exp",
             "floor", "ceil", "round", "float-to-int", "int-to-float",
             "infinity", "nan", "is-nan?", "is-infinite?",
+            "panic", "assert",
             "json-parse", "json-stringify", "http-post", "http-request",
             "shell-exec", "time-now", "getenv",
             "run-bytecode", "compile-to-executable",
