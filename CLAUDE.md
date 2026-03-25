@@ -116,6 +116,10 @@ The stdlib is 4 modules (49 functions total) — mostly pure AIRL, with Rust bui
 - `infinity`, `nan` — IEEE 754 special values (0-arg constructors)
 - `is-nan?`, `is-infinite?` — IEEE 754 predicates → Bool
 
+**Error handling builtins** (2) in `crates/airl-runtime/src/builtins.rs`:
+- `panic` — `(panic msg)` abort execution with custom error message
+- `assert` — `(assert condition msg)` abort if condition is false, returns `true` if passes
+
 **Type conversion builtins** (5) in `crates/airl-runtime/src/builtins.rs`:
 - `int-to-string`, `float-to-string` — numeric to string
 - `string-to-int`, `string-to-float` — string to numeric (returns Result)
@@ -264,6 +268,7 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 - **Character Code Builtins** — `char-code` (string → Unicode codepoint as Int), `char-from-code` (Int codepoint → 1-char string), `string-to-float` (parse float strings → Result). Unlocks `parse_int` and cipher algorithms that were impossible without character-to-digit conversion.
 - **Float Math Builtins** — 15 builtins: transcendentals (`sqrt`, `sin`, `cos`, `tan`, `log`, `exp`), rounding (`floor`, `ceil`, `round` → Int), conversion (`float-to-int`, `int-to-float`), IEEE 754 (`infinity`, `nan`, `is-nan?`, `is-infinite?`). All accept Int or Float via `as_float` auto-coercion. New `crates/airl-rt/src/math.rs` module.
 - **Collection Builtins** — 3 Rust builtins: `at-or` (safe indexing with default), `set-at` (immutable update at index), `list-contains?` (element membership). 3 AIRL stdlib functions: `unique` (deduplicate), `enumerate` (zip-with-index), `group-by` (group elements by key function → Map).
+- **Error Handling Builtins** — `panic` (abort with custom message) and `assert` (abort if condition false). Provides explicit error paths beyond contract violations.
 
 ---
 

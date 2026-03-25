@@ -1350,6 +1350,8 @@ impl Builtins {
         self.register("string-to-float", builtin_string_to_float);
         self.register("char-code", builtin_char_code);
         self.register("char-from-code", builtin_char_from_code);
+        self.register("panic", builtin_panic);
+        self.register("assert", builtin_assert);
         self.register("time-now", builtin_time_now);
         self.register("getenv", builtin_getenv);
         self.register("http-request", builtin_http_request);
@@ -1447,6 +1449,35 @@ fn builtin_char_from_code(args: &[Value]) -> Result<Value, RuntimeError> {
             }
         }
         _ => Err(RuntimeError::TypeError("char-from-code: expected integer".into())),
+    }
+}
+
+/// `(panic msg)` — abort execution with a custom error message.
+fn builtin_panic(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("panic", args, 1)?;
+    let msg = match &args[0] {
+        Value::Str(s) => s.clone(),
+        other => format!("{}", other),
+    };
+    Err(RuntimeError::Custom(format!("panic: {}", msg)))
+}
+
+/// `(assert condition msg)` — abort if condition is false.
+fn builtin_assert(args: &[Value]) -> Result<Value, RuntimeError> {
+    expect_arity("assert", args, 2)?;
+    let condition = match &args[0] {
+        Value::Bool(b) => *b,
+        Value::Nil => false,
+        _ => true, // non-nil, non-bool is truthy
+    };
+    if condition {
+        Ok(Value::Bool(true))
+    } else {
+        let msg = match &args[1] {
+            Value::Str(s) => s.clone(),
+            other => format!("{}", other),
+        };
+        Err(RuntimeError::Custom(format!("assertion failed: {}", msg)))
     }
 }
 
