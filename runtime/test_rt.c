@@ -493,6 +493,176 @@ TEST(test_cons_empty) {
     airl_value_release(one);
 }
 
+/* ---- COW List Optimization Tests ---- */
+
+TEST(test_tail_cow_elements) {
+    /* tail returns correct elements via COW view */
+    RtValue* items[] = { airl_int(10), airl_int(20), airl_int(30) };
+    RtValue* l = airl_list_new(items, 3);
+    RtValue* t = airl_tail(l);
+    assert(t->data.list.len == 2);
+    display_to_string(t);
+    assert(strcmp(display_buf, "[20 30]") == 0);
+    /* verify head of tail */
+    RtValue* h = airl_head(t);
+    assert(h->data.i == 20);
+    airl_value_release(h);
+    airl_value_release(t);
+    airl_value_release(l);
+    for (int i = 0; i < 3; i++) airl_value_release(items[i]);
+}
+
+TEST(test_tail_of_tail) {
+    /* nested tail views */
+    RtValue* items[] = { airl_int(1), airl_int(2), airl_int(3), airl_int(4) };
+    RtValue* l = airl_list_new(items, 4);
+    RtValue* t1 = airl_tail(l);
+    RtValue* t2 = airl_tail(t1);
+    assert(t2->data.list.len == 2);
+    display_to_string(t2);
+    assert(strcmp(display_buf, "[3 4]") == 0);
+    /* at on nested tail */
+    RtValue* idx0 = airl_int(0);
+    RtValue* v0 = airl_at(t2, idx0);
+    assert(v0->data.i == 3);
+    RtValue* idx1 = airl_int(1);
+    RtValue* v1 = airl_at(t2, idx1);
+    assert(v1->data.i == 4);
+    airl_value_release(v0);
+    airl_value_release(v1);
+    airl_value_release(idx0);
+    airl_value_release(idx1);
+    airl_value_release(t2);
+    airl_value_release(t1);
+    airl_value_release(l);
+    for (int i = 0; i < 4; i++) airl_value_release(items[i]);
+}
+
+TEST(test_tail_parent_freed_after_view) {
+    /* release original list before view — view keeps parent alive */
+    RtValue* items[] = { airl_int(100), airl_int(200) };
+    RtValue* l = airl_list_new(items, 2);
+    RtValue* t = airl_tail(l);
+    /* release original — tail view should keep data alive via parent ref */
+    airl_value_release(l);
+    assert(t->data.list.len == 1);
+    RtValue* h = airl_head(t);
+    assert(h->data.i == 200);
+    airl_value_release(h);
+    airl_value_release(t);
+    for (int i = 0; i < 2; i++) airl_value_release(items[i]);
+}
+
+TEST(test_append_inplace_sole_owner) {
+    /* when list has rc==1, append should reuse the same pointer */
+    RtValue* items[] = { airl_int(1), airl_int(2) };
+    RtValue* l = airl_list_new(items, 2);
+    /* l has rc=1 but cap==2==len, so it must grow. Verify correctness. */
+    RtValue* three = airl_int(3);
+    RtValue* l2 = airl_append(l, three);
+    /* l2 should be the same pointer as l (in-place realloc) */
+    assert(l2 == l);
+    assert(l2->data.list.len == 3);
+    display_to_string(l2);
+    assert(strcmp(display_buf, "[1 2 3]") == 0);
+    /* l2 was retained for the caller, release both refs */
+    airl_value_release(l2);  /* drops the extra retain from append */
+    airl_value_release(l);   /* our original ref — but l==l2, so this is the last ref */
+    /* Actually l2==l and both release calls are on the same pointer.
+       After the first release rc goes from 2->1, second release frees it. */
+    airl_value_release(three);
+    for (int i = 0; i < 2; i++) airl_value_release(items[i]);
+}
+
+TEST(test_append_copies_when_shared) {
+    /* when list has rc>1, append must copy */
+    RtValue* items[] = { airl_int(1), airl_int(2) };
+    RtValue* l = airl_list_new(items, 2);
+    airl_value_retain(l);  /* simulate sharing: rc=2 */
+    RtValue* three = airl_int(3);
+    RtValue* l2 = airl_append(l, three);
+    /* must be a different pointer */
+    assert(l2 != l);
+    assert(l2->data.list.len == 3);
+    /* original list unchanged */
+    assert(l->data.list.len == 2);
+    display_to_string(l2);
+    assert(strcmp(display_buf, "[1 2 3]") == 0);
+    airl_value_release(l2);
+    airl_value_release(l);  /* drop the extra retain */
+    airl_value_release(l);  /* drop original */
+    airl_value_release(three);
+    for (int i = 0; i < 2; i++) airl_value_release(items[i]);
+}
+
+TEST(test_cons_on_tail_view) {
+    /* cons on a tail view should produce correct list */
+    RtValue* items[] = { airl_int(1), airl_int(2), airl_int(3) };
+    RtValue* l = airl_list_new(items, 3);
+    RtValue* t = airl_tail(l);  /* [2, 3] */
+    RtValue* zero = airl_int(0);
+    RtValue* l2 = airl_cons(zero, t);  /* [0, 2, 3] */
+    assert(l2->data.list.len == 3);
+    display_to_string(l2);
+    assert(strcmp(display_buf, "[0 2 3]") == 0);
+    airl_value_release(l2);
+    airl_value_release(zero);
+    airl_value_release(t);
+    airl_value_release(l);
+    for (int i = 0; i < 3; i++) airl_value_release(items[i]);
+}
+
+TEST(test_length_on_tail_view) {
+    RtValue* items[] = { airl_int(10), airl_int(20), airl_int(30) };
+    RtValue* l = airl_list_new(items, 3);
+    RtValue* t = airl_tail(l);
+    RtValue* len = airl_length(t);
+    assert(len->data.i == 2);
+    airl_value_release(len);
+    airl_value_release(t);
+    airl_value_release(l);
+    for (int i = 0; i < 3; i++) airl_value_release(items[i]);
+}
+
+TEST(test_empty_on_tail_view) {
+    RtValue* items[] = { airl_int(42) };
+    RtValue* l = airl_list_new(items, 1);
+    RtValue* t = airl_tail(l);
+    RtValue* e = airl_empty(t);
+    assert(airl_as_bool_raw(e) == 1);
+    airl_value_release(e);
+    airl_value_release(t);
+    airl_value_release(l);
+    airl_value_release(items[0]);
+}
+
+TEST(test_fold_pattern_with_tail) {
+    /* Simulate a fold: sum a list by repeatedly calling head/tail.
+       This is the hot path that was O(N^2) before COW. */
+    RtValue* items[100];
+    for (int i = 0; i < 100; i++) items[i] = airl_int(i + 1);
+    RtValue* l = airl_list_new(items, 100);
+    int64_t sum = 0;
+    RtValue* cur = l;
+    airl_value_retain(cur);
+    while (1) {
+        RtValue* emp = airl_empty(cur);
+        int is_empty = airl_as_bool_raw(emp);
+        airl_value_release(emp);
+        if (is_empty) break;
+        RtValue* h = airl_head(cur);
+        sum += h->data.i;
+        airl_value_release(h);
+        RtValue* next = airl_tail(cur);
+        airl_value_release(cur);
+        cur = next;
+    }
+    airl_value_release(cur);
+    assert(sum == 5050);  /* 1+2+...+100 = 5050 */
+    airl_value_release(l);
+    for (int i = 0; i < 100; i++) airl_value_release(items[i]);
+}
+
 /* ---- Task 4: String Operations ---- */
 
 TEST(test_char_at) {
@@ -1341,6 +1511,16 @@ int main(void) {
     RUN(test_append);
     RUN(test_tail_single);
     RUN(test_cons_empty);
+    printf("\nC Runtime Tests (COW List Optimizations):\n");
+    RUN(test_tail_cow_elements);
+    RUN(test_tail_of_tail);
+    RUN(test_tail_parent_freed_after_view);
+    RUN(test_append_inplace_sole_owner);
+    RUN(test_append_copies_when_shared);
+    RUN(test_cons_on_tail_view);
+    RUN(test_length_on_tail_view);
+    RUN(test_empty_on_tail_view);
+    RUN(test_fold_pattern_with_tail);
     printf("\nC Runtime Tests (Task 4):\n");
     RUN(test_char_at);
     RUN(test_char_at_utf8);

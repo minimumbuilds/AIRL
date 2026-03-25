@@ -141,9 +141,10 @@ RtValue* airl_map_new(void) {
 RtValue* airl_map_from(RtValue* pairs) {
     RtValue* m = map_alloc(INITIAL_CAP);
     size_t len = pairs->data.list.len;
+    size_t off = pairs->data.list.offset;
     for (size_t i = 0; i + 1 < len; i += 2) {
-        RtValue* key = pairs->data.list.items[i];
-        RtValue* val = pairs->data.list.items[i + 1];
+        RtValue* key = pairs->data.list.items[off + i];
+        RtValue* val = pairs->data.list.items[off + i + 1];
         map_insert(m, key->data.s.ptr, key->data.s.len, val);
     }
     return m;

@@ -404,10 +404,11 @@ static void stringify_value(RtValue *v, JsonBuf *buf) {
             stringify_string(v->data.s.ptr, v->data.s.len, buf);
             break;
         case RT_LIST: {
+            size_t off = v->data.list.offset;
             jbuf_push(buf, '[');
             for (size_t i = 0; i < v->data.list.len; i++) {
                 if (i > 0) jbuf_push(buf, ',');
-                stringify_value(v->data.list.items[i], buf);
+                stringify_value(v->data.list.items[off + i], buf);
             }
             jbuf_push(buf, ']');
             break;

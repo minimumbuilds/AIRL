@@ -120,6 +120,7 @@ RtValue* airl_split(RtValue* s, RtValue* delim) {
 
 RtValue* airl_join(RtValue* list, RtValue* sep) {
     size_t n = list->data.list.len;
+    size_t off = list->data.list.offset;
     if (n == 0) {
         return airl_str("", 0);
     }
@@ -127,7 +128,7 @@ RtValue* airl_join(RtValue* list, RtValue* sep) {
     /* Calculate total length */
     size_t total = 0;
     for (size_t i = 0; i < n; i++) {
-        total += list->data.list.items[i]->data.s.len;
+        total += list->data.list.items[off + i]->data.s.len;
     }
     total += sep->data.s.len * (n - 1);
 
@@ -138,7 +139,7 @@ RtValue* airl_join(RtValue* list, RtValue* sep) {
             memcpy(buf + pos, sep->data.s.ptr, sep->data.s.len);
             pos += sep->data.s.len;
         }
-        RtValue* item = list->data.list.items[i];
+        RtValue* item = list->data.list.items[off + i];
         memcpy(buf + pos, item->data.s.ptr, item->data.s.len);
         pos += item->data.s.len;
     }

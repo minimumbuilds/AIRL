@@ -74,8 +74,9 @@ RtValue *airl_shell_exec(RtValue *command, RtValue *args) {
     cmd[command->data.s.len] = '\0';
     argv[0] = cmd;
 
+    size_t args_off = args->data.list.offset;
     for (size_t i = 0; i < argc; i++) {
-        RtValue *arg = args->data.list.items[i];
+        RtValue *arg = args->data.list.items[args_off + i];
         if (arg->tag != RT_STR) {
             /* Clean up on error */
             for (size_t j = 0; j <= i; j++) free(argv[j]);

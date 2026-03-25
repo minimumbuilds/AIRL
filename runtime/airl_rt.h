@@ -45,8 +45,10 @@ typedef struct RtValue {
         } s;
         struct {                /* RT_LIST */
             RtValue** items;
-            size_t len;
-            size_t cap;
+            size_t offset;      /* start index into items (for COW tail views) */
+            size_t len;         /* number of elements from offset */
+            size_t cap;         /* total capacity of items array */
+            RtValue* parent;    /* if non-NULL, this is a view — parent owns items */
         } list;
         struct {                /* RT_MAP */
             MapEntry* entries;

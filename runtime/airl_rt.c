@@ -35,11 +35,17 @@ void airl_value_release(RtValue* v) {
             free(v->data.s.ptr);
             break;
         case RT_LIST: {
-            size_t i;
-            for (i = 0; i < v->data.list.len; i++) {
-                airl_value_release(v->data.list.items[i]);
+            if (v->data.list.parent) {
+                /* This is a tail-view — release the parent, don't free items */
+                airl_value_release(v->data.list.parent);
+            } else {
+                /* We own the items array — release elements and free */
+                size_t i;
+                for (i = 0; i < v->data.list.len; i++) {
+                    airl_value_release(v->data.list.items[v->data.list.offset + i]);
+                }
+                free(v->data.list.items);
             }
-            free(v->data.list.items);
             break;
         }
         case RT_MAP: {
@@ -90,13 +96,16 @@ RtValue* airl_value_clone(RtValue* v) {
             return airl_unit();
         case RT_LIST: {
             size_t i;
+            size_t off = v->data.list.offset;
             RtValue* clone = rt_alloc(RT_LIST);
             clone->data.list.len = v->data.list.len;
             clone->data.list.cap = v->data.list.len;
+            clone->data.list.offset = 0;
+            clone->data.list.parent = NULL;
             if (v->data.list.len > 0) {
                 clone->data.list.items = (RtValue**)malloc(sizeof(RtValue*) * v->data.list.len);
                 for (i = 0; i < v->data.list.len; i++) {
-                    clone->data.list.items[i] = airl_value_clone(v->data.list.items[i]);
+                    clone->data.list.items[i] = airl_value_clone(v->data.list.items[off + i]);
                 }
             }
             return clone;
@@ -254,10 +263,11 @@ void display_value(RtValue* v, FILE* out) {
             break;
         case RT_LIST: {
             size_t i;
+            size_t off = v->data.list.offset;
             fprintf(out, "[");
             for (i = 0; i < v->data.list.len; i++) {
                 if (i > 0) fprintf(out, " ");
-                display_value(v->data.list.items[i], out);
+                display_value(v->data.list.items[off + i], out);
             }
             fprintf(out, "]");
             break;
