@@ -132,6 +132,7 @@ pub struct RuntimeImports {
     pub get_args:    FuncId,
     pub run_bytecode: FuncId,
     pub compile_to_exe: FuncId,
+    pub compile_bc_to_exe: FuncId,
 
     // Type conversions
     pub int_to_string: FuncId,
@@ -556,6 +557,7 @@ impl BytecodeAot {
         let get_args    = declare_import(m, "airl_get_args",    sig_0_ptr(m));
         let run_bytecode = declare_import(m, "airl_run_bytecode", s1.clone());
         let compile_to_exe = declare_import(m, "airl_compile_to_executable", s2.clone());
+        let compile_bc_to_exe = declare_import(m, "airl_compile_bytecode_to_executable", s2.clone());
 
         // Type conversions
         let int_to_string = declare_import(m, "airl_int_to_string", s1.clone());
@@ -718,7 +720,7 @@ impl BytecodeAot {
             read_file, write_file, file_exists,
             append_file, delete_file, delete_dir, rename_file,
             read_dir, create_dir, file_size, is_dir,
-            get_args, run_bytecode, compile_to_exe,
+            get_args, run_bytecode, compile_to_exe, compile_bc_to_exe,
             int_to_string, float_to_string, string_to_int, string_to_float,
             char_code, char_from_code,
             sqrt, sin, cos, tan, log, exp, floor, ceil, round,
@@ -828,6 +830,7 @@ impl BytecodeAot {
         m.insert("get-args".into(),     rt.get_args);
         m.insert("run-bytecode".into(), rt.run_bytecode);
         m.insert("compile-to-executable".into(), rt.compile_to_exe);
+        m.insert("compile-bytecode-to-executable".into(), rt.compile_bc_to_exe);
 
         // Type conversions
         m.insert("int-to-string".into(),   rt.int_to_string);
@@ -3161,7 +3164,7 @@ pub fn get_or_extract_rt_lib() -> Result<String, String> {
     }
 }
 
-fn find_lib(name: &str) -> String {
+pub fn find_lib(name: &str) -> String {
     let candidates = [
         format!("target/release/lib{}.a", name),
         format!("target/debug/lib{}.a", name),

@@ -207,6 +207,45 @@ pub extern "C" fn airl_run_bytecode(prog: *mut airl_rt::value::RtValue) -> *mut 
     }
 }
 
+/// C-ABI entry point for `compile-bytecode-to-executable`.
+/// Takes a list of BCFunc values and an output path string.
+/// Compiles bytecode to a native binary via Cranelift AOT.
+/// This allows AOT-compiled G3 compiler binaries to produce native executables.
+#[cfg(all(feature = "aot", feature = "jit"))]
+#[no_mangle]
+pub extern "C" fn airl_compile_bytecode_to_executable(
+    funcs_val: *mut airl_rt::value::RtValue,
+    output_val: *mut airl_rt::value::RtValue,
+) -> *mut airl_rt::value::RtValue {
+    use crate::bytecode_jit_full::BytecodeJitFull;
+
+    let funcs_value = BytecodeJitFull::rt_to_value(funcs_val);
+    let output_value = BytecodeJitFull::rt_to_value(output_val);
+
+    let funcs = match &funcs_value {
+        Value::List(items) => items.clone(),
+        _ => {
+            eprintln!("airl_compile_bytecode_to_executable: first arg must be list of BCFunc");
+            return airl_rt::value::rt_nil();
+        }
+    };
+    let output_path = match &output_value {
+        Value::Str(s) => s.clone(),
+        _ => {
+            eprintln!("airl_compile_bytecode_to_executable: second arg must be output path string");
+            return airl_rt::value::rt_nil();
+        }
+    };
+
+    match compile_bytecode_to_executable(&funcs, &output_path) {
+        Ok(()) => BytecodeJitFull::value_to_rt(&Value::Str(format!("Compiled to {}", output_path))),
+        Err(e) => {
+            eprintln!("Compilation error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Compile a list of BCFunc values to a native executable via Cranelift AOT.
 /// Takes the same BCFunc format as `run-bytecode` but produces a binary instead of executing.
 #[cfg(feature = "aot")]
@@ -244,12 +283,28 @@ pub fn compile_bytecode_to_executable(funcs: &[Value], output_path: &str) -> Res
     let rt_lib = crate::bytecode_aot::get_or_extract_rt_lib()
         .map_err(|e| RuntimeError::Custom(e))?;
 
+    // Check if program needs the full runtime (compiler infrastructure)
+    let needs_compiler = bc_funcs.iter().any(|f| {
+        f.constants.iter().any(|c| matches!(c,
+            Value::Str(s) if s == "compile-bytecode-to-executable"
+                || s == "compile-to-executable"
+                || s == "run-bytecode"))
+    });
+
     // Link with system cc
-    let status = std::process::Command::new("cc")
-        .arg(&obj_path)
-        .arg("-o")
-        .arg(output_path)
-        .arg(&rt_lib)
+    let mut cmd = std::process::Command::new("cc");
+    cmd.arg(&obj_path).arg("-o").arg(output_path).arg(&rt_lib);
+
+    if needs_compiler {
+        // Link against libairl_runtime.a for compiler infrastructure (Cranelift, etc.)
+        let runtime_lib = crate::bytecode_aot::find_lib("airl_runtime");
+        if !runtime_lib.is_empty() {
+            cmd.arg(&runtime_lib);
+            cmd.arg(&rt_lib); // re-add for symbol resolution order
+        }
+    }
+
+    let status = cmd
         .arg("-lm")
         .arg("-lpthread")
         .arg("-ldl")

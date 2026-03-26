@@ -137,6 +137,7 @@ pub struct RuntimeImports {
     pub is_dir:      FuncId,      // (path) -> bool
     pub get_args:    FuncId,      // () -> list
     pub run_bytecode: FuncId,   // (list_of_bcfuncs) -> result
+    pub compile_bc_to_exe: FuncId, // (list_of_bcfuncs, output_path) -> result
 
     // Misc builtins
     pub char_count: FuncId,
@@ -492,6 +493,8 @@ impl BytecodeJitFull {
         builder.symbol("airl_run_bytecode", crate::bytecode_marshal::airl_run_bytecode as *const u8);
         #[cfg(feature = "aot")]
         builder.symbol("airl_compile_to_executable", crate::bytecode_aot::airl_compile_to_executable as *const u8);
+        #[cfg(feature = "aot")]
+        builder.symbol("airl_compile_bytecode_to_executable", crate::bytecode_marshal::airl_compile_bytecode_to_executable as *const u8);
 
         // Contract failure signaling (shared module)
         builder.symbol("airl_jit_contract_fail", crate::jit_contract::airl_jit_contract_fail as *const u8);
@@ -640,6 +643,7 @@ impl BytecodeJitFull {
         let is_dir      = declare_import(m, "airl_is_dir",      s1.clone());
         let get_args    = declare_import(m, "airl_get_args",    sig_0_ptr(m));
         let run_bytecode = declare_import(m, "airl_run_bytecode", s1.clone());
+        let compile_bc_to_exe = declare_import(m, "airl_compile_bytecode_to_executable", s2.clone());
 
         // Misc builtins
         let char_count = declare_import(m, "airl_char_count", s1.clone());
@@ -763,7 +767,7 @@ impl BytecodeJitFull {
             read_file, write_file, file_exists,
             append_file, delete_file, delete_dir, rename_file,
             read_dir, create_dir, file_size, is_dir,
-            get_args, run_bytecode,
+            get_args, run_bytecode, compile_bc_to_exe,
             char_count, str_variadic, format_variadic,
             assert_fn, panic_fn, exit_fn, sleep_fn, format_time, read_lines,
             concat_lists, range_fn, reverse_list, take_fn, drop_fn, zip_fn,
@@ -872,6 +876,7 @@ impl BytecodeJitFull {
         m.insert("is-dir?".into(),      rt.is_dir);
         m.insert("get-args".into(),     rt.get_args);
         m.insert("run-bytecode".into(), rt.run_bytecode);
+        m.insert("compile-bytecode-to-executable".into(), rt.compile_bc_to_exe);
 
         // Misc builtins
         m.insert("char-count".into(),    rt.char_count);
