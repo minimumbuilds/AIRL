@@ -268,7 +268,8 @@ pub fn compile_bytecode_to_executable(funcs: &[Value], output_path: &str) -> Res
     let mut aot = BytecodeAot::new()
         .map_err(|e| RuntimeError::Custom(format!("AOT init: {}", e)))?;
     for func in &bc_funcs {
-        let _ = aot.compile_all(std::slice::from_ref(func), &func_map);
+        aot.compile_all(std::slice::from_ref(func), &func_map)
+            .map_err(|e| RuntimeError::Custom(format!("AOT compile '{}': {}", func.name, e)))?;
     }
     aot.emit_entry_point()
         .map_err(|e| RuntimeError::Custom(format!("AOT entry point: {}", e)))?;

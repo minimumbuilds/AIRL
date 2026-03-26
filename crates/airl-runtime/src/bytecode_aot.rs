@@ -1985,6 +1985,10 @@ impl BytecodeAot {
             .module
             .declare_function(&func.name, Linkage::Local, &sig)
             .map_err(|e| format!("declare: {}", e))?;
+        // NOTE: insert into compiled_funcs BEFORE body compilation so that
+        // self-recursive calls and emit_entry_point can find the function.
+        // If body compilation fails, the function will be declared but undefined,
+        // which is caught by the error propagation from compile_func → compile_all.
         self.compiled_funcs.insert(func.name.clone(), func_id);
 
         // ── 3. Build function body ───────────────────────────────────────
