@@ -1,0 +1,25 @@
+;; EXPECT: 1:ok1|2:ok1|3:ok2|4:ok1|5:ok1|6:err|7:err|8:err|9:ok1|10:err
+;; DEPS: bootstrap/lexer.airl bootstrap/parser.airl
+(defn parse-check
+  :sig [(src : String) -> String]
+  :requires [(valid src)]
+  :ensures [(valid result)]
+  :body
+    (match (parse src)
+      (Ok ast) (str "ok" (length ast))
+      (Err _) "err"))
+
+;; 5 passing from R2
+(let (r1 : String (parse-check "(+ 1 2)"))
+     (r2 : String (parse-check "(if true 1 2)"))
+     (r3 : String (parse-check "(defn f :sig [(x : i64) -> i64] :requires [(valid x)] :ensures [(valid result)] :body x) (f 1)"))
+     (r4 : String (parse-check "(let (x : i64 5) (+ x 1))"))
+     (r5 : String (parse-check "(match (Ok 42) (Ok v) v (Err e) 0)"))
+     ;; 5 error cases — bad syntax
+     (r6 : String (parse-check "("))
+     (r7 : String (parse-check ")"))
+     (r8 : String (parse-check "(defn)"))
+     (r9 : String (parse-check "(defn f)"))
+     (r10 : String (parse-check "(if true)"))
+  (print (str "1:" r1 "|2:" r2 "|3:" r3 "|4:" r4 "|5:" r5
+              "|6:" r6 "|7:" r7 "|8:" r8 "|9:" r9 "|10:" r10)))

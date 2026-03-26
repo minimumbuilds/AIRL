@@ -1,0 +1,16 @@
+;; EXPECT: 1:5|2:helloworld|3:llo|4:true|5:3|6:-1|7:true|8:|9:false|10:HELLO
+(let (s : String "helloworld")
+     ;; 5 passing from R2
+     (r1 : i64 (index-of s "world"))
+     (r2 : String (str "hello" "world"))
+     (r3 : String (substring "hello" 2 5))
+     (r4 : Bool (contains "hello" "ell"))
+     (r5 : i64 (length (split "a,b,c" ",")))
+     ;; 5 edge/error cases
+     (r6 : i64 (index-of "hello" "xyz"))
+     (r7 : Bool (contains "" ""))
+     (r8 : String (substring "hello" 0 0))
+     (r9 : Bool (starts-with "hello" "xyz"))
+     (r10 : String (to-upper "hello"))
+  (print (str "1:" r1 "|2:" r2 "|3:" r3 "|4:" r4 "|5:" r5
+              "|6:" r6 "|7:" r7 "|8:" r8 "|9:" r9 "|10:" r10)))

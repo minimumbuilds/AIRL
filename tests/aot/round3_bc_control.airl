@@ -1,0 +1,15 @@
+;; EXPECT: 1:a|2:b|3:c|4:ok-42|5:err-nope|6:zero|7:neg|8:big|9:ok-hello|10:err-fail
+(let (;; 5 passing from R2
+      r1 : String (match 1 1 "a" 2 "b" _ "c"))
+     (r2 : String (match 2 1 "a" 2 "b" _ "c"))
+     (r3 : String (match 99 1 "a" 2 "b" _ "c"))
+     (r4 : String (match (Ok 42) (Ok v) (str "ok-" v) (Err e) (str "err-" e)))
+     (r5 : String (match (Err "nope") (Ok v) (str "ok-" v) (Err e) (str "err-" e)))
+     ;; 5 edge cases — boundary values, nested results
+     (r6 : String (if (= 0 0) "zero" "nonzero"))
+     (r7 : String (if (< -100 0) "neg" "pos"))
+     (r8 : String (if (> 999999 0) "big" "small"))
+     (r9 : String (match (Ok "hello") (Ok v) (str "ok-" v) (Err e) (str "err-" e)))
+     (r10 : String (match (Err "fail") (Ok v) (str "ok-" v) (Err e) (str "err-" e)))
+  (print (str "1:" r1 "|2:" r2 "|3:" r3 "|4:" r4 "|5:" r5
+              "|6:" r6 "|7:" r7 "|8:" r8 "|9:" r9 "|10:" r10)))

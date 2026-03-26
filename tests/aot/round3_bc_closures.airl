@@ -1,0 +1,23 @@
+;; EXPECT: 1:0|2:15|3:55|4:2|5:1 4 9|6:0|7:0|8:5|9:1 2 3|10:10 20 30
+(let (empty : List [])
+     (five : List [1 2 3 4 5])
+     (ten : List [1 2 3 4 5 6 7 8 9 10])
+     ;; 5 passing from R2
+     (s1 : i64 (fold (fn [a x] (+ a x)) 0 empty))
+     (s2 : i64 (fold (fn [a x] (+ a x)) 0 five))
+     (s3 : i64 (fold (fn [a x] (+ a x)) 0 ten))
+     (f1 : List (filter (fn [x] (> x 3)) five))
+     (m1 : List (map (fn [x] (* x x)) [1 2 3]))
+     ;; 5 edge/stress cases
+     (s4 : i64 (fold (fn [a x] (+ a x)) 0 []))
+     (f2 : i64 (length (filter (fn [x] (> x 100)) five)))
+     (len1 : i64 (length (filter (fn [x] (> x 0)) five)))
+     (rev1 : List (reverse [3 2 1]))
+     (m2 : List (map (fn [x] (* x 10)) [1 2 3]))
+  (print (str "1:" s1 "|2:" s2 "|3:" s3 "|4:" (length f1)
+              "|5:" (at m1 0) " " (at m1 1) " " (at m1 2)
+              "|6:" s4
+              "|7:" f2
+              "|8:" len1
+              "|9:" (at rev1 0) " " (at rev1 1) " " (at rev1 2)
+              "|10:" (at m2 0) " " (at m2 1) " " (at m2 2))))

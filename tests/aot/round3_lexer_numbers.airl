@@ -1,0 +1,28 @@
+;; EXPECT: 1:integer 0|2:integer 99|3:integer -7|4:float 3.14|5:float 0.5|6:symbol .|7:symbol -|8:integer 0|9:symbol +.|10:integer 9
+;; DEPS: bootstrap/lexer.airl
+(defn lex-first-token
+  :sig [(src : String) -> String]
+  :requires [(valid src)]
+  :ensures [(valid result)]
+  :body
+    (match (lex src)
+      (Ok tokens)
+        (if (empty? tokens) "empty"
+          (match (at tokens 0)
+            (Token kind val _ _) (str kind " " val)))
+      (Err e) (str "err:" e)))
+
+;; 5 passing from R2
+(let (r1 : String (lex-first-token "0"))
+     (r2 : String (lex-first-token "99"))
+     (r3 : String (lex-first-token "-7"))
+     (r4 : String (lex-first-token "3.14"))
+     (r5 : String (lex-first-token "0.5"))
+     ;; 5 edge/error cases: not-a-number inputs
+     (r6 : String (lex-first-token "."))
+     (r7 : String (lex-first-token "-"))
+     (r8 : String (lex-first-token "0abc"))
+     (r9 : String (lex-first-token "+."))
+     (r10 : String (lex-first-token "9"))
+  (print (str "1:" r1 "|2:" r2 "|3:" r3 "|4:" r4 "|5:" r5
+              "|6:" r6 "|7:" r7 "|8:" r8 "|9:" r9 "|10:" r10)))

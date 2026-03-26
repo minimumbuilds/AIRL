@@ -1,0 +1,41 @@
+;; EXPECT: 1:0 a.out|2:1 a.out|3:1 out|4:2 out|5:0 a.out|6:3 a.out|7:1 b|8:0 last|9:2 -o|10:0 z
+(defn g3-parse-args
+  :sig [(args : List) -> _]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body
+    (let (result : _ (fold (fn [acc arg]
+            (let (files : _ (at acc 0))
+                 (output : _ (at acc 1))
+                 (expect-o : _ (at acc 2))
+              (match expect-o
+                1 [files arg 0]
+                _ (match arg
+                    "-o" [files output 1]
+                    _ [(append files arg) output 0]))))
+          [[] "a.out" 0]
+          args))
+      [(at result 0) (at result 1)]))
+
+(defn show-parsed
+  :sig [(args : List) -> String]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body
+    (let (p : _ (g3-parse-args args))
+      (str (length (at p 0)) " " (at p 1))))
+
+;; 5 passing from R2
+(let (r1 : String (show-parsed []))
+     (r2 : String (show-parsed ["x.airl"]))
+     (r3 : String (show-parsed ["x.airl" "-o" "out"]))
+     (r4 : String (show-parsed ["a.airl" "b.airl" "-o" "out"]))
+     (r5 : String (show-parsed ["-o"]))
+     ;; 5 edge cases
+     (r6 : String (show-parsed ["a" "b" "c"]))
+     (r7 : String (show-parsed ["-o" "b" "x.airl"]))
+     (r8 : String (show-parsed ["-o" "first" "-o" "last"]))
+     (r9 : String (show-parsed ["x" "-o" "-o" "y"]))
+     (r10 : String (show-parsed ["-o" "z"]))
+  (print (str "1:" r1 "|2:" r2 "|3:" r3 "|4:" r4 "|5:" r5
+              "|6:" r6 "|7:" r7 "|8:" r8 "|9:" r9 "|10:" r10)))

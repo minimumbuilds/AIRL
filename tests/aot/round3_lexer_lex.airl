@@ -1,0 +1,25 @@
+;; EXPECT: 1:ok2|2:ok6|3:ok12|4:ok2|5:ok7|6:err|7:err|8:ok2|9:ok1|10:err
+;; DEPS: bootstrap/lexer.airl
+(defn lex-check
+  :sig [(src : String) -> String]
+  :requires [(valid src)]
+  :ensures [(valid result)]
+  :body
+    (match (lex src)
+      (Ok tokens) (str "ok" (length tokens))
+      (Err _) "err"))
+
+;; 5 passing from R2
+(let (r1 : String (lex-check "hello"))
+     (r2 : String (lex-check "(+ 1 2)"))
+     (r3 : String (lex-check "(defn f :sig [-> i64] :body 1)"))
+     (r4 : String (lex-check "42"))
+     (r5 : String (lex-check "(if true \"yes\" \"no\")"))
+     ;; 5 error cases
+     (r6 : String (lex-check "\"unterminated string"))
+     (r7 : String (lex-check "#| unterminated block comment"))
+     (r8 : String (lex-check "\"\""))
+     (r9 : String (lex-check ""))
+     (r10 : String (lex-check "\"escape at end\\"))
+  (print (str "1:" r1 "|2:" r2 "|3:" r3 "|4:" r4 "|5:" r5
+              "|6:" r6 "|7:" r7 "|8:" r8 "|9:" r9 "|10:" r10)))

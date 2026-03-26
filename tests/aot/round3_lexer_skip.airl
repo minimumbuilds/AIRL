@@ -1,0 +1,25 @@
+;; EXPECT: 1:ok3|2:ok5|3:ok4|4:abc|5:hello-world!|6:ok0|7:ok3|8:ok11|9:|10:ok14
+;; DEPS: bootstrap/lexer.airl
+(defn skip-check
+  :sig [(src : String) -> String]
+  :requires [(valid src)]
+  :ensures [(valid result)]
+  :body
+    (match (skip-ws src 0 1 1)
+      (Ok s) (str "ok" (at s 0))
+      (Err e) (str "err:" e)))
+
+;; 5 passing from R2
+(let (r1 : String (skip-check "   x"))
+     (r2 : String (skip-check "  \n  y"))
+     (r3 : String (skip-check "\t\t\t\tx"))
+     (sym1 : List (read-symbol-chars "abc " 0 1 1 ""))
+     (sym2 : List (read-symbol-chars "hello-world!" 0 1 1 ""))
+     ;; 5 edge cases
+     (r6 : String (skip-check ""))
+     (r7 : String (skip-check "   "))
+     (r8 : String (skip-check ";; comment\nx"))
+     (sym3 : List (read-symbol-chars "" 0 1 1 ""))
+     (r10 : String (skip-check "  #| block |# x"))
+  (print (str "1:" r1 "|2:" r2 "|3:" r3 "|4:" (head sym1) "|5:" (head sym2)
+              "|6:" r6 "|7:" r7 "|8:" r8 "|9:" (head sym3) "|10:" r10)))
