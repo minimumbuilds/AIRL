@@ -1,0 +1,27 @@
+;; EXPECT: 1:ASTInt|2:ASTFloat|3:ASTStr|4:ASTBool|5:ASTSymbol
+;; DEPS: bootstrap/lexer.airl bootstrap/parser.airl
+(defn atom-type
+  :sig [(src : String) -> String]
+  :requires [(valid src)]
+  :ensures [(valid result)]
+  :body
+    (match (lex src)
+      (Ok tokens)
+        (match (parse-atom (at tokens 0))
+          (Ok a)
+            (match a
+              (ASTInt _ _ _) "ASTInt"
+              (ASTFloat _ _ _) "ASTFloat"
+              (ASTStr _ _ _) "ASTStr"
+              (ASTBool _ _ _) "ASTBool"
+              (ASTSymbol _ _ _) "ASTSymbol"
+              (ASTKeyword _ _ _) "ASTKeyword"
+              _ "other")
+          (Err _) "err")
+      (Err _) "lex-err"))
+
+(print (str "1:" (atom-type "42")
+            "|2:" (atom-type "3.14")
+            "|3:" (atom-type "\"hi\"")
+            "|4:" (atom-type "true")
+            "|5:" (atom-type "foo")))

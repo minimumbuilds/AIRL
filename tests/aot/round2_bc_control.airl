@@ -1,0 +1,7 @@
+;; EXPECT: 1:a|2:b|3:c|4:ok-42|5:err-nope
+(let (r1 : String (match 1 1 "a" 2 "b" _ "c"))
+     (r2 : String (match 2 1 "a" 2 "b" _ "c"))
+     (r3 : String (match 99 1 "a" 2 "b" _ "c"))
+     (r4 : String (match (Ok 42) (Ok v) (str "ok-" v) (Err e) (str "err-" e)))
+     (r5 : String (match (Err "nope") (Ok v) (str "ok-" v) (Err e) (str "err-" e)))
+  (print (str "1:" r1 "|2:" r2 "|3:" r3 "|4:" r4 "|5:" r5)))

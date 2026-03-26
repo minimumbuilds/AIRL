@@ -1,0 +1,19 @@
+;; EXPECT: 1:hello|2:a b c|3:12|4:0|5:true
+;; DEPS: bootstrap/lexer.airl
+(defn lex-str-val
+  :sig [(src : String) -> String]
+  :requires [(valid src)]
+  :ensures [(valid result)]
+  :body
+    (match (lex src)
+      (Ok tokens)
+        (match (at tokens 0)
+          (Token kind val _ _) val)
+      (Err e) (str "err:" e)))
+
+(let (s1 : String (lex-str-val "\"hello\""))
+     (s2 : String (lex-str-val "\"a b c\""))
+     (s3 : i64 (length (lex-str-val "\"with\\nnewline\"")))
+     (s4 : i64 (length (lex-str-val "\"\"")))
+     (s5 : Bool (contains (lex-str-val "\"escaped\\\"quote\"") "quote"))
+  (print (str "1:" s1 "|2:" s2 "|3:" s3 "|4:" s4 "|5:" s5)))

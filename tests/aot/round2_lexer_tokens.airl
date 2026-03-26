@@ -1,0 +1,8 @@
+;; EXPECT: 1:2|2:5|3:12|4:2|5:7
+;; DEPS: bootstrap/lexer.airl
+(let (t1 : i64 (match (lex "hello") (Ok t) (length t) (Err _) 0))
+     (t2 : i64 (match (lex "(+ 1)") (Ok t) (length t) (Err _) 0))
+     (t3 : i64 (match (lex "(defn f :sig [-> i64] :body 1)") (Ok t) (length t) (Err _) 0))
+     (t4 : i64 (match (lex "42") (Ok t) (length t) (Err _) 0))
+     (t5 : i64 (match (lex "(if true \"yes\" \"no\")") (Ok t) (length t) (Err _) 0))
+  (print (str "1:" t1 "|2:" t2 "|3:" t3 "|4:" t4 "|5:" t5)))

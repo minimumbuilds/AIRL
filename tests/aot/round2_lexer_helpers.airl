@@ -1,0 +1,8 @@
+;; EXPECT: 1:truefalsefalsefalsefalse|2:truefalsefalsetruefalse|3:02479|4:truetruetruetruefalse|5:truetruetruetruetrue
+;; DEPS: bootstrap/lexer.airl
+(let (ws1 : String (str (is-whitespace? " ") (is-whitespace? "a") (is-whitespace? "0") (is-whitespace? "(") (is-whitespace? "z")))
+     (dig1 : String (str (is-digit? "3") (is-digit? "a") (is-digit? " ") (is-digit? "9") (is-digit? "+")))
+     (dv1 : String (str (digit-value "0") (digit-value "2") (digit-value "4") (digit-value "7") (digit-value "9")))
+     (ss1 : String (str (is-symbol-start? "a") (is-symbol-start? "Z") (is-symbol-start? "?") (is-symbol-start? "~") (is-symbol-start? "0")))
+     (sc1 : String (str (is-symbol-char? "a") (is-symbol-char? "0") (is-symbol-char? "+") (is-symbol-char? "Z") (is-symbol-char? "9")))
+  (print (str "1:" ws1 "|2:" dig1 "|3:" dv1 "|4:" ss1 "|5:" sc1)))

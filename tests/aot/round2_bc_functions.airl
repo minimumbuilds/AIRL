@@ -1,0 +1,12 @@
+;; EXPECT: 1:1|2:1|3:2|4:6|5:24
+(defn fact
+  :sig [(n : i64) -> i64]
+  :requires [(valid n)]
+  :ensures [(valid result)]
+  :body (if (<= n 1) 1 (* n (fact (- n 1)))))
+
+(print (str "1:" (fact 0)
+            "|2:" (fact 1)
+            "|3:" (fact 2)
+            "|4:" (fact 3)
+            "|5:" (fact 4)))

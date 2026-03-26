@@ -1,0 +1,8 @@
+;; EXPECT: 1:3|2:5|3:4|4:abc|5:hello-world!
+;; DEPS: bootstrap/lexer.airl
+(let (s1 : _ (match (skip-ws "   x" 0 1 1) (Ok s) (at s 0) (Err _) -1))
+     (s2 : _ (match (skip-ws "  \n  y" 0 1 1) (Ok s) (at s 0) (Err _) -1))
+     (s3 : _ (match (skip-ws "\t\t\t\tx" 0 1 1) (Ok s) (at s 0) (Err _) -1))
+     (r1 : List (read-symbol-chars "abc " 0 1 1 ""))
+     (r2 : List (read-symbol-chars "hello-world!" 0 1 1 ""))
+  (print (str "1:" s1 "|2:" s2 "|3:" s3 "|4:" (head r1) "|5:" (head r2))))

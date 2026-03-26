@@ -1,0 +1,14 @@
+;; EXPECT: 1:integer 0|2:integer 99|3:integer -7|4:float 3.14|5:float 0.5
+;; DEPS: bootstrap/lexer.airl
+(defn lex-first-token
+  :sig [(src : String) -> String]
+  :requires [(valid src)]
+  :ensures [(valid result)]
+  :body
+    (match (lex src)
+      (Ok tokens)
+        (match (at tokens 0)
+          (Token kind val _ _) (str kind " " val))
+      (Err e) (str "err:" e)))
+
+(print (str "1:" (lex-first-token "0") "|2:" (lex-first-token "99") "|3:" (lex-first-token "-7") "|4:" (lex-first-token "3.14") "|5:" (lex-first-token "0.5")))

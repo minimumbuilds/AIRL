@@ -1,0 +1,32 @@
+;; EXPECT: 1:0 a.out|2:1 a.out|3:1 out|4:2 out|5:0 a.out
+(defn g3-parse-args
+  :sig [(args : List) -> _]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body
+    (let (result : _ (fold (fn [acc arg]
+            (let (files : _ (at acc 0))
+                 (output : _ (at acc 1))
+                 (expect-o : _ (at acc 2))
+              (match expect-o
+                1 [files arg 0]
+                _ (match arg
+                    "-o" [files output 1]
+                    _ [(append files arg) output 0]))))
+          [[] "a.out" 0]
+          args))
+      [(at result 0) (at result 1)]))
+
+(defn show-parsed
+  :sig [(args : List) -> String]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body
+    (let (p : _ (g3-parse-args args))
+      (str (length (at p 0)) " " (at p 1))))
+
+(print (str "1:" (show-parsed [])
+            "|2:" (show-parsed ["x.airl"])
+            "|3:" (show-parsed ["x.airl" "-o" "out"])
+            "|4:" (show-parsed ["a.airl" "b.airl" "-o" "out"])
+            "|5:" (show-parsed ["-o"])))
