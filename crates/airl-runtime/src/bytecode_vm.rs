@@ -1670,51 +1670,9 @@ mod tests {
         assert_eq!(compile_and_run(&nodes), Value::Int(0));
     }
 
-    #[test]
-    fn test_map_simple_closure() {
-        let nodes = vec![
-            IRNode::Call("map".into(), vec![
-                IRNode::Lambda(vec!["x".into()], Box::new(IRNode::Call("+".into(), vec![IRNode::Load("x".into()), IRNode::Int(1)]))),
-                IRNode::List(vec![IRNode::Int(1), IRNode::Int(2), IRNode::Int(3)]),
-            ]),
-        ];
-        assert_eq!(compile_and_run(&nodes), Value::List(vec![Value::Int(2), Value::Int(3), Value::Int(4)]));
-    }
-
-    #[test]
-    fn test_filter_simple_closure() {
-        let nodes = vec![
-            IRNode::Call("filter".into(), vec![
-                IRNode::Lambda(vec!["x".into()], Box::new(IRNode::Call(">".into(), vec![IRNode::Load("x".into()), IRNode::Int(2)]))),
-                IRNode::List(vec![IRNode::Int(1), IRNode::Int(2), IRNode::Int(3), IRNode::Int(4), IRNode::Int(5)]),
-            ]),
-        ];
-        assert_eq!(compile_and_run(&nodes), Value::List(vec![Value::Int(3), Value::Int(4), Value::Int(5)]));
-    }
-
-    #[test]
-    fn test_fold_simple_closure() {
-        let nodes = vec![
-            IRNode::Call("fold".into(), vec![
-                IRNode::Lambda(vec!["acc".into(), "x".into()],
-                    Box::new(IRNode::Call("+".into(), vec![IRNode::Load("acc".into()), IRNode::Load("x".into())]))),
-                IRNode::Int(0),
-                IRNode::List(vec![IRNode::Int(1), IRNode::Int(2), IRNode::Int(3)]),
-            ]),
-        ];
-        assert_eq!(compile_and_run(&nodes), Value::Int(6));
-    }
-
-    #[test]
-    fn test_map_mul_closure() {
-        let nodes = vec![
-            IRNode::Call("map".into(), vec![
-                IRNode::Lambda(vec!["x".into()], Box::new(IRNode::Call("*".into(), vec![IRNode::Load("x".into()), IRNode::Load("x".into())]))),
-                IRNode::List(vec![IRNode::Int(2), IRNode::Int(3), IRNode::Int(4)]),
-            ]),
-        ];
-        assert_eq!(compile_and_run(&nodes), Value::List(vec![Value::Int(4), Value::Int(9), Value::Int(16)]));
-    }
+    // NOTE: map/filter/fold tests removed in v0.6.0 — these are now stdlib AIRL functions
+    // (not builtins), so they require the full stdlib to be loaded. They're tested by
+    // the E2E fixtures and bootstrap tests instead.
 
     #[test]
     fn test_is_simple_closure_check() {
