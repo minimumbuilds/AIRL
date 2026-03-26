@@ -1,0 +1,29 @@
+;; EXPECT: ws:true true true true false|dig:true true false false|dv:0 5 9|ss:true true true false false|sc:true true true true false
+;; DEPS: bootstrap/lexer.airl
+(let (r1 : Bool (is-whitespace? " "))
+     (r2 : Bool (is-whitespace? "\t"))
+     (r3 : Bool (is-whitespace? "\n"))
+     (r4 : Bool (is-whitespace? "\r"))
+     (r5 : Bool (is-whitespace? "a"))
+     (r6 : Bool (is-digit? "0"))
+     (r7 : Bool (is-digit? "9"))
+     (r8 : Bool (is-digit? "a"))
+     (r9 : Bool (is-digit? " "))
+     (d1 : i64 (digit-value "0"))
+     (d2 : i64 (digit-value "5"))
+     (d3 : i64 (digit-value "9"))
+     (s1 : Bool (is-symbol-start? "a"))
+     (s2 : Bool (is-symbol-start? "+"))
+     (s3 : Bool (is-symbol-start? "_"))
+     (s4 : Bool (is-symbol-start? "0"))
+     (s5 : Bool (is-symbol-start? " "))
+     (c1 : Bool (is-symbol-char? "a"))
+     (c2 : Bool (is-symbol-char? "z"))
+     (c3 : Bool (is-symbol-char? "0"))
+     (c4 : Bool (is-symbol-char? "+"))
+     (c5 : Bool (is-symbol-char? " "))
+  (print (str "ws:" r1 " " r2 " " r3 " " r4 " " r5
+              "|dig:" r6 " " r7 " " r8 " " r9
+              "|dv:" d1 " " d2 " " d3
+              "|ss:" s1 " " s2 " " s3 " " s4 " " s5
+              "|sc:" c1 " " c2 " " c3 " " c4 " " c5)))

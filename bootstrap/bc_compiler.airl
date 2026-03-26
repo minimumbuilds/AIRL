@@ -428,8 +428,9 @@
               ;; Emit JumpIfFalse (will be patched)
               (let (jump-to-else-idx : Int (cs-instr-count st3))
                 (let (st4 : _ (cs-emit st3 (op-jump-if-false) 0 cond-reg 0))
-                  ;; Free cond temp: if cond-reg > dst, free back to dst+1; else keep as-is
-                  (let (free-to : Int (if (> cond-reg (+ dst 1)) (+ dst 1) (cs-next-reg st4)))
+                  ;; Free cond temp: reclaim only the condition register itself.
+                  ;; Never free below cond-reg — registers before it may hold let-bound variables.
+                  (let (free-to : Int cond-reg)
                     (let (st5 : _ (cs-free-reg-to st4 free-to))
                       ;; Compile then branch
                       (match (bc-compile-expr st5 then-br dst)

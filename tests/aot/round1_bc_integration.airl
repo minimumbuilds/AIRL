@@ -1,0 +1,10 @@
+;; EXPECT: lex-ok:6|parse-ok:1
+;; DEPS: bootstrap/lexer.airl bootstrap/parser.airl
+(let (src : String "(+ 1 2)")
+  (match (lex src)
+    (Ok tokens)
+      (match (parse-sexpr-all tokens)
+        (Ok sexprs)
+          (print (str "lex-ok:" (length tokens) "|parse-ok:" (length sexprs)))
+        (Err e) (print (str "parse err: " e)))
+    (Err e) (print (str "lex err: " e))))

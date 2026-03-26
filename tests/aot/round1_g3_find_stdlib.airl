@@ -1,0 +1,12 @@
+;; EXPECT: stdlib
+;; g3-find-stdlib-dir inlined
+(defn g3-find-stdlib-dir
+  :sig [-> String]
+  :requires [(valid 1)]
+  :ensures [(valid result)]
+  :body
+    (match (getenv "AIRL_STDLIB")
+      (Ok dir) dir
+      (Err _) "stdlib"))
+
+(print (g3-find-stdlib-dir))

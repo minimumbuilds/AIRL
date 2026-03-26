@@ -1,0 +1,5 @@
+;; EXPECT: parse-ok
+;; DEPS: bootstrap/lexer.airl bootstrap/parser.airl
+(match (parse "(if true 1 2)")
+  (Ok ast) (print "parse-ok")
+  (Err e) (print (str "err: " e)))

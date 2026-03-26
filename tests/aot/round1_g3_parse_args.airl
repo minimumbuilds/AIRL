@@ -1,0 +1,24 @@
+;; EXPECT: files:2 output:out.bin
+;; g3-parse-args inlined (can't --load g3_compiler.airl due to main body)
+(defn g3-parse-args
+  :sig [(args : List) -> _]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body
+    (let (result : _ (fold (fn [acc arg]
+            (let (files : _ (at acc 0))
+                 (output : _ (at acc 1))
+                 (expect-o : _ (at acc 2))
+              (match expect-o
+                1 [files arg 0]
+                _ (match arg
+                    "-o" [files output 1]
+                    _ [(append files arg) output 0]))))
+          [[] "a.out" 0]
+          args))
+      [(at result 0) (at result 1)]))
+
+(let (parsed : _ (g3-parse-args ["a.airl" "b.airl" "-o" "out.bin"]))
+     (files : List (at parsed 0))
+     (output : String (at parsed 1))
+  (print (str "files:" (length files) " output:" output)))

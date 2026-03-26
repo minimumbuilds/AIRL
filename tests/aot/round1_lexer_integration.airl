@@ -1,0 +1,5 @@
+;; EXPECT: lex:ok 6 tokens
+;; DEPS: bootstrap/lexer.airl
+(match (lex "(+ 1 2)")
+  (Ok tokens) (print (str "lex:ok " (length tokens) " tokens"))
+  (Err e) (print (str "lex:err " e)))

@@ -1,0 +1,7 @@
+;; EXPECT: 15|2 4 6|1 2 3
+(let (nums : List [1 2 3 4 5])
+     (s : i64 (fold (fn [acc x] (+ acc x)) 0 nums))
+     (doubled : List (map (fn [x] (* x 2)) nums))
+     (filtered : List (filter (fn [x] (<= x 3)) nums))
+  (print (str s "|" (at doubled 0) " " (at doubled 1) " " (at doubled 2)
+             "|" (at filtered 0) " " (at filtered 1) " " (at filtered 2))))

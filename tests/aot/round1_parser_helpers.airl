@@ -1,0 +1,12 @@
+;; EXPECT: upper:true true false false|tok:1 0 symbol foo
+;; DEPS: bootstrap/lexer.airl bootstrap/parser.airl
+(let (u1 : Bool (is-upper? "A"))
+     (u2 : Bool (is-upper? "Z"))
+     (u3 : Bool (is-upper? "a"))
+     (u4 : Bool (is-upper? "1"))
+  (match (lex "foo")
+    (Ok tokens)
+      (let (t : _ (at tokens 0))
+        (print (str "upper:" u1 " " u2 " " u3 " " u4
+                    "|tok:" (token-line t) " " (token-col t) " " (token-kind t) " " (token-value t))))
+    (Err e) (print (str "lex err: " e))))

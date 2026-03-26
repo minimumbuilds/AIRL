@@ -1,0 +1,5 @@
+;; EXPECT: parsed 2 top-level forms
+;; DEPS: bootstrap/lexer.airl bootstrap/parser.airl
+(match (parse "(defn f :sig [(x : i64) -> i64] :requires [(valid x)] :ensures [(valid result)] :body x) (print 42)")
+  (Ok ast) (print (str "parsed " (length ast) " top-level forms"))
+  (Err e) (print (str "err: " e)))

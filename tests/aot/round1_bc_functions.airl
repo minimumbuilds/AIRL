@@ -1,0 +1,14 @@
+;; EXPECT: 120|55
+(defn factorial
+  :sig [(n : i64) -> i64]
+  :requires [(valid n)]
+  :ensures [(valid result)]
+  :body (if (<= n 1) 1 (* n (factorial (- n 1)))))
+
+(defn fib
+  :sig [(n : i64) -> i64]
+  :requires [(valid n)]
+  :ensures [(valid result)]
+  :body (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2)))))
+
+(print (str (factorial 5) "|" (fib 10)))

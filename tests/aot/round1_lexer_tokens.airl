@@ -1,0 +1,30 @@
+;; EXPECT: sym:symbol foo|kw:keyword bar|int:integer 42|str:string hello
+;; DEPS: bootstrap/lexer.airl
+(match (lex-symbol "foo bar" 0 1 1 "" 1 1)
+  (Ok s1)
+    (let (s1-tok : _ (at s1 0))
+      (match s1-tok
+        (Token kind val line col)
+          (match (lex-keyword ":bar rest" 1 1 2 "" 1 1)
+            (Ok k1)
+              (let (k1-tok : _ (at k1 0))
+                (match k1-tok
+                  (Token kk kv kl kc)
+                    (match (lex-number "42 " 0 1 1 0 false 1 1)
+                      (Ok n1)
+                        (let (n1-tok : _ (at n1 0))
+                          (match n1-tok
+                            (Token nk nv nl nc)
+                              (match (lex-string "hello\" rest" 0 1 1 "" 1 1)
+                                (Ok st1)
+                                  (let (st1-tok : _ (at st1 0))
+                                    (match st1-tok
+                                      (Token sk sv sl sc)
+                                        (print (str "sym:" kind " " val
+                                                    "|kw:" kk " " kv
+                                                    "|int:" nk " " nv
+                                                    "|str:" sk " " sv))))
+                                (Err e) (print (str "str-err: " e)))))
+                      (Err e) (print (str "num-err: " e)))))
+            (Err e) (print (str "kw-err: " e)))))
+  (Err e) (print (str "sym-err: " e)))

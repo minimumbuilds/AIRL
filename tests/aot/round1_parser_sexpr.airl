@@ -1,0 +1,19 @@
+;; EXPECT: sexpr:3 items|all:2 sexprs
+;; DEPS: bootstrap/lexer.airl bootstrap/parser.airl
+(match (lex "(a b c)")
+  (Ok tokens)
+    (match (parse-sexpr tokens 0)
+      (Ok pair)
+        (let (sexpr : _ (at pair 0))
+          (match sexpr
+            (SList items line col)
+              (match (lex "(+ 1) (- 2)")
+                (Ok tokens2)
+                  (match (parse-sexpr-all tokens2)
+                    (Ok sexprs)
+                      (print (str "sexpr:" (length items) " items|all:" (length sexprs) " sexprs"))
+                    (Err e) (print (str "parse-all err: " e)))
+                (Err e) (print (str "lex2 err: " e)))
+            _ (print "unexpected sexpr type")))
+      (Err e) (print (str "parse err: " e)))
+  (Err e) (print (str "lex err: " e)))

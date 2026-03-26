@@ -1,0 +1,11 @@
+;; EXPECT: yes|b|10|ok:42
+(let (r1 : String (if true "yes" "no"))
+     (r2 : String (match 2
+                    1 "a"
+                    2 "b"
+                    _ "c"))
+     (r3 : i64 (let (x : i64 5) (+ x x)))
+     (r4 : String (match (Ok 42)
+                    (Ok v) (str "ok:" v)
+                    (Err e) (str "err:" e)))
+  (print (str r1 "|" r2 "|" r3 "|" r4)))

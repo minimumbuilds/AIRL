@@ -1,0 +1,12 @@
+;; EXPECT: defn:add2 params:2
+;; DEPS: bootstrap/lexer.airl bootstrap/parser.airl
+(match (parse "(defn add2 :sig [(a : i64) (b : i64) -> i64] :requires [(valid a)] :ensures [(valid result)] :body (+ a b))")
+  (Ok ast)
+    (match (head ast)
+      (ASTDefn name sig _ _ _ body _ _)
+        (match sig
+          (ASTSig params ret)
+            (print (str "defn:" name " params:" (length params)))
+          _ (print "bad sig"))
+      _ (print "not defn"))
+  (Err e) (print (str "err: " e)))

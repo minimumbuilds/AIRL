@@ -1,0 +1,17 @@
+;; EXPECT: peek:true false false|skip:5 2|sym:abc+d hello
+;; DEPS: bootstrap/lexer.airl
+(let (p1 : Bool (peek-next-is? "ab" 0 "b"))
+     (p2 : Bool (peek-next-is? "ab" 0 "c"))
+     (p3 : Bool (peek-next-is? "a" 0 "b"))
+  (match (skip-ws "  \n  x" 0 1 1)
+    (Ok ws-state)
+      (let (ws-pos : i64 (at ws-state 0))
+           (ws-line : i64 (at ws-state 1))
+           (sym1 : List (read-symbol-chars "abc+d" 0 1 1 ""))
+           (sym1-text : String (head sym1))
+           (sym2 : List (read-symbol-chars "hello world" 0 1 1 ""))
+           (sym2-text : String (head sym2))
+        (print (str "peek:" p1 " " p2 " " p3
+                    "|skip:" ws-pos " " ws-line
+                    "|sym:" sym1-text " " sym2-text)))
+    (Err e) (print (str "error: " e))))

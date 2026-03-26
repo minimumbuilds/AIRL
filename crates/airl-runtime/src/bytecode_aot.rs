@@ -1207,6 +1207,22 @@ impl BytecodeAot {
         if std::env::var("AIRL_AOT_DEBUG").as_deref() == Ok("1") {
             eprintln!("[AOT] compiling {} ({} instrs, boxed)", name, func.instructions.len());
         }
+        if std::env::var("AIRL_BC_DUMP").as_deref() == Ok("1") {
+            eprintln!("[BC] {} (arity={}, regs={}, consts={})", name, func.arity, func.register_count, func.constants.len());
+            for (i, instr) in func.instructions.iter().enumerate() {
+                let const_hint = match instr.op {
+                    Op::LoadConst | Op::Call | Op::CallBuiltin | Op::MakeVariant | Op::MakeVariant0 | Op::MakeClosure | Op::MatchTag => {
+                        if (instr.a as usize) < func.constants.len() {
+                            format!("  ; const[{}]={:?}", instr.a, func.constants[instr.a as usize])
+                        } else {
+                            String::new()
+                        }
+                    }
+                    _ => String::new(),
+                };
+                eprintln!("  {:3}: {:?} dst={} a={} b={}{}", i, instr.op, instr.dst, instr.a, instr.b, const_hint);
+            }
+        }
 
         if is_eligible {
             self.compile_func_unboxed(func, all_functions)?;
