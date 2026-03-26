@@ -2415,7 +2415,7 @@ impl BytecodeAot {
 
                     // Variadic builtins: print (multi-arg), str, format
                     // These use (ptr_to_args, count) -> ptr calling convention
-                    let variadic_func_id = if callee_name == "print" && argc != 1 && !call_targets.contains_key("print") {
+                    let variadic_func_id = if callee_name == "print" && argc != 1 {
                         Some(self.rt.print_values)
                     } else if callee_name == "str" {
                         Some(self.rt.str_variadic)
@@ -2929,12 +2929,24 @@ impl BytecodeAot {
 
         // Debug output
         if std::env::var("AIRL_AOT_DEBUG").as_deref() == Ok("1") {
-            eprintln!("[AOT] Cranelift IR for {}:\n{}", func.name, ctx.func.display());
+            eprintln!("[AOT] Cranelift IR for {}:", func.name);
+        }
+
+        // Pre-verify to get detailed error
+        let flags = cranelift_codegen::settings::Flags::new(cranelift_codegen::settings::builder());
+        if let Err(errs) = cranelift_codegen::verify_function(&ctx.func, &flags) {
+            eprintln!("[AOT] VERIFIER ERRORS for '{}':\n{}", func.name, errs);
+            eprintln!("[AOT] Full IR:\n{}", ctx.func.display());
+            return Err(format!("verify: {}", errs));
         }
 
         self.module
             .define_function(func_id, &mut ctx)
-            .map_err(|e| format!("define: {}", e))?;
+            .map_err(|e| {
+                let err_str = format!("{:#}", e);
+                eprintln!("[AOT] DEFINE FAILED for '{}': {}", func.name, err_str);
+                format!("define: {}", err_str)
+            })?;
 
         Ok(())
     }
