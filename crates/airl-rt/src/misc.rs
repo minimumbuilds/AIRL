@@ -1,4 +1,5 @@
-use crate::value::{rt_bool, rt_float, rt_int, rt_list, rt_nil, rt_str, rt_variant, RtData, RtValue};
+use std::collections::HashMap;
+use crate::value::{rt_bool, rt_float, rt_int, rt_list, rt_map, rt_nil, rt_str, rt_variant, RtData, RtValue};
 
 fn ok_variant(inner: *mut RtValue) -> *mut RtValue {
     rt_variant("Ok".into(), inner)
@@ -653,37 +654,158 @@ pub extern "C" fn airl_http_request(_method: *mut RtValue, _url: *mut RtValue, _
 
 #[no_mangle]
 pub extern "C" fn airl_json_parse(text: *mut RtValue) -> *mut RtValue {
-    let input = match unsafe { &(*text).data } { RtData::Str(s) => s.clone(), _ => return rt_nil() };
-    let trimmed = input.trim();
-    if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
-        rt_str(trimmed[1..trimmed.len()-1].to_string())
-    } else if let Ok(n) = trimmed.parse::<i64>() {
-        rt_int(n)
-    } else if let Ok(f) = trimmed.parse::<f64>() {
-        rt_float(f)
-    } else if trimmed == "true" {
-        rt_bool(true)
-    } else if trimmed == "false" {
-        rt_bool(false)
-    } else if trimmed == "null" {
-        rt_nil()
+    let input = match unsafe { &(*text).data } { RtData::Str(s) => s.clone(), _ => return err_variant("json-parse: not a string") };
+    match parse_json_value(input.trim()) {
+        Some((val, _)) => ok_variant(val),
+        None => err_variant(&format!("json-parse: invalid JSON: {}", input)),
+    }
+}
+
+/// Minimal recursive-descent JSON parser returning (*mut RtValue, remaining_input).
+fn parse_json_value(input: &str) -> Option<(*mut RtValue, &str)> {
+    let s = input.trim_start();
+    if s.is_empty() { return None; }
+    match s.as_bytes()[0] {
+        b'"' => parse_json_string(s),
+        b'{' => parse_json_object(s),
+        b'[' => parse_json_array(s),
+        b't' if s.starts_with("true") => Some((rt_bool(true), &s[4..])),
+        b'f' if s.starts_with("false") => Some((rt_bool(false), &s[5..])),
+        b'n' if s.starts_with("null") => Some((rt_nil(), &s[4..])),
+        _ => parse_json_number(s),
+    }
+}
+
+fn parse_json_string(s: &str) -> Option<(*mut RtValue, &str)> {
+    if !s.starts_with('"') { return None; }
+    let mut result = String::new();
+    let bytes = s.as_bytes();
+    let mut i = 1;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            match bytes[i + 1] {
+                b'"' => { result.push('"'); i += 2; }
+                b'\\' => { result.push('\\'); i += 2; }
+                b'/' => { result.push('/'); i += 2; }
+                b'n' => { result.push('\n'); i += 2; }
+                b'r' => { result.push('\r'); i += 2; }
+                b't' => { result.push('\t'); i += 2; }
+                b'b' => { result.push('\u{0008}'); i += 2; }
+                b'f' => { result.push('\u{000C}'); i += 2; }
+                b'u' if i + 5 < bytes.len() => {
+                    if let Ok(cp) = u32::from_str_radix(&s[i+2..i+6], 16) {
+                        if let Some(ch) = char::from_u32(cp) { result.push(ch); }
+                    }
+                    i += 6;
+                }
+                _ => { result.push(bytes[i] as char); i += 1; }
+            }
+        } else if bytes[i] == b'"' {
+            return Some((rt_str(result), &s[i+1..]));
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    None
+}
+
+fn parse_json_number(s: &str) -> Option<(*mut RtValue, &str)> {
+    let mut end = 0;
+    let bytes = s.as_bytes();
+    if end < bytes.len() && bytes[end] == b'-' { end += 1; }
+    while end < bytes.len() && bytes[end].is_ascii_digit() { end += 1; }
+    let mut is_float = false;
+    if end < bytes.len() && bytes[end] == b'.' {
+        is_float = true; end += 1;
+        while end < bytes.len() && bytes[end].is_ascii_digit() { end += 1; }
+    }
+    if end < bytes.len() && (bytes[end] == b'e' || bytes[end] == b'E') {
+        is_float = true; end += 1;
+        if end < bytes.len() && (bytes[end] == b'+' || bytes[end] == b'-') { end += 1; }
+        while end < bytes.len() && bytes[end].is_ascii_digit() { end += 1; }
+    }
+    if end == 0 { return None; }
+    let num_str = &s[..end];
+    if is_float {
+        num_str.parse::<f64>().ok().map(|f| (rt_float(f), &s[end..]))
     } else {
-        rt_str(input)
+        num_str.parse::<i64>().ok().map(|n| (rt_int(n), &s[end..]))
+    }
+}
+
+fn parse_json_array(s: &str) -> Option<(*mut RtValue, &str)> {
+    let mut rest = s[1..].trim_start(); // skip '['
+    let mut items: Vec<*mut RtValue> = Vec::new();
+    if rest.starts_with(']') { return Some((rt_list(items), &rest[1..])); }
+    loop {
+        let (val, r) = parse_json_value(rest)?;
+        items.push(val);
+        rest = r.trim_start();
+        if rest.starts_with(',') { rest = rest[1..].trim_start(); }
+        else if rest.starts_with(']') { return Some((rt_list(items), &rest[1..])); }
+        else { return None; }
+    }
+}
+
+fn parse_json_object(s: &str) -> Option<(*mut RtValue, &str)> {
+    let mut rest = s[1..].trim_start(); // skip '{'
+    let mut map: HashMap<String, *mut RtValue> = HashMap::new();
+    if rest.starts_with('}') { return Some((rt_map(map), &rest[1..])); }
+    loop {
+        // Parse key (must be string)
+        let (key_val, r) = parse_json_string(rest.trim_start())?;
+        let key = unsafe { match &(*key_val).data { RtData::Str(s) => s.clone(), _ => return None } };
+        crate::memory::airl_value_release(key_val);
+        rest = r.trim_start();
+        if !rest.starts_with(':') { return None; }
+        rest = rest[1..].trim_start();
+        let (val, r) = parse_json_value(rest)?;
+        map.insert(key, val);
+        rest = r.trim_start();
+        if rest.starts_with(',') { rest = rest[1..].trim_start(); }
+        else if rest.starts_with('}') { return Some((rt_map(map), &rest[1..])); }
+        else { return None; }
     }
 }
 
 #[no_mangle]
 pub extern "C" fn airl_json_stringify(val: *mut RtValue) -> *mut RtValue {
+    fn to_json(v: &RtValue) -> String {
+        match &v.data {
+            RtData::Str(s) => format!("\"{}\"", s),
+            RtData::Int(n) => n.to_string(),
+            RtData::Float(f) => f.to_string(),
+            RtData::Bool(b) => (if *b { "true" } else { "false" }).to_string(),
+            RtData::Nil | RtData::Unit => "null".to_string(),
+            RtData::List(items) => {
+                let parts: Vec<String> = items.iter().map(|&p| {
+                    let inner = unsafe { &*p };
+                    to_json(inner)
+                }).collect();
+                format!("[{}]", parts.join(","))
+            }
+            RtData::Map(m) => {
+                let mut keys: Vec<&String> = m.keys().collect();
+                keys.sort();
+                let parts: Vec<String> = keys.iter().map(|k| {
+                    let val = unsafe { &*m[*k] };
+                    format!("\"{}\":{}", k, to_json(val))
+                }).collect();
+                format!("{{{}}}", parts.join(","))
+            }
+            RtData::Variant { tag_name, inner } => {
+                let inner_v = unsafe { &**inner };
+                match &inner_v.data {
+                    RtData::Unit => format!("\"({})\"", tag_name),
+                    _ => format!("\"({} {})\"", tag_name, to_json(inner_v)),
+                }
+            }
+            RtData::Closure { .. } => "\"<closure>\"".to_string(),
+        }
+    }
     let v = unsafe { &*val };
-    let s = match &v.data {
-        RtData::Str(s) => format!("\"{}\"", s),
-        RtData::Int(n) => n.to_string(),
-        RtData::Float(f) => f.to_string(),
-        RtData::Bool(b) => (if *b { "true" } else { "false" }).to_string(),
-        RtData::Nil => "null".to_string(),
-        _ => format!("{}", v),
-    };
-    rt_str(s)
+    rt_str(to_json(v))
 }
 
 // ── TCP sockets ──

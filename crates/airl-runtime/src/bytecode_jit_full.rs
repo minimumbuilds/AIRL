@@ -981,7 +981,6 @@ impl BytecodeJitFull {
         use airl_rt::value::*;
         match v {
             Value::Int(n)   => rt_int(*n),
-            Value::UInt(n)  => rt_int(*n as i64),
             Value::Float(f) => rt_float(*f),
             Value::Bool(b)  => rt_bool(*b),
             Value::Str(s)   => rt_str(s.clone()),

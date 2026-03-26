@@ -1,44 +1,25 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt;
 
-use airl_syntax::ast::{FnDef, Param, Expr};
-
-/// Runtime function value — a named function with its definition.
-#[derive(Debug, Clone)]
-pub struct FnValue {
-    pub name: String,
-    pub def: FnDef,
-}
-
-/// Runtime lambda (closure) value with captured environment.
-#[derive(Debug, Clone)]
-pub struct LambdaValue {
-    pub params: Vec<Param>,
-    pub body: Expr,
-    pub captures: Vec<(String, Value)>,
-}
-
-/// The runtime representation of all AIRL values.
+/// Value enum — used as the bytecode constant representation and for
+/// marshalling between RtValue and the bytecode compiler/VM.
+///
+/// v0.6.0: Runtime-only variants (Tensor, Struct, UInt, IRClosure, Function,
+/// Lambda) have been removed. Runtime values are now RtValue from airl-rt.
 #[derive(Debug, Clone)]
 pub enum Value {
     Int(i64),
-    UInt(u64),
     Float(f64),
     Bool(bool),
     Str(String),
     Nil,
     Unit,
-    Tensor(Box<crate::tensor::TensorValue>),
     List(Vec<Value>),
     IntList(Vec<i64>),  // Specialized homogeneous integer list (cache-friendly, no boxing)
     Tuple(Vec<Value>),
     Variant(String, Box<Value>),
-    Struct(BTreeMap<String, Value>),
     Map(HashMap<String, Value>),
-    Function(FnValue),
-    Lambda(LambdaValue),
     BuiltinFn(String),
-    IRClosure(crate::ir::IRClosureValue),
     IRFuncRef(String),
     BytecodeClosure(crate::bytecode::BytecodeClosureValue),
 }
@@ -47,7 +28,6 @@ impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Value::Int(n) => write!(f, "{}", n),
-            Value::UInt(n) => write!(f, "{}", n),
             Value::Float(n) => {
                 if n.fract() == 0.0 && n.is_finite() {
                     write!(f, "{}.0", n)
@@ -59,7 +39,6 @@ impl fmt::Display for Value {
             Value::Str(s) => write!(f, "\"{}\"", s),
             Value::Nil => write!(f, "nil"),
             Value::Unit => write!(f, "()"),
-            Value::Tensor(t) => write!(f, "tensor<{:?}, {:?}>", t.dtype, t.shape),
             Value::List(items) => {
                 write!(f, "[")?;
                 for (i, item) in items.iter().enumerate() {
@@ -90,14 +69,6 @@ impl fmt::Display for Value {
                     _ => write!(f, "({} {})", name, inner),
                 }
             }
-            Value::Struct(fields) => {
-                write!(f, "{{")?;
-                for (i, (k, v)) in fields.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
-                    write!(f, "{}: {}", k, v)?;
-                }
-                write!(f, "}}")
-            }
             Value::Map(m) => {
                 let mut keys: Vec<&String> = m.keys().collect();
                 keys.sort();
@@ -108,10 +79,7 @@ impl fmt::Display for Value {
                 }
                 write!(f, "}}")
             }
-            Value::Function(fv) => write!(f, "<fn {}>", fv.name),
-            Value::Lambda(_) => write!(f, "<lambda>"),
             Value::BuiltinFn(name) => write!(f, "<builtin {}>", name),
-            Value::IRClosure(_) => write!(f, "<ir-closure>"),
             Value::IRFuncRef(name) => write!(f, "<ir-fn:{}>", name),
             Value::BytecodeClosure(_) => write!(f, "<bytecode-closure>"),
         }
@@ -122,7 +90,6 @@ impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => a == b,
-            (Value::UInt(a), Value::UInt(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a.to_bits() == b.to_bits(),
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Str(a), Value::Str(b)) => a == b,
@@ -137,7 +104,6 @@ impl PartialEq for Value {
             }
             (Value::Tuple(a), Value::Tuple(b)) => a == b,
             (Value::Variant(na, va), Value::Variant(nb, vb)) => na == nb && va == vb,
-            (Value::Struct(a), Value::Struct(b)) => a == b,
             (Value::Map(a), Value::Map(b)) => {
                 if a.len() != b.len() {
                     return false;
@@ -145,13 +111,6 @@ impl PartialEq for Value {
                 a.iter().all(|(k, v)| b.get(k).map_or(false, |bv| v == bv))
             }
             (Value::BuiltinFn(a), Value::BuiltinFn(b)) => a == b,
-            (Value::Tensor(a), Value::Tensor(b)) => {
-                a.dtype == b.dtype && a.shape == b.shape && a.data == b.data
-            }
-            // Functions and lambdas are never equal
-            (Value::Function(_), Value::Function(_)) => false,
-            (Value::Lambda(_), Value::Lambda(_)) => false,
-            (Value::IRClosure(_), _) => false,
             (Value::IRFuncRef(a), Value::IRFuncRef(b)) => a == b,
             (Value::IRFuncRef(_), _) => false,
             (Value::BytecodeClosure(_), _) => false,
@@ -185,13 +144,6 @@ mod tests {
     }
 
     #[test]
-    fn uint_display_and_eq() {
-        let v = Value::UInt(100);
-        assert_eq!(format!("{}", v), "100");
-        assert_eq!(v, Value::UInt(100));
-    }
-
-    #[test]
     fn float_display() {
         assert_eq!(format!("{}", Value::Float(3.14)), "3.14");
         assert_eq!(format!("{}", Value::Float(1.0)), "1.0");
@@ -200,9 +152,7 @@ mod tests {
     #[test]
     fn float_eq_bitwise() {
         assert_eq!(Value::Float(0.0), Value::Float(0.0));
-        // NaN == NaN when comparing bits
         assert_eq!(Value::Float(f64::NAN), Value::Float(f64::NAN));
-        // -0.0 != 0.0 in bit comparison
         assert_ne!(Value::Float(-0.0), Value::Float(0.0));
     }
 
@@ -259,72 +209,10 @@ mod tests {
     }
 
     #[test]
-    fn struct_display() {
-        let mut m = BTreeMap::new();
-        m.insert("x".into(), Value::Int(1));
-        m.insert("y".into(), Value::Int(2));
-        let v = Value::Struct(m);
-        assert_eq!(format!("{}", v), "{x: 1, y: 2}");
-    }
-
-    #[test]
     fn builtin_fn_display_and_eq() {
         let v = Value::BuiltinFn("print".into());
         assert_eq!(format!("{}", v), "<builtin print>");
         assert_eq!(v, Value::BuiltinFn("print".into()));
-    }
-
-    #[test]
-    fn function_display() {
-        let v = Value::Function(FnValue {
-            name: "add".into(),
-            def: airl_syntax::ast::FnDef {
-                name: "add".into(),
-                params: vec![],
-                return_type: airl_syntax::ast::AstType {
-                    kind: airl_syntax::ast::AstTypeKind::Named("i32".into()),
-                    span: airl_syntax::Span::dummy(),
-                },
-                intent: None,
-                requires: vec![],
-                ensures: vec![],
-                invariants: vec![],
-                body: airl_syntax::ast::Expr {
-                    kind: airl_syntax::ast::ExprKind::IntLit(0),
-                    span: airl_syntax::Span::dummy(),
-                },
-                execute_on: None,
-                priority: None,
-                span: airl_syntax::Span::dummy(),
-            },
-        });
-        assert_eq!(format!("{}", v), "<fn add>");
-    }
-
-    #[test]
-    fn functions_never_equal() {
-        let def = airl_syntax::ast::FnDef {
-            name: "f".into(),
-            params: vec![],
-            return_type: airl_syntax::ast::AstType {
-                kind: airl_syntax::ast::AstTypeKind::Named("i32".into()),
-                span: airl_syntax::Span::dummy(),
-            },
-            intent: None,
-            requires: vec![],
-            ensures: vec![],
-            invariants: vec![],
-            body: airl_syntax::ast::Expr {
-                kind: airl_syntax::ast::ExprKind::IntLit(0),
-                span: airl_syntax::Span::dummy(),
-            },
-            execute_on: None,
-            priority: None,
-            span: airl_syntax::Span::dummy(),
-        };
-        let a = Value::Function(FnValue { name: "f".into(), def: def.clone() });
-        let b = Value::Function(FnValue { name: "f".into(), def });
-        assert_ne!(a, b);
     }
 
     #[test]
@@ -333,7 +221,6 @@ mod tests {
         m1.insert("b".into(), Value::Int(2));
         m1.insert("a".into(), Value::Int(1));
         let v1 = Value::Map(m1);
-        // Display should sort keys
         assert_eq!(format!("{}", v1), "{a: 1, b: 2}");
 
         let mut m2 = HashMap::new();
@@ -353,7 +240,6 @@ mod tests {
 
     #[test]
     fn cross_type_not_equal() {
-        assert_ne!(Value::Int(1), Value::UInt(1));
         assert_ne!(Value::Int(0), Value::Bool(false));
         assert_ne!(Value::Nil, Value::Bool(false));
     }
@@ -364,8 +250,6 @@ mod tests {
         let v2 = v.clone();
         let _ = format!("{:?}", v2);
     }
-
-    // ── IntList ─────────────────────────────────────────
 
     #[test]
     fn intlist_display() {

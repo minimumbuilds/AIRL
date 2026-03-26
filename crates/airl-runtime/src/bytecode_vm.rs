@@ -1,14 +1,13 @@
 // crates/airl-runtime/src/bytecode_vm.rs
 //
-// v0.6.0: Register bank uses *mut RtValue from airl-rt.
-// Builtin dispatch calls airl-rt extern "C" functions directly.
-// VM-aware builtins (map/filter/fold/sort/any/all/find) bridge through
-// Value conversion until Phase 3 removes builtins.rs entirely.
+// v0.6.0 Phase 3: Builtins struct removed. All builtin dispatch goes through
+// dispatch_rt_builtin() calling airl-rt extern "C" functions, plus special-case
+// handlers for thread-spawn, fn-metadata, thread-join, channel-*, compile-*, run-bytecode.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, Ordering};
 use crate::bytecode::*;
 use crate::value::Value;
-use crate::builtins::{Builtins, VmCaller};
 use crate::error::RuntimeError;
 use airl_rt::value::{RtValue, RtData, rt_nil, rt_int, rt_float, rt_bool, rt_str, rt_list, rt_map, rt_variant};
 use airl_rt::memory::{airl_value_retain, airl_value_release};
@@ -48,7 +47,6 @@ fn is_simple_closure(func: &BytecodeFunc) -> bool {
 fn value_to_rt(v: &Value) -> *mut RtValue {
     match v {
         Value::Int(n)   => rt_int(*n),
-        Value::UInt(n)  => rt_int(*n as i64),
         Value::Float(f) => rt_float(*f),
         Value::Bool(b)  => rt_bool(*b),
         Value::Str(s)   => rt_str(s.clone()),
@@ -78,8 +76,6 @@ fn value_to_rt(v: &Value) -> *mut RtValue {
             rt_map(rt_map_data)
         }
         Value::BytecodeClosure(bc) => {
-            // Represent as a closure with null func_ptr (VM dispatches by name).
-            // Store function name as first capture, followed by actual captures.
             let name_rt = rt_str(bc.func_name.clone());
             let mut caps: Vec<*mut RtValue> = vec![name_rt];
             for c in &bc.captured {
@@ -91,7 +87,7 @@ fn value_to_rt(v: &Value) -> *mut RtValue {
                 caps.len(),
             )
         }
-        _ => rt_nil(),
+        Value::BuiltinFn(_) | Value::IRFuncRef(_) => rt_nil(),
     }
 }
 
@@ -204,6 +200,212 @@ struct CallFrame {
     return_reg: u16,
     match_flag: bool,
     moved: Vec<bool>,
+}
+
+// ── Thread/channel globals ──────────────────────────────────────────
+
+pub(crate) static NEXT_THREAD_HANDLE: AtomicI64 = AtomicI64::new(1);
+
+pub(crate) fn thread_handles() -> &'static std::sync::Mutex<HashMap<i64, std::thread::JoinHandle<Result<Value, String>>>> {
+    use std::sync::{Mutex, OnceLock};
+    static HANDLES: OnceLock<Mutex<HashMap<i64, std::thread::JoinHandle<Result<Value, String>>>>> = OnceLock::new();
+    HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+static NEXT_CHANNEL_HANDLE: AtomicI64 = AtomicI64::new(1);
+
+fn channel_senders() -> &'static std::sync::Mutex<HashMap<i64, std::sync::mpsc::Sender<Value>>> {
+    use std::sync::{Mutex, OnceLock};
+    static SENDERS: OnceLock<Mutex<HashMap<i64, std::sync::mpsc::Sender<Value>>>> = OnceLock::new();
+    SENDERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn channel_receivers() -> &'static std::sync::Mutex<HashMap<i64, std::sync::mpsc::Receiver<Value>>> {
+    use std::sync::{Mutex, OnceLock};
+    static RECEIVERS: OnceLock<Mutex<HashMap<i64, std::sync::mpsc::Receiver<Value>>>> = OnceLock::new();
+    RECEIVERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+// ── Thread/channel dispatch helpers (RtValue interface) ─────────────
+
+fn dispatch_thread_join(args: &[*mut RtValue]) -> *mut RtValue {
+    let handle_id = match args.first() {
+        Some(&ptr) if !ptr.is_null() => unsafe {
+            match &(*ptr).data { RtData::Int(n) => *n, _ => return rt_variant("Err".into(), rt_str("thread-join: handle must be Int".into())) }
+        },
+        _ => return rt_variant("Err".into(), rt_str("thread-join: requires 1 argument".into())),
+    };
+    let join_handle = match thread_handles().lock().unwrap().remove(&handle_id) {
+        Some(h) => h,
+        None => return rt_variant("Err".into(), rt_str(format!("thread-join: invalid or already-joined handle {}", handle_id))),
+    };
+    match join_handle.join() {
+        Ok(Ok(val)) => {
+            let inner = value_to_rt(&val);
+            rt_variant("Ok".into(), inner)
+        }
+        Ok(Err(msg)) => rt_variant("Err".into(), rt_str(msg)),
+        Err(_) => rt_variant("Err".into(), rt_str("thread panicked".into())),
+    }
+}
+
+fn dispatch_channel_new(_args: &[*mut RtValue]) -> *mut RtValue {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let tx_id = NEXT_CHANNEL_HANDLE.fetch_add(1, Ordering::SeqCst);
+    let rx_id = NEXT_CHANNEL_HANDLE.fetch_add(1, Ordering::SeqCst);
+    channel_senders().lock().unwrap().insert(tx_id, tx);
+    channel_receivers().lock().unwrap().insert(rx_id, rx);
+    rt_list(vec![rt_int(tx_id), rt_int(rx_id)])
+}
+
+fn dispatch_channel_send(args: &[*mut RtValue]) -> *mut RtValue {
+    let tx_id = match args.first() {
+        Some(&ptr) if !ptr.is_null() => unsafe {
+            match &(*ptr).data { RtData::Int(n) => *n, _ => return rt_variant("Err".into(), rt_str("channel-send: handle must be Int".into())) }
+        },
+        _ => return rt_variant("Err".into(), rt_str("channel-send: requires 2 arguments".into())),
+    };
+    let value = args.get(1).map(|&p| rt_to_value_no_release(p)).unwrap_or(Value::Nil);
+    let senders = channel_senders().lock().unwrap();
+    match senders.get(&tx_id) {
+        Some(tx) => match tx.send(value) {
+            Ok(()) => rt_variant("Ok".into(), rt_bool(true)),
+            Err(_) => rt_variant("Err".into(), rt_str("channel closed".into())),
+        },
+        None => rt_variant("Err".into(), rt_str(format!("channel-send: invalid sender handle {}", tx_id))),
+    }
+}
+
+fn dispatch_channel_recv(args: &[*mut RtValue]) -> *mut RtValue {
+    let rx_id = match args.first() {
+        Some(&ptr) if !ptr.is_null() => unsafe {
+            match &(*ptr).data { RtData::Int(n) => *n, _ => return rt_variant("Err".into(), rt_str("channel-recv: handle must be Int".into())) }
+        },
+        _ => return rt_variant("Err".into(), rt_str("channel-recv: requires 1 argument".into())),
+    };
+    let rx = channel_receivers().lock().unwrap().remove(&rx_id);
+    match rx {
+        Some(rx) => {
+            let result = match rx.recv() {
+                Ok(val) => rt_variant("Ok".into(), value_to_rt(&val)),
+                Err(_) => rt_variant("Err".into(), rt_str("channel closed".into())),
+            };
+            channel_receivers().lock().unwrap().insert(rx_id, rx);
+            result
+        },
+        None => rt_variant("Err".into(), rt_str(format!("channel-recv: invalid receiver handle {}", rx_id))),
+    }
+}
+
+fn dispatch_channel_recv_timeout(args: &[*mut RtValue]) -> *mut RtValue {
+    let rx_id = match args.first() {
+        Some(&ptr) if !ptr.is_null() => unsafe {
+            match &(*ptr).data { RtData::Int(n) => *n, _ => return rt_variant("Err".into(), rt_str("channel-recv-timeout: handle must be Int".into())) }
+        },
+        _ => return rt_variant("Err".into(), rt_str("channel-recv-timeout: requires 2 arguments".into())),
+    };
+    let timeout_ms = match args.get(1) {
+        Some(&ptr) if !ptr.is_null() => unsafe {
+            match &(*ptr).data { RtData::Int(n) => *n, _ => return rt_variant("Err".into(), rt_str("channel-recv-timeout: timeout must be Int".into())) }
+        },
+        _ => return rt_variant("Err".into(), rt_str("channel-recv-timeout: requires 2 arguments".into())),
+    };
+    let rx = channel_receivers().lock().unwrap().remove(&rx_id);
+    match rx {
+        Some(rx) => {
+            let duration = std::time::Duration::from_millis(timeout_ms as u64);
+            let result = match rx.recv_timeout(duration) {
+                Ok(val) => rt_variant("Ok".into(), value_to_rt(&val)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => rt_variant("Err".into(), rt_str("timeout".into())),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => rt_variant("Err".into(), rt_str("channel closed".into())),
+            };
+            channel_receivers().lock().unwrap().insert(rx_id, rx);
+            result
+        },
+        None => rt_variant("Err".into(), rt_str(format!("channel-recv-timeout: invalid receiver handle {}", rx_id))),
+    }
+}
+
+fn dispatch_channel_close(args: &[*mut RtValue]) -> *mut RtValue {
+    let handle_id = match args.first() {
+        Some(&ptr) if !ptr.is_null() => unsafe {
+            match &(*ptr).data { RtData::Int(n) => *n, _ => return rt_bool(false) }
+        },
+        _ => return rt_bool(false),
+    };
+    let removed_tx = channel_senders().lock().unwrap().remove(&handle_id).is_some();
+    let removed_rx = channel_receivers().lock().unwrap().remove(&handle_id).is_some();
+    rt_bool(removed_tx || removed_rx)
+}
+
+// ── Compile/bytecode dispatch helpers (bridge through Value) ────────
+
+fn dispatch_compile_to_executable(args: &[*mut RtValue]) -> *mut RtValue {
+    let value_args: Vec<Value> = args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+    let paths = match value_args.first() {
+        Some(Value::List(items)) => {
+            match items.iter().map(|v| match v { Value::Str(s) => Ok(s.clone()), _ => Err(()) }).collect::<Result<Vec<_>, _>>() {
+                Ok(ps) => ps,
+                Err(_) => return rt_variant("Err".into(), rt_str("compile-to-executable: paths must be strings".into())),
+            }
+        }
+        _ => return rt_variant("Err".into(), rt_str("compile-to-executable: first arg must be list of paths".into())),
+    };
+    let output = match value_args.get(1) {
+        Some(Value::Str(s)) => s.clone(),
+        _ => return rt_variant("Err".into(), rt_str("compile-to-executable: second arg must be output path string".into())),
+    };
+    #[cfg(feature = "aot")]
+    {
+        match crate::bytecode_aot::compile_to_executable_impl(&paths, &output) {
+            Ok(()) => airl_rt::value::rt_unit(),
+            Err(e) => rt_variant("Err".into(), rt_str(e)),
+        }
+    }
+    #[cfg(not(feature = "aot"))]
+    {
+        let _ = (paths, output);
+        rt_variant("Err".into(), rt_str("compile-to-executable: AOT feature not enabled".into()))
+    }
+}
+
+fn dispatch_compile_bytecode_to_executable(args: &[*mut RtValue]) -> *mut RtValue {
+    let value_args: Vec<Value> = args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+    let func_list = match value_args.first() {
+        Some(Value::List(items)) => items.clone(),
+        _ => return rt_variant("Err".into(), rt_str("compile-bytecode-to-executable: first arg must be list of BCFunc".into())),
+    };
+    let output_path = match value_args.get(1) {
+        Some(Value::Str(s)) => s.clone(),
+        _ => return rt_variant("Err".into(), rt_str("compile-bytecode-to-executable: second arg must be output path string".into())),
+    };
+    #[cfg(feature = "aot")]
+    {
+        match crate::bytecode_marshal::compile_bytecode_to_executable(&func_list, &output_path) {
+            Ok(()) => rt_str(format!("Compiled to {}", output_path)),
+            Err(e) => rt_variant("Err".into(), rt_str(format!("{}", e))),
+        }
+    }
+    #[cfg(not(feature = "aot"))]
+    {
+        let _ = (func_list, output_path);
+        rt_variant("Err".into(), rt_str("compile-bytecode-to-executable: AOT feature not enabled".into()))
+    }
+}
+
+fn dispatch_run_bytecode(args: &[*mut RtValue]) -> *mut RtValue {
+    let value_args: Vec<Value> = args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+    let func_list = match value_args.first() {
+        Some(Value::List(items)) => items.clone(),
+        _ => return rt_nil(),
+    };
+    match crate::bytecode_marshal::run_bytecode_program(&func_list) {
+        Ok(val) => value_to_rt(&val),
+        Err(e) => {
+            eprintln!("run-bytecode error: {}", e);
+            rt_nil()
+        }
+    }
 }
 
 // ── Builtin dispatcher ─────────────────────────────────────────────
@@ -425,6 +627,19 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "zstd-compress" => airl_rt::misc::airl_zstd_compress(a0!()),
         "zstd-decompress" => airl_rt::misc::airl_zstd_decompress(a0!()),
 
+        // Thread/channel
+        "thread-join" => dispatch_thread_join(args),
+        "channel-new" => dispatch_channel_new(args),
+        "channel-send" => dispatch_channel_send(args),
+        "channel-recv" => dispatch_channel_recv(args),
+        "channel-recv-timeout" => dispatch_channel_recv_timeout(args),
+        "channel-close" => dispatch_channel_close(args),
+
+        // Compiler/bytecode
+        "compile-to-executable" => dispatch_compile_to_executable(args),
+        "compile-bytecode-to-executable" => dispatch_compile_bytecode_to_executable(args),
+        "run-bytecode" => dispatch_run_bytecode(args),
+
         // Not found
         _ => return None,
     };
@@ -441,7 +656,6 @@ unsafe impl Send for BytecodeVm {}
 pub struct BytecodeVm {
     pub functions: HashMap<String, BytecodeFunc>,
     fn_metadata: HashMap<String, crate::bytecode::FnDefMetadata>,
-    builtins: Builtins,
     call_stack: Vec<CallFrame>,
     recursion_depth: usize,
     #[cfg(feature = "jit")]
@@ -453,7 +667,6 @@ impl BytecodeVm {
         BytecodeVm {
             functions: HashMap::new(),
             fn_metadata: HashMap::new(),
-            builtins: Builtins::new(),
             call_stack: Vec::new(),
             recursion_depth: 0,
             #[cfg(feature = "jit")]
@@ -466,7 +679,6 @@ impl BytecodeVm {
         BytecodeVm {
             functions: HashMap::new(),
             fn_metadata: HashMap::new(),
-            builtins: Builtins::new(),
             call_stack: Vec::new(),
             recursion_depth: 0,
             jit_full: crate::bytecode_jit_full::BytecodeJitFull::new().ok().map(std::sync::Arc::new),
@@ -492,7 +704,6 @@ impl BytecodeVm {
         BytecodeVm {
             functions: self.functions.clone(),
             fn_metadata: self.fn_metadata.clone(),
-            builtins: Builtins::new(),
             call_stack: Vec::new(),
             recursion_depth: 0,
             #[cfg(feature = "jit")]
@@ -539,7 +750,7 @@ impl BytecodeVm {
         }
     }
 
-    /// Dispatch fn-metadata using Value args (for VmCaller compat).
+    /// Dispatch fn-metadata using Value args (legacy bridge for tests).
     #[allow(dead_code)]
     fn dispatch_fn_metadata(&self, args: &[Value]) -> Result<Value, RuntimeError> {
         let fname = match args.first() {
@@ -1048,7 +1259,7 @@ impl BytecodeVm {
                         }
                     }
 
-                    // Dispatch chain
+                    // Dispatch chain: special cases first, then airl-rt, then push frame
                     if name == "thread-spawn" {
                         let result = self.dispatch_thread_spawn_rt(&rt_args)?;
                         reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
@@ -1057,15 +1268,6 @@ impl BytecodeVm {
                         reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                     } else if let Some(result) = dispatch_rt_builtin(&name, &rt_args) {
                         reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
-                    } else if self.builtins.get_with_vm(&name).is_some() {
-                        let value_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
-                        let f = *self.builtins.get_with_vm(&name).unwrap();
-                        let result = f(self, &value_args)?;
-                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, value_to_rt(&result));
-                    } else if let Some(f) = self.builtins.get(&name) {
-                        let value_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
-                        let result = f(&value_args)?;
-                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, value_to_rt(&result));
                     } else {
                         self.push_frame_rt(&name, &rt_args, instr.dst)?;
                     }
@@ -1090,15 +1292,6 @@ impl BytecodeVm {
                         reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                     } else if let Some(result) = dispatch_rt_builtin(&name, &rt_args) {
                         reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
-                    } else if self.builtins.get_with_vm(&name).is_some() {
-                        let value_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
-                        let f = *self.builtins.get_with_vm(&name).unwrap();
-                        let result = f(self, &value_args)?;
-                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, value_to_rt(&result));
-                    } else if let Some(f) = self.builtins.get(&name) {
-                        let value_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
-                        let result = f(&value_args)?;
-                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, value_to_rt(&result));
                     } else {
                         return Err(RuntimeError::UndefinedSymbol(name));
                     }
@@ -1131,7 +1324,6 @@ impl BytecodeVm {
                         }
                         Value::IRFuncRef(ref name) | Value::BuiltinFn(ref name) => {
                             let name = name.clone();
-                            let value_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
                             if name == "thread-spawn" {
                                 let result = self.dispatch_thread_spawn_rt(&rt_args)?;
                                 reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
@@ -1140,14 +1332,8 @@ impl BytecodeVm {
                                 reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                             } else if let Some(result) = dispatch_rt_builtin(&name, &rt_args) {
                                 reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
-                            } else if self.builtins.get_with_vm(&name).is_some() {
-                                let f = *self.builtins.get_with_vm(&name).unwrap();
-                                let result = f(self, &value_args)?;
-                                reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, value_to_rt(&result));
-                            } else if let Some(f) = self.builtins.get(&name) {
-                                let result = f(&value_args)?;
-                                reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, value_to_rt(&result));
                             } else {
+                                let value_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
                                 self.push_frame(&name, &value_args, instr.dst)?;
                             }
                         }
@@ -1201,7 +1387,6 @@ impl BytecodeVm {
 
     /// Dispatch thread-spawn with RtValue arguments.
     fn dispatch_thread_spawn_rt(&mut self, args: &[*mut RtValue]) -> Result<*mut RtValue, RuntimeError> {
-        use crate::builtins::{NEXT_THREAD_HANDLE, thread_handles};
         let closure_val = args.first()
             .map(|&p| rt_to_value_no_release(p))
             .ok_or_else(|| RuntimeError::Custom("thread-spawn: requires 1 argument".into()))?;
@@ -1332,15 +1517,7 @@ impl BytecodeVm {
                         for p in &rt_args { airl_value_release(*p); }
                     } else {
                         for p in &rt_args { airl_value_release(*p); }
-                        if self.builtins.get_with_vm(&name).is_some() {
-                            return Err(RuntimeError::Custom(
-                                format!("eval_simple: VM-aware builtin '{}' not supported inline", name)));
-                        }
-                        if let Some(f) = self.builtins.get(&name) {
-                            regs[instr.dst as usize] = f(&args)?;
-                        } else {
-                            return Err(RuntimeError::UndefinedSymbol(name));
-                        }
+                        return Err(RuntimeError::UndefinedSymbol(name));
                     }
                 }
                 Op::MakeList => {
@@ -1381,41 +1558,6 @@ impl BytecodeVm {
         for func in functions { self.load_function(func); }
         self.load_function(main_func);
         self.exec_main()
-    }
-}
-
-impl VmCaller for BytecodeVm {
-    fn call_value(&mut self, callee: &Value, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        match callee {
-            Value::BytecodeClosure(closure) => {
-                let mut full_args = closure.captured.clone();
-                full_args.extend(args);
-                let func_name = closure.func_name.clone();
-                if let Some(func) = self.functions.get(&func_name) {
-                    if is_simple_closure(func) {
-                        let func = func.clone();
-                        return self.eval_simple(&func, full_args);
-                    }
-                }
-                self.invoke_in_nested_frame(&func_name, full_args)
-            }
-            Value::IRFuncRef(ref name) | Value::BuiltinFn(ref name) => {
-                let name = name.clone();
-                if let Some(f) = self.builtins.get_with_vm(&name) {
-                    let f = *f;
-                    return f(self, &args);
-                }
-                if let Some(f) = self.builtins.get(&name) {
-                    return f(&args);
-                }
-                self.invoke_in_nested_frame(&name, args)
-            }
-            _ => Err(RuntimeError::Custom(format!("not callable: {}", callee))),
-        }
-    }
-
-    fn get_func(&self, name: &str) -> Option<BytecodeFunc> {
-        self.functions.get(name).cloned()
     }
 }
 
