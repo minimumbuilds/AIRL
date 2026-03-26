@@ -13,7 +13,7 @@ airl-types = { path = "../airl-types" }
 airl-contracts = { path = "../airl-contracts" }
 airl-codegen = { path = "../airl-codegen" }
 airl-mlir = { path = "../airl-mlir", optional = true }
-airl-rt = { path = "../airl-rt", optional = true }
+airl-rt = { path = "../airl-rt" }
 cranelift-codegen = { version = "0.130", optional = true }
 cranelift-frontend = { version = "0.130", optional = true }
 cranelift-jit = { version = "0.130", optional = true }
@@ -44,5 +44,5 @@ flate2 = "1"
 [features]
 mlir = ["airl-mlir"]
 cuda = ["mlir", "airl-mlir/cuda"]
-jit = ["dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-jit", "dep:cranelift-module", "dep:target-lexicon", "dep:airl-rt"]
-aot = ["dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-object", "dep:cranelift-module", "dep:target-lexicon", "dep:airl-rt", "dep:object"]
+jit = ["dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-jit", "dep:cranelift-module", "dep:target-lexicon"]
+aot = ["dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-object", "dep:cranelift-module", "dep:target-lexicon", "dep:object"]
