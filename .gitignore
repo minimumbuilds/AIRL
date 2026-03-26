@@ -1,3 +1,4 @@
 /target
 .worktrees/
 benchmarks/artifacts/
+g3_debug_compile.log

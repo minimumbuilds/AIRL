@@ -1123,12 +1123,18 @@ impl BytecodeAot {
         funcs: &[BytecodeFunc],
         all_functions: &HashMap<String, BytecodeFunc>,
     ) -> Result<(), String> {
-        // Pre-scan: identify functions referenced by MakeClosure.
+        // Pre-scan: identify functions referenced by MakeClosure or IRFuncRef.
         // These must be compiled boxed (airl_call_closure uses RtValue* ABI).
         for func in all_functions.values() {
             for instr in &func.instructions {
                 if instr.op == Op::MakeClosure {
                     if let Some(Value::Str(target)) = func.constants.get(instr.a as usize) {
+                        self.closure_targets.insert(target.clone());
+                    }
+                }
+                // IRFuncRef loaded via LoadConst — function used as a value
+                if instr.op == Op::LoadConst {
+                    if let Some(Value::IRFuncRef(target)) = func.constants.get(instr.a as usize) {
                         self.closure_targets.insert(target.clone());
                     }
                 }
@@ -1169,6 +1175,18 @@ impl BytecodeAot {
         for instr in &func.instructions {
             if instr.op == Op::Call || instr.op == Op::MakeClosure {
                 if let Value::Str(callee_name) = &func.constants[instr.a as usize] {
+                    if callee_name != &func.name
+                        && !self.compiled_funcs.contains_key(callee_name)
+                    {
+                        if let Some(callee) = all_functions.get(callee_name).cloned() {
+                            self.compile_with_deps(&callee, all_functions, in_progress, eligible_cache, ineligible_cache)?;
+                        }
+                    }
+                }
+            }
+            // IRFuncRef loaded via LoadConst — function used as a value (higher-order)
+            if instr.op == Op::LoadConst {
+                if let Some(Value::IRFuncRef(callee_name)) = func.constants.get(instr.a as usize) {
                     if callee_name != &func.name
                         && !self.compiled_funcs.contains_key(callee_name)
                     {
@@ -2172,6 +2190,25 @@ impl BytecodeAot {
                             let call = builder.ins().call(str_ref, &[ptr_val, len_val]);
                             let result = builder.inst_results(call)[0];
                             builder.def_var(vars[dst], result);
+                        }
+                        Value::IRFuncRef(name) => {
+                            // Function reference: create a closure with zero captures
+                            if let Some(&func_id) = self.compiled_funcs.get(name) {
+                                let callee_ref = self.module.declare_func_in_func(func_id, builder.func);
+                                let fn_ptr_val = builder.ins().func_addr(PTR, callee_ref);
+                                let make_closure_ref = self.module.declare_func_in_func(self.rt.make_closure, builder.func);
+                                let null = builder.ins().iconst(PTR, 0);
+                                let zero = builder.ins().iconst(types::I64, 0);
+                                let call = builder.ins().call(make_closure_ref, &[fn_ptr_val, null, zero]);
+                                let result = builder.inst_results(call)[0];
+                                builder.def_var(vars[dst], result);
+                            } else {
+                                // Unknown function — emit nil as fallback
+                                let nil_ref = self.module.declare_func_in_func(self.rt.nil_ctor, builder.func);
+                                let call = builder.ins().call(nil_ref, &[]);
+                                let result = builder.inst_results(call)[0];
+                                builder.def_var(vars[dst], result);
+                            }
                         }
                         _ => {
                             let nil_ref = self.module.declare_func_in_func(self.rt.nil_ctor, builder.func);

@@ -231,6 +231,45 @@ pub struct RuntimeImports {
 
     // Contract failure
     pub contract_fail: FuncId,  // (kind: i64, fn_name_idx: i64, clause_idx: i64) -> i64
+
+    // Additional list builtins
+    pub at_or: FuncId,
+    pub set_at: FuncId,
+    pub list_contains: FuncId,
+
+    // Additional string builtins
+    pub char_code: FuncId,
+    pub char_from_code: FuncId,
+
+    // Type conversion
+    pub int_to_string: FuncId,
+    pub float_to_string: FuncId,
+    pub string_to_int: FuncId,
+
+    // System/misc
+    pub time_now: FuncId,
+    pub getenv: FuncId,
+    pub shell_exec: FuncId,
+    pub http_request: FuncId,
+    pub json_parse: FuncId,
+    pub json_stringify: FuncId,
+
+    // Math
+    pub sqrt: FuncId,
+    pub sin: FuncId,
+    pub cos: FuncId,
+    pub tan: FuncId,
+    pub log: FuncId,
+    pub exp: FuncId,
+    pub floor: FuncId,
+    pub ceil: FuncId,
+    pub round: FuncId,
+    pub float_to_int: FuncId,
+    pub int_to_float: FuncId,
+    pub infinity: FuncId,
+    pub nan: FuncId,
+    pub is_nan: FuncId,
+    pub is_infinite: FuncId,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -525,6 +564,139 @@ impl BytecodeJitFull {
         builder.symbol("airl_map_keys",   map::airl_map_keys   as *const u8);
         builder.symbol("airl_map_values", map::airl_map_values as *const u8);
         builder.symbol("airl_map_size",   map::airl_map_size   as *const u8);
+
+        // List (additional)
+        builder.symbol("airl_at_or",          list::airl_at_or          as *const u8);
+        builder.symbol("airl_set_at",         list::airl_set_at         as *const u8);
+        builder.symbol("airl_list_contains",  list::airl_list_contains  as *const u8);
+
+        // Higher-order list ops
+        builder.symbol("airl_map",     list::airl_map     as *const u8);
+        builder.symbol("airl_filter",  list::airl_filter  as *const u8);
+        builder.symbol("airl_fold",    list::airl_fold    as *const u8);
+        builder.symbol("airl_sort",    list::airl_sort    as *const u8);
+        builder.symbol("airl_any",     list::airl_any     as *const u8);
+        builder.symbol("airl_all",     list::airl_all     as *const u8);
+        builder.symbol("airl_find",    list::airl_find    as *const u8);
+
+        // Misc builtins
+        builder.symbol("airl_char_count",        misc::airl_char_count        as *const u8);
+        builder.symbol("airl_str_variadic",      misc::airl_str_variadic      as *const u8);
+        builder.symbol("airl_format_variadic",   misc::airl_format_variadic   as *const u8);
+        builder.symbol("airl_assert",            misc::airl_assert            as *const u8);
+        builder.symbol("airl_panic",             misc::airl_panic             as *const u8);
+        builder.symbol("airl_exit",              misc::airl_exit              as *const u8);
+        builder.symbol("airl_sleep",             misc::airl_sleep             as *const u8);
+        builder.symbol("airl_format_time",       misc::airl_format_time       as *const u8);
+        builder.symbol("airl_read_lines",        misc::airl_read_lines        as *const u8);
+        builder.symbol("airl_concat_lists",      misc::airl_concat_lists      as *const u8);
+        builder.symbol("airl_range",             misc::airl_range             as *const u8);
+        builder.symbol("airl_reverse_list",      misc::airl_reverse_list      as *const u8);
+        builder.symbol("airl_take",              misc::airl_take              as *const u8);
+        builder.symbol("airl_drop",              misc::airl_drop              as *const u8);
+        builder.symbol("airl_zip",               misc::airl_zip               as *const u8);
+        builder.symbol("airl_flatten",           misc::airl_flatten           as *const u8);
+        builder.symbol("airl_enumerate",         misc::airl_enumerate         as *const u8);
+        builder.symbol("airl_int_to_string",     misc::airl_int_to_string     as *const u8);
+        builder.symbol("airl_float_to_string",   misc::airl_float_to_string   as *const u8);
+        builder.symbol("airl_string_to_int",     misc::airl_string_to_int     as *const u8);
+        builder.symbol("airl_time_now",          misc::airl_time_now          as *const u8);
+        builder.symbol("airl_getenv",            misc::airl_getenv            as *const u8);
+        builder.symbol("airl_shell_exec",        misc::airl_shell_exec        as *const u8);
+        builder.symbol("airl_http_request",      misc::airl_http_request      as *const u8);
+        builder.symbol("airl_json_parse",        misc::airl_json_parse        as *const u8);
+        builder.symbol("airl_json_stringify",    misc::airl_json_stringify    as *const u8);
+
+        // String (additional)
+        builder.symbol("airl_char_code",       string::airl_char_code       as *const u8);
+        builder.symbol("airl_char_from_code",  string::airl_char_from_code  as *const u8);
+        builder.symbol("airl_string_to_float", string::airl_string_to_float as *const u8);
+
+        // Math
+        builder.symbol("airl_sqrt",         math::airl_sqrt         as *const u8);
+        builder.symbol("airl_sin",          math::airl_sin          as *const u8);
+        builder.symbol("airl_cos",          math::airl_cos          as *const u8);
+        builder.symbol("airl_tan",          math::airl_tan          as *const u8);
+        builder.symbol("airl_log",          math::airl_log          as *const u8);
+        builder.symbol("airl_exp",          math::airl_exp          as *const u8);
+        builder.symbol("airl_floor",        math::airl_floor        as *const u8);
+        builder.symbol("airl_ceil",         math::airl_ceil         as *const u8);
+        builder.symbol("airl_round",        math::airl_round        as *const u8);
+        builder.symbol("airl_float_to_int", math::airl_float_to_int as *const u8);
+        builder.symbol("airl_int_to_float", math::airl_int_to_float as *const u8);
+        builder.symbol("airl_infinity",     math::airl_infinity     as *const u8);
+        builder.symbol("airl_nan",          math::airl_nan          as *const u8);
+        builder.symbol("airl_is_nan",       math::airl_is_nan       as *const u8);
+        builder.symbol("airl_is_infinite",  math::airl_is_infinite  as *const u8);
+
+        // Path
+        builder.symbol("airl_path_join",      misc::airl_path_join      as *const u8);
+        builder.symbol("airl_path_parent",    misc::airl_path_parent    as *const u8);
+        builder.symbol("airl_path_filename",  misc::airl_path_filename  as *const u8);
+        builder.symbol("airl_path_extension", misc::airl_path_extension as *const u8);
+        builder.symbol("airl_is_absolute",    misc::airl_is_absolute    as *const u8);
+
+        // Regex
+        builder.symbol("airl_regex_match",    misc::airl_regex_match    as *const u8);
+        builder.symbol("airl_regex_find_all", misc::airl_regex_find_all as *const u8);
+        builder.symbol("airl_regex_replace",  misc::airl_regex_replace  as *const u8);
+        builder.symbol("airl_regex_split",    misc::airl_regex_split    as *const u8);
+
+        // Crypto
+        builder.symbol("airl_sha256",            misc::airl_sha256            as *const u8);
+        builder.symbol("airl_hmac_sha256",       misc::airl_hmac_sha256       as *const u8);
+        builder.symbol("airl_base64_encode",     misc::airl_base64_encode     as *const u8);
+        builder.symbol("airl_base64_decode",     misc::airl_base64_decode     as *const u8);
+        builder.symbol("airl_random_bytes",      misc::airl_random_bytes      as *const u8);
+        builder.symbol("airl_sha512",            misc::airl_sha512            as *const u8);
+        builder.symbol("airl_hmac_sha512",       misc::airl_hmac_sha512       as *const u8);
+        builder.symbol("airl_sha256_bytes",      misc::airl_sha256_bytes      as *const u8);
+        builder.symbol("airl_sha512_bytes",      misc::airl_sha512_bytes      as *const u8);
+        builder.symbol("airl_hmac_sha256_bytes", misc::airl_hmac_sha256_bytes as *const u8);
+        builder.symbol("airl_hmac_sha512_bytes", misc::airl_hmac_sha512_bytes as *const u8);
+        builder.symbol("airl_pbkdf2_sha256",     misc::airl_pbkdf2_sha256     as *const u8);
+        builder.symbol("airl_pbkdf2_sha512",     misc::airl_pbkdf2_sha512     as *const u8);
+        builder.symbol("airl_base64_decode_bytes", misc::airl_base64_decode_bytes as *const u8);
+        builder.symbol("airl_base64_encode_bytes", misc::airl_base64_encode_bytes as *const u8);
+
+        // Bitwise
+        builder.symbol("airl_bitwise_xor", misc::airl_bitwise_xor as *const u8);
+        builder.symbol("airl_bitwise_and", misc::airl_bitwise_and as *const u8);
+        builder.symbol("airl_bitwise_or",  misc::airl_bitwise_or  as *const u8);
+        builder.symbol("airl_bitwise_shr", misc::airl_bitwise_shr as *const u8);
+        builder.symbol("airl_bitwise_shl", misc::airl_bitwise_shl as *const u8);
+
+        // Byte encoding
+        builder.symbol("airl_bytes_from_int16",  misc::airl_bytes_from_int16  as *const u8);
+        builder.symbol("airl_bytes_from_int32",  misc::airl_bytes_from_int32  as *const u8);
+        builder.symbol("airl_bytes_from_int64",  misc::airl_bytes_from_int64  as *const u8);
+        builder.symbol("airl_bytes_to_int16",    misc::airl_bytes_to_int16    as *const u8);
+        builder.symbol("airl_bytes_to_int32",    misc::airl_bytes_to_int32    as *const u8);
+        builder.symbol("airl_bytes_to_int64",    misc::airl_bytes_to_int64    as *const u8);
+        builder.symbol("airl_bytes_from_string", misc::airl_bytes_from_string as *const u8);
+        builder.symbol("airl_bytes_to_string",   misc::airl_bytes_to_string   as *const u8);
+        builder.symbol("airl_bytes_concat",      misc::airl_bytes_concat      as *const u8);
+        builder.symbol("airl_bytes_slice",       misc::airl_bytes_slice       as *const u8);
+        builder.symbol("airl_crc32c",            misc::airl_crc32c            as *const u8);
+
+        // Compression
+        builder.symbol("airl_gzip_compress",    misc::airl_gzip_compress    as *const u8);
+        builder.symbol("airl_gzip_decompress",  misc::airl_gzip_decompress  as *const u8);
+        builder.symbol("airl_snappy_compress",  misc::airl_snappy_compress  as *const u8);
+        builder.symbol("airl_snappy_decompress",misc::airl_snappy_decompress as *const u8);
+        builder.symbol("airl_lz4_compress",     misc::airl_lz4_compress     as *const u8);
+        builder.symbol("airl_lz4_decompress",   misc::airl_lz4_decompress   as *const u8);
+        builder.symbol("airl_zstd_compress",    misc::airl_zstd_compress    as *const u8);
+        builder.symbol("airl_zstd_decompress",  misc::airl_zstd_decompress  as *const u8);
+
+        // TCP sockets
+        builder.symbol("airl_tcp_connect",     misc::airl_tcp_connect     as *const u8);
+        builder.symbol("airl_tcp_close",       misc::airl_tcp_close       as *const u8);
+        builder.symbol("airl_tcp_send",        misc::airl_tcp_send        as *const u8);
+        builder.symbol("airl_tcp_recv",        misc::airl_tcp_recv        as *const u8);
+        builder.symbol("airl_tcp_recv_exact",  misc::airl_tcp_recv_exact  as *const u8);
+        builder.symbol("airl_tcp_set_timeout", misc::airl_tcp_set_timeout as *const u8);
+        builder.symbol("airl_tcp_connect_tls", misc::airl_tcp_connect_tls as *const u8);
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -749,6 +921,46 @@ impl BytecodeJitFull {
         cf_sig.returns.push(AbiParam::new(types::I64));
         let contract_fail = declare_import(m, "airl_jit_contract_fail", cf_sig);
 
+        // Additional list builtins
+        let s3_ptr = sig_3_ptr(m);
+        let at_or = declare_import(m, "airl_at_or", s3_ptr.clone());
+        let set_at = declare_import(m, "airl_set_at", sig_3_ptr(m));
+        let list_contains = declare_import(m, "airl_list_contains", s2.clone());
+
+        // Additional string builtins
+        let char_code = declare_import(m, "airl_char_code", s1.clone());
+        let char_from_code = declare_import(m, "airl_char_from_code", s1.clone());
+
+        // Type conversion
+        let int_to_string = declare_import(m, "airl_int_to_string", s1.clone());
+        let float_to_string = declare_import(m, "airl_float_to_string", s1.clone());
+        let string_to_int = declare_import(m, "airl_string_to_int", s1.clone());
+
+        // System/misc
+        let time_now = declare_import(m, "airl_time_now", sig_0_ptr(m));
+        let getenv = declare_import(m, "airl_getenv", s1.clone());
+        let shell_exec = declare_import(m, "airl_shell_exec", s2.clone());
+        let http_request = declare_import(m, "airl_http_request", sig_4_ptr(m));
+        let json_parse = declare_import(m, "airl_json_parse", s1.clone());
+        let json_stringify = declare_import(m, "airl_json_stringify", s1.clone());
+
+        // Math
+        let sqrt = declare_import(m, "airl_sqrt", s1.clone());
+        let sin = declare_import(m, "airl_sin", s1.clone());
+        let cos = declare_import(m, "airl_cos", s1.clone());
+        let tan = declare_import(m, "airl_tan", s1.clone());
+        let log = declare_import(m, "airl_log", s1.clone());
+        let exp = declare_import(m, "airl_exp", s1.clone());
+        let floor = declare_import(m, "airl_floor", s1.clone());
+        let ceil = declare_import(m, "airl_ceil", s1.clone());
+        let round = declare_import(m, "airl_round", s1.clone());
+        let float_to_int = declare_import(m, "airl_float_to_int", s1.clone());
+        let int_to_float = declare_import(m, "airl_int_to_float", s1.clone());
+        let infinity = declare_import(m, "airl_infinity", sig_0_ptr(m));
+        let nan = declare_import(m, "airl_nan", sig_0_ptr(m));
+        let is_nan = declare_import(m, "airl_is_nan", s1.clone());
+        let is_infinite = declare_import(m, "airl_is_infinite", s1.clone());
+
         RuntimeImports {
             value_retain, value_release, value_clone,
             int_ctor, float_ctor, bool_ctor, nil_ctor, unit_ctor, str_ctor,
@@ -789,6 +1001,12 @@ impl BytecodeJitFull {
             lz4_compress, lz4_decompress, zstd_compress, zstd_decompress,
             tcp_connect, tcp_close, tcp_send, tcp_recv, tcp_recv_exact, tcp_set_timeout, tcp_connect_tls,
             contract_fail,
+            at_or, set_at, list_contains,
+            char_code, char_from_code,
+            int_to_string, float_to_string, string_to_int,
+            time_now, getenv, shell_exec, http_request, json_parse, json_stringify,
+            sqrt, sin, cos, tan, log, exp, floor, ceil, round,
+            float_to_int, int_to_float, infinity, nan, is_nan, is_infinite,
         }
     }
 
@@ -958,6 +1176,45 @@ impl BytecodeJitFull {
         m.insert("tcp-recv-exact".into(),  rt.tcp_recv_exact);
         m.insert("tcp-set-timeout".into(), rt.tcp_set_timeout);
         m.insert("tcp-connect-tls".into(), rt.tcp_connect_tls);
+
+        // Additional list builtins
+        m.insert("at-or".into(),          rt.at_or);
+        m.insert("set-at".into(),         rt.set_at);
+        m.insert("list-contains?".into(), rt.list_contains);
+
+        // Additional string builtins
+        m.insert("char-code".into(),      rt.char_code);
+        m.insert("char-from-code".into(), rt.char_from_code);
+
+        // Type conversion
+        m.insert("int-to-string".into(),   rt.int_to_string);
+        m.insert("float-to-string".into(), rt.float_to_string);
+        m.insert("string-to-int".into(),   rt.string_to_int);
+
+        // System/misc
+        m.insert("time-now".into(),        rt.time_now);
+        m.insert("getenv".into(),          rt.getenv);
+        m.insert("shell-exec".into(),      rt.shell_exec);
+        m.insert("http-request".into(),    rt.http_request);
+        m.insert("json-parse".into(),      rt.json_parse);
+        m.insert("json-stringify".into(),  rt.json_stringify);
+
+        // Math
+        m.insert("sqrt".into(),         rt.sqrt);
+        m.insert("sin".into(),          rt.sin);
+        m.insert("cos".into(),          rt.cos);
+        m.insert("tan".into(),          rt.tan);
+        m.insert("log".into(),          rt.log);
+        m.insert("exp".into(),          rt.exp);
+        m.insert("floor".into(),        rt.floor);
+        m.insert("ceil".into(),         rt.ceil);
+        m.insert("round".into(),        rt.round);
+        m.insert("float-to-int".into(), rt.float_to_int);
+        m.insert("int-to-float".into(), rt.int_to_float);
+        m.insert("infinity".into(),     rt.infinity);
+        m.insert("nan".into(),          rt.nan);
+        m.insert("is-nan?".into(),      rt.is_nan);
+        m.insert("is-infinite?".into(), rt.is_infinite);
 
         // NOTE: map/filter/fold/sort/any/all/find resolve to AIRL stdlib
         // definitions, not extern C functions. See bytecode_aot.rs comment.
