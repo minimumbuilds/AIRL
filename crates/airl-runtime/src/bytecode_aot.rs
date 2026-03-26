@@ -2964,7 +2964,7 @@ impl BytecodeAot {
 
         // Debug output
         if std::env::var("AIRL_AOT_DEBUG").as_deref() == Ok("1") {
-            eprintln!("[AOT] Cranelift IR for {}:", func.name);
+            eprintln!("[AOT] Cranelift IR for {}:\n{}", func.name, ctx.func.display());
         }
 
         // Pre-verify to get detailed error
