@@ -1198,16 +1198,14 @@ impl BytecodeAot {
             }
         }
 
-        // Two-tier dispatch: eligible functions get unboxed compilation.
-        // Exception: closure targets (referenced by MakeClosure) are always boxed
-        // because airl_call_closure calls them with *mut RtValue arguments.
-        let is_closure_target = self.closure_targets.contains(&name);
-        let is_eligible = !is_closure_target && self.is_eligible(func, all_functions, eligible_cache, ineligible_cache);
+        // v0.6.0: All functions compile boxed for uniform calling convention.
+        // Unboxed compilation (raw i64/f64 register ops) is disabled to eliminate
+        // calling convention mismatches that caused the G3 self-compilation crash.
+        // Can be re-enabled as an optimization in a future version.
+        let is_eligible = false;
 
         if std::env::var("AIRL_AOT_DEBUG").as_deref() == Ok("1") {
-            eprintln!("[AOT] compiling {} ({} instrs, {}{})", name, func.instructions.len(),
-                if is_eligible { "unboxed" } else { "boxed" },
-                if is_closure_target { ", closure-target" } else { "" });
+            eprintln!("[AOT] compiling {} ({} instrs, boxed)", name, func.instructions.len());
         }
 
         if is_eligible {
