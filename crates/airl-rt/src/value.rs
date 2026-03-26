@@ -15,23 +15,22 @@ pub const TAG_VARIANT: u8 = 7;
 pub const TAG_CLOSURE: u8 = 8;
 pub const TAG_UNIT: u8 = 9;
 
+/// Variant order MUST match TAG_* constants (0-9).
+/// The Rust compiler assigns discriminants by position,
+/// and airl-rt functions match on RtData using these discriminants.
+/// AOT-compiled code checks the `tag` byte directly.
+/// If these diverge, AOT binaries will misidentify value types.
 pub enum RtData {
-    Nil,
-    Unit,
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-    Str(String),
-    List(Vec<*mut RtValue>),
-    Map(HashMap<String, *mut RtValue>),
-    Variant {
-        tag_name: String,
-        inner: *mut RtValue,
-    },
-    Closure {
-        func_ptr: *const u8,
-        captures: Vec<*mut RtValue>,
-    },
+    Nil,                                                    // 0 = TAG_NIL
+    Int(i64),                                               // 1 = TAG_INT
+    Float(f64),                                             // 2 = TAG_FLOAT
+    Bool(bool),                                             // 3 = TAG_BOOL
+    Str(String),                                            // 4 = TAG_STR
+    List(Vec<*mut RtValue>),                                // 5 = TAG_LIST
+    Map(HashMap<String, *mut RtValue>),                     // 6 = TAG_MAP
+    Variant { tag_name: String, inner: *mut RtValue },      // 7 = TAG_VARIANT
+    Closure { func_ptr: *const u8, captures: Vec<*mut RtValue> }, // 8 = TAG_CLOSURE
+    Unit,                                                   // 9 = TAG_UNIT
 }
 
 pub struct RtValue {
