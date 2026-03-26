@@ -1,0 +1,22 @@
+;; EXPECT: words:3|unwords:a b c|lines:2|unlines:ok|repeat:aaa|padl:--hi|padr:hi--|empty:t f|revstr:cba|count:2
+(let (w1 : List (words "hello world foo"))
+     (uw : String (unwords ["a" "b" "c"]))
+     (ln : List (lines "line1\nline2"))
+     (ul : String (unlines ["ok"]))
+     (rp : String (repeat-str "a" 3))
+     (pl : String (pad-left "hi" 4 "-"))
+     (pr : String (pad-right "hi" 4 "-"))
+     (e1 : Bool (is-empty-str ""))
+     (e2 : Bool (is-empty-str "x"))
+     (rv : String (reverse-str "abc"))
+     (co : i64 (count-occurrences "abcabc" "abc"))
+  (print (str "words:" (length w1)
+              "|unwords:" uw
+              "|lines:" (length ln)
+              "|unlines:" ul
+              "|repeat:" rp
+              "|padl:" pl
+              "|padr:" pr
+              "|empty:" (if e1 "t" "f") " " (if e2 "t" "f")
+              "|revstr:" rv
+              "|count:" co)))

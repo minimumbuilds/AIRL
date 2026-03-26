@@ -1,0 +1,31 @@
+;; EXPECT: abs:5 0 3|min:1|max:5|clamp:3 1 5|sign:-1 0 1|even:t f|odd:f t|pow:8 1|gcd:6|lcm:12|sum:15|prod:120
+(let (a1 : i64 (abs -5))
+     (a2 : i64 (abs 0))
+     (a3 : i64 (abs 3))
+     (mn : i64 (min 1 5))
+     (mx : i64 (max 1 5))
+     (c1 : i64 (clamp 3 1 5))
+     (c2 : i64 (clamp 0 1 5))
+     (c3 : i64 (clamp 10 1 5))
+     (s1 : i64 (sign -7))
+     (s2 : i64 (sign 0))
+     (s3 : i64 (sign 42))
+     (ev1 : Bool (even? 4))
+     (ev2 : Bool (even? 3))
+     (od1 : Bool (odd? 4))
+     (od2 : Bool (odd? 3))
+     (p1 : i64 (pow 2 3))
+     (p2 : i64 (pow 5 0))
+     (g1 : i64 (gcd 12 18))
+     (l1 : i64 (lcm 4 6))
+     (sm : i64 (sum-list [1 2 3 4 5]))
+     (pr : i64 (product-list [1 2 3 4 5]))
+  (print (str "abs:" a1 " " a2 " " a3
+              "|min:" mn "|max:" mx
+              "|clamp:" c1 " " c2 " " c3
+              "|sign:" s1 " " s2 " " s3
+              "|even:" (if ev1 "t" "f") " " (if ev2 "t" "f")
+              "|odd:" (if od1 "t" "f") " " (if od2 "t" "f")
+              "|pow:" p1 " " p2
+              "|gcd:" g1 "|lcm:" l1
+              "|sum:" sm "|prod:" pr)))
