@@ -96,14 +96,14 @@ Symbols are identifiers: `x`, `my-function`, `tensor.add`. Hyphens are allowed i
 
 ### S-Expression Nesting and Parenthesis Counting
 
-Each `let` opens one parenthesis. The body of a `let` is the **last expression before its closing paren**. N nested `let` bindings require N closing parens:
+Multi-binding `let` is the **preferred** style — multiple bindings in one `let`, with the body as the last expression:
 
 ```lisp
-;; 3 nested lets → 3 closing parens
-(let (a : i64 1)                  ;; let #1 opens
-  (let (b : i64 2)                ;; let #2 opens
-    (let (c : i64 (+ a b))        ;; let #3 opens
-      (print c))))                ;; body, then ))) closes #3, #2, #1
+;; PREFERRED — multi-binding let: 3 bindings, 1 closing paren
+(let (a : i64 1)
+     (b : i64 2)
+     (c : i64 (+ a b))
+  (print c))
 ```
 
 **Common mistake — closing `let` before its body:**
@@ -1305,13 +1305,13 @@ Define sum types (enums) and product types (structs):
 
 ### Chained Let Bindings
 
-Since `let` returns the body expression, chain computations with nested `let`:
+Use multi-binding `let` to chain computations (preferred over nested single-binding lets):
 
 ```lisp
 (let (a : i64 10)
-  (let (b : i64 (* a 2))
-    (let (c : i64 (+ b 5))
-      (print "Result:" c))))  ;; prints 25
+     (b : i64 (* a 2))
+     (c : i64 (+ b 5))
+  (print "Result:" c))  ;; prints 25
 ```
 
 ### Error Propagation with Nested Match

@@ -2,28 +2,28 @@
 ;; Test that length and char-at agree on non-ASCII strings
 
 (let (cafe-len : _ (length "café"))
-  (let (dash-len : _ (length "a—b"))
-    (let (last-char : _ (char-at "café" 3))
-      (do
-        (print "café length:" cafe-len)
-        (print "a—b length:" dash-len)
-        (print "last char of café:" last-char)
+     (dash-len : _ (length "a—b"))
+     (last-char : _ (char-at "café" 3))
+  (do
+    (print "café length:" cafe-len)
+    (print "a—b length:" dash-len)
+    (print "last char of café:" last-char)
 
-        ;; char-at at each position
-        (print "café[0]:" (char-at "café" 0))
-        (print "café[1]:" (char-at "café" 1))
-        (print "café[2]:" (char-at "café" 2))
-        (print "café[3]:" (char-at "café" 3))
+    ;; char-at at each position
+    (print "café[0]:" (char-at "café" 0))
+    (print "café[1]:" (char-at "café" 1))
+    (print "café[2]:" (char-at "café" 2))
+    (print "café[3]:" (char-at "café" 3))
 
-        ;; String operations on non-ASCII
-        (print "contains é:" (contains "café" "é"))
-        (print "replace é->e:" (replace "café" "é" "e"))
+    ;; String operations on non-ASCII
+    (print "contains é:" (contains "café" "é"))
+    (print "replace é->e:" (replace "café" "é" "e"))
 
-        ;; Final assertion — nested if (and is eager in AIRL)
-        (if (= cafe-len 4)
-          (if (= dash-len 3)
-            (if (= last-char "é")
-              true
-              false)
-            false)
-          false)))))
+    ;; Final assertion — nested if (and is eager in AIRL)
+    (if (= cafe-len 4)
+      (if (= dash-len 3)
+        (if (= last-char "é")
+          true
+          false)
+        false)
+      false)))

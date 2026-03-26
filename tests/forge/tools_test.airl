@@ -17,13 +17,13 @@
 
 ;; Test 2: register-fn auto-discovers greet
 (let (reg0 : _ (make-registry))
-  (let (reg-result : _ (register-fn reg0 "greet" (fn [n] (greet n))))
-    (do
-      (assert (is-ok? reg-result) "register-fn must succeed for greet")
+     (reg-result : _ (register-fn reg0 "greet" (fn [n] (greet n))))
+  (do
+    (assert (is-ok? reg-result) "register-fn must succeed for greet")
 
-      ;; Test 3: list-tools returns ["greet"]
-      (let (reg1 : _ (unwrap-or reg-result (map-new)))
-        (do
+    ;; Test 3: list-tools returns ["greet"]
+    (let (reg1 : _ (unwrap-or reg-result (map-new)))
+      (do
           (let (names : _ (list-tools reg1))
             (do
               (assert (= (length names) 1) "registry must have 1 tool")
@@ -56,6 +56,6 @@
               (let (s : _ (at schemas 0))
                 (do
                   (assert (= (map-get s "name") "greet") "schema name must be 'greet'")
-                  (assert (= (map-get s "description") "Greet a person by name") "schema description must match"))))))))))
+                  (assert (= (map-get s "description") "Greet a person by name") "schema description must match")))))))))
 
 (print "ALL TOOLS TESTS PASSED")

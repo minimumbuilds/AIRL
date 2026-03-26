@@ -38,15 +38,15 @@
 ;; ─── Section 2: Tool registry + schema generation ────────────────────────────
 
 (let (reg0 : _ (make-registry))
-  (let (reg1-result : _ (register-fn reg0 "add" (fn [a b] (add a b))))
-    (do
-      (assert (is-ok? reg1-result) "register-fn must succeed for add")
-      (let (reg1 : _ (unwrap-or reg1-result (map-new)))
-        (let (reg2-result : _ (register-fn reg1 "multiply" (fn [a b] (multiply a b))))
+     (reg1-result : _ (register-fn reg0 "add" (fn [a b] (add a b))))
+  (do
+    (assert (is-ok? reg1-result) "register-fn must succeed for add")
+    (let (reg1 : _ (unwrap-or reg1-result (map-new)))
+         (reg2-result : _ (register-fn reg1 "multiply" (fn [a b] (multiply a b))))
+      (do
+        (assert (is-ok? reg2-result) "register-fn must succeed for multiply")
+        (let (reg2 : _ (unwrap-or reg2-result (map-new)))
           (do
-            (assert (is-ok? reg2-result) "register-fn must succeed for multiply")
-            (let (reg2 : _ (unwrap-or reg2-result (map-new)))
-              (do
                 ;; Verify both tools registered
                 (let (names : _ (list-tools reg2))
                   (do
@@ -72,62 +72,62 @@
                   (do
                     (assert (is-ok? mul-result) "call-tool multiply must succeed")
                     (let (mul-val : _ (unwrap-or mul-result 0))
-                      (assert (= mul-val 20) "multiply 4 5 must equal 20"))))))))))))
+                      (assert (= mul-val 20) "multiply 4 5 must equal 20"))))))))))
 
 ;; ─── Section 3: Pipeline chain — json-parse → validate-keys → compute ────────
 
 (let (step-parse : _ (make-step "json-parse" (fn [s] (json-parse s))))
-  (let (step-validate : _ (make-step "validate-keys" (fn [m] (validate-keys m ["x" "y"]))))
-    (let (step-compute : _ (make-step "compute" (fn [m] (+ (map-get m "x") (map-get m "y")))))
-      (let (steps : _ [step-parse step-validate step-compute])
-        (let (chain-result : _ (chain steps "{\"x\":10,\"y\":20}"))
-          (do
-            (assert (is-ok? chain-result) "3-step pipeline must succeed")
-            (let (val : _ (unwrap-or chain-result 0))
-              (assert (= val 30) "json x+y pipeline must produce 30"))))))))
+     (step-validate : _ (make-step "validate-keys" (fn [m] (validate-keys m ["x" "y"]))))
+     (step-compute : _ (make-step "compute" (fn [m] (+ (map-get m "x") (map-get m "y")))))
+     (steps : _ [step-parse step-validate step-compute])
+     (chain-result : _ (chain steps "{\"x\":10,\"y\":20}"))
+  (do
+    (assert (is-ok? chain-result) "3-step pipeline must succeed")
+    (let (val : _ (unwrap-or chain-result 0))
+      (assert (= val 30) "json x+y pipeline must produce 30"))))
 
 ;; ─── Section 4: Pipeline with validation failure (missing key) ───────────────
 
 (let (step-parse2 : _ (make-step "json-parse2" (fn [s] (json-parse s))))
-  (let (step-validate2 : _ (make-step "validate-keys2" (fn [m] (validate-keys m ["x" "z"]))))
-    (let (step-compute2 : _ (make-step "compute2" (fn [m] (+ (map-get m "x") (map-get m "z")))))
-      (let (steps2 : _ [step-parse2 step-validate2 step-compute2])
-        (let (fail-result : _ (chain steps2 "{\"x\":10,\"y\":20}"))
-          (do
-            (assert (is-err? fail-result) "pipeline must Err when required key z is missing")
-            (let (err-str : _ (match fail-result (Ok _) "" (Err e) e))
-              (assert (contains err-str "Missing") "error message must contain 'Missing'"))))))))
+     (step-validate2 : _ (make-step "validate-keys2" (fn [m] (validate-keys m ["x" "z"]))))
+     (step-compute2 : _ (make-step "compute2" (fn [m] (+ (map-get m "x") (map-get m "z")))))
+     (steps2 : _ [step-parse2 step-validate2 step-compute2])
+     (fail-result : _ (chain steps2 "{\"x\":10,\"y\":20}"))
+  (do
+    (assert (is-err? fail-result) "pipeline must Err when required key z is missing")
+    (let (err-str : _ (match fail-result (Ok _) "" (Err e) e))
+      (assert (contains err-str "Missing") "error message must contain 'Missing'"))))
 
 ;; ─── Section 5: Codec round-trip ─────────────────────────────────────────────
 
 (let (original : _ (map-from ["name" "forge" "version" "1.0"]))
-  (let (enc-result : _ (encode-map original))
-    (do
-      (assert (is-ok? enc-result) "encode-map must return Ok")
-      (let (json-str : _ (unwrap-or enc-result "{}"))
-        (let (dec-result : _ (decode-value json-str))
+     (enc-result : _ (encode-map original))
+  (do
+    (assert (is-ok? enc-result) "encode-map must return Ok")
+    (let (json-str : _ (unwrap-or enc-result "{}"))
+         (dec-result : _ (decode-value json-str))
+      (do
+        (assert (is-ok? dec-result) "decode-value must return Ok for encoded map")
+        (let (decoded : _ (match dec-result (Ok v) v (Err _) (map-new)))
           (do
-            (assert (is-ok? dec-result) "decode-value must return Ok for encoded map")
-            (let (decoded : _ (match dec-result (Ok v) v (Err _) (map-new)))
-              (do
-                (assert (map-has decoded "name") "decoded map must have name field")
-                (assert (= (map-get decoded "name") "forge") "decoded name must equal forge")
-                (assert (map-has decoded "version") "decoded map must have version field")
-                (assert (= (map-get decoded "version") "1.0") "decoded version must equal 1.0")))))))))
+            (assert (map-has decoded "name") "decoded map must have name field")
+            (assert (= (map-get decoded "name") "forge") "decoded name must equal forge")
+            (assert (map-has decoded "version") "decoded map must have version field")
+            (assert (= (map-get decoded "version") "1.0") "decoded version must equal 1.0")))))))
 
 ;; ─── Section 6: Fan-out — apply 3 functions to same input ────────────────────
 
 (let (double-fn : _ (fn [x] (* x 2)))
-  (let (triple-fn : _ (fn [x] (* x 3)))
-    (let (square-fn : _ (fn [x] (* x x)))
-      (let (fo-result : _ (fan-out [double-fn triple-fn square-fn] 5))
-        (do
-          (assert (is-ok? fo-result) "fan-out must succeed for all 3 functions")
-          (let (vals : _ (unwrap-or fo-result []))
-            (do
-              (assert (= (length vals) 3) "fan-out must return 3 results")
-              (assert (= (at vals 0) 10) "double 5 must equal 10")
-              (assert (= (at vals 1) 15) "triple 5 must equal 15")
-              (assert (= (at vals 2) 25) "square 5 must equal 25"))))))))
+     (triple-fn : _ (fn [x] (* x 3)))
+     (square-fn : _ (fn [x] (* x x)))
+     (fo-result : _ (fan-out [double-fn triple-fn square-fn] 5))
+  (do
+    (assert (is-ok? fo-result) "fan-out must succeed for all 3 functions")
+    (let (vals : _ (unwrap-or fo-result []))
+      (do
+        (assert (= (length vals) 3) "fan-out must return 3 results")
+        (assert (= (at vals 0) 10) "double 5 must equal 10")
+        (assert (= (at vals 1) 15) "triple 5 must equal 15")
+        (assert (= (at vals 2) 25) "square 5 must equal 25")))))
 
 (print "ALL INTEGRATION TESTS PASSED")

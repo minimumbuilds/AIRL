@@ -19,18 +19,18 @@
 ;; --- validate-keys tests ---
 
 (let (m : _ (map-from ["name" "Alice" "age" 30 "email" "alice@example.com"]))
-  (let (r3 : _ (validate-keys m ["name" "age" "email"]))
-    (match r3
-      (Err e) (do (print "FAIL validate-keys success:" e) (exit 1))
-      (Ok v)  (print "PASS validate-keys success"))))
+     (r3 : _ (validate-keys m ["name" "age" "email"]))
+  (match r3
+    (Err e) (do (print "FAIL validate-keys success:" e) (exit 1))
+    (Ok v)  (print "PASS validate-keys success")))
 
 (let (m2 : _ (map-from ["name" "Bob"]))
-  (let (r4 : _ (validate-keys m2 ["name" "age" "email"]))
-    (match r4
-      (Ok v)  (do (print "FAIL validate-keys failure: expected Err got Ok") (exit 1))
-      (Err e) (if (contains e "Missing required keys")
-                 (print "PASS validate-keys failure")
-                 (do (print "FAIL validate-keys failure: wrong error message" e) (exit 1))))))
+     (r4 : _ (validate-keys m2 ["name" "age" "email"]))
+  (match r4
+    (Ok v)  (do (print "FAIL validate-keys failure: expected Err got Ok") (exit 1))
+    (Err e) (if (contains e "Missing required keys")
+               (print "PASS validate-keys failure")
+               (do (print "FAIL validate-keys failure: wrong error message" e) (exit 1)))))
 
 ;; --- validate-type tests ---
 

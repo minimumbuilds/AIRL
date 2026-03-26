@@ -143,14 +143,14 @@
   :ensures [(valid result)]
   :body
     (let (r : List (read-symbol-chars source pos line col acc))
-      (let (text : String (head r))
-        (let (new-pos : i64 (at r 1))
-          (let (new-line : i64 (at r 2))
-            (let (new-col : i64 (at r 3))
+         (text : String (head r))
+         (new-pos : i64 (at r 1))
+         (new-line : i64 (at r 2))
+         (new-col : i64 (at r 3))
               (if (= text "true")  (Ok [(Token "bool" true start-line start-col) new-pos new-line new-col])
               (if (= text "false") (Ok [(Token "bool" false start-line start-col) new-pos new-line new-col])
               (if (= text "nil")   (Ok [(Token "nil" nil start-line start-col) new-pos new-line new-col])
-                (Ok [(Token "symbol" text start-line start-col) new-pos new-line new-col]))))))))))
+                (Ok [(Token "symbol" text start-line start-col) new-pos new-line new-col]))))))
 
 (defn lex-keyword
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
@@ -159,11 +159,11 @@
   :ensures [(valid result)]
   :body
     (let (r : List (read-symbol-chars source pos line col acc))
-      (let (text : String (head r))
-        (let (new-pos : i64 (at r 1))
-          (let (new-line : i64 (at r 2))
-            (let (new-col : i64 (at r 3))
-              (Ok [(Token "keyword" text start-line start-col) new-pos new-line new-col])))))))
+         (text : String (head r))
+         (new-pos : i64 (at r 1))
+         (new-line : i64 (at r 2))
+         (new-col : i64 (at r 3))
+              (Ok [(Token "keyword" text start-line start-col) new-pos new-line new-col])))
 
 ;; ── Numeric helpers ──────────────────────────────────
 
@@ -232,10 +232,10 @@
   :ensures [(valid result)]
   :body
     (let (int-result : List (read-digits source pos line col acc))
-      (let (int-val : i64 (head int-result))
-        (let (new-pos : i64 (at int-result 1))
-          (let (new-line : i64 (at int-result 2))
-            (let (new-col : i64 (at int-result 3))
+         (int-val : i64 (head int-result))
+         (new-pos : i64 (at int-result 1))
+         (new-line : i64 (at int-result 2))
+         (new-col : i64 (at int-result 3))
               ;; Check for '.' followed by digit -> float
               (if (< new-pos (length source))
                 (if (= (char-at source new-pos) ".")
@@ -243,12 +243,12 @@
                     (if (is-digit? (char-at source (+ new-pos 1)))
                       ;; Float
                       (let (frac-result : List (read-frac-digits source (+ new-pos 1) new-line (+ new-col 1) 0.0 10.0))
-                        (let (frac-val : f64 (head frac-result))
-                          (let (fp : i64 (at frac-result 1))
-                            (let (fl : i64 (at frac-result 2))
-                              (let (fc : i64 (at frac-result 3))
-                                (let (float-val : f64 (+ (int-to-float int-val) frac-val))
-                                  (Ok [(Token "float" (if negative (- 0.0 float-val) float-val) start-line start-col) fp fl fc])))))))
+                           (frac-val : f64 (head frac-result))
+                           (fp : i64 (at frac-result 1))
+                           (fl : i64 (at frac-result 2))
+                           (fc : i64 (at frac-result 3))
+                           (float-val : f64 (+ (int-to-float int-val) frac-val))
+                                  (Ok [(Token "float" (if negative (- 0.0 float-val) float-val) start-line start-col) fp fl fc]))
                       ;; Integer (dot followed by non-digit)
                       (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
                     ;; Integer (dot at end of input)
@@ -256,7 +256,7 @@
                   ;; Integer (no dot)
                   (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
                 ;; Integer (end of input)
-                (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))))))))
+                (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))))
 
 ;; ── String sub-lexer ────────────────────────────────
 
@@ -301,8 +301,8 @@
       (Err msg) (Err msg)
       (Ok ws-state)
         (let (p : i64 (head ws-state))
-          (let (ln : i64 (at ws-state 1))
-            (let (c : i64 (at ws-state 2))
+             (ln : i64 (at ws-state 1))
+             (c : i64 (at ws-state 2))
               (if (>= p (length source))
                 (Ok [(Token "eof" nil ln c) p ln c])
                 (let (ch : String (char-at source p))
@@ -331,7 +331,7 @@
                   (if (is-symbol-start? ch)
                     (lex-symbol source p ln c "" ln c)
                     (Err (+ "unexpected character '" (+ ch "'")))))
-                  )))))))))))))))
+                  )))))))))))))
 
 (defn lex-loop
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (tokens : List) -> List]
@@ -343,15 +343,15 @@
       (Err msg) (Err msg)
       (Ok tok-state)
         (let (tok : List (head tok-state))
-          (let (new-pos : i64 (at tok-state 1))
-            (let (new-line : i64 (at tok-state 2))
-              (let (new-col : i64 (at tok-state 3))
-                (let (new-tokens : List (cons tok tokens))
+             (new-pos : i64 (at tok-state 1))
+             (new-line : i64 (at tok-state 2))
+             (new-col : i64 (at tok-state 3))
+             (new-tokens : List (cons tok tokens))
                   (match tok
                     (Token kind _ _ _)
                       (if (= kind "eof")
                         (Ok new-tokens)
-                        (lex-loop source new-pos new-line new-col new-tokens))))))))))
+                        (lex-loop source new-pos new-line new-col new-tokens))))))
 
 (defn lex
   :sig [(source : String) -> List]
@@ -431,7 +431,7 @@
               (match (parse-sexprs tokens (+ pos 1) "rparen")
                 (Ok result)
                   (let (items : List (at result 0))
-                    (let (end-pos : i64 (at result 1))
+                       (end-pos : i64 (at result 1))
                       ;; Check for closing rparen
                       (if (>= end-pos (length tokens))
                         (Err (ParseError "unclosed parenthesis" line col))
@@ -440,14 +440,14 @@
                             (Token ck _ _ _)
                               (if (= ck "rparen")
                                 (Ok [(SList items line col) (+ end-pos 1)])
-                                (Err (ParseError "unclosed parenthesis" line col))))))))
+                                (Err (ParseError "unclosed parenthesis" line col)))))))
                 (Err e) (Err e))
               (if (= kind "lbracket")
                 ;; Parse bracket contents until rbracket
                 (match (parse-sexprs tokens (+ pos 1) "rbracket")
                   (Ok result)
                     (let (items : List (at result 0))
-                      (let (end-pos : i64 (at result 1))
+                         (end-pos : i64 (at result 1))
                         (if (>= end-pos (length tokens))
                           (Err (ParseError "unclosed bracket" line col))
                           (let (closer : List (at tokens end-pos))
@@ -455,7 +455,7 @@
                               (Token ck _ _ _)
                                 (if (= ck "rbracket")
                                   (Ok [(SBracket items line col) (+ end-pos 1)])
-                                  (Err (ParseError "unclosed bracket" line col))))))))
+                                  (Err (ParseError "unclosed bracket" line col)))))))
                   (Err e) (Err e))
                 (if (= kind "rparen")
                   (Err (ParseError "unexpected ')'" line col))
@@ -487,13 +487,13 @@
                 (match (parse-sexpr tokens pos)
                   (Ok result)
                     (let (sexpr : List (at result 0))
-                      (let (new-pos : i64 (at result 1))
+                         (new-pos : i64 (at result 1))
                         (match (parse-sexprs tokens new-pos stop-kind)
                           (Ok rest-result)
                             (let (rest-sexprs : List (at rest-result 0))
-                              (let (final-pos : i64 (at rest-result 1))
-                                (Ok [(cons sexpr rest-sexprs) final-pos])))
-                          (Err e) (Err e))))
+                                 (final-pos : i64 (at rest-result 1))
+                                (Ok [(cons sexpr rest-sexprs) final-pos]))
+                          (Err e) (Err e)))
                   (Err e) (Err e))))))))
 
 (defn parse-sexpr-all
@@ -688,13 +688,13 @@
       (Err (ParseError "let requires at least one binding and a body" line col))
       ;; bindings are items[1] to items[n-2], body is items[n-1]
       (let (num-items : i64 (length items))
-        (let (body-idx : i64 (- num-items 1))
+           (body-idx : i64 (- num-items 1))
           (match (parse-let-bindings items 1 body-idx)
             (Ok bindings)
               (match (parse-expr (at items body-idx))
                 (Ok body-node) (Ok (ASTLet bindings body-node line col))
                 (Err e) (Err e))
-            (Err e) (Err e))))))
+            (Err e) (Err e)))))
 
 (defn parse-do
   :sig [(items : List) (line : i64) (col : i64) -> List]
@@ -1578,34 +1578,34 @@
     (IRNil _)       "(IRNil)"
     (IRLoad name)   (join ["(IRLoad " name ")"] "")
     (IRIf parts)    (let (c : String (ir-to-string (at parts 0)))
-                      (let (t : String (ir-to-string (at parts 1)))
-                        (let (e : String (ir-to-string (at parts 2)))
-                          (join ["(IRIf " c " " t " " e ")"] ""))))
+                         (t : String (ir-to-string (at parts 1)))
+                         (e : String (ir-to-string (at parts 2)))
+                          (join ["(IRIf " c " " t " " e ")"] ""))
     (IRDo exprs)    (join ["(IRDo [" (join (map (fn [e] (ir-to-string e)) exprs) " ") "])"] "")
     (IRLet parts)   (let (bindings : List (at parts 0))
-                      (let (body : String (ir-to-string (at parts 1)))
-                        (let (bs : String (join (map (fn [b] (ir-binding-to-string b)) bindings) " "))
-                          (join ["(IRLet [" bs "] " body ")"] ""))))
+                         (body : String (ir-to-string (at parts 1)))
+                         (bs : String (join (map (fn [b] (ir-binding-to-string b)) bindings) " "))
+                          (join ["(IRLet [" bs "] " body ")"] ""))
     (IRFunc parts)  (let (name : String (at parts 0))
-                      (let (params : List (at parts 1))
-                        (let (body : String (ir-to-string (at parts 2)))
-                          (join ["(IRFunc " name " [" (join params " ") "] " body ")"] ""))))
+                         (params : List (at parts 1))
+                         (body : String (ir-to-string (at parts 2)))
+                          (join ["(IRFunc " name " [" (join params " ") "] " body ")"] ""))
     (IRLambda parts) (let (params : List (at parts 0))
-                       (let (body : String (ir-to-string (at parts 1)))
-                         (join ["(IRLambda [" (join params " ") "] " body ")"] "")))
+                          (body : String (ir-to-string (at parts 1)))
+                         (join ["(IRLambda [" (join params " ") "] " body ")"] ""))
     (IRCall parts)  (let (name : String (at parts 0))
-                      (let (args : List (at parts 1))
-                        (join ["(IRCall " name " [" (join (map (fn [a] (ir-to-string a)) args) " ") "])"] "")))
+                         (args : List (at parts 1))
+                        (join ["(IRCall " name " [" (join (map (fn [a] (ir-to-string a)) args) " ") "])"] ""))
     (IRCallExpr parts) (let (callee : String (ir-to-string (at parts 0)))
-                         (let (args : List (at parts 1))
-                           (join ["(IRCallExpr " callee " [" (join (map (fn [a] (ir-to-string a)) args) " ") "])"] "")))
+                            (args : List (at parts 1))
+                           (join ["(IRCallExpr " callee " [" (join (map (fn [a] (ir-to-string a)) args) " ") "])"] ""))
     (IRList items)  (join ["(IRList [" (join (map (fn [i] (ir-to-string i)) items) " ") "])"] "")
     (IRVariant parts) (let (tag : String (at parts 0))
-                        (let (args : List (at parts 1))
-                          (join ["(IRVariant " tag " [" (join (map (fn [a] (ir-to-string a)) args) " ") "])"] "")))
+                           (args : List (at parts 1))
+                          (join ["(IRVariant " tag " [" (join (map (fn [a] (ir-to-string a)) args) " ") "])"] ""))
     (IRMatch parts) (let (scr : String (ir-to-string (at parts 0)))
-                      (let (arms : List (at parts 1))
-                        (join ["(IRMatch " scr " [" (join (map (fn [a] (ir-arm-to-string a)) arms) " ") "])"] "")))
+                         (arms : List (at parts 1))
+                        (join ["(IRMatch " scr " [" (join (map (fn [a] (ir-arm-to-string a)) arms) " ") "])"] ""))
     (IRTry expr)    (join ["(IRTry " (ir-to-string expr) ")"] "")
     _               "<UNKNOWN-IR-NODE>"))
 
@@ -1634,8 +1634,8 @@
     (IRPatBind name)   (join ["(IRPatBind " name ")"] "")
     (IRPatLit v)       (join ["(IRPatLit " (value-to-string v) ")"] "")
     (IRPatVariant parts) (let (tag : String (at parts 0))
-                           (let (sub-pats : List (at parts 1))
-                             (join ["(IRPatVariant " tag " [" (join (map (fn [p] (ir-pattern-to-string p)) sub-pats) " ") "])"] "")))
+                              (sub-pats : List (at parts 1))
+                             (join ["(IRPatVariant " tag " [" (join (map (fn [p] (ir-pattern-to-string p)) sub-pats) " ") "])"] ""))
     _ "<UNKNOWN-IR-PATTERN>"))
 
 (defn ir-nodes-to-string
@@ -1679,10 +1679,10 @@
                     "(defn all :sig [(pred : fn) (xs : List) -> Bool] :requires [(valid pred)] :ensures [(valid result)] :body (if (empty? xs) true (if (pred (head xs)) (all pred (tail xs)) false)))\n"
                     "(defn find :sig [(pred : fn) (xs : List) -> List] :requires [(valid pred)] :ensures [(valid result)] :body (if (empty? xs) nil (if (pred (head xs)) (head xs) (find pred (tail xs)))))\n"
                     ] ""))
-                (let (lexer-source : String (read-file "bootstrap/lexer.airl"))
-                  (let (parser-source : String (read-file "bootstrap/parser.airl"))
-                    (let (compiler-source : String (read-file "bootstrap/compiler.airl"))
-                      (let (full-source : String (join [
+                   (lexer-source : String (read-file "bootstrap/lexer.airl"))
+                   (parser-source : String (read-file "bootstrap/parser.airl"))
+                   (compiler-source : String (read-file "bootstrap/compiler.airl"))
+                   (full-source : String (join [
                             stdlib-mini "\n"
                             lexer-source "\n"
                             parser-source "\n"
@@ -1708,7 +1708,7 @@
                                   (let (ir2-str : String (ir-nodes-to-string ir2))
                                     (assert-eq ir1-str ir2-str "tier 1 fixpoint"))
                                 (Err e) (do (print "FAIL: compiled compile returned Err:" e) false)
-                                _ (do (print "FAIL: unexpected result") false))))))))))))))
+                                _ (do (print "FAIL: unexpected result") false))))))))))
 
 ;; ── Tier 2: Compiler self-compilation fixpoint ──────────
 
@@ -1732,10 +1732,10 @@
                     "(defn all :sig [(pred : fn) (xs : List) -> Bool] :requires [(valid pred)] :ensures [(valid result)] :body (if (empty? xs) true (if (pred (head xs)) (all pred (tail xs)) false)))\n"
                     "(defn find :sig [(pred : fn) (xs : List) -> List] :requires [(valid pred)] :ensures [(valid result)] :body (if (empty? xs) nil (if (pred (head xs)) (head xs) (find pred (tail xs)))))\n"
                     ] ""))
-                (let (lexer-source : String (read-file "bootstrap/lexer.airl"))
-                  (let (parser-source : String (read-file "bootstrap/parser.airl"))
-                    (let (compiler-source : String (read-file "bootstrap/compiler.airl"))
-                      (let (full-source : String (join [
+                   (lexer-source : String (read-file "bootstrap/lexer.airl"))
+                   (parser-source : String (read-file "bootstrap/parser.airl"))
+                   (compiler-source : String (read-file "bootstrap/compiler.airl"))
+                   (full-source : String (join [
                             stdlib-mini "\n"
                             lexer-source "\n"
                             parser-source "\n"
@@ -1761,6 +1761,6 @@
                                   (let (ir2-str : String (ir-nodes-to-string ir2))
                                     (assert-eq ir1-str ir2-str "tier 2 fixpoint: compiler self-compilation"))
                                 (Err e) (do (print "FAIL: compiled compile of compiler returned Err:" e) false)
-                                _ (do (print "FAIL: unexpected result from tier 2") false))))))))))))))
+                                _ (do (print "FAIL: unexpected result from tier 2") false))))))))))
 
 (print "fixpoint tests complete")

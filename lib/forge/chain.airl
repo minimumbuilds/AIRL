@@ -20,11 +20,11 @@
         (Err e) (Err e)
         (Ok val)
           (let (step-fn : _ (map-get step "fn"))
-            (let (step-result : _ (step-fn val))
-              (match step-result
-                (Ok v)  (Ok v)
-                (Err e) (Err e)
-                _       (Ok step-result))))))
+               (step-result : _ (step-fn val))
+            (match step-result
+              (Ok v)  (Ok v)
+              (Err e) (Err e)
+              _       (Ok step-result)))))
     (Ok initial-input)
     steps))
 
@@ -35,14 +35,14 @@
   :ensures [(valid result)]
   :body
   (let (raw-results : _ (map (fn [f] (f input)) fns))
-    (let (results : _ (map
-                        (fn [r]
-                          (match r
-                            (Ok v)  (Ok v)
-                            (Err e) (Err e)
-                            _       (Ok r)))
-                        raw-results))
-      (let (errors : _ (filter (fn [r] (is-err? r)) results))
-        (if (empty? errors)
-          (Ok (map (fn [r] (unwrap-or r nil)) results))
-          (Err (str (length errors) " step(s) failed")))))))
+       (results : _ (map
+                      (fn [r]
+                        (match r
+                          (Ok v)  (Ok v)
+                          (Err e) (Err e)
+                          _       (Ok r)))
+                      raw-results))
+       (errors : _ (filter (fn [r] (is-err? r)) results))
+    (if (empty? errors)
+      (Ok (map (fn [r] (unwrap-or r nil)) results))
+      (Err (str (length errors) " step(s) failed")))))

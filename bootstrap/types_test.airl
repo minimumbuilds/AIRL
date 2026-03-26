@@ -260,30 +260,30 @@
 ;; ─── type environment ────────────────────────────────
 
 (let (env : List (type-env-new 0))
-  (let (env2 : List (type-env-bind env "x" (TyI64)))
+     (env2 : List (type-env-bind env "x" (TyI64)))
     (do
       (assert-eq (type-env-lookup env2 "x") (Ok (TyI64)))
       (match (type-env-lookup env2 "y")
         (Err _) (print "PASS: undefined lookup")
-        _ (print "FAIL: y should be undefined")))))
+        _ (print "FAIL: y should be undefined"))))
 
 ;; Scoping: push/pop
 (let (env : List (type-env-new 0))
-  (let (env2 : List (type-env-bind env "x" (TyI64)))
-    (let (env3 : List (type-env-push env2))
-      (let (env4 : List (type-env-bind env3 "x" (TyStr)))
+     (env2 : List (type-env-bind env "x" (TyI64)))
+     (env3 : List (type-env-push env2))
+     (env4 : List (type-env-bind env3 "x" (TyStr)))
         (do
           ;; Inner shadows outer
           (assert-eq (type-env-lookup env4 "x") (Ok (TyStr)))
           ;; After pop, outer value restored
           (let (env5 : List (type-env-pop env4))
-            (assert-eq (type-env-lookup env5 "x") (Ok (TyI64)))))))))
+            (assert-eq (type-env-lookup env5 "x") (Ok (TyI64))))))
 
 ;; Inner frame sees outer bindings
 (let (env : List (type-env-new 0))
-  (let (env2 : List (type-env-bind env "y" (TyStr)))
-    (let (env3 : List (type-env-push env2))
-      (assert-eq (type-env-lookup env3 "y") (Ok (TyStr))))))
+     (env2 : List (type-env-bind env "y" (TyStr)))
+     (env3 : List (type-env-push env2))
+      (assert-eq (type-env-lookup env3 "y") (Ok (TyStr))))
 
 ;; ─── types-compatible ────────────────────────────────
 
@@ -301,7 +301,7 @@
 ;; ─── type registry ───────────────────────────────────
 
 (let (reg : List (registry-new 0))
-  (let (reg2 : List (registry-add-ctor reg "Ok" (CtorInfo "Result" [(TyVar "T")])))
+     (reg2 : List (registry-add-ctor reg "Ok" (CtorInfo "Result" [(TyVar "T")])))
     (do
       (assert-eq (registry-has-ctor reg2 "Ok") true)
       (assert-eq (registry-has-ctor reg2 "Foo") false)
@@ -311,6 +311,6 @@
             (do (assert-eq parent "Result")
                 (assert-eq (length fields) 1))
           _ (print "FAIL: not CtorInfo"))
-        (Err _) (print "FAIL: Ok should be in registry")))))
+        (Err _) (print "FAIL: Ok should be in registry"))))
 
 (print "=== types tests complete ===")

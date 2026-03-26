@@ -1,11 +1,11 @@
 ;; EXPECT: "hello from channel"
 ;; Basic channel send/recv
 (let (ch : List (channel-new))
-  (let (tx : i64 (at ch 0))
-    (let (rx : i64 (at ch 1))
-      (do
-        (channel-send tx "hello from channel")
-        (channel-close tx)
-        (match (channel-recv rx)
-          (Ok v) v
-          (Err _) "failed")))))
+     (tx : i64 (at ch 0))
+     (rx : i64 (at ch 1))
+  (do
+    (channel-send tx "hello from channel")
+    (channel-close tx)
+    (match (channel-recv rx)
+      (Ok v) v
+      (Err _) "failed")))

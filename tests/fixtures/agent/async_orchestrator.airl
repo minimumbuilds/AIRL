@@ -4,19 +4,19 @@
   (do
     ;; Test send-async + await
     (let (t1 : String (send-async w "add" 10 20))
-      (let (r1 : i64 (await t1))
-        (print "async add(10, 20) =" r1)))
+         (r1 : i64 (await t1))
+      (print "async add(10, 20) =" r1))
 
     ;; Test parallel: fire two async tasks, collect both
     (let (t2 : String (send-async w "add" 3 4))
-      (let (t3 : String (send-async w "multiply" 5 6))
-        (let (results : List (parallel [t2 t3]))
-          (do
-            (print "parallel results:" results)
-            (print "add(3,4) =" (at results 0))
-            (print "multiply(5,6) =" (at results 1))))))
+         (t3 : String (send-async w "multiply" 5 6))
+         (results : List (parallel [t2 t3]))
+      (do
+        (print "parallel results:" results)
+        (print "add(3,4) =" (at results 0))
+        (print "multiply(5,6) =" (at results 1))))
 
     ;; Test await with timeout
     (let (t4 : String (send-async w "add" 100 200))
-      (let (r4 : i64 (await t4 5000))
-        (print "await with timeout: add(100, 200) =" r4)))))
+         (r4 : i64 (await t4 5000))
+      (print "await with timeout: add(100, 200) =" r4))))

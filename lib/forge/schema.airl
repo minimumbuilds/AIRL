@@ -43,20 +43,20 @@
   :ensures [(map-has result "name")]
   :body
   (let (fn-name : _ (map-get meta "name"))
-    (let (description : _ (map-get-or meta "intent" ""))
-      (let (param-names : _ (map-get-or meta "param-names" []))
-        (let (param-types : _ (map-get-or meta "param-types" []))
-          (let (pairs : _ (zip param-names param-types))
-            (let (properties : _ (fold
-                                    (fn [acc pair]
-                                      (let (pname : _ (at pair 0))
-                                        (let (ptype : _ (at pair 1))
-                                          (map-set acc pname (type-to-json-schema ptype)))))
-                                    (map-new)
-                                    pairs))
-              (let (parameters : _ (map-from ["type" "object"
-                                              "properties" properties
-                                              "required" param-names]))
-                (map-from ["name" fn-name
-                           "description" description
-                           "parameters" parameters])))))))))
+       (description : _ (map-get-or meta "intent" ""))
+       (param-names : _ (map-get-or meta "param-names" []))
+       (param-types : _ (map-get-or meta "param-types" []))
+       (pairs : _ (zip param-names param-types))
+       (properties : _ (fold
+                          (fn [acc pair]
+                            (let (pname : _ (at pair 0))
+                                 (ptype : _ (at pair 1))
+                              (map-set acc pname (type-to-json-schema ptype))))
+                          (map-new)
+                          pairs))
+       (parameters : _ (map-from ["type" "object"
+                                   "properties" properties
+                                   "required" param-names]))
+    (map-from ["name" fn-name
+               "description" description
+               "parameters" parameters])))

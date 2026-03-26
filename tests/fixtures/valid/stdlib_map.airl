@@ -48,9 +48,9 @@
 
 ;; map-merge
 (let (m1 : _ (map-from ["a" 1 "b" 2]))
-  (let (m2 : _ (map-from ["b" 99 "c" 3]))
-    (let (merged : _ (map-merge m1 m2))
-      (print "merge a:" (map-get merged "a") "b:" (map-get merged "b") "c:" (map-get merged "c")))))
+     (m2 : _ (map-from ["b" 99 "c" 3]))
+     (merged : _ (map-merge m1 m2))
+  (print "merge a:" (map-get merged "a") "b:" (map-get merged "b") "c:" (map-get merged "c")))
 
 ;; map-map-values
 (let (m : _ (map-from ["a" 1 "b" 2 "c" 3]))

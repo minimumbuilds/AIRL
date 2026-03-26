@@ -157,9 +157,9 @@
   :body (if (<= (length xs) 1)
           xs
           (let (mid : i64 (/ (length xs) 2))
-            (let (left : List (take mid xs))
-              (let (right : List (drop mid xs))
-                (merge cmp (sort cmp left) (sort cmp right)))))))
+               (left : List (take mid xs))
+               (right : List (drop mid xs))
+            (merge cmp (sort cmp left) (sort cmp right)))))
 
 ;; ── unique : remove duplicate elements (preserves first occurrence) ──
 (defn unique
@@ -170,10 +170,10 @@
   :body (if (empty? xs)
           []
           (let (h : _ (head xs))
-            (let (rest : List (unique (tail xs)))
-              (if (list-contains? rest h)
-                rest
-                (cons h rest))))))
+               (rest : List (unique (tail xs)))
+            (if (list-contains? rest h)
+              rest
+              (cons h rest)))))
 
 ;; ── enumerate : pair each element with its index ──
 (defn enumerate
@@ -191,6 +191,6 @@
   :ensures [(valid result)]
   :body (fold (fn [acc x]
     (let (k : _ (f x))
-      (let (existing : List (map-get-or acc k []))
-        (map-set acc k (append existing x)))))
+         (existing : List (map-get-or acc k []))
+      (map-set acc k (append existing x))))
     (map-new) xs))

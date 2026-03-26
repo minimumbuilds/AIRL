@@ -142,7 +142,7 @@
 
 ;; Push/pop frame with shadowing
 (let (e0 : Any (env-bind (env-new 0) "x" (ValInt 1)))
-  (let (e1 : Any (env-bind (env-push e0) "x" (ValInt 2)))
+     (e1 : Any (env-bind (env-push e0) "x" (ValInt 2)))
     (do
       ;; Inner frame shadows outer
       (match (env-get e1 "x")
@@ -151,14 +151,14 @@
       ;; After pop, outer value restored
       (match (env-get (env-pop e1) "x")
         (Ok v) (assert-eq (unwrap-int v) 1)
-        (Err _) (print "  FAIL")))))
+        (Err _) (print "  FAIL"))))
 
 ;; Inner frame can see outer bindings
 (let (e0 : Any (env-bind (env-new 0) "y" (ValStr "hello")))
-  (let (e1 : Any (env-push e0))
+     (e1 : Any (env-push e0))
     (match (env-get e1 "y")
       (Ok v) (assert-eq (unwrap-str v) "hello")
-      (Err _) (print "  FAIL: y not visible in inner frame"))))
+      (Err _) (print "  FAIL: y not visible in inner frame")))
 
 (print "=== Task 2 tests complete ===")
 
@@ -221,36 +221,36 @@
   :ensures [(valid result)]
   :body
     (let (e : Any (env-new 0))
-    (let (e : Any (env-bind e "+" (ValBuiltin "+")))
-    (let (e : Any (env-bind e "-" (ValBuiltin "-")))
-    (let (e : Any (env-bind e "*" (ValBuiltin "*")))
-    (let (e : Any (env-bind e "/" (ValBuiltin "/")))
-    (let (e : Any (env-bind e "%" (ValBuiltin "%")))
-    (let (e : Any (env-bind e "=" (ValBuiltin "=")))
-    (let (e : Any (env-bind e "!=" (ValBuiltin "!=")))
-    (let (e : Any (env-bind e "<" (ValBuiltin "<")))
-    (let (e : Any (env-bind e ">" (ValBuiltin ">")))
-    (let (e : Any (env-bind e "<=" (ValBuiltin "<=")))
-    (let (e : Any (env-bind e ">=" (ValBuiltin ">=")))
-    (let (e : Any (env-bind e "not" (ValBuiltin "not")))
-    (let (e : Any (env-bind e "and" (ValBuiltin "and")))
-    (let (e : Any (env-bind e "or" (ValBuiltin "or")))
-    (let (e : Any (env-bind e "head" (ValBuiltin "head")))
-    (let (e : Any (env-bind e "tail" (ValBuiltin "tail")))
-    (let (e : Any (env-bind e "cons" (ValBuiltin "cons")))
-    (let (e : Any (env-bind e "empty?" (ValBuiltin "empty?")))
-    (let (e : Any (env-bind e "length" (ValBuiltin "length")))
-    (let (e : Any (env-bind e "at" (ValBuiltin "at")))
-    (let (e : Any (env-bind e "append" (ValBuiltin "append")))
-    (let (e : Any (env-bind e "char-at" (ValBuiltin "char-at")))
-    (let (e : Any (env-bind e "substring" (ValBuiltin "substring")))
-    (let (e : Any (env-bind e "contains" (ValBuiltin "contains")))
-    (let (e : Any (env-bind e "split" (ValBuiltin "split")))
-    (let (e : Any (env-bind e "join" (ValBuiltin "join")))
-    (let (e : Any (env-bind e "chars" (ValBuiltin "chars")))
-    (let (e : Any (env-bind e "print" (ValBuiltin "print")))
-    (let (e : Any (env-bind e "type-of" (ValBuiltin "type-of")))
-      e)))))))))))))))))))))))))))))))
+         (e : Any (env-bind e "+" (ValBuiltin "+")))
+         (e : Any (env-bind e "-" (ValBuiltin "-")))
+         (e : Any (env-bind e "*" (ValBuiltin "*")))
+         (e : Any (env-bind e "/" (ValBuiltin "/")))
+         (e : Any (env-bind e "%" (ValBuiltin "%")))
+         (e : Any (env-bind e "=" (ValBuiltin "=")))
+         (e : Any (env-bind e "!=" (ValBuiltin "!=")))
+         (e : Any (env-bind e "<" (ValBuiltin "<")))
+         (e : Any (env-bind e ">" (ValBuiltin ">")))
+         (e : Any (env-bind e "<=" (ValBuiltin "<=")))
+         (e : Any (env-bind e ">=" (ValBuiltin ">=")))
+         (e : Any (env-bind e "not" (ValBuiltin "not")))
+         (e : Any (env-bind e "and" (ValBuiltin "and")))
+         (e : Any (env-bind e "or" (ValBuiltin "or")))
+         (e : Any (env-bind e "head" (ValBuiltin "head")))
+         (e : Any (env-bind e "tail" (ValBuiltin "tail")))
+         (e : Any (env-bind e "cons" (ValBuiltin "cons")))
+         (e : Any (env-bind e "empty?" (ValBuiltin "empty?")))
+         (e : Any (env-bind e "length" (ValBuiltin "length")))
+         (e : Any (env-bind e "at" (ValBuiltin "at")))
+         (e : Any (env-bind e "append" (ValBuiltin "append")))
+         (e : Any (env-bind e "char-at" (ValBuiltin "char-at")))
+         (e : Any (env-bind e "substring" (ValBuiltin "substring")))
+         (e : Any (env-bind e "contains" (ValBuiltin "contains")))
+         (e : Any (env-bind e "split" (ValBuiltin "split")))
+         (e : Any (env-bind e "join" (ValBuiltin "join")))
+         (e : Any (env-bind e "chars" (ValBuiltin "chars")))
+         (e : Any (env-bind e "print" (ValBuiltin "print")))
+         (e : Any (env-bind e "type-of" (ValBuiltin "type-of")))
+      e))
 
 (defn eval-args-acc
   :sig [(args : List) (env : List) (acc : List) -> Any]
@@ -440,12 +440,12 @@
         (Err e) (Err e)
         (Ok callee-pair)
           (let (callee-val : Any (at callee-pair 0))
-            (let (env2 : Any (at callee-pair 1))
+               (env2 : Any (at callee-pair 1))
               (match (eval-args args env2)
                 (Err e) (Err e)
                 (Ok args-pair)
                   (let (arg-vals : Any (at args-pair 0))
-                    (let (env3 : Any (at args-pair 1))
+                       (env3 : Any (at args-pair 1))
                       (match callee-val
                         (ValBuiltin name)
                           (match (call-builtin name arg-vals)
@@ -464,17 +464,17 @@
                               (Err e) (Err e)
                               (Ok pair) (Ok [(at pair 0) env3])))
 
-                        _ (Err "eval: not callable"))))))))
+                        _ (Err "eval: not callable"))))))
 
     (ASTIf cond then-expr else-expr _ _)
       (match (eval-node cond env)
         (Err e) (Err e)
         (Ok cond-pair)
           (let (cond-val : Any (at cond-pair 0))
-            (let (env2 : Any (at cond-pair 1))
+               (env2 : Any (at cond-pair 1))
               (if (unwrap-bool cond-val)
                 (eval-node then-expr env2)
-                (eval-node else-expr env2)))))
+                (eval-node else-expr env2))))
 
     (ASTLet bindings body _ _)
       (let (env2 : Any (env-push env))
@@ -501,10 +501,10 @@
           (Err e) (Err e)
           (Ok args-pair)
             (let (vals : Any (at args-pair 0))
-              (let (env2 : Any (at args-pair 1))
+                 (env2 : Any (at args-pair 1))
                 (if (= (length vals) 1)
                   (Ok [(ValVariant name (head vals)) env2])
-                  (Ok [(ValVariant name (ValList vals)) env2]))))))
+                  (Ok [(ValVariant name (ValList vals)) env2])))))
 
     (ASTTry expr _ _)
       (match (eval-node expr env)
@@ -672,8 +672,8 @@
   :body (match node
     (ASTDefn name sig _ _ _ body _ _)
       (let (param-names : Any (extract-param-names sig))
-        (let (fn-val : Any (ValFn name param-names body env))
-          (Ok [(ValNil) (env-bind env name fn-val)])))
+           (fn-val : Any (ValFn name param-names body env))
+          (Ok [(ValNil) (env-bind env name fn-val)]))
     _ (eval-node node env)))
 
 (defn eval-program
@@ -698,21 +698,21 @@
 ;; (defn double :sig [(x : i64) -> i64] :body (* x 2))
 ;; (double 21) -> 42
 (let (env : Any (make-initial-env 0))
-  (let (defn-node : Any (ASTDefn "double"
+     (defn-node : Any (ASTDefn "double"
     (ASTSig [(ASTParam "x" "i64")] "i64")
     nil [] []
     (ASTCall (ASTSymbol "*" 0 0) [(ASTSymbol "x" 0 0) (ASTInt 2 0 0)] 0 0)
     0 0))
-    (let (call-node : Any (ASTCall (ASTSymbol "double" 0 0) [(ASTInt 21 0 0)] 0 0))
+     (call-node : Any (ASTCall (ASTSymbol "double" 0 0) [(ASTInt 21 0 0)] 0 0))
       (match (eval-program [defn-node call-node] env)
         (Ok pair) (assert-eq (unwrap-int (at pair 0)) 42)
-        (Err e) (print "  FAIL:" e)))))
+        (Err e) (print "  FAIL:" e)))
 
 ;; Recursive function: factorial
 ;; (defn fact :sig [(n : i64) -> i64] :body (if (= n 0) 1 (* n (fact (- n 1)))))
 ;; (fact 5) -> 120
 (let (env : Any (make-initial-env 0))
-  (let (defn-node : Any (ASTDefn "fact"
+     (defn-node : Any (ASTDefn "fact"
     (ASTSig [(ASTParam "n" "i64")] "i64")
     nil [] []
     (ASTIf
@@ -726,10 +726,10 @@
         0 0)
       0 0)
     0 0))
-    (let (call-node : Any (ASTCall (ASTSymbol "fact" 0 0) [(ASTInt 5 0 0)] 0 0))
+     (call-node : Any (ASTCall (ASTSymbol "fact" 0 0) [(ASTInt 5 0 0)] 0 0))
       (match (eval-program [defn-node call-node] env)
         (Ok pair) (assert-eq (unwrap-int (at pair 0)) 120)
-        (Err e) (print "  FAIL:" e)))))
+        (Err e) (print "  FAIL:" e)))
 
 (print "=== Task 6 tests complete ===")
 

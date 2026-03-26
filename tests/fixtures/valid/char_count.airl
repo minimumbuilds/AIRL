@@ -2,22 +2,22 @@
 ;; Test char-count builtin returns Unicode character count
 
 (let (ascii-count : _ (char-count "hello"))
-  (let (multi-count : _ (char-count "café"))
-    (let (emoji-count : _ (char-count "a—b"))
-      (let (empty-count : _ (char-count ""))
-        (do
-          (print "char-count hello:" ascii-count)
-          (print "char-count café:" multi-count)
-          (print "char-count a—b:" emoji-count)
-          (print "char-count empty:" empty-count)
+     (multi-count : _ (char-count "café"))
+     (emoji-count : _ (char-count "a—b"))
+     (empty-count : _ (char-count ""))
+  (do
+    (print "char-count hello:" ascii-count)
+    (print "char-count café:" multi-count)
+    (print "char-count a—b:" emoji-count)
+    (print "char-count empty:" empty-count)
 
-          ;; Assertions
-          (if (= ascii-count 5)
-            (if (= multi-count 4)
-              (if (= emoji-count 3)
-                (if (= empty-count 0)
-                  true
-                  false)
-                false)
-              false)
-            false))))))
+    ;; Assertions
+    (if (= ascii-count 5)
+      (if (= multi-count 4)
+        (if (= emoji-count 3)
+          (if (= empty-count 0)
+            true
+            false)
+          false)
+        false)
+      false)))

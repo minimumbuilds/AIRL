@@ -14,16 +14,16 @@
   :ensures [(map-has result "name")]
   :body
   (let (tool-name : _ (map-get meta "name"))
-    (let (tool-intent : _ (map-get-or meta "intent" ""))
-      (let (tool-param-names : _ (map-get-or meta "param-names" []))
-        (let (tool-param-types : _ (map-get-or meta "param-types" []))
-          (let (tool-schema : _ (fn-to-tool-schema meta))
-            (map-from ["name" tool-name
-                       "handler" handler
-                       "schema" tool-schema
-                       "intent" tool-intent
-                       "param-names" tool-param-names
-                       "param-types" tool-param-types])))))))
+       (tool-intent : _ (map-get-or meta "intent" ""))
+       (tool-param-names : _ (map-get-or meta "param-names" []))
+       (tool-param-types : _ (map-get-or meta "param-types" []))
+       (tool-schema : _ (fn-to-tool-schema meta))
+    (map-from ["name" tool-name
+               "handler" handler
+               "schema" tool-schema
+               "intent" tool-intent
+               "param-names" tool-param-names
+               "param-types" tool-param-types])))
 
 (defn make-registry
   :sig [-> Map]
@@ -93,9 +93,10 @@
       (Err e) (Err e)
       (Ok tool)
         (let (handler : _ (map-get tool "handler"))
-          (let (argc : _ (length args))
-            (match argc
-              0 (Ok (handler))
-              1 (Ok (handler (at args 0)))
-              2 (Ok (handler (at args 0) (at args 1)))
-              _ (Ok (handler (at args 0) (at args 1) (at args 2)))))))))
+             (argc : _ (length args))
+          (match argc
+            0 (Ok (handler))
+            1 (Ok (handler (at args 0)))
+            2 (Ok (handler (at args 0) (at args 1)))
+            _ (Ok (handler (at args 0) (at args 1) (at args 2))))))))
+

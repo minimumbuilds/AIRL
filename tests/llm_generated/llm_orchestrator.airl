@@ -2,7 +2,7 @@
 ;; Spawns the worker, dispatches typed tasks, validates results
 
 (let (worker : String (spawn-agent "tests/llm_generated/llm_worker.airl"))
-  (let (grade1 : i64 (send worker "classify" 85))
-    (let (grade2 : i64 (send worker "classify" 95))
-      (let (avg : i64 (send worker "weighted-average" 85 95 60))
-        (send worker "classify" avg)))))
+     (grade1 : i64 (send worker "classify" 85))
+     (grade2 : i64 (send worker "classify" 95))
+     (avg : i64 (send worker "weighted-average" 85 95 60))
+  (send worker "classify" avg))

@@ -3,44 +3,44 @@
 
 ;; ── 1. Sum 10K integers ──────────────────────────────────
 (let (start : i64 (time-now))
-  (let (result : i64 (fold (fn [acc x] (+ acc x)) 0 (range 0 10000)))
-    (let (elapsed : i64 (- (time-now) start))
-      (do
-        (assert (= result 49995000) "sum-10k failed")
-        (print "Sum 10K:" result "in" elapsed "ms\n")))))
+     (result : i64 (fold (fn [acc x] (+ acc x)) 0 (range 0 10000)))
+     (elapsed : i64 (- (time-now) start))
+  (do
+    (assert (= result 49995000) "sum-10k failed")
+    (print "Sum 10K:" result "in" elapsed "ms\n")))
 
 ;; ── 2. Filter evens from 10K ─────────────────────────────
 (let (start : i64 (time-now))
-  (let (result : i64 (length (filter (fn [x] (= (% x 2) 0)) (range 0 10000))))
-    (let (elapsed : i64 (- (time-now) start))
-      (do
-        (assert (= result 5000) "count-evens failed")
-        (print "Filter evens 10K:" result "in" elapsed "ms\n")))))
+     (result : i64 (length (filter (fn [x] (= (% x 2) 0)) (range 0 10000))))
+     (elapsed : i64 (- (time-now) start))
+  (do
+    (assert (= result 5000) "count-evens failed")
+    (print "Filter evens 10K:" result "in" elapsed "ms\n")))
 
 ;; ── 3. Map squares over 1K ──────────────────────────────
 (let (start : i64 (time-now))
-  (let (squares : _ (map (fn [x] (* x x)) (range 0 1000)))
-    (let (elapsed : i64 (- (time-now) start))
-      (let (last : i64 (at squares 999))
-        (do
-          (assert (= last 998001) "map-squares failed")
-          (print "Map squares 1K: last=" last "in" elapsed "ms\n"))))))
+     (squares : _ (map (fn [x] (* x x)) (range 0 1000)))
+     (elapsed : i64 (- (time-now) start))
+     (last : i64 (at squares 999))
+  (do
+    (assert (= last 998001) "map-squares failed")
+    (print "Map squares 1K: last=" last "in" elapsed "ms\n")))
 
 ;; ── 4. Sort 100 reversed ────────────────────────────────
 (let (start : i64 (time-now))
-  (let (sorted : _ (sort (fn [a b] (< a b)) (reverse (range 0 100))))
-    (let (elapsed : i64 (- (time-now) start))
-      (do
-        (assert (= (at sorted 0) 0) "sort first failed")
-        (assert (= (at sorted 99) 99) "sort last failed")
-        (print "Sort 100 reversed: in" elapsed "ms\n")))))
+     (sorted : _ (sort (fn [a b] (< a b)) (reverse (range 0 100))))
+     (elapsed : i64 (- (time-now) start))
+  (do
+    (assert (= (at sorted 0) 0) "sort first failed")
+    (assert (= (at sorted 99) 99) "sort last failed")
+    (print "Sort 100 reversed: in" elapsed "ms\n")))
 
 ;; ── 5. Chained: sum of squares of evens 0-99 ────────────
 (let (start : i64 (time-now))
-  (let (result : i64 (fold (fn [acc x] (+ acc x)) 0
-                        (map (fn [x] (* x x))
-                          (filter (fn [x] (= (% x 2) 0)) (range 0 100)))))
-    (let (elapsed : i64 (- (time-now) start))
-      (do
-        (assert (= result 161700) "chained failed")
-        (print "Chained sum-sq-evens:" result "in" elapsed "ms\n")))))
+     (result : i64 (fold (fn [acc x] (+ acc x)) 0
+                      (map (fn [x] (* x x))
+                        (filter (fn [x] (= (% x 2) 0)) (range 0 100)))))
+     (elapsed : i64 (- (time-now) start))
+  (do
+    (assert (= result 161700) "chained failed")
+    (print "Chained sum-sq-evens:" result "in" elapsed "ms\n")))

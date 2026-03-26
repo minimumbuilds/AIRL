@@ -22,8 +22,8 @@
         (Err _) acc)))
 
 (let (ch : List (channel-new))
-  (let (tx : i64 (at ch 0))
-    (let (rx : i64 (at ch 1))
-      (do
-        (thread-spawn (fn [] (send-range tx 1 10)))
-        (recv-sum rx 0 10)))))
+     (tx : i64 (at ch 0))
+     (rx : i64 (at ch 1))
+  (do
+    (thread-spawn (fn [] (send-range tx 1 10)))
+    (recv-sum rx 0 10)))

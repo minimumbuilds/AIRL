@@ -65,6 +65,7 @@ airl-driver ← airl-solver (Z3)
 - **Fixtures live in** `tests/fixtures/valid/`, `tests/fixtures/type_errors/`, `tests/fixtures/contract_errors/`, `tests/fixtures/linearity_errors/`, `tests/fixtures/agent/`.
 - **The `orchestrator.airl` fixture** requires the built binary (uses `spawn-agent`) — it's in `tests/fixtures/agent/`, NOT `tests/fixtures/valid/`, so the fixture runner doesn't try to run it.
 - **Builtin dispatch pattern:** Builtins are dispatched via `CallBuiltin` opcode in the bytecode VM, which calls into `Builtins::get()` registry. The tree-walking interpreter (`eval.rs`) is kept for the REPL and agent runtime but is not the default execution path.
+- **Multi-binding `let` is the preferred style.** Use `(let (x : T v1) (y : T v2) body)` instead of nested single-binding lets. The parser, bytecode compiler, and JIT all support it.
 
 ## Standard Library
 

@@ -22,24 +22,24 @@
           (if (< (length args) 3)
             (do (print "Usage: airl-compiler run <file.airl>\n") nil)
             (let (filename : String (at args 2))
-              (let (source : String (read-file filename))
+                 (source : String (read-file filename))
                 (match (run-compiled-bc source)
                   (Ok result)
                     (if (valid result)
                       (if (= (type-of result) "unit") nil
                         (println result))
                       nil)
-                  (Err e) (do (print "Error: ") (print e) (print "\n") nil)))))
+                  (Err e) (do (print "Error: ") (print e) (print "\n") nil))))
           ;; Default: treat first arg as file to run
           (let (filename : String (at args 1))
-            (let (source : String (read-file filename))
+               (source : String (read-file filename))
               (match (run-compiled-bc source)
                 (Ok result)
                   (if (valid result)
                     (if (= (type-of result) "unit") nil
                       (println result))
                     nil)
-                (Err e) (do (print "Error: ") (print e) (print "\n") nil)))))))))
+                (Err e) (do (print "Error: ") (print e) (print "\n") nil))))))))
 
 ;; Parse compile args: collect files until -o, then output name
 (defn parse-compile-args

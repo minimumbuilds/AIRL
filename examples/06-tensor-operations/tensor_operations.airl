@@ -10,10 +10,10 @@
 
 ;; Create a 3x3 matrix of ones and the 3x3 identity matrix
 (let (a : tensor (tensor.ones [3 3]))
-  (let (b : tensor (tensor.identity 3))
-    (do
-      (print "A = 3x3 ones, shape:" (shape a))
-      (print "B = 3x3 identity, shape:" (shape b))
+     (b : tensor (tensor.identity 3))
+  (do
+    (print "A = 3x3 ones, shape:" (shape a))
+    (print "B = 3x3 identity, shape:" (shape b))
 
       ;; Element-wise addition (JIT-accelerated)
       (let (c : tensor (tensor.add a b))
@@ -27,13 +27,13 @@
 
       ;; Random tensor with softmax (attention-style normalization)
       (let (logits : tensor (tensor.rand [5] 42))
-        (let (probs : tensor (tensor.softmax logits))
-          (do
-            (print "Softmax probabilities sum =" (tensor.sum probs))
-            (print "  (should be ~1.0)"))))
+           (probs : tensor (tensor.softmax logits))
+        (do
+          (print "Softmax probabilities sum =" (tensor.sum probs))
+          (print "  (should be ~1.0)")))
 
       ;; Reshape and transpose
       (let (flat : tensor (tensor.ones [6]))
-        (let (matrix : tensor (tensor.reshape flat [2 3]))
-          (let (transposed : tensor (tensor.transpose matrix))
-            (print "Reshaped [6] -> [2,3] -> transposed shape:" (shape transposed))))))))
+           (matrix : tensor (tensor.reshape flat [2 3]))
+           (transposed : tensor (tensor.transpose matrix))
+        (print "Reshaped [6] -> [2,3] -> transposed shape:" (shape transposed)))))

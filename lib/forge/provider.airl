@@ -41,21 +41,21 @@
   :ensures [(valid result)]
   :body
   (let (api-url : _ (map-get provider "api-url"))
-    (let (api-key : _ (map-get provider "api-key"))
-      (let (model : _ (map-get provider "model"))
-        (let (body-map : _ (format-messages-anthropic messages model tools))
-          (let (body-str : _ (json-stringify body-map))
-            (let (headers : _ (map-from ["Content-Type" "application/json"
-                                         "x-api-key" api-key
-                                         "anthropic-version" "2023-06-01"]))
-              (let (http-result : _ (http-request "POST" api-url body-str headers))
-                (match http-result
-                  (Err e) (Err e)
-                  (Ok resp-str)
-                    (let (parse-result : _ (json-parse resp-str))
-                      (match parse-result
-                        (Err e) (Err (str "Failed to parse response: " e))
-                        (Ok resp) (Ok resp))))))))))))
+       (api-key : _ (map-get provider "api-key"))
+       (model : _ (map-get provider "model"))
+       (body-map : _ (format-messages-anthropic messages model tools))
+       (body-str : _ (json-stringify body-map))
+       (headers : _ (map-from ["Content-Type" "application/json"
+                                "x-api-key" api-key
+                                "anthropic-version" "2023-06-01"]))
+       (http-result : _ (http-request "POST" api-url body-str headers))
+    (match http-result
+      (Err e) (Err e)
+      (Ok resp-str)
+        (let (parse-result : _ (json-parse resp-str))
+          (match parse-result
+            (Err e) (Err (str "Failed to parse response: " e))
+            (Ok resp) (Ok resp))))))
 
 (defn extract-text-content
   :sig [(response : Map) -> _]
@@ -65,14 +65,14 @@
   :body
   (if (map-has response "error")
     (let (err-obj : _ (map-get response "error"))
-      (let (err-msg : _ (map-get-or err-obj "message" "Unknown error"))
-        (Err err-msg)))
+         (err-msg : _ (map-get-or err-obj "message" "Unknown error"))
+      (Err err-msg))
     (if (map-has response "content")
       (let (content : _ (map-get response "content"))
-        (let (text-block : _ (find (fn [block] (map-has block "text")) content))
-          (if (= text-block nil)
-            (Err "No text block found in response content")
-            (Ok (map-get text-block "text")))))
+           (text-block : _ (find (fn [block] (map-has block "text")) content))
+        (if (= text-block nil)
+          (Err "No text block found in response content")
+          (Ok (map-get text-block "text"))))
       (Err "Response has no content field"))))
 
 (defn extract-tool-calls

@@ -155,14 +155,14 @@
   :ensures [(valid result)]
   :body
     (let (r : List (read-symbol-chars source pos line col acc))
-      (let (text : String (head r))
-        (let (new-pos : i64 (at r 1))
-          (let (new-line : i64 (at r 2))
-            (let (new-col : i64 (at r 3))
+         (text : String (head r))
+         (new-pos : i64 (at r 1))
+         (new-line : i64 (at r 2))
+         (new-col : i64 (at r 3))
               (if (= text "true")  (Ok [(Token "bool" true start-line start-col) new-pos new-line new-col])
               (if (= text "false") (Ok [(Token "bool" false start-line start-col) new-pos new-line new-col])
               (if (= text "nil")   (Ok [(Token "nil" nil start-line start-col) new-pos new-line new-col])
-                (Ok [(Token "symbol" text start-line start-col) new-pos new-line new-col]))))))))))
+                (Ok [(Token "symbol" text start-line start-col) new-pos new-line new-col]))))))
 
 (defn lex-keyword
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
@@ -171,11 +171,11 @@
   :ensures [(valid result)]
   :body
     (let (r : List (read-symbol-chars source pos line col acc))
-      (let (text : String (head r))
-        (let (new-pos : i64 (at r 1))
-          (let (new-line : i64 (at r 2))
-            (let (new-col : i64 (at r 3))
-              (Ok [(Token "keyword" text start-line start-col) new-pos new-line new-col])))))))
+         (text : String (head r))
+         (new-pos : i64 (at r 1))
+         (new-line : i64 (at r 2))
+         (new-col : i64 (at r 3))
+              (Ok [(Token "keyword" text start-line start-col) new-pos new-line new-col])))
 
 ;; ── Numeric helpers ──────────────────────────────────
 
@@ -244,10 +244,10 @@
   :ensures [(valid result)]
   :body
     (let (int-result : List (read-digits source pos line col acc))
-      (let (int-val : i64 (head int-result))
-        (let (new-pos : i64 (at int-result 1))
-          (let (new-line : i64 (at int-result 2))
-            (let (new-col : i64 (at int-result 3))
+         (int-val : i64 (head int-result))
+         (new-pos : i64 (at int-result 1))
+         (new-line : i64 (at int-result 2))
+         (new-col : i64 (at int-result 3))
               ;; Check for '.' followed by digit -> float
               (if (< new-pos (length source))
                 (if (= (char-at source new-pos) ".")
@@ -255,12 +255,12 @@
                     (if (is-digit? (char-at source (+ new-pos 1)))
                       ;; Float
                       (let (frac-result : List (read-frac-digits source (+ new-pos 1) new-line (+ new-col 1) 0.0 10.0))
-                        (let (frac-val : f64 (head frac-result))
-                          (let (fp : i64 (at frac-result 1))
-                            (let (fl : i64 (at frac-result 2))
-                              (let (fc : i64 (at frac-result 3))
-                                (let (float-val : f64 (+ (int-to-float int-val) frac-val))
-                                  (Ok [(Token "float" (if negative (- 0.0 float-val) float-val) start-line start-col) fp fl fc])))))))
+                           (frac-val : f64 (head frac-result))
+                           (fp : i64 (at frac-result 1))
+                           (fl : i64 (at frac-result 2))
+                           (fc : i64 (at frac-result 3))
+                           (float-val : f64 (+ (int-to-float int-val) frac-val))
+                                  (Ok [(Token "float" (if negative (- 0.0 float-val) float-val) start-line start-col) fp fl fc]))
                       ;; Integer (dot followed by non-digit)
                       (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
                     ;; Integer (dot at end of input)
@@ -268,7 +268,7 @@
                   ;; Integer (no dot)
                   (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
                 ;; Integer (end of input)
-                (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))))))))
+                (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))))
 
 ;; ── String sub-lexer ────────────────────────────────
 
@@ -313,8 +313,8 @@
       (Err msg) (Err msg)
       (Ok ws-state)
         (let (p : i64 (head ws-state))
-          (let (ln : i64 (at ws-state 1))
-            (let (c : i64 (at ws-state 2))
+             (ln : i64 (at ws-state 1))
+             (c : i64 (at ws-state 2))
               (if (>= p (length source))
                 (Ok [(Token "eof" nil ln c) p ln c])
                 (let (ch : String (char-at source p))
@@ -343,7 +343,7 @@
                   (if (is-symbol-start? ch)
                     (lex-symbol source p ln c "" ln c)
                     (Err (+ "unexpected character '" (+ ch "'")))))
-                  )))))))))))))))
+                  )))))))))))))
 
 (defn lex-loop
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (tokens : List) -> List]
@@ -355,15 +355,15 @@
       (Err msg) (Err msg)
       (Ok tok-state)
         (let (tok : List (head tok-state))
-          (let (new-pos : i64 (at tok-state 1))
-            (let (new-line : i64 (at tok-state 2))
-              (let (new-col : i64 (at tok-state 3))
-                (let (new-tokens : List (cons tok tokens))
+             (new-pos : i64 (at tok-state 1))
+             (new-line : i64 (at tok-state 2))
+             (new-col : i64 (at tok-state 3))
+             (new-tokens : List (cons tok tokens))
                   (match tok
                     (Token kind _ _ _)
                       (if (= kind "eof")
                         (Ok new-tokens)
-                        (lex-loop source new-pos new-line new-col new-tokens))))))))))
+                        (lex-loop source new-pos new-line new-col new-tokens))))))
 
 (defn lex
   :sig [(source : String) -> List]
@@ -443,7 +443,7 @@
               (match (parse-sexprs tokens (+ pos 1) "rparen")
                 (Ok result)
                   (let (items : List (at result 0))
-                    (let (end-pos : i64 (at result 1))
+                       (end-pos : i64 (at result 1))
                       ;; Check for closing rparen
                       (if (>= end-pos (length tokens))
                         (Err (ParseError "unclosed parenthesis" line col))
@@ -452,14 +452,14 @@
                             (Token ck _ _ _)
                               (if (= ck "rparen")
                                 (Ok [(SList items line col) (+ end-pos 1)])
-                                (Err (ParseError "unclosed parenthesis" line col))))))))
+                                (Err (ParseError "unclosed parenthesis" line col)))))))
                 (Err e) (Err e))
               (if (= kind "lbracket")
                 ;; Parse bracket contents until rbracket
                 (match (parse-sexprs tokens (+ pos 1) "rbracket")
                   (Ok result)
                     (let (items : List (at result 0))
-                      (let (end-pos : i64 (at result 1))
+                         (end-pos : i64 (at result 1))
                         (if (>= end-pos (length tokens))
                           (Err (ParseError "unclosed bracket" line col))
                           (let (closer : List (at tokens end-pos))
@@ -467,7 +467,7 @@
                               (Token ck _ _ _)
                                 (if (= ck "rbracket")
                                   (Ok [(SBracket items line col) (+ end-pos 1)])
-                                  (Err (ParseError "unclosed bracket" line col))))))))
+                                  (Err (ParseError "unclosed bracket" line col)))))))
                   (Err e) (Err e))
                 (if (= kind "rparen")
                   (Err (ParseError "unexpected ')'" line col))
@@ -499,13 +499,13 @@
                 (match (parse-sexpr tokens pos)
                   (Ok result)
                     (let (sexpr : List (at result 0))
-                      (let (new-pos : i64 (at result 1))
+                         (new-pos : i64 (at result 1))
                         (match (parse-sexprs tokens new-pos stop-kind)
                           (Ok rest-result)
                             (let (rest-sexprs : List (at rest-result 0))
-                              (let (final-pos : i64 (at rest-result 1))
-                                (Ok [(cons sexpr rest-sexprs) final-pos])))
-                          (Err e) (Err e))))
+                                 (final-pos : i64 (at rest-result 1))
+                                (Ok [(cons sexpr rest-sexprs) final-pos]))
+                          (Err e) (Err e)))
                   (Err e) (Err e))))))))
 
 (defn parse-sexpr-all
@@ -700,13 +700,13 @@
       (Err (ParseError "let requires at least one binding and a body" line col))
       ;; bindings are items[1] to items[n-2], body is items[n-1]
       (let (num-items : i64 (length items))
-        (let (body-idx : i64 (- num-items 1))
+           (body-idx : i64 (- num-items 1))
           (match (parse-let-bindings items 1 body-idx)
             (Ok bindings)
               (match (parse-expr (at items body-idx))
                 (Ok body-node) (Ok (ASTLet bindings body-node line col))
                 (Err e) (Err e))
-            (Err e) (Err e))))))
+            (Err e) (Err e)))))
 
 (defn parse-do
   :sig [(items : List) (line : i64) (col : i64) -> List]
@@ -1549,14 +1549,14 @@
   :ensures [(valid result)]
   :body
     (let (tv : List (TyVar "a"))
-      (let (tvb : List (TyVar "b"))
-        (let (boolT : List (TyBool))
-          (let (intT : List (TyI64))
-            (let (strT : List (TyStr))
-              (let (unitT : List (TyUnit))
-                (let (listA : List (TyList tv))
-                  (let (mapT : List (TyVar "Map"))
-                    (let (fnT : List (TyVar "fn"))
+         (tvb : List (TyVar "b"))
+         (boolT : List (TyBool))
+         (intT : List (TyI64))
+         (strT : List (TyStr))
+         (unitT : List (TyUnit))
+         (listA : List (TyList tv))
+         (mapT : List (TyVar "Map"))
+         (fnT : List (TyVar "fn"))
                       (bind-builtins (type-env-new 0)
                         [;; Arithmetic
                          "+" (TyFunc [tv tv] tv)
@@ -1628,7 +1628,7 @@
                          ;; Result
                          "is-ok?" (TyFunc [tv] boolT)
                          "is-err?" (TyFunc [tv] boolT)
-                         ])))))))))))
+                         ])))
 
 ;; ─── Core Expression Type Checking ──────────────────
 
@@ -1719,11 +1719,11 @@
     ;; Lambda
     (ASTLambda params body _ _)
       (let (lenv : List (type-env-push env))
-        (let (lenv : List (bind-lambda-params lenv params))
+           (lenv : List (bind-lambda-params lenv params))
           (match (check-expr body lenv reg)
             (Err e) (Err e)
             (Ok body-ty)
-              (Ok (TyFunc (map (fn [_p] (TyVar "_")) params) body-ty)))))
+              (Ok (TyFunc (map (fn [_p] (TyVar "_")) params) body-ty))))
 
     ;; Match expression
     (ASTMatch scrutinee arms _ _)
@@ -1824,7 +1824,7 @@
       (match (head arms)
         (ASTArm pattern body)
           (let (arm-env : List (type-env-push env))
-            (let (arm-env : List (bind-pattern-vars arm-env pattern scr-ty))
+               (arm-env : List (bind-pattern-vars arm-env pattern scr-ty))
               (match (check-expr body arm-env reg)
                 (Err e) (Err e)
                 (Ok arm-ty)
@@ -1835,7 +1835,7 @@
                       (Ok rest-ty)
                         (if (types-compatible arm-ty rest-ty)
                           (Ok arm-ty)
-                          (Ok (TyVar "match-result"))))))))
+                          (Ok (TyVar "match-result")))))))
         _ (Err "invalid match arm"))))
 
 (defn bind-pattern-vars
@@ -1877,13 +1877,13 @@
               (Err e) (Err e)
               (Ok param-result)
                 (let (fn-env : List (at param-result 0))
-                  (let (param-tys : List (at param-result 1))
+                     (param-tys : List (at param-result 1))
                     (match (resolve-type-name ret-name reg)
                       (Err e) (Err e)
                       (Ok ret-ty)
                         ;; Bind function name for recursion
                         (let (fn-ty : List (TyFunc param-tys ret-ty))
-                          (let (fn-env : List (type-env-bind fn-env name fn-ty))
+                             (fn-env : List (type-env-bind fn-env name fn-ty))
                             ;; Also bind "result" for ensures
                             (let (fn-env : List (type-env-bind fn-env "result" ret-ty))
                               (match (check-expr body fn-env reg)
@@ -1891,7 +1891,7 @@
                                 (Ok body-ty)
                                   (if (types-compatible body-ty ret-ty)
                                     (Ok [fn-ty (type-env-bind env name fn-ty)])
-                                    (Err (join ["function '" name "': body type incompatible with declared return type"] ""))))))))))))
+                                    (Err (join ["function '" name "': body type incompatible with declared return type"] ""))))))))))
         _ (Err "defn requires a sig"))
     _ (Err "check-fn: not a defn")))
 
@@ -1964,13 +1964,13 @@
   :ensures [(valid result)]
   :body
     (let (reg : List (registry-new 0))
-      (let (reg : List (registry-add-type reg "Result" true))
-        (let (reg : List (registry-add-ctor reg "Ok" (CtorInfo "Result" [(TyVar "T")])))
-          (let (reg : List (registry-add-ctor reg "Err" (CtorInfo "Result" [(TyVar "E")])))
-            (let (reg : List (registry-add-type reg "Option" true))
-              (let (reg : List (registry-add-ctor reg "Some" (CtorInfo "Option" [(TyVar "T")])))
-                (let (reg : List (registry-add-ctor reg "None" (CtorInfo "Option" [])))
-                  reg))))))))
+         (reg : List (registry-add-type reg "Result" true))
+         (reg : List (registry-add-ctor reg "Ok" (CtorInfo "Result" [(TyVar "T")])))
+         (reg : List (registry-add-ctor reg "Err" (CtorInfo "Result" [(TyVar "E")])))
+         (reg : List (registry-add-type reg "Option" true))
+         (reg : List (registry-add-ctor reg "Some" (CtorInfo "Option" [(TyVar "T")])))
+         (reg : List (registry-add-ctor reg "None" (CtorInfo "Option" [])))
+                  reg))
 
 ;; ─── Two-Pass Program Checking ───────────────────────
 ;; Pass 1: Register all function signatures and deftypes
@@ -2073,8 +2073,8 @@
         (if (empty? nodes)
           (Err "no expressions")
           (let (env : List (make-builtin-env 0))
-            (let (reg : List (make-prelude-registry 0))
-              (check-expr (head nodes) env reg))))))
+               (reg : List (make-prelude-registry 0))
+              (check-expr (head nodes) env reg)))))
 
 (defn check-program-source
   :sig [(source : String) -> List]
@@ -2086,8 +2086,8 @@
       (Err e) (Err e)
       (Ok nodes)
         (let (env : List (make-builtin-env 0))
-          (let (reg : List (make-prelude-registry 0))
-            (type-check-program nodes env reg)))))
+             (reg : List (make-prelude-registry 0))
+            (type-check-program nodes env reg))))
 
 (print "=== typecheck expression tests ===")
 
@@ -2155,10 +2155,10 @@
     (Err e) (print "FAIL: lexer parse:" e)
     (Ok nodes)
       (let (env : List (make-builtin-env 0))
-        (let (reg : List (make-prelude-registry 0))
+           (reg : List (make-prelude-registry 0))
           (match (type-check-program nodes env reg)
             (Ok _) (print "PASS: lexer type-checks clean")
-            (Err e) (print "FAIL: lexer:" e))))))
+            (Err e) (print "FAIL: lexer:" e)))))
 
 ;; Parser (needs lexer sigs)
 (let (lexer-source : String (read-file "bootstrap/lexer.airl"))
@@ -2170,13 +2170,13 @@
           (Err e) (print "FAIL: parser parse:" e)
           (Ok parser-nodes)
             (let (env : List (make-builtin-env 0))
-              (let (reg : List (make-prelude-registry 0))
+                 (reg : List (make-prelude-registry 0))
                 (match (register-all-top-levels lexer-nodes env reg)
                   (Err e) (print "FAIL:" e)
                   (Ok lr)
                     (match (type-check-program parser-nodes (at lr 0) (at lr 1))
                       (Ok _) (print "PASS: parser type-checks clean")
-                      (Err e) (print "FAIL: parser:" e)))))))))
+                      (Err e) (print "FAIL: parser:" e))))))))
 
 ;; Eval (needs lexer+parser sigs)
 (let (lexer-source : String (read-file "bootstrap/lexer.airl"))
@@ -2192,7 +2192,7 @@
                 (Err e) (print "FAIL: eval parse:" e)
                 (Ok eval-nodes)
                   (let (env : List (make-builtin-env 0))
-                    (let (reg : List (make-prelude-registry 0))
+                       (reg : List (make-prelude-registry 0))
                       (match (register-all-top-levels lexer-nodes env reg)
                         (Err e) (print "FAIL:" e)
                         (Ok lr)
@@ -2201,7 +2201,7 @@
                             (Ok pr)
                               (match (type-check-program eval-nodes (at pr 0) (at pr 1))
                                 (Ok _) (print "PASS: eval type-checks clean")
-                                (Err e) (print "FAIL: eval:" e))))))))))))
+                                (Err e) (print "FAIL: eval:" e)))))))))))
 
 (print "=== typecheck integration tests complete ===")
 (print "=== all typecheck tests complete ===")

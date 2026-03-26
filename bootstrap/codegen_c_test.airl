@@ -143,14 +143,14 @@
   :ensures [(valid result)]
   :body
     (let (r : List (read-symbol-chars source pos line col acc))
-      (let (text : String (head r))
-        (let (new-pos : i64 (at r 1))
-          (let (new-line : i64 (at r 2))
-            (let (new-col : i64 (at r 3))
+         (text : String (head r))
+         (new-pos : i64 (at r 1))
+         (new-line : i64 (at r 2))
+         (new-col : i64 (at r 3))
               (if (= text "true")  (Ok [(Token "bool" true start-line start-col) new-pos new-line new-col])
               (if (= text "false") (Ok [(Token "bool" false start-line start-col) new-pos new-line new-col])
               (if (= text "nil")   (Ok [(Token "nil" nil start-line start-col) new-pos new-line new-col])
-                (Ok [(Token "symbol" text start-line start-col) new-pos new-line new-col]))))))))))
+                (Ok [(Token "symbol" text start-line start-col) new-pos new-line new-col]))))))
 
 (defn lex-keyword
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
@@ -159,11 +159,11 @@
   :ensures [(valid result)]
   :body
     (let (r : List (read-symbol-chars source pos line col acc))
-      (let (text : String (head r))
-        (let (new-pos : i64 (at r 1))
-          (let (new-line : i64 (at r 2))
-            (let (new-col : i64 (at r 3))
-              (Ok [(Token "keyword" text start-line start-col) new-pos new-line new-col])))))))
+         (text : String (head r))
+         (new-pos : i64 (at r 1))
+         (new-line : i64 (at r 2))
+         (new-col : i64 (at r 3))
+              (Ok [(Token "keyword" text start-line start-col) new-pos new-line new-col])))
 
 ;; ── Numeric helpers ──────────────────────────────────
 
@@ -232,10 +232,10 @@
   :ensures [(valid result)]
   :body
     (let (int-result : List (read-digits source pos line col acc))
-      (let (int-val : i64 (head int-result))
-        (let (new-pos : i64 (at int-result 1))
-          (let (new-line : i64 (at int-result 2))
-            (let (new-col : i64 (at int-result 3))
+         (int-val : i64 (head int-result))
+         (new-pos : i64 (at int-result 1))
+         (new-line : i64 (at int-result 2))
+         (new-col : i64 (at int-result 3))
               ;; Check for '.' followed by digit -> float
               (if (< new-pos (length source))
                 (if (= (char-at source new-pos) ".")
@@ -243,12 +243,12 @@
                     (if (is-digit? (char-at source (+ new-pos 1)))
                       ;; Float
                       (let (frac-result : List (read-frac-digits source (+ new-pos 1) new-line (+ new-col 1) 0.0 10.0))
-                        (let (frac-val : f64 (head frac-result))
-                          (let (fp : i64 (at frac-result 1))
-                            (let (fl : i64 (at frac-result 2))
-                              (let (fc : i64 (at frac-result 3))
-                                (let (float-val : f64 (+ (int-to-float int-val) frac-val))
-                                  (Ok [(Token "float" (if negative (- 0.0 float-val) float-val) start-line start-col) fp fl fc])))))))
+                           (frac-val : f64 (head frac-result))
+                           (fp : i64 (at frac-result 1))
+                           (fl : i64 (at frac-result 2))
+                           (fc : i64 (at frac-result 3))
+                           (float-val : f64 (+ (int-to-float int-val) frac-val))
+                                  (Ok [(Token "float" (if negative (- 0.0 float-val) float-val) start-line start-col) fp fl fc]))
                       ;; Integer (dot followed by non-digit)
                       (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
                     ;; Integer (dot at end of input)
@@ -256,7 +256,7 @@
                   ;; Integer (no dot)
                   (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
                 ;; Integer (end of input)
-                (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))))))))
+                (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))))
 
 ;; ── String sub-lexer ────────────────────────────────
 
@@ -301,8 +301,8 @@
       (Err msg) (Err msg)
       (Ok ws-state)
         (let (p : i64 (head ws-state))
-          (let (ln : i64 (at ws-state 1))
-            (let (c : i64 (at ws-state 2))
+             (ln : i64 (at ws-state 1))
+             (c : i64 (at ws-state 2))
               (if (>= p (length source))
                 (Ok [(Token "eof" nil ln c) p ln c])
                 (let (ch : String (char-at source p))
@@ -331,7 +331,7 @@
                   (if (is-symbol-start? ch)
                     (lex-symbol source p ln c "" ln c)
                     (Err (+ "unexpected character '" (+ ch "'")))))
-                  )))))))))))))))
+                  )))))))))))))
 
 (defn lex-loop
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (tokens : List) -> List]
@@ -343,15 +343,15 @@
       (Err msg) (Err msg)
       (Ok tok-state)
         (let (tok : List (head tok-state))
-          (let (new-pos : i64 (at tok-state 1))
-            (let (new-line : i64 (at tok-state 2))
-              (let (new-col : i64 (at tok-state 3))
-                (let (new-tokens : List (cons tok tokens))
+             (new-pos : i64 (at tok-state 1))
+             (new-line : i64 (at tok-state 2))
+             (new-col : i64 (at tok-state 3))
+             (new-tokens : List (cons tok tokens))
                   (match tok
                     (Token kind _ _ _)
                       (if (= kind "eof")
                         (Ok new-tokens)
-                        (lex-loop source new-pos new-line new-col new-tokens))))))))))
+                        (lex-loop source new-pos new-line new-col new-tokens))))))
 
 (defn lex
   :sig [(source : String) -> List]
@@ -431,7 +431,7 @@
               (match (parse-sexprs tokens (+ pos 1) "rparen")
                 (Ok result)
                   (let (items : List (at result 0))
-                    (let (end-pos : i64 (at result 1))
+                       (end-pos : i64 (at result 1))
                       ;; Check for closing rparen
                       (if (>= end-pos (length tokens))
                         (Err (ParseError "unclosed parenthesis" line col))
@@ -440,14 +440,14 @@
                             (Token ck _ _ _)
                               (if (= ck "rparen")
                                 (Ok [(SList items line col) (+ end-pos 1)])
-                                (Err (ParseError "unclosed parenthesis" line col))))))))
+                                (Err (ParseError "unclosed parenthesis" line col)))))))
                 (Err e) (Err e))
               (if (= kind "lbracket")
                 ;; Parse bracket contents until rbracket
                 (match (parse-sexprs tokens (+ pos 1) "rbracket")
                   (Ok result)
                     (let (items : List (at result 0))
-                      (let (end-pos : i64 (at result 1))
+                         (end-pos : i64 (at result 1))
                         (if (>= end-pos (length tokens))
                           (Err (ParseError "unclosed bracket" line col))
                           (let (closer : List (at tokens end-pos))
@@ -455,7 +455,7 @@
                               (Token ck _ _ _)
                                 (if (= ck "rbracket")
                                   (Ok [(SBracket items line col) (+ end-pos 1)])
-                                  (Err (ParseError "unclosed bracket" line col))))))))
+                                  (Err (ParseError "unclosed bracket" line col)))))))
                   (Err e) (Err e))
                 (if (= kind "rparen")
                   (Err (ParseError "unexpected ')'" line col))
@@ -487,13 +487,13 @@
                 (match (parse-sexpr tokens pos)
                   (Ok result)
                     (let (sexpr : List (at result 0))
-                      (let (new-pos : i64 (at result 1))
+                         (new-pos : i64 (at result 1))
                         (match (parse-sexprs tokens new-pos stop-kind)
                           (Ok rest-result)
                             (let (rest-sexprs : List (at rest-result 0))
-                              (let (final-pos : i64 (at rest-result 1))
-                                (Ok [(cons sexpr rest-sexprs) final-pos])))
-                          (Err e) (Err e))))
+                                 (final-pos : i64 (at rest-result 1))
+                                (Ok [(cons sexpr rest-sexprs) final-pos]))
+                          (Err e) (Err e)))
                   (Err e) (Err e))))))))
 
 (defn parse-sexpr-all
@@ -688,13 +688,13 @@
       (Err (ParseError "let requires at least one binding and a body" line col))
       ;; bindings are items[1] to items[n-2], body is items[n-1]
       (let (num-items : i64 (length items))
-        (let (body-idx : i64 (- num-items 1))
+           (body-idx : i64 (- num-items 1))
           (match (parse-let-bindings items 1 body-idx)
             (Ok bindings)
               (match (parse-expr (at items body-idx))
                 (Ok body-node) (Ok (ASTLet bindings body-node line col))
                 (Err e) (Err e))
-            (Err e) (Err e))))))
+            (Err e) (Err e)))))
 
 (defn parse-do
   :sig [(items : List) (line : i64) (col : i64) -> List]
@@ -1809,8 +1809,8 @@
   :ensures [(valid result)]
   :body
     (let (ctr : i64 (cg-lambda-ctr st))
-      (let (name : String (+ "__lambda_" (cg-int-to-string ctr)))
-        [(map-set st "lambda-ctr" (+ ctr 1)) name])))
+         (name : String (+ "__lambda_" (cg-int-to-string ctr)))
+        [(map-set st "lambda-ctr" (+ ctr 1)) name]))
 
 (defn cg-add-lambda
   :sig [(st : _) (name : String) (all-params : List) (body-code : String) (fwd : String) -> _]
@@ -1818,8 +1818,8 @@
   :ensures [(valid result)]
   :body
     (let (entry : List [name all-params body-code])
-      (let (st2 : _ (map-set st "lambdas" (append (cg-lambdas st) entry)))
-        (map-set st2 "fwd-decls" (append (cg-fwd-decls st2) fwd)))))
+         (st2 : _ (map-set st "lambdas" (append (cg-lambdas st) entry)))
+        (map-set st2 "fwd-decls" (append (cg-fwd-decls st2) fwd))))
 
 ;; ── C code building helpers ───────────────────────────────
 
@@ -1849,8 +1849,8 @@
     (IRInt v)    [st (str3 "airl_int(" (cg-int-to-string v) ")")]
     (IRFloat v)  [st (str3 "airl_float(" (cg-int-to-string v) ".0)")]
     (IRStr s)    (let (esc : String (escape-c-string s))
-                   (let (sl : String (cg-int-to-string (cg-str-len s)))
-                     [st (str5 "airl_str(\"" esc "\", " sl ")")]))
+                      (sl : String (cg-int-to-string (cg-str-len s)))
+                     [st (str5 "airl_str(\"" esc "\", " sl ")")])
     (IRBool b)   (if b [st "airl_bool(1)"] [st "airl_bool(0)"])
     (IRNil _)    [st "airl_nil()"]
     (IRLoad name) [st (mangle-name name)]
@@ -1874,9 +1874,9 @@
   :ensures [(valid result)]
   :body
     (let (r1 : List (emit-c-expr st (at parts 0)))
-      (let (r2 : List (emit-c-expr (at r1 0) (at parts 1)))
-        (let (r3 : List (emit-c-expr (at r2 0) (at parts 2)))
-          [(at r3 0) (str6 "(airl_as_bool_raw(" (at r1 1) ") ? " (at r2 1) " : " (+ (at r3 1) ")"))]))))
+         (r2 : List (emit-c-expr (at r1 0) (at parts 1)))
+         (r3 : List (emit-c-expr (at r2 0) (at parts 2)))
+          [(at r3 0) (str6 "(airl_as_bool_raw(" (at r1 1) ") ? " (at r2 1) " : " (+ (at r3 1) ")"))]))
 
 ;; ── Let ───────────────────────────────────────────────────
 
@@ -1888,9 +1888,9 @@
     (match (head bindings)
       (IRBinding parts)
         (let (bname : String (at parts 0))
-          (let (r1 : List (emit-c-expr st (at parts 1)))
-            (let (r2 : List (emit-c-let-bindings (at r1 0) (tail bindings)))
-              [(at r2 0) (str5 "RtValue* " (mangle-name bname) " = " (at r1 1) (+ "; " (at r2 1)))])))
+             (r1 : List (emit-c-expr st (at parts 1)))
+             (r2 : List (emit-c-let-bindings (at r1 0) (tail bindings)))
+              [(at r2 0) (str5 "RtValue* " (mangle-name bname) " = " (at r1 1) (+ "; " (at r2 1)))])
       _ (emit-c-let-bindings st (tail bindings)))))
 
 (defn emit-c-let
@@ -1899,8 +1899,8 @@
   :ensures [(valid result)]
   :body
     (let (r1 : List (emit-c-let-bindings st (at parts 0)))
-      (let (r2 : List (emit-c-expr (at r1 0) (at parts 1)))
-        [(at r2 0) (str4 "({ " (at r1 1) (at r2 1) "; })")])))
+         (r2 : List (emit-c-expr (at r1 0) (at parts 1)))
+        [(at r2 0) (str4 "({ " (at r1 1) (at r2 1) "; })")]))
 
 ;; ── Do ────────────────────────────────────────────────────
 
@@ -1942,15 +1942,15 @@
   :ensures [(valid result)]
   :body
     (let (name : String (at parts 0))
-      (let (args : List (at parts 1))
-        (let (bi : _ (builtin-c-name name))
+         (args : List (at parts 1))
+         (bi : _ (builtin-c-name name))
           (if (= bi nil)
             (let (r : List (emit-c-args st args))
               [(at r 0) (str3 (mangle-name name) "(" (+ (at r 1) ")"))])
             (if (= name "print")
               (emit-c-print st args)
               (let (r : List (emit-c-args st args))
-                [(at r 0) (str3 bi "(" (+ (at r 1) ")"))])))))))
+                [(at r 0) (str3 bi "(" (+ (at r 1) ")"))])))))
 
 (defn emit-c-print
   :sig [(st : _) (args : List) -> List]
@@ -1962,10 +1962,10 @@
         (let (r : List (emit-c-expr st (head args)))
           [(at r 0) (str3 "airl_print(" (at r 1) ")")])
         (let (r : List (emit-c-args st args))
-          (let (ns : String (cg-int-to-string argc))
-            (let (p1 : String (str3 "({ RtValue* __pargs[] = {" (at r 1) "}; "))
-              (let (p2 : String (str4 "airl_print_values(__pargs, " ns "); " "})"))
-                [(at r 0) (+ p1 p2)])))))))
+             (ns : String (cg-int-to-string argc))
+             (p1 : String (str3 "({ RtValue* __pargs[] = {" (at r 1) "}; "))
+             (p2 : String (str4 "airl_print_values(__pargs, " ns "); " "})"))
+                [(at r 0) (+ p1 p2)]))))
 
 ;; ── Call expression (computed callee) ─────────────────────
 
@@ -1975,11 +1975,11 @@
   :ensures [(valid result)]
   :body
     (let (r1 : List (emit-c-expr st (at parts 0)))
-      (let (r2 : List (emit-c-args (at r1 0) (at parts 1)))
-        (let (ns : String (cg-int-to-string (length (at parts 1))))
-          (let (p1 : String (str3 "({ RtValue* __cargs[] = {" (at r2 1) "}; "))
-            (let (p2 : String (str5 "airl_call_closure(" (at r1 1) ", __cargs, " ns "); })"))
-              [(at r2 0) (+ p1 p2)]))))))
+         (r2 : List (emit-c-args (at r1 0) (at parts 1)))
+         (ns : String (cg-int-to-string (length (at parts 1))))
+         (p1 : String (str3 "({ RtValue* __cargs[] = {" (at r2 1) "}; "))
+         (p2 : String (str5 "airl_call_closure(" (at r1 1) ", __cargs, " ns "); })"))
+              [(at r2 0) (+ p1 p2)]))
 
 ;; ── List literal ──────────────────────────────────────────
 
@@ -1992,10 +1992,10 @@
       (if (= n 0)
         [st "airl_list_new(NULL, 0)"]
         (let (r : List (emit-c-args st items))
-          (let (ns : String (cg-int-to-string n))
-            (let (p1 : String (str3 "({ RtValue* __litems[] = {" (at r 1) "}; "))
-              (let (p2 : String (str4 "airl_list_new(__litems, " ns "); " "})"))
-                [(at r 0) (+ p1 p2)])))))))
+             (ns : String (cg-int-to-string n))
+             (p1 : String (str3 "({ RtValue* __litems[] = {" (at r 1) "}; "))
+             (p2 : String (str4 "airl_list_new(__litems, " ns "); " "})"))
+                [(at r 0) (+ p1 p2)]))))
 
 ;; ── Variant constructor ───────────────────────────────────
 
@@ -2005,18 +2005,18 @@
   :ensures [(valid result)]
   :body
     (let (tag : String (at parts 0))
-      (let (args : List (at parts 1))
-        (let (te : String (make-variant-tag tag))
+         (args : List (at parts 1))
+         (te : String (make-variant-tag tag))
           (if (empty? args)
             [st (str3 "airl_make_variant(" te ", airl_nil())")]
             (if (= (length args) 1)
               (let (r : List (emit-c-expr st (head args)))
                 [(at r 0) (str5 "airl_make_variant(" te ", " (at r 1) ")")])
               (let (r : List (emit-c-args st args))
-                (let (ns : String (cg-int-to-string (length args)))
-                  (let (p1 : String (str3 "({ RtValue* __vargs[] = {" (at r 1) "}; "))
-                    (let (p2 : String (str6 "airl_make_variant(" te ", airl_list_new(__vargs, " ns ")); " "})"))
-                      [(at r 0) (+ p1 p2)]))))))))))
+                   (ns : String (cg-int-to-string (length args)))
+                   (p1 : String (str3 "({ RtValue* __vargs[] = {" (at r 1) "}; "))
+                   (p2 : String (str6 "airl_make_variant(" te ", airl_list_new(__vargs, " ns ")); " "})"))
+                      [(at r 0) (+ p1 p2)])))))
 
 ;; ── Lambda ────────────────────────────────────────────────
 
@@ -2029,10 +2029,10 @@
       (if (= ncap 0)
         [st (str3 "airl_make_closure(" lname ", NULL, 0)")]
         (let (ca : String (join (map (fn [c] (mangle-name c)) captures) ", "))
-          (let (ns : String (cg-int-to-string ncap))
-            (let (p1 : String (str3 "({ RtValue* __caps[] = {" ca "}; "))
-              (let (p2 : String (str5 "airl_make_closure(" lname ", __caps, " ns "); })"))
-                [st (+ p1 p2)])))))))
+             (ns : String (cg-int-to-string ncap))
+             (p1 : String (str3 "({ RtValue* __caps[] = {" ca "}; "))
+             (p2 : String (str5 "airl_make_closure(" lname ", __caps, " ns "); })"))
+                [st (+ p1 p2)]))))
 
 (defn emit-c-lambda
   :sig [(st : _) (parts : List) -> List]
@@ -2040,20 +2040,20 @@
   :ensures [(valid result)]
   :body
     (let (params : List (at parts 0))
-      (let (body-ir : _ (at parts 1))
-        (let (captures : List (free-vars params body-ir))
-          (let (pair : List (cg-next-lambda st))
-            (let (st2 : _ (at pair 0))
-              (let (lname : String (at pair 1))
-                (let (cap-params : List (map (fn [c] (+ "__cap_" (mangle-name c))) captures))
-                  (let (fn-params : List (map (fn [p] (mangle-name p)) params))
-                    (let (all-params : List (concat cap-params fn-params))
-                      (let (r : List (emit-c-expr st2 body-ir))
-                        (let (pdecls : String (emit-c-param-decls all-params))
-                          (let (fwd : String (str4 "static RtValue* " lname "(" (+ pdecls ");")))
-                            (let (fdef : String (str6 "static RtValue* " lname "(" pdecls ") { return " (+ (at r 1) "; }")))
-                              (let (st3 : _ (cg-add-lambda (at r 0) lname all-params fdef fwd))
-                                (emit-closure-site st3 lname captures))))))))))))))))
+         (body-ir : _ (at parts 1))
+         (captures : List (free-vars params body-ir))
+         (pair : List (cg-next-lambda st))
+         (st2 : _ (at pair 0))
+         (lname : String (at pair 1))
+         (cap-params : List (map (fn [c] (+ "__cap_" (mangle-name c))) captures))
+         (fn-params : List (map (fn [p] (mangle-name p)) params))
+         (all-params : List (concat cap-params fn-params))
+         (r : List (emit-c-expr st2 body-ir))
+         (pdecls : String (emit-c-param-decls all-params))
+         (fwd : String (str4 "static RtValue* " lname "(" (+ pdecls ");")))
+         (fdef : String (str6 "static RtValue* " lname "(" pdecls ") { return " (+ (at r 1) "; }")))
+         (st3 : _ (cg-add-lambda (at r 0) lname all-params fdef fwd))
+                                (emit-closure-site st3 lname captures)))
 
 ;; ── Pattern match ─────────────────────────────────────────
 
@@ -2063,8 +2063,8 @@
   :ensures [(valid result)]
   :body
     (let (r1 : List (emit-c-expr st (at parts 0)))
-      (let (r2 : List (emit-c-match-arms (at r1 0) "__mscr" (at parts 1)))
-        [(at r2 0) (str5 "({ RtValue* __mscr = " (at r1 1) "; " (at r2 1) "; })")])))
+         (r2 : List (emit-c-match-arms (at r1 0) "__mscr" (at parts 1)))
+        [(at r2 0) (str5 "({ RtValue* __mscr = " (at r1 1) "; " (at r2 1) "; })")]))
 
 (defn emit-c-match-arms
   :sig [(st : _) (sn : String) (arms : List) -> List]
@@ -2074,7 +2074,7 @@
     (match (head arms)
       (IRArm parts)
         (let (pat : _ (at parts 0))
-          (let (body-ir : _ (at parts 1))
+             (body-ir : _ (at parts 1))
             (match pat
               (IRPatWild _)
                 (emit-c-expr st body-ir)
@@ -2085,14 +2085,14 @@
 
               (IRPatLit value)
                 (let (lc : String (emit-lit-check sn value))
-                  (let (r1 : List (emit-c-expr st body-ir))
-                    (let (r2 : List (emit-c-match-arms (at r1 0) sn (tail arms)))
-                      [(at r2 0) (str6 "(" lc " ? " (at r1 1) " : " (+ (at r2 1) ")"))])))
+                     (r1 : List (emit-c-expr st body-ir))
+                     (r2 : List (emit-c-match-arms (at r1 0) sn (tail arms)))
+                      [(at r2 0) (str6 "(" lc " ? " (at r1 1) " : " (+ (at r2 1) ")"))])
 
               (IRPatVariant vparts)
                 (emit-c-variant-arm st sn vparts body-ir (tail arms))
 
-              _ (emit-c-match-arms st sn (tail arms)))))
+              _ (emit-c-match-arms st sn (tail arms))))
       _ (emit-c-match-arms st sn (tail arms)))))
 
 (defn emit-c-variant-arm
@@ -2101,15 +2101,15 @@
   :ensures [(valid result)]
   :body
     (let (vtag : String (at vparts 0))
-      (let (inner-pats : List (at vparts 1))
-        (let (te : String (make-variant-tag vtag))
-          (let (mv : String (+ "__mv_" (mangle-name vtag)))
-            (let (r1 : List (emit-c-variant-body st mv inner-pats body-ir))
-              (let (r2 : List (emit-c-match-arms (at r1 0) sn rest-arms))
-                (let (p1 : String (str5 "({ RtValue* " mv " = airl_match_tag(" sn ", "))
-                  (let (p2 : String (str5 te "); " mv " ? " (at r1 1)))
-                    (let (p3 : String (str3 " : " (at r2 1) "; })"))
-                      [(at r2 0) (str3 p1 p2 p3)]))))))))))
+         (inner-pats : List (at vparts 1))
+         (te : String (make-variant-tag vtag))
+         (mv : String (+ "__mv_" (mangle-name vtag)))
+         (r1 : List (emit-c-variant-body st mv inner-pats body-ir))
+         (r2 : List (emit-c-match-arms (at r1 0) sn rest-arms))
+         (p1 : String (str5 "({ RtValue* " mv " = airl_match_tag(" sn ", "))
+         (p2 : String (str5 te "); " mv " ? " (at r1 1)))
+         (p3 : String (str3 " : " (at r2 1) "; })"))
+                      [(at r2 0) (str3 p1 p2 p3)]))
 
 (defn emit-lit-check
   :sig [(sn : String) (value : _) -> String]
@@ -2120,8 +2120,8 @@
       (str5 "airl_as_bool_raw(airl_eq(" sn ", airl_int(" vs ")))"))
     (if (= (type-of value) "Str")
       (let (esc : String (escape-c-string value))
-        (let (sl : String (cg-int-to-string (cg-str-len value)))
-          (str6 "airl_as_bool_raw(airl_eq(" sn ", airl_str(\"" esc "\", " (+ sl "))))"))))
+           (sl : String (cg-int-to-string (cg-str-len value)))
+          (str6 "airl_as_bool_raw(airl_eq(" sn ", airl_str(\"" esc "\", " (+ sl "))))")))
       (if (= (type-of value) "Bool")
         (if value
           (str3 "airl_as_bool_raw(airl_eq(" sn ", airl_bool(1)))")
@@ -2144,13 +2144,13 @@
               [(at r 0) (str6 "({ RtValue* " (mangle-name name) " = " mv "; " (+ (at r 1) "; })"))])
           (IRPatVariant vparts)
             (let (vtag : String (at vparts 0))
-              (let (sub-pats : List (at vparts 1))
-                (let (te : String (make-variant-tag vtag))
-                  (let (nv : String (+ "__nmv_" (mangle-name vtag)))
-                    (let (r : List (emit-c-variant-body st nv sub-pats body-ir))
-                      (let (p1 : String (str5 "({ RtValue* " nv " = airl_match_tag(" mv ", "))
-                        (let (p2 : String (str5 te "); " nv " ? " (at r 1)))
-                          [(at r 0) (str3 p1 p2 " : airl_nil(); })")])))))))
+                 (sub-pats : List (at vparts 1))
+                 (te : String (make-variant-tag vtag))
+                 (nv : String (+ "__nmv_" (mangle-name vtag)))
+                 (r : List (emit-c-variant-body st nv sub-pats body-ir))
+                 (p1 : String (str5 "({ RtValue* " nv " = airl_match_tag(" mv ", "))
+                 (p2 : String (str5 te "); " nv " ? " (at r 1)))
+                          [(at r 0) (str3 p1 p2 " : airl_nil(); })")])
           _ (emit-c-expr st body-ir)))))
 
 ;; ── Try expression ────────────────────────────────────────
@@ -2161,10 +2161,10 @@
   :ensures [(valid result)]
   :body
     (let (r : List (emit-c-expr st expr))
-      (let (p1 : String (+ "({ RtValue* __t = " (at r 1)))
-        (let (p2 : String "; RtValue* __ok = airl_match_tag(__t, airl_str(\"Ok\", 2)); ")
-          (let (p3 : String "if(!__ok){fprintf(stderr,\"try failed\\n\");exit(1);} __ok; })")
-            [(at r 0) (str3 p1 p2 p3)])))))
+         (p1 : String (+ "({ RtValue* __t = " (at r 1)))
+         (p2 : String "; RtValue* __ok = airl_match_tag(__t, airl_str(\"Ok\", 2)); ")
+         (p3 : String "if(!__ok){fprintf(stderr,\"try failed\\n\");exit(1);} __ok; })")
+            [(at r 0) (str3 p1 p2 p3)]))
 
 ;; ── Top-level function emitter ────────────────────────────
 
@@ -2176,15 +2176,15 @@
   :body (match ir
     (IRFunc parts)
       (let (name : String (at parts 0))
-        (let (params : List (at parts 1))
-          (let (body-ir : _ (at parts 2))
-            (let (mn : String (mangle-name name))
-              (let (cp : List (map (fn [p] (mangle-name p)) params))
-                (let (pd : String (emit-c-param-decls cp))
-                  (let (r : List (emit-c-expr st body-ir))
-                    (let (fwd : String (str4 "RtValue* " mn "(" (+ pd ");")))
-                      (let (def : String (str6 "RtValue* " mn "(" pd ") {\n    return " (+ (at r 1) ";\n}")))
-                        [(at r 0) def fwd])))))))))
+           (params : List (at parts 1))
+           (body-ir : _ (at parts 2))
+           (mn : String (mangle-name name))
+           (cp : List (map (fn [p] (mangle-name p)) params))
+           (pd : String (emit-c-param-decls cp))
+           (r : List (emit-c-expr st body-ir))
+           (fwd : String (str4 "RtValue* " mn "(" (+ pd ");")))
+           (def : String (str6 "RtValue* " mn "(" pd ") {\n    return " (+ (at r 1) ";\n}")))
+                        [(at r 0) def fwd])
     _ (let (r : List (emit-c-expr st ir))
         [(at r 0) (at r 1) ""])))
 
@@ -2212,19 +2212,19 @@
   :ensures [(valid result)]
   :body
     (let (st : _ (cg-make-state))
-      (let (r : List (emit-c-top-levels-loop st ir-nodes [] [] []))
-        (let (st2 : _ (at r 0))
-          (let (funcs : List (at r 1))
-            (let (fwds : List (at r 2))
-              (let (main-stmts : List (at r 3))
-                (let (header : String (str3 "#include \"airl_rt.h\"\n" "#include <stdio.h>\n" "#include <stdlib.h>\n\n"))
-                  (let (uf : String (if (empty? fwds) "" (+ (join fwds "\n") "\n")))
-                    (let (lf : String (if (empty? (cg-fwd-decls st2)) "" (+ (join (cg-fwd-decls st2) "\n") "\n")))
-                      (let (ld : String (emit-lambda-defs (cg-lambdas st2)))
-                        (let (fd : String (if (empty? funcs) "" (+ (join funcs "\n\n") "\n")))
-                          (let (mb : String (emit-main-stmts main-stmts))
-                            (let (mf : String (str4 "int main(int argc, char** argv) {\n" "    airl_set_args(argc, argv);\n" mb "    airl_flush_stdout();\n    return 0;\n}\n"))
-                              (str6 header "/* Forward declarations */\n" (+ uf lf) (+ "\n/* Lambda definitions */\n" ld) (+ "\n/* Function definitions */\n" fd) (+ "\n/* Main */\n" mf))))))))))))))))
+         (r : List (emit-c-top-levels-loop st ir-nodes [] [] []))
+         (st2 : _ (at r 0))
+         (funcs : List (at r 1))
+         (fwds : List (at r 2))
+         (main-stmts : List (at r 3))
+         (header : String (str3 "#include \"airl_rt.h\"\n" "#include <stdio.h>\n" "#include <stdlib.h>\n\n"))
+         (uf : String (if (empty? fwds) "" (+ (join fwds "\n") "\n")))
+         (lf : String (if (empty? (cg-fwd-decls st2)) "" (+ (join (cg-fwd-decls st2) "\n") "\n")))
+         (ld : String (emit-lambda-defs (cg-lambdas st2)))
+         (fd : String (if (empty? funcs) "" (+ (join funcs "\n\n") "\n")))
+         (mb : String (emit-main-stmts main-stmts))
+         (mf : String (str4 "int main(int argc, char** argv) {\n" "    airl_set_args(argc, argv);\n" mb "    airl_flush_stdout();\n    return 0;\n}\n"))
+                              (str6 header "/* Forward declarations */\n" (+ uf lf) (+ "\n/* Lambda definitions */\n" ld) (+ "\n/* Function definitions */\n" fd) (+ "\n/* Main */\n" mf))))
 
 (defn emit-lambda-defs
   :sig [(lambdas : List) -> String]

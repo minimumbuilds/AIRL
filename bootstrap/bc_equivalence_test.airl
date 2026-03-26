@@ -36,59 +36,59 @@
 
 ;; Group 1: Literals
 (let (t01 : Bool (bc-test "42" 42 "int literal"))
-(let (t02 : Bool (bc-test "-7" -7 "negative int literal"))
-(let (t03 : Bool (bc-test "3.14" 3.14 "float literal"))
-(let (t04 : Bool (bc-test "\"hello\"" "hello" "string literal"))
-(let (t05 : Bool (bc-test "true" true "bool true"))
-(let (t06 : Bool (bc-test "false" false "bool false"))
-(let (t07 : Bool (bc-test "nil" nil "nil literal"))
+     (t02 : Bool (bc-test "-7" -7 "negative int literal"))
+     (t03 : Bool (bc-test "3.14" 3.14 "float literal"))
+     (t04 : Bool (bc-test "\"hello\"" "hello" "string literal"))
+     (t05 : Bool (bc-test "true" true "bool true"))
+     (t06 : Bool (bc-test "false" false "bool false"))
+     (t07 : Bool (bc-test "nil" nil "nil literal"))
 
 ;; Group 2: Arithmetic
 (let (t08 : Bool (bc-test "(+ 3 4)" 7 "addition"))
-(let (t09 : Bool (bc-test "(- 10 3)" 7 "subtraction"))
-(let (t10 : Bool (bc-test "(* 6 7)" 42 "multiplication"))
-(let (t11 : Bool (bc-test "(/ 10 3)" 3 "integer division"))
-(let (t12 : Bool (bc-test "(% 10 3)" 1 "modulo"))
+     (t09 : Bool (bc-test "(- 10 3)" 7 "subtraction"))
+     (t10 : Bool (bc-test "(* 6 7)" 42 "multiplication"))
+     (t11 : Bool (bc-test "(/ 10 3)" 3 "integer division"))
+     (t12 : Bool (bc-test "(% 10 3)" 1 "modulo"))
 
 ;; Group 3: Comparisons
 (let (t13 : Bool (bc-test "(= 5 5)" true "equality true"))
-(let (t14 : Bool (bc-test "(= 5 6)" false "equality false"))
-(let (t15 : Bool (bc-test "(!= 3 4)" true "not equal"))
-(let (t16 : Bool (bc-test "(< 2 5)" true "less than"))
-(let (t17 : Bool (bc-test "(> 5 2)" true "greater than"))
-(let (t18 : Bool (bc-test "(<= 5 5)" true "less than or equal"))
-(let (t19 : Bool (bc-test "(>= 6 5)" true "greater than or equal"))
+     (t14 : Bool (bc-test "(= 5 6)" false "equality false"))
+     (t15 : Bool (bc-test "(!= 3 4)" true "not equal"))
+     (t16 : Bool (bc-test "(< 2 5)" true "less than"))
+     (t17 : Bool (bc-test "(> 5 2)" true "greater than"))
+     (t18 : Bool (bc-test "(<= 5 5)" true "less than or equal"))
+     (t19 : Bool (bc-test "(>= 6 5)" true "greater than or equal"))
 
 ;; Group 4: Logic
 (let (t20 : Bool (bc-test "(not false)" true "not false"))
-(let (t21 : Bool (bc-test "(not true)" false "not true"))
+     (t21 : Bool (bc-test "(not true)" false "not true"))
 
 ;; Group 5: Control flow
 (let (t22 : Bool (bc-test "(if true 1 2)" 1 "if true branch"))
-(let (t23 : Bool (bc-test "(if false 1 2)" 2 "if false branch"))
-(let (t24 : Bool (bc-test "(if (> 5 3) (if (< 1 2) 100 200) 300)" 100 "nested if"))
-(let (t25 : Bool (bc-test "(do 1 2 3)" 3 "do block returns last"))
+     (t23 : Bool (bc-test "(if false 1 2)" 2 "if false branch"))
+     (t24 : Bool (bc-test "(if (> 5 3) (if (< 1 2) 100 200) 300)" 100 "nested if"))
+     (t25 : Bool (bc-test "(do 1 2 3)" 3 "do block returns last"))
 
 ;; Group 6: Let bindings
 (let (t26 : Bool (bc-test "(let (x : i64 10) (+ x 5))" 15 "let binding"))
-(let (t27 : Bool (bc-test "(let (x : i64 5) (let (y : i64 3) (* x y)))" 15 "nested let"))
-(let (t28 : Bool (bc-test "(let (x : i64 5) (let (y : i64 (+ x 1)) (* x y)))" 30 "let dependent binding"))
+     (t27 : Bool (bc-test "(let (x : i64 5) (let (y : i64 3) (* x y)))" 15 "nested let"))
+     (t28 : Bool (bc-test "(let (x : i64 5) (let (y : i64 (+ x 1)) (* x y)))" 30 "let dependent binding"))
 
 ;; Group 7: Lists
 (let (t29 : Bool (bc-test "[1 2 3]" [1 2 3] "list literal"))
-(let (t30 : Bool (bc-test "[[1 2] [3 4]]" [[1 2] [3 4]] "nested list"))
-(let (t31 : Bool (bc-test "(head [10 20 30])" 10 "list head"))
-(let (t32 : Bool (bc-test "(tail [10 20 30])" [20 30] "list tail"))
-(let (t33 : Bool (bc-test "(empty? [])" true "empty? on empty list"))
-(let (t34 : Bool (bc-test "(empty? [1 2])" false "empty? on non-empty list"))
-(let (t35 : Bool (bc-test "(cons 1 [2 3])" [1 2 3] "cons prepend"))
-(let (t36 : Bool (bc-test "(append [1 2] 3)" [1 2 3] "append"))
-(let (t37 : Bool (bc-test "(length [1 2 3 4 5])" 5 "list length"))
-(let (t38 : Bool (bc-test "(at [10 20 30] 1)" 20 "at index"))
+     (t30 : Bool (bc-test "[[1 2] [3 4]]" [[1 2] [3 4]] "nested list"))
+     (t31 : Bool (bc-test "(head [10 20 30])" 10 "list head"))
+     (t32 : Bool (bc-test "(tail [10 20 30])" [20 30] "list tail"))
+     (t33 : Bool (bc-test "(empty? [])" true "empty? on empty list"))
+     (t34 : Bool (bc-test "(empty? [1 2])" false "empty? on non-empty list"))
+     (t35 : Bool (bc-test "(cons 1 [2 3])" [1 2 3] "cons prepend"))
+     (t36 : Bool (bc-test "(append [1 2] 3)" [1 2 3] "append"))
+     (t37 : Bool (bc-test "(length [1 2 3 4 5])" 5 "list length"))
+     (t38 : Bool (bc-test "(at [10 20 30] 1)" 20 "at index"))
 
 ;; Group 8: Variants
 (let (t39 : Bool (bc-test "(Ok 42)" (Ok 42) "Ok variant"))
-(let (t40 : Bool (bc-test "(Err \"oops\")" (Err "oops") "Err variant"))
+     (t40 : Bool (bc-test "(Err \"oops\")" (Err "oops") "Err variant"))
 
 ;; Group 9: Function definitions and calls
 (let (t41 : Bool (bc-test
@@ -101,25 +101,24 @@
   "(defn fact :sig [(n : i64) -> i64] :requires [(>= n 0)] :ensures [(>= result 1)] :body (if (<= n 1) 1 (* n (fact (- n 1))))) (fact 5)"
   120
   "recursion factorial"))
-
-(let (t43 : Bool (bc-test
+     (t43 : Bool (bc-test
   "(defn fib :sig [(n : i64) -> i64] :requires [(>= n 0)] :ensures [(>= result 0)] :body (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2))))) (fib 10)"
   55
   "fibonacci recursive"))
 
 ;; Group 11: Pattern matching
 (let (t44 : Bool (bc-test "(match (Ok 42) (Ok v) v _ 0)" 42 "match Ok variant"))
-(let (t45 : Bool (bc-test "(match (Err 99) (Ok v) v (Err e) e _ 0)" 99 "match Err variant"))
-(let (t46 : Bool (bc-test "(match 42 _ 999)" 999 "match wildcard"))
-(let (t47 : Bool (bc-test "(match 5 1 \"one\" 5 \"five\" _ \"other\")" "five" "match literal pattern"))
-(let (t48 : Bool (bc-test "(match 42 x (+ x 1))" 43 "match bind pattern"))
-(let (t49 : Bool (bc-test "(match (Ok (Ok 99)) (Ok (Ok v)) v _ -1)" 99 "match nested variant pattern"))
+     (t45 : Bool (bc-test "(match (Err 99) (Ok v) v (Err e) e _ 0)" 99 "match Err variant"))
+     (t46 : Bool (bc-test "(match 42 _ 999)" 999 "match wildcard"))
+     (t47 : Bool (bc-test "(match 5 1 \"one\" 5 \"five\" _ \"other\")" "five" "match literal pattern"))
+     (t48 : Bool (bc-test "(match 42 x (+ x 1))" 43 "match bind pattern"))
+     (t49 : Bool (bc-test "(match (Ok (Ok 99)) (Ok (Ok v)) v _ -1)" 99 "match nested variant pattern"))
 
 ;; Group 12: Lambdas and closures
 ;; Use let-binding for lambdas to avoid IIFE register aliasing bug in bc_compiler
 (let (t50 : Bool (bc-test "(let (f : _ (fn [x] (+ x 1))) (f 10))" 11 "lambda no captures"))
-(let (t51 : Bool (bc-test "(let (f : _ (fn [a b] (* a b))) (f 6 7))" 42 "lambda two args"))
-(let (t52 : Bool (bc-test
+     (t51 : Bool (bc-test "(let (f : _ (fn [a b] (* a b))) (f 6 7))" 42 "lambda two args"))
+     (t52 : Bool (bc-test
   "(let (n : i64 10) (let (f : _ (fn [x] (+ x n))) (f 5)))"
   15
   "closure captures variable"))
@@ -132,7 +131,7 @@
 
 ;; Group 14: String operations
 (let (t54 : Bool (bc-test "(+ \"hello\" \" world\")" "hello world" "string concatenation"))
-(let (t55 : Bool (bc-test "(length \"hello\")" 5 "string length"))
+     (t55 : Bool (bc-test "(length \"hello\")" 5 "string length"))
 
 ;; Group 15: Try expression
 (let (t56 : Bool (bc-test "(try (Ok 42))" 42 "try unwrap Ok"))
@@ -145,9 +144,9 @@
                            t31 t32 t33 t34 t35 t36 t37 t38 t39 t40
                            t41 t42 t43 t44 t45 t46 t47 t48 t49 t50
                            t51 t52 t53 t54 t55 t56])
-  (let (counts : List (count-results all-results 0 0))
-    (let (passes : Int (at counts 0))
-      (let (fails : Int (at counts 1))
+     (counts : List (count-results all-results 0 0))
+     (passes : Int (at counts 0))
+     (fails : Int (at counts 1))
         (do
           (print "")
           (print "=== Bytecode Equivalence Test Summary ===")
@@ -155,5 +154,5 @@
           (print "FAILED:" fails "/ 56")
           (if (= fails 0)
             (print "All 56 tests PASSED!")
-            (print "Some tests FAILED.")))))))
-))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+            (print "Some tests FAILED."))))
+)))))))))))))))

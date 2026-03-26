@@ -7,7 +7,7 @@
 3. `if` has EXACTLY 3 forms: `(if cond then else)`. Both branches required. Multi-expr branch: wrap in `do`.
 4. No mixed int/float: `(+ 1 1.0)` errors. Use `(+ 1.0 1.0)` or `int-to-float`.
 5. `let` REQUIRES type annotation AND body: `(let (x : i64 5) body)`. No body = parse error.
-6. `let` paren counting: N nested lets = N closing parens. Body is LAST expr before close paren.
+6. `let` supports multi-binding: `(let (x : T v1) (y : T v2) body)`. PREFER flat multi-binding over nested single lets.
 7. Every `defn` needs `:sig` + `:body` + at least one of `:requires`/`:ensures`. Min guard: `(valid x)`.
 8. `result` only available in `:ensures`/`:invariant`, NOT `:requires`.
 9. `match` arms are FLAT pairs after scrutinee: `(match expr pat1 body1 pat2 body2)`. Must be even count.
@@ -28,8 +28,8 @@
 ```
 (defn NAME :sig [PARAMS -> RET] :requires [CONDS] :ensures [CONDS] :body EXPR)
   optional: :intent "desc" :invariant [CONDS] :execute-on cpu|gpu :priority normal
-(let (NAME : TYPE VAL) BODY)
-(let (N1 : T1 V1) (N2 : T2 V2) BODY)   ;; multi-binding
+(let (N1 : T1 V1) (N2 : T2 V2) ... BODY) ;; multi-binding (preferred)
+(let (NAME : TYPE VAL) BODY)               ;; single-binding (special case)
 (if COND THEN ELSE)
 (do E1 E2 ... EN)                        ;; returns last
 (match EXPR PAT1 BODY1 PAT2 BODY2 ...)   ;; flat pairs

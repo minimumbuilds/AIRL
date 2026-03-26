@@ -60,34 +60,36 @@
                                 "intent" "Add two integers together"
                                 "param-names" ["a" "b"]
                                 "param-types" ["i64" "i64"]]))
-  (let (tool : _ (fn-to-tool-schema mock-meta))
-    (do
-      (assert (= (map-get tool "name") "add-numbers") "tool must have correct name")
-      (assert (= (map-get tool "description") "Add two integers together") "tool must have correct description")
-      (assert (map-has tool "parameters") "tool must have parameters")
-      (let (params : _ (map-get tool "parameters"))
-        (do
-          (assert (= (map-get params "type") "object") "parameters type must be 'object'")
-          (assert (map-has params "properties") "parameters must have properties")
-          (assert (map-has params "required") "parameters must have required list")
-          (let (props : _ (map-get params "properties"))
-            (do
-              (assert (map-has props "a") "properties must contain param 'a'")
-              (assert (map-has props "b") "properties must contain param 'b'")
-              (assert (= (map-get (map-get props "a") "type") "integer") "param 'a' must be integer type")
-              (assert (= (map-get (map-get props "b") "type") "integer") "param 'b' must be integer type"))))))))
+     (tool : _ (fn-to-tool-schema mock-meta))
+  (do
+    (assert (= (map-get tool "name") "add-numbers") "tool must have correct name")
+    (assert (= (map-get tool "description") "Add two integers together") "tool must have correct description")
+    (assert (map-has tool "parameters") "tool must have parameters")
+    (let (params : _ (map-get tool "parameters"))
+      (do
+        (assert (= (map-get params "type") "object") "parameters type must be 'object'")
+        (assert (map-has params "properties") "parameters must have properties")
+        (assert (map-has params "required") "parameters must have required list")
+        (let (props : _ (map-get params "properties"))
+          (do
+            (assert (map-has props "a") "properties must contain param 'a'")
+            (assert (map-has props "b") "properties must contain param 'b'")
+            (assert (= (map-get (map-get props "a") "type") "integer") "param 'a' must be integer type")
+            (assert (= (map-get (map-get props "b") "type") "integer") "param 'b' must be integer type")))))))
+
 
 ;; Test 14: fn-to-tool-schema with no params
 (let (mock-meta2 : _ (map-from ["name" "get-time"
                                  "intent" "Get current time"
                                  "param-names" []
                                  "param-types" []]))
-  (let (tool2 : _ (fn-to-tool-schema mock-meta2))
-    (do
-      (assert (= (map-get tool2 "name") "get-time") "tool2 must have correct name")
-      (let (params2 : _ (map-get tool2 "parameters"))
-        (do
-          (assert (= (map-get params2 "type") "object") "parameters type must be 'object'")
-          (assert (= (map-size (map-get params2 "properties")) 0) "empty params: properties must be empty map"))))))
+     (tool2 : _ (fn-to-tool-schema mock-meta2))
+  (do
+    (assert (= (map-get tool2 "name") "get-time") "tool2 must have correct name")
+    (let (params2 : _ (map-get tool2 "parameters"))
+      (do
+        (assert (= (map-get params2 "type") "object") "parameters type must be 'object'")
+        (assert (= (map-size (map-get params2 "properties")) 0) "empty params: properties must be empty map")))))
+
 
 (print "ALL SCHEMA TESTS PASSED")
