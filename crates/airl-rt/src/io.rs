@@ -1,4 +1,4 @@
-use crate::value::{rt_bool, rt_nil, rt_str, RtData, RtValue};
+use crate::value::{rt_bool, rt_nil, rt_str, rt_unit, RtData, RtValue};
 use std::io::Write;
 
 #[no_mangle]
@@ -8,7 +8,7 @@ pub extern "C" fn airl_print(v: *mut RtValue) -> *mut RtValue {
         RtData::Str(s) => print!("{}", s),
         _ => print!("{}", val),
     }
-    rt_nil()
+    rt_unit()
 }
 
 /// Display a value using its Display impl (strings are quoted) with trailing newline.
@@ -17,7 +17,7 @@ pub extern "C" fn airl_print(v: *mut RtValue) -> *mut RtValue {
 pub extern "C" fn airl_println(v: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*v };
     println!("{}", val);
-    rt_nil()
+    rt_unit()
 }
 
 /// Variadic print: takes a pointer to an array of `*mut RtValue` and a count.
@@ -38,7 +38,7 @@ pub extern "C" fn airl_print_values(args: *const *mut RtValue, count: i64) -> *m
         }
     }
     println!();
-    rt_nil()
+    rt_unit()
 }
 
 /// Flush stdout — called at program exit to ensure all print output is visible.

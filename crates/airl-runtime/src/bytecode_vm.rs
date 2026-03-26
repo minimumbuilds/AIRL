@@ -1,9 +1,17 @@
 // crates/airl-runtime/src/bytecode_vm.rs
+//
+// v0.6.0: Register bank uses *mut RtValue from airl-rt.
+// Builtin dispatch calls airl-rt extern "C" functions directly.
+// VM-aware builtins (map/filter/fold/sort/any/all/find) bridge through
+// Value conversion until Phase 3 removes builtins.rs entirely.
+
 use std::collections::HashMap;
 use crate::bytecode::*;
 use crate::value::Value;
 use crate::builtins::{Builtins, VmCaller};
 use crate::error::RuntimeError;
+use airl_rt::value::{RtValue, RtData, rt_nil, rt_int, rt_float, rt_bool, rt_str, rt_list, rt_map, rt_variant};
+use airl_rt::memory::{airl_value_retain, airl_value_release};
 
 /// Maximum instruction count for a "simple" closure eligible for inline eval.
 const SIMPLE_CLOSURE_MAX_INSTRS: usize = 15;
@@ -12,12 +20,6 @@ const SIMPLE_CLOSURE_MAX_PARAMS: usize = 8;
 
 /// Check whether a compiled function is "simple" enough to evaluate inline
 /// without pushing a full VM call frame.
-///
-/// A function is simple if:
-/// - It has ≤ SIMPLE_CLOSURE_MAX_INSTRS instructions
-/// - It has ≤ SIMPLE_CLOSURE_MAX_PARAMS parameters
-/// - It contains no ops that require a nested frame (Call, CallReg, MakeClosure, TryUnwrap)
-///   or complex control flow (Jump*, MatchTag, JumpIfNoMatch, MatchWild, TailCall)
 fn is_simple_closure(func: &BytecodeFunc) -> bool {
     if func.instructions.len() > SIMPLE_CLOSURE_MAX_INSTRS {
         return false;
@@ -27,7 +29,6 @@ fn is_simple_closure(func: &BytecodeFunc) -> bool {
     }
     for instr in &func.instructions {
         match instr.op {
-            // Allowed ops
             Op::LoadConst | Op::LoadNil | Op::LoadTrue | Op::LoadFalse | Op::Move
             | Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod | Op::Neg
             | Op::Eq | Op::Ne | Op::Lt | Op::Le | Op::Gt | Op::Ge | Op::Not
@@ -35,24 +36,407 @@ fn is_simple_closure(func: &BytecodeFunc) -> bool {
             | Op::CallBuiltin
             | Op::MakeList
             | Op::MarkMoved | Op::CheckNotMoved => {}
-            // Everything else disqualifies
             _ => return false,
         }
     }
     true
 }
 
+// ── Value / RtValue conversion helpers ──────────────────────────────
+
+/// Convert interpreter Value to *mut RtValue. Caller owns the returned pointer (rc=1).
+fn value_to_rt(v: &Value) -> *mut RtValue {
+    match v {
+        Value::Int(n)   => rt_int(*n),
+        Value::UInt(n)  => rt_int(*n as i64),
+        Value::Float(f) => rt_float(*f),
+        Value::Bool(b)  => rt_bool(*b),
+        Value::Str(s)   => rt_str(s.clone()),
+        Value::Nil      => rt_nil(),
+        Value::Unit     => airl_rt::value::rt_unit(),
+        Value::List(items) => {
+            let ptrs: Vec<*mut RtValue> = items.iter().map(|i| value_to_rt(i)).collect();
+            rt_list(ptrs)
+        }
+        Value::IntList(ints) => {
+            let ptrs: Vec<*mut RtValue> = ints.iter().map(|n| rt_int(*n)).collect();
+            rt_list(ptrs)
+        }
+        Value::Tuple(items) => {
+            let ptrs: Vec<*mut RtValue> = items.iter().map(|i| value_to_rt(i)).collect();
+            rt_list(ptrs)
+        }
+        Value::Variant(tag, inner) => {
+            let inner_ptr = value_to_rt(inner);
+            rt_variant(tag.clone(), inner_ptr)
+        }
+        Value::Map(map) => {
+            let mut rt_map_data: HashMap<String, *mut RtValue> = HashMap::new();
+            for (k, val) in map {
+                rt_map_data.insert(k.clone(), value_to_rt(val));
+            }
+            rt_map(rt_map_data)
+        }
+        Value::BytecodeClosure(bc) => {
+            // Represent as a closure with null func_ptr (VM dispatches by name).
+            // Store function name as first capture, followed by actual captures.
+            let name_rt = rt_str(bc.func_name.clone());
+            let mut caps: Vec<*mut RtValue> = vec![name_rt];
+            for c in &bc.captured {
+                caps.push(value_to_rt(c));
+            }
+            airl_rt::closure::airl_make_closure(
+                std::ptr::null(),
+                if caps.is_empty() { std::ptr::null() } else { caps.as_ptr() },
+                caps.len(),
+            )
+        }
+        _ => rt_nil(),
+    }
+}
+
+/// Convert *mut RtValue back to interpreter Value (non-owning read).
+fn rt_to_value_no_release(ptr: *mut RtValue) -> Value {
+    if ptr.is_null() {
+        return Value::Nil;
+    }
+    unsafe {
+        match &(*ptr).data {
+            RtData::Nil      => Value::Nil,
+            RtData::Unit     => Value::Unit,
+            RtData::Int(n)   => Value::Int(*n),
+            RtData::Float(f) => Value::Float(*f),
+            RtData::Bool(b)  => Value::Bool(*b),
+            RtData::Str(s)   => Value::Str(s.clone()),
+            RtData::List(items) => {
+                let vals: Vec<Value> = items.iter().map(|&item| rt_to_value_no_release(item)).collect();
+                Value::List(vals)
+            }
+            RtData::Map(map) => {
+                let mut result_map = HashMap::new();
+                for (k, &val) in map {
+                    result_map.insert(k.clone(), rt_to_value_no_release(val));
+                }
+                Value::Map(result_map)
+            }
+            RtData::Variant { tag_name, inner } => {
+                Value::Variant(tag_name.clone(), Box::new(rt_to_value_no_release(*inner)))
+            }
+            RtData::Closure { captures, .. } if !captures.is_empty() => {
+                let first = &*captures[0];
+                if let RtData::Str(name) = &first.data {
+                    let mut captured_values = Vec::new();
+                    for i in 1..captures.len() {
+                        captured_values.push(rt_to_value_no_release(captures[i]));
+                    }
+                    Value::BytecodeClosure(BytecodeClosureValue {
+                        func_name: name.clone(),
+                        captured: captured_values,
+                    })
+                } else {
+                    Value::Nil
+                }
+            }
+            _ => Value::Nil,
+        }
+    }
+}
+
+/// Convert *mut RtValue back to interpreter Value. Also releases the pointer.
+#[allow(dead_code)]
+fn rt_to_value(ptr: *mut RtValue) -> Value {
+    let result = rt_to_value_no_release(ptr);
+    airl_value_release(ptr);
+    result
+}
+
+/// Extract bool exactly (must be Bool(true)).
+fn rt_is_bool_true(ptr: *mut RtValue) -> bool {
+    if ptr.is_null() { return false; }
+    unsafe { matches!(&(*ptr).data, RtData::Bool(true)) }
+}
+
+fn rt_is_bool_false(ptr: *mut RtValue) -> bool {
+    if ptr.is_null() { return false; }
+    unsafe { matches!(&(*ptr).data, RtData::Bool(false)) }
+}
+
+/// Display an RtValue for error messages (non-owning read).
+fn rt_display(ptr: *mut RtValue) -> String {
+    if ptr.is_null() { return "nil".to_string(); }
+    unsafe { format!("{}", &*ptr) }
+}
+
+// ── Register helpers ──────────────────────────────────────────────
+
+/// Store a new value in a register, releasing the old value.
+#[inline(always)]
+fn reg_set(regs: &mut [*mut RtValue], idx: usize, val: *mut RtValue) {
+    let old = regs[idx];
+    regs[idx] = val;
+    if !old.is_null() {
+        airl_value_release(old);
+    }
+}
+
+/// Read a register value (no ownership change).
+#[inline(always)]
+fn reg_get(regs: &[*mut RtValue], idx: usize) -> *mut RtValue {
+    regs[idx]
+}
+
+/// Release all registers in a frame.
+fn release_registers(regs: &mut [*mut RtValue]) {
+    for r in regs.iter_mut() {
+        if !r.is_null() {
+            airl_value_release(*r);
+            *r = std::ptr::null_mut();
+        }
+    }
+}
+
+// ── CallFrame ──────────────────────────────────────────────────────
+
 struct CallFrame {
-    registers: Vec<Value>,
+    registers: Vec<*mut RtValue>,
     func_name: String,
     ip: usize,
-    /// Register in the CALLER's frame where the return value should be stored.
-    /// Ignored for the bottom-most frame (returns via Ok(result)).
     return_reg: u16,
     match_flag: bool,
-    /// Tracks which registers have been moved (ownership consumed).
     moved: Vec<bool>,
 }
+
+// ── Builtin dispatcher ─────────────────────────────────────────────
+
+/// Dispatch a builtin call to the appropriate airl-rt extern "C" function.
+/// Returns Some(result) if the builtin is handled, None if not found.
+/// The returned pointer has rc=1 (caller owns it).
+fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue> {
+    let argc = args.len();
+    macro_rules! a0 { () => { args.get(0).copied().unwrap_or(std::ptr::null_mut()) }; }
+    macro_rules! a1 { () => { args.get(1).copied().unwrap_or(std::ptr::null_mut()) }; }
+    macro_rules! a2 { () => { args.get(2).copied().unwrap_or(std::ptr::null_mut()) }; }
+    macro_rules! a3 { () => { args.get(3).copied().unwrap_or(std::ptr::null_mut()) }; }
+
+    let result = match name {
+        // Arithmetic
+        "+" => airl_rt::arithmetic::airl_add(a0!(), a1!()),
+        "-" => airl_rt::arithmetic::airl_sub(a0!(), a1!()),
+        "*" => airl_rt::arithmetic::airl_mul(a0!(), a1!()),
+        "/" => airl_rt::arithmetic::airl_div(a0!(), a1!()),
+        "%" => airl_rt::arithmetic::airl_mod(a0!(), a1!()),
+
+        // Comparison
+        "=" => airl_rt::comparison::airl_eq(a0!(), a1!()),
+        "!=" => airl_rt::comparison::airl_ne(a0!(), a1!()),
+        "<" => airl_rt::comparison::airl_lt(a0!(), a1!()),
+        ">" => airl_rt::comparison::airl_gt(a0!(), a1!()),
+        "<=" => airl_rt::comparison::airl_le(a0!(), a1!()),
+        ">=" => airl_rt::comparison::airl_ge(a0!(), a1!()),
+
+        // Logic
+        "and" => airl_rt::logic::airl_and(a0!(), a1!()),
+        "or" => airl_rt::logic::airl_or(a0!(), a1!()),
+        "not" => airl_rt::logic::airl_not(a0!()),
+        "xor" => airl_rt::logic::airl_xor(a0!(), a1!()),
+
+        // Collections
+        "length" => airl_rt::list::airl_length(a0!()),
+        "at" => airl_rt::list::airl_at(a0!(), a1!()),
+        "append" => airl_rt::list::airl_append(a0!(), a1!()),
+        "head" => airl_rt::list::airl_head(a0!()),
+        "tail" => airl_rt::list::airl_tail(a0!()),
+        "empty?" => airl_rt::list::airl_empty(a0!()),
+        "cons" => airl_rt::list::airl_cons(a0!(), a1!()),
+        "at-or" => airl_rt::list::airl_at_or(a0!(), a1!(), a2!()),
+        "set-at" => airl_rt::list::airl_set_at(a0!(), a1!(), a2!()),
+        "list-contains?" => airl_rt::list::airl_list_contains(a0!(), a1!()),
+        "reverse" => airl_rt::misc::airl_reverse_list(a0!()),
+        "concat" => airl_rt::misc::airl_concat_lists(a0!(), a1!()),
+        "flatten" => airl_rt::misc::airl_flatten(a0!()),
+        "range" => airl_rt::misc::airl_range(a0!(), a1!()),
+        "take" => airl_rt::misc::airl_take(a0!(), a1!()),
+        "drop" => airl_rt::misc::airl_drop(a0!(), a1!()),
+        "zip" => airl_rt::misc::airl_zip(a0!(), a1!()),
+        "enumerate" => airl_rt::misc::airl_enumerate(a0!()),
+
+        // String
+        "char-at" => airl_rt::string::airl_char_at(a0!(), a1!()),
+        "substring" => airl_rt::string::airl_substring(a0!(), a1!(), a2!()),
+        "split" => airl_rt::string::airl_split(a0!(), a1!()),
+        "join" => airl_rt::string::airl_join(a0!(), a1!()),
+        "contains" => airl_rt::string::airl_contains(a0!(), a1!()),
+        "starts-with" => airl_rt::string::airl_starts_with(a0!(), a1!()),
+        "ends-with" => airl_rt::string::airl_ends_with(a0!(), a1!()),
+        "trim" => airl_rt::string::airl_trim(a0!()),
+        "to-upper" => airl_rt::string::airl_to_upper(a0!()),
+        "to-lower" => airl_rt::string::airl_to_lower(a0!()),
+        "replace" => airl_rt::string::airl_replace(a0!(), a1!(), a2!()),
+        "index-of" => airl_rt::string::airl_index_of(a0!(), a1!()),
+        "chars" => airl_rt::string::airl_chars(a0!()),
+        "char-count" => airl_rt::misc::airl_char_count(a0!()),
+        "char-code" => airl_rt::string::airl_char_code(a0!()),
+        "char-from-code" => airl_rt::string::airl_char_from_code(a0!()),
+
+        // Print (variadic)
+        "print" => {
+            if argc == 1 {
+                airl_rt::io::airl_print(a0!())
+            } else {
+                airl_rt::io::airl_print_values(args.as_ptr(), argc as i64)
+            }
+        }
+        "println" => airl_rt::io::airl_println(a0!()),
+
+        // Variadic str / format
+        "str" => airl_rt::misc::airl_str_variadic(args.as_ptr(), argc as i64),
+        "format" => airl_rt::misc::airl_format_variadic(args.as_ptr(), argc as i64),
+
+        // Map
+        "map-new" => airl_rt::map::airl_map_new(),
+        "map-from" => airl_rt::map::airl_map_from(a0!()),
+        "map-get" => airl_rt::map::airl_map_get(a0!(), a1!()),
+        "map-get-or" => airl_rt::map::airl_map_get_or(a0!(), a1!(), a2!()),
+        "map-set" => airl_rt::map::airl_map_set(a0!(), a1!(), a2!()),
+        "map-has" => airl_rt::map::airl_map_has(a0!(), a1!()),
+        "map-remove" => airl_rt::map::airl_map_remove(a0!(), a1!()),
+        "map-keys" => airl_rt::map::airl_map_keys(a0!()),
+        "map-values" => airl_rt::map::airl_map_values(a0!()),
+        "map-size" => airl_rt::map::airl_map_size(a0!()),
+
+        // File I/O
+        "read-file" => airl_rt::io::airl_read_file(a0!()),
+        "write-file" => airl_rt::io::airl_write_file(a0!(), a1!()),
+        "file-exists?" => airl_rt::io::airl_file_exists(a0!()),
+        "read-lines" => airl_rt::misc::airl_read_lines(a0!()),
+        "get-args" => airl_rt::io::airl_get_args(),
+        "append-file" => airl_rt::io::airl_append_file(a0!(), a1!()),
+        "delete-file" => airl_rt::io::airl_delete_file(a0!()),
+        "delete-dir" => airl_rt::io::airl_delete_dir(a0!()),
+        "rename-file" => airl_rt::io::airl_rename_file(a0!(), a1!()),
+        "create-dir" => airl_rt::io::airl_create_dir(a0!()),
+        "read-dir" => airl_rt::io::airl_read_dir(a0!()),
+        "file-size" => airl_rt::io::airl_file_size(a0!()),
+        "is-dir?" => airl_rt::io::airl_is_dir(a0!()),
+
+        // Utility
+        "type-of" => airl_rt::io::airl_type_of(a0!()),
+        "valid" => airl_rt::io::airl_valid(a0!()),
+
+        // System / type conversion
+        "int-to-string" => airl_rt::misc::airl_int_to_string(a0!()),
+        "float-to-string" => airl_rt::misc::airl_float_to_string(a0!()),
+        "string-to-int" => airl_rt::misc::airl_string_to_int(a0!()),
+        "string-to-float" => airl_rt::string::airl_string_to_float(a0!()),
+        "panic" => airl_rt::misc::airl_panic(a0!()),
+        "assert" => airl_rt::misc::airl_assert(a0!(), a1!()),
+        "time-now" => airl_rt::misc::airl_time_now(),
+        "sleep" => airl_rt::misc::airl_sleep(a0!()),
+        "format-time" => airl_rt::misc::airl_format_time(a0!(), a1!()),
+        "getenv" => airl_rt::misc::airl_getenv(a0!()),
+        "http-request" => airl_rt::misc::airl_http_request(a0!(), a1!(), a2!(), a3!()),
+        "json-parse" => airl_rt::misc::airl_json_parse(a0!()),
+        "json-stringify" => airl_rt::misc::airl_json_stringify(a0!()),
+        "shell-exec" => airl_rt::misc::airl_shell_exec(a0!(), a1!()),
+        "exit" => airl_rt::misc::airl_exit(a0!()),
+
+        // Float math
+        "sqrt" => airl_rt::math::airl_sqrt(a0!()),
+        "sin" => airl_rt::math::airl_sin(a0!()),
+        "cos" => airl_rt::math::airl_cos(a0!()),
+        "tan" => airl_rt::math::airl_tan(a0!()),
+        "log" => airl_rt::math::airl_log(a0!()),
+        "exp" => airl_rt::math::airl_exp(a0!()),
+        "floor" => airl_rt::math::airl_floor(a0!()),
+        "ceil" => airl_rt::math::airl_ceil(a0!()),
+        "round" => airl_rt::math::airl_round(a0!()),
+        "float-to-int" => airl_rt::math::airl_float_to_int(a0!()),
+        "int-to-float" => airl_rt::math::airl_int_to_float(a0!()),
+        "infinity" => airl_rt::math::airl_infinity(),
+        "nan" => airl_rt::math::airl_nan(),
+        "is-nan?" => airl_rt::math::airl_is_nan(a0!()),
+        "is-infinite?" => airl_rt::math::airl_is_infinite(a0!()),
+
+        // Path
+        "path-join" => airl_rt::misc::airl_path_join(a0!()),
+        "path-parent" => airl_rt::misc::airl_path_parent(a0!()),
+        "path-filename" => airl_rt::misc::airl_path_filename(a0!()),
+        "path-extension" => airl_rt::misc::airl_path_extension(a0!()),
+        "is-absolute?" => airl_rt::misc::airl_is_absolute(a0!()),
+
+        // Regex
+        "regex-match" => airl_rt::misc::airl_regex_match(a0!(), a1!()),
+        "regex-find-all" => airl_rt::misc::airl_regex_find_all(a0!(), a1!()),
+        "regex-replace" => airl_rt::misc::airl_regex_replace(a0!(), a1!(), a2!()),
+        "regex-split" => airl_rt::misc::airl_regex_split(a0!(), a1!()),
+
+        // Crypto
+        "sha256" => airl_rt::misc::airl_sha256(a0!()),
+        "hmac-sha256" => airl_rt::misc::airl_hmac_sha256(a0!(), a1!()),
+        "base64-encode" => airl_rt::misc::airl_base64_encode(a0!()),
+        "base64-decode" => airl_rt::misc::airl_base64_decode(a0!()),
+        "random-bytes" => airl_rt::misc::airl_random_bytes(a0!()),
+        "sha512" => airl_rt::misc::airl_sha512(a0!()),
+        "hmac-sha512" => airl_rt::misc::airl_hmac_sha512(a0!(), a1!()),
+        "sha256-bytes" => airl_rt::misc::airl_sha256_bytes(a0!()),
+        "sha512-bytes" => airl_rt::misc::airl_sha512_bytes(a0!()),
+        "hmac-sha256-bytes" => airl_rt::misc::airl_hmac_sha256_bytes(a0!(), a1!()),
+        "hmac-sha512-bytes" => airl_rt::misc::airl_hmac_sha512_bytes(a0!(), a1!()),
+        "pbkdf2-sha256" => airl_rt::misc::airl_pbkdf2_sha256(a0!(), a1!(), a2!(), a3!()),
+        "pbkdf2-sha512" => airl_rt::misc::airl_pbkdf2_sha512(a0!(), a1!(), a2!(), a3!()),
+        "base64-decode-bytes" => airl_rt::misc::airl_base64_decode_bytes(a0!()),
+        "base64-encode-bytes" => airl_rt::misc::airl_base64_encode_bytes(a0!()),
+        "bitwise-xor" => airl_rt::misc::airl_bitwise_xor(a0!(), a1!()),
+        "bitwise-and" => airl_rt::misc::airl_bitwise_and(a0!(), a1!()),
+        "bitwise-or" => airl_rt::misc::airl_bitwise_or(a0!(), a1!()),
+        "bitwise-shr" => airl_rt::misc::airl_bitwise_shr(a0!(), a1!()),
+        "bitwise-shl" => airl_rt::misc::airl_bitwise_shl(a0!(), a1!()),
+
+        // Byte encoding
+        "bytes-from-int16" => airl_rt::misc::airl_bytes_from_int16(a0!()),
+        "bytes-from-int32" => airl_rt::misc::airl_bytes_from_int32(a0!()),
+        "bytes-from-int64" => airl_rt::misc::airl_bytes_from_int64(a0!()),
+        "bytes-to-int16" => airl_rt::misc::airl_bytes_to_int16(a0!(), a1!()),
+        "bytes-to-int32" => airl_rt::misc::airl_bytes_to_int32(a0!(), a1!()),
+        "bytes-to-int64" => airl_rt::misc::airl_bytes_to_int64(a0!(), a1!()),
+        "bytes-from-string" => airl_rt::misc::airl_bytes_from_string(a0!()),
+        "bytes-to-string" => airl_rt::misc::airl_bytes_to_string(a0!(), a1!(), a2!()),
+        "bytes-concat" => airl_rt::misc::airl_bytes_concat(a0!(), a1!()),
+        "bytes-slice" => airl_rt::misc::airl_bytes_slice(a0!(), a1!(), a2!()),
+        "crc32c" => airl_rt::misc::airl_crc32c(a0!()),
+
+        // TCP
+        "tcp-connect" => airl_rt::misc::airl_tcp_connect(a0!(), a1!()),
+        "tcp-close" => airl_rt::misc::airl_tcp_close(a0!()),
+        "tcp-send" => airl_rt::misc::airl_tcp_send(a0!(), a1!()),
+        "tcp-recv" => airl_rt::misc::airl_tcp_recv(a0!(), a1!()),
+        "tcp-recv-exact" => airl_rt::misc::airl_tcp_recv_exact(a0!(), a1!()),
+        "tcp-set-timeout" => airl_rt::misc::airl_tcp_set_timeout(a0!(), a1!()),
+        "tcp-connect-tls" => airl_rt::misc::airl_tcp_connect_tls(a0!(), a1!(), a2!(), a3!(),
+            args.get(4).copied().unwrap_or(std::ptr::null_mut())),
+
+        // Compression
+        "gzip-compress" => airl_rt::misc::airl_gzip_compress(a0!()),
+        "gzip-decompress" => airl_rt::misc::airl_gzip_decompress(a0!()),
+        "snappy-compress" => airl_rt::misc::airl_snappy_compress(a0!()),
+        "snappy-decompress" => airl_rt::misc::airl_snappy_decompress(a0!()),
+        "lz4-compress" => airl_rt::misc::airl_lz4_compress(a0!()),
+        "lz4-decompress" => airl_rt::misc::airl_lz4_decompress(a0!()),
+        "zstd-compress" => airl_rt::misc::airl_zstd_compress(a0!()),
+        "zstd-decompress" => airl_rt::misc::airl_zstd_decompress(a0!()),
+
+        // Not found
+        _ => return None,
+    };
+    Some(result)
+}
+
+// ── BytecodeVm ─────────────────────────────────────────────────────
+
+// SAFETY: BytecodeVm contains *mut RtValue in CallFrame registers.
+// These pointers are owned (rc-managed) and never shared across threads.
+// Each child VM (from spawn_child) gets a fresh empty call stack.
+unsafe impl Send for BytecodeVm {}
 
 pub struct BytecodeVm {
     pub functions: HashMap<String, BytecodeFunc>,
@@ -103,8 +487,7 @@ impl BytecodeVm {
         }
     }
 
-    /// Create a child VM for thread-spawn: clones function registry,
-    /// fresh builtins and call stack, shares JIT via Arc.
+    /// Create a child VM for thread-spawn.
     pub fn spawn_child(&self) -> BytecodeVm {
         BytecodeVm {
             functions: self.functions.clone(),
@@ -121,58 +504,70 @@ impl BytecodeVm {
         self.functions.insert(func.name.clone(), func);
     }
 
-    /// Store function metadata (param types, intent, contracts) for runtime introspection.
     pub fn store_fn_metadata(&mut self, meta: crate::bytecode::FnDefMetadata) {
         self.fn_metadata.insert(meta.name.clone(), meta);
     }
 
-    /// Look up metadata for a function by name.
     pub fn get_fn_metadata(&self, name: &str) -> Option<&crate::bytecode::FnDefMetadata> {
         self.fn_metadata.get(name)
     }
 
-    /// Dispatch the `fn-metadata` builtin: look up function metadata and return
-    /// a Result-wrapped Map with name, intent, param info, and contracts.
+    /// Dispatch fn-metadata using RtValue args, returning *mut RtValue.
+    fn dispatch_fn_metadata_rt(&self, args: &[*mut RtValue]) -> Result<*mut RtValue, RuntimeError> {
+        let fname = match args.first() {
+            Some(&ptr) if !ptr.is_null() => unsafe {
+                match &(*ptr).data {
+                    RtData::Str(s) => s.clone(),
+                    _ => return Err(RuntimeError::Custom("fn-metadata: requires string arg".into())),
+                }
+            },
+            _ => return Err(RuntimeError::Custom("fn-metadata: requires 1 argument".into())),
+        };
+        match self.fn_metadata.get(&fname) {
+            Some(meta) => {
+                let mut m: HashMap<String, *mut RtValue> = HashMap::new();
+                m.insert("name".into(), rt_str(meta.name.clone()));
+                m.insert("intent".into(), meta.intent.as_ref().map_or_else(rt_nil, |s| rt_str(s.clone())));
+                m.insert("param-names".into(), rt_list(meta.param_names.iter().map(|s| rt_str(s.clone())).collect()));
+                m.insert("param-types".into(), rt_list(meta.param_types.iter().map(|s| rt_str(s.clone())).collect()));
+                m.insert("return-type".into(), rt_str(meta.return_type.clone()));
+                m.insert("requires".into(), rt_list(meta.requires.iter().map(|s| rt_str(s.clone())).collect()));
+                m.insert("ensures".into(), rt_list(meta.ensures.iter().map(|s| rt_str(s.clone())).collect()));
+                Ok(rt_variant("Ok".into(), rt_map(m)))
+            }
+            None => Ok(rt_variant("Err".into(), rt_str(format!("function not found: {}", fname)))),
+        }
+    }
+
+    /// Dispatch fn-metadata using Value args (for VmCaller compat).
+    #[allow(dead_code)]
     fn dispatch_fn_metadata(&self, args: &[Value]) -> Result<Value, RuntimeError> {
         let fname = match args.first() {
             Some(Value::Str(s)) => s.clone(),
-            _ => return Err(RuntimeError::Custom(
-                "fn-metadata: requires 1 string argument (function name)".into())),
+            _ => return Err(RuntimeError::Custom("fn-metadata: requires string arg".into())),
         };
         match self.fn_metadata.get(&fname) {
             Some(meta) => {
                 let mut m = HashMap::new();
-                m.insert("name".to_string(), Value::Str(meta.name.clone()));
-                m.insert("intent".to_string(), match &meta.intent {
-                    Some(s) => Value::Str(s.clone()),
-                    None => Value::Nil,
-                });
-                m.insert("param-names".to_string(), Value::List(
-                    meta.param_names.iter().map(|s| Value::Str(s.clone())).collect()));
-                m.insert("param-types".to_string(), Value::List(
-                    meta.param_types.iter().map(|s| Value::Str(s.clone())).collect()));
-                m.insert("return-type".to_string(), Value::Str(meta.return_type.clone()));
-                m.insert("requires".to_string(), Value::List(
-                    meta.requires.iter().map(|s| Value::Str(s.clone())).collect()));
-                m.insert("ensures".to_string(), Value::List(
-                    meta.ensures.iter().map(|s| Value::Str(s.clone())).collect()));
-                Ok(Value::Variant("Ok".to_string(), Box::new(Value::Map(m))))
+                m.insert("name".into(), Value::Str(meta.name.clone()));
+                m.insert("intent".into(), meta.intent.as_ref().map_or(Value::Nil, |s| Value::Str(s.clone())));
+                m.insert("param-names".into(), Value::List(meta.param_names.iter().map(|s| Value::Str(s.clone())).collect()));
+                m.insert("param-types".into(), Value::List(meta.param_types.iter().map(|s| Value::Str(s.clone())).collect()));
+                m.insert("return-type".into(), Value::Str(meta.return_type.clone()));
+                m.insert("requires".into(), Value::List(meta.requires.iter().map(|s| Value::Str(s.clone())).collect()));
+                m.insert("ensures".into(), Value::List(meta.ensures.iter().map(|s| Value::Str(s.clone())).collect()));
+                Ok(Value::Variant("Ok".into(), Box::new(Value::Map(m))))
             }
-            None => {
-                Ok(Value::Variant("Err".to_string(),
-                    Box::new(Value::Str(format!("function not found: {}", fname)))))
-            }
+            None => Ok(Value::Variant("Err".into(), Box::new(Value::Str(format!("function not found: {}", fname))))),
         }
     }
 
-    /// Execute a function by name with no arguments. Used to run __main__.
     pub fn exec_main(&mut self) -> Result<Value, RuntimeError> {
         self.push_frame("__main__", &[], 0)
             .and_then(|_| self.run())
     }
 
-    /// Push a new call frame for the named function with the given args.
-    /// `return_reg` is the register in the CALLER's frame where the return value goes.
+    /// Push a frame with Value args (converts to RtValue).
     fn push_frame(&mut self, name: &str, args: &[Value], return_reg: u16) -> Result<(), RuntimeError> {
         let func = self.functions.get(name)
             .ok_or_else(|| RuntimeError::UndefinedSymbol(name.to_string()))?;
@@ -184,10 +579,45 @@ impl BytecodeVm {
         }
 
         let reg_count = func.register_count as usize;
-        let mut registers = vec![Value::Nil; reg_count];
+        let mut registers: Vec<*mut RtValue> = Vec::with_capacity(reg_count);
+        for _ in 0..reg_count { registers.push(rt_nil()); }
         for (i, arg) in args.iter().enumerate() {
             if i < registers.len() {
-                registers[i] = arg.clone();
+                airl_value_release(registers[i]);
+                registers[i] = value_to_rt(arg);
+            }
+        }
+
+        self.call_stack.push(CallFrame {
+            registers,
+            func_name: name.to_string(),
+            ip: 0,
+            return_reg,
+            match_flag: false,
+            moved: vec![false; reg_count],
+        });
+        Ok(())
+    }
+
+    /// Push a frame with RtValue args (retains each arg).
+    fn push_frame_rt(&mut self, name: &str, args: &[*mut RtValue], return_reg: u16) -> Result<(), RuntimeError> {
+        let func = self.functions.get(name)
+            .ok_or_else(|| RuntimeError::UndefinedSymbol(name.to_string()))?;
+
+        self.recursion_depth += 1;
+        if self.recursion_depth > 50_000 {
+            self.recursion_depth -= 1;
+            return Err(RuntimeError::Custom("stack overflow".into()));
+        }
+
+        let reg_count = func.register_count as usize;
+        let mut registers: Vec<*mut RtValue> = Vec::with_capacity(reg_count);
+        for _ in 0..reg_count { registers.push(rt_nil()); }
+        for (i, &arg) in args.iter().enumerate() {
+            if i < registers.len() {
+                airl_value_release(registers[i]);
+                airl_value_retain(arg);
+                registers[i] = arg;
             }
         }
 
@@ -203,313 +633,321 @@ impl BytecodeVm {
     }
 
     fn run(&mut self) -> Result<Value, RuntimeError> {
-        self.run_with_min_depth(0)
+        let result_rt = self.run_rt_with_min_depth(0)?;
+        let result = rt_to_value_no_release(result_rt);
+        airl_value_release(result_rt);
+        Ok(result)
     }
 
-    /// Run the VM loop until the call stack depth drops to `min_depth`.
-    /// When `min_depth` is 0, this behaves identically to the original `run()`.
-    /// When called from `invoke_in_nested_frame`, `min_depth` is the stack
-    /// depth of the caller, so we stop as soon as the nested frame returns.
-    fn run_with_min_depth(&mut self, min_depth: usize) -> Result<Value, RuntimeError> {
+    /// Main VM loop. Returns *mut RtValue with rc >= 1 (caller must release).
+    fn run_rt_with_min_depth(&mut self, min_depth: usize) -> Result<*mut RtValue, RuntimeError> {
         loop {
             let (func_name, ip, func_len) = {
                 let frame = self.call_stack.last().unwrap();
                 (frame.func_name.clone(), frame.ip, {
-                    let f = self.functions.get(&frame.func_name).unwrap();
-                    f.instructions.len()
+                    self.functions.get(&frame.func_name).unwrap().instructions.len()
                 })
             };
 
             if ip >= func_len {
-                // Implicit return nil
                 let return_reg = self.call_stack.last().unwrap().return_reg;
-                self.call_stack.pop();
+                let mut frame = self.call_stack.pop().unwrap();
+                release_registers(&mut frame.registers);
                 self.recursion_depth = self.recursion_depth.saturating_sub(1);
                 if self.call_stack.len() <= min_depth {
-                    return Ok(Value::Nil);
+                    return Ok(rt_nil());
                 }
                 let caller = self.call_stack.last_mut().unwrap();
-                caller.registers[return_reg as usize] = Value::Nil;
+                reg_set(&mut caller.registers, return_reg as usize, rt_nil());
                 continue;
             }
 
-            let instr = {
-                let f = self.functions.get(&func_name).unwrap();
-                f.instructions[ip]
-            };
+            let instr = self.functions.get(&func_name).unwrap().instructions[ip];
             self.call_stack.last_mut().unwrap().ip += 1;
 
             match instr.op {
                 Op::LoadConst => {
-                    let val = {
-                        let f = self.functions.get(&func_name).unwrap();
-                        f.constants[instr.a as usize].clone()
-                    };
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = val;
+                    let val = value_to_rt(&self.functions.get(&func_name).unwrap().constants[instr.a as usize]);
+                    let frame = self.call_stack.last_mut().unwrap();
+                    reg_set(&mut frame.registers, instr.dst as usize, val);
                 }
                 Op::LoadNil => {
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = Value::Nil;
+                    let frame = self.call_stack.last_mut().unwrap();
+                    reg_set(&mut frame.registers, instr.dst as usize, rt_nil());
                 }
                 Op::LoadTrue => {
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = Value::Bool(true);
+                    let frame = self.call_stack.last_mut().unwrap();
+                    reg_set(&mut frame.registers, instr.dst as usize, rt_bool(true));
                 }
                 Op::LoadFalse => {
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = Value::Bool(false);
+                    let frame = self.call_stack.last_mut().unwrap();
+                    reg_set(&mut frame.registers, instr.dst as usize, rt_bool(false));
                 }
                 Op::Move => {
-                    let val = self.call_stack.last().unwrap().registers[instr.a as usize].clone();
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = val;
+                    let src = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    airl_value_retain(src);
+                    let frame = self.call_stack.last_mut().unwrap();
+                    reg_set(&mut frame.registers, instr.dst as usize, src);
                 }
 
-                // Arithmetic
+                // ── Arithmetic (inline for proper error returns) ──
                 Op::Add => {
-                    let frame = self.call_stack.last().unwrap();
-                    let a = frame.registers[instr.a as usize].clone();
-                    let b = frame.registers[instr.b as usize].clone();
-                    let result = match (&a, &b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x + y),
-                        (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
-                        (Value::Str(x), Value::Str(y)) => Value::Str(format!("{}{}", x, y)),
-                        _ => return Err(RuntimeError::TypeError("add: incompatible types".into()))
+                    let (a, b) = {
+                        let r = &self.call_stack.last().unwrap().registers;
+                        (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                        (RtData::Int(x), RtData::Int(y)) => rt_int(x.wrapping_add(*y)),
+                        (RtData::Float(x), RtData::Float(y)) => rt_float(x + y),
+                        (RtData::Str(x), RtData::Str(y)) => rt_str(format!("{}{}", x, y)),
+                        _ => return Err(RuntimeError::TypeError("add: incompatible types".into())),
+                    }};
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                 }
                 Op::Sub => {
-                    let frame = self.call_stack.last().unwrap();
-                    let a = frame.registers[instr.a as usize].clone();
-                    let b = frame.registers[instr.b as usize].clone();
-                    let result = match (&a, &b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x - y),
-                        (Value::Float(x), Value::Float(y)) => Value::Float(x - y),
-                        _ => return Err(RuntimeError::TypeError("sub: incompatible types".into()))
+                    let (a, b) = {
+                        let r = &self.call_stack.last().unwrap().registers;
+                        (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                        (RtData::Int(x), RtData::Int(y)) => rt_int(x.wrapping_sub(*y)),
+                        (RtData::Float(x), RtData::Float(y)) => rt_float(x - y),
+                        _ => return Err(RuntimeError::TypeError("sub: incompatible types".into())),
+                    }};
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                 }
                 Op::Mul => {
-                    let frame = self.call_stack.last().unwrap();
-                    let a = frame.registers[instr.a as usize].clone();
-                    let b = frame.registers[instr.b as usize].clone();
-                    let result = match (&a, &b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x * y),
-                        (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
-                        _ => return Err(RuntimeError::TypeError("mul: incompatible types".into()))
+                    let (a, b) = {
+                        let r = &self.call_stack.last().unwrap().registers;
+                        (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                        (RtData::Int(x), RtData::Int(y)) => rt_int(x.wrapping_mul(*y)),
+                        (RtData::Float(x), RtData::Float(y)) => rt_float(x * y),
+                        _ => return Err(RuntimeError::TypeError("mul: incompatible types".into())),
+                    }};
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                 }
                 Op::Div => {
-                    let frame = self.call_stack.last().unwrap();
-                    let a = frame.registers[instr.a as usize].clone();
-                    let b = frame.registers[instr.b as usize].clone();
-                    let result = match (&a, &b) {
-                        (Value::Int(_), Value::Int(0)) => return Err(RuntimeError::DivisionByZero),
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x / y),
-                        (Value::Float(x), Value::Float(y)) => Value::Float(x / y),
-                        _ => return Err(RuntimeError::TypeError("div: incompatible types".into()))
+                    let (a, b) = {
+                        let r = &self.call_stack.last().unwrap().registers;
+                        (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                        (RtData::Int(_), RtData::Int(0)) => return Err(RuntimeError::DivisionByZero),
+                        (RtData::Int(x), RtData::Int(y)) => rt_int(x / y),
+                        (RtData::Float(x), RtData::Float(y)) => rt_float(x / y),
+                        _ => return Err(RuntimeError::TypeError("div: incompatible types".into())),
+                    }};
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                 }
                 Op::Mod => {
-                    let frame = self.call_stack.last().unwrap();
-                    let a = frame.registers[instr.a as usize].clone();
-                    let b = frame.registers[instr.b as usize].clone();
-                    let result = match (&a, &b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x % y),
-                        _ => return Err(RuntimeError::TypeError("mod: incompatible types".into()))
+                    let (a, b) = {
+                        let r = &self.call_stack.last().unwrap().registers;
+                        (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                        (RtData::Int(x), RtData::Int(y)) => rt_int(x % y),
+                        _ => return Err(RuntimeError::TypeError("mod: incompatible types".into())),
+                    }};
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                 }
                 Op::Neg => {
-                    let a = self.call_stack.last().unwrap().registers[instr.a as usize].clone();
-                    let result = match &a {
-                        Value::Int(x) => Value::Int(-x),
-                        Value::Float(x) => Value::Float(-x),
+                    let a = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    let result = unsafe { match &(*a).data {
+                        RtData::Int(x) => rt_int(-x),
+                        RtData::Float(x) => rt_float(-x),
                         _ => return Err(RuntimeError::TypeError("neg: expected number".into())),
-                    };
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                    }};
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                 }
 
-                // Comparison
+                // ── Comparison ──
                 Op::Eq => {
-                    let frame = self.call_stack.last().unwrap();
-                    let a = frame.registers[instr.a as usize].clone();
-                    let b = frame.registers[instr.b as usize].clone();
-                    let result = Value::Bool(a == b);
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                    let (a, b) = {
+                        let r = &self.call_stack.last().unwrap().registers;
+                        (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
+                    };
+                    let result = rt_bool(airl_rt::comparison::rt_values_equal(a, b));
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                 }
                 Op::Ne => {
-                    let frame = self.call_stack.last().unwrap();
-                    let a = frame.registers[instr.a as usize].clone();
-                    let b = frame.registers[instr.b as usize].clone();
-                    let result = Value::Bool(a != b);
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                    let (a, b) = {
+                        let r = &self.call_stack.last().unwrap().registers;
+                        (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
+                    };
+                    let result = rt_bool(!airl_rt::comparison::rt_values_equal(a, b));
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                 }
                 Op::Lt => {
-                    let frame = self.call_stack.last().unwrap();
-                    let a = frame.registers[instr.a as usize].clone();
-                    let b = frame.registers[instr.b as usize].clone();
-                    let result = match (&a, &b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Bool(x < y),
-                        (Value::Float(x), Value::Float(y)) => Value::Bool(x < y),
-                        _ => Value::Bool(false),
+                    let (a, b) = {
+                        let r = &self.call_stack.last().unwrap().registers;
+                        (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                        (RtData::Int(x), RtData::Int(y)) => rt_bool(x < y),
+                        (RtData::Float(x), RtData::Float(y)) => rt_bool(x < y),
+                        (RtData::Str(x), RtData::Str(y)) => rt_bool(x < y),
+                        _ => rt_bool(false),
+                    }};
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                 }
                 Op::Le => {
-                    let frame = self.call_stack.last().unwrap();
-                    let a = frame.registers[instr.a as usize].clone();
-                    let b = frame.registers[instr.b as usize].clone();
-                    let result = match (&a, &b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Bool(x <= y),
-                        (Value::Float(x), Value::Float(y)) => Value::Bool(x <= y),
-                        _ => Value::Bool(false),
+                    let (a, b) = {
+                        let r = &self.call_stack.last().unwrap().registers;
+                        (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                        (RtData::Int(x), RtData::Int(y)) => rt_bool(x <= y),
+                        (RtData::Float(x), RtData::Float(y)) => rt_bool(x <= y),
+                        (RtData::Str(x), RtData::Str(y)) => rt_bool(x <= y),
+                        _ => rt_bool(false),
+                    }};
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                 }
                 Op::Gt => {
-                    let frame = self.call_stack.last().unwrap();
-                    let a = frame.registers[instr.a as usize].clone();
-                    let b = frame.registers[instr.b as usize].clone();
-                    let result = match (&a, &b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Bool(x > y),
-                        (Value::Float(x), Value::Float(y)) => Value::Bool(x > y),
-                        _ => Value::Bool(false),
+                    let (a, b) = {
+                        let r = &self.call_stack.last().unwrap().registers;
+                        (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                        (RtData::Int(x), RtData::Int(y)) => rt_bool(x > y),
+                        (RtData::Float(x), RtData::Float(y)) => rt_bool(x > y),
+                        (RtData::Str(x), RtData::Str(y)) => rt_bool(x > y),
+                        _ => rt_bool(false),
+                    }};
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                 }
                 Op::Ge => {
-                    let frame = self.call_stack.last().unwrap();
-                    let a = frame.registers[instr.a as usize].clone();
-                    let b = frame.registers[instr.b as usize].clone();
-                    let result = match (&a, &b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Bool(x >= y),
-                        (Value::Float(x), Value::Float(y)) => Value::Bool(x >= y),
-                        _ => Value::Bool(false),
+                    let (a, b) = {
+                        let r = &self.call_stack.last().unwrap().registers;
+                        (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                        (RtData::Int(x), RtData::Int(y)) => rt_bool(x >= y),
+                        (RtData::Float(x), RtData::Float(y)) => rt_bool(x >= y),
+                        (RtData::Str(x), RtData::Str(y)) => rt_bool(x >= y),
+                        _ => rt_bool(false),
+                    }};
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                 }
                 Op::Not => {
-                    let a = self.call_stack.last().unwrap().registers[instr.a as usize].clone();
-                    let result = match &a {
-                        Value::Bool(b) => Value::Bool(!b),
+                    let a = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    let result = unsafe { match &(*a).data {
+                        RtData::Bool(b) => rt_bool(!b),
                         _ => return Err(RuntimeError::TypeError("not: expected bool".into())),
-                    };
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                    }};
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                 }
 
-                // Control flow
+                // ── Control flow ──
                 Op::Jump => {
                     let offset = instr.a as i16;
                     let frame = self.call_stack.last_mut().unwrap();
                     frame.ip = (frame.ip as i32 + offset as i32) as usize;
                 }
                 Op::JumpIfFalse => {
-                    let val = self.call_stack.last().unwrap().registers[instr.a as usize].clone();
-                    if let Value::Bool(false) = val {
+                    let val = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    if rt_is_bool_false(val) {
                         let offset = instr.b as i16;
-                        let frame = self.call_stack.last_mut().unwrap();
-                        frame.ip = (frame.ip as i32 + offset as i32) as usize;
+                        self.call_stack.last_mut().unwrap().ip =
+                            (self.call_stack.last().unwrap().ip as i32 + offset as i32) as usize;
                     }
                 }
                 Op::JumpIfTrue => {
-                    let val = self.call_stack.last().unwrap().registers[instr.a as usize].clone();
-                    if let Value::Bool(true) = val {
+                    let val = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    if rt_is_bool_true(val) {
                         let offset = instr.b as i16;
-                        let frame = self.call_stack.last_mut().unwrap();
-                        frame.ip = (frame.ip as i32 + offset as i32) as usize;
+                        self.call_stack.last_mut().unwrap().ip =
+                            (self.call_stack.last().unwrap().ip as i32 + offset as i32) as usize;
                     }
                 }
 
-                // Data
+                // ── Data ──
                 Op::MakeList => {
                     let start = instr.a as usize;
                     let count = instr.b as usize;
-                    let items: Vec<Value> = {
-                        let frame = self.call_stack.last().unwrap();
-                        (start..start+count).map(|i| frame.registers[i].clone()).collect()
+                    let items: Vec<*mut RtValue> = {
+                        let r = &self.call_stack.last().unwrap().registers;
+                        (start..start+count).map(|i| { let p = reg_get(r, i); airl_value_retain(p); p }).collect()
                     };
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = Value::List(items);
+                    let list = rt_list(items);
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, list);
                 }
                 Op::MakeVariant => {
-                    let tag = {
-                        let f = self.functions.get(&func_name).unwrap();
-                        match &f.constants[instr.a as usize] {
-                            Value::Str(s) => s.clone(),
-                            _ => return Err(RuntimeError::TypeError("variant tag must be string".into())),
-                        }
+                    let tag = match &self.functions.get(&func_name).unwrap().constants[instr.a as usize] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err(RuntimeError::TypeError("variant tag must be string".into())),
                     };
-                    let inner = self.call_stack.last().unwrap().registers[instr.b as usize].clone();
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] =
-                        Value::Variant(tag, Box::new(inner));
+                    let inner = reg_get(&self.call_stack.last().unwrap().registers, instr.b as usize);
+                    airl_value_retain(inner);
+                    let variant = rt_variant(tag, inner);
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, variant);
                 }
                 Op::MakeVariant0 => {
-                    let tag = {
-                        let f = self.functions.get(&func_name).unwrap();
-                        match &f.constants[instr.a as usize] {
-                            Value::Str(s) => s.clone(),
-                            _ => return Err(RuntimeError::TypeError("variant tag must be string".into())),
-                        }
+                    let tag = match &self.functions.get(&func_name).unwrap().constants[instr.a as usize] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err(RuntimeError::TypeError("variant tag must be string".into())),
                     };
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] =
-                        Value::Variant(tag, Box::new(Value::Nil));
+                    let variant = rt_variant(tag, rt_nil());
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, variant);
                 }
 
-                // Pattern matching
+                // ── Pattern matching ──
                 Op::MatchTag => {
-                    let tag = {
-                        let f = self.functions.get(&func_name).unwrap();
-                        match &f.constants[instr.b as usize] {
-                            Value::Str(s) => s.clone(),
-                            _ => return Err(RuntimeError::TypeError("match tag must be string".into())),
-                        }
+                    let tag = match &self.functions.get(&func_name).unwrap().constants[instr.b as usize] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err(RuntimeError::TypeError("match tag must be string".into())),
                     };
-                    let scr = self.call_stack.last().unwrap().registers[instr.a as usize].clone();
-                    let frame = self.call_stack.last_mut().unwrap();
-                    match scr {
-                        Value::Variant(ref vtag, ref inner) if *vtag == tag => {
-                            frame.registers[instr.dst as usize] = *inner.clone();
-                            frame.match_flag = true;
-                        }
-                        _ => {
-                            frame.match_flag = false;
+                    let scr = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    unsafe {
+                        match &(*scr).data {
+                            RtData::Variant { tag_name, inner } if *tag_name == tag => {
+                                airl_value_retain(*inner);
+                                let frame = self.call_stack.last_mut().unwrap();
+                                reg_set(&mut frame.registers, instr.dst as usize, *inner);
+                                frame.match_flag = true;
+                            }
+                            _ => {
+                                self.call_stack.last_mut().unwrap().match_flag = false;
+                            }
                         }
                     }
                 }
                 Op::JumpIfNoMatch => {
-                    let matched = self.call_stack.last().unwrap().match_flag;
-                    if !matched {
+                    if !self.call_stack.last().unwrap().match_flag {
                         let offset = instr.a as i16;
                         let frame = self.call_stack.last_mut().unwrap();
                         frame.ip = (frame.ip as i32 + offset as i32) as usize;
                     }
                 }
                 Op::MatchWild => {
-                    let val = self.call_stack.last().unwrap().registers[instr.a as usize].clone();
+                    let val = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    airl_value_retain(val);
                     let frame = self.call_stack.last_mut().unwrap();
-                    frame.registers[instr.dst as usize] = val;
+                    reg_set(&mut frame.registers, instr.dst as usize, val);
                     frame.match_flag = true;
                 }
 
-                // Try
+                // ── TryUnwrap ──
                 Op::TryUnwrap => {
-                    let val = self.call_stack.last().unwrap().registers[instr.a as usize].clone();
-                    match val {
-                        Value::Variant(ref tag, ref inner) if tag == "Ok" => {
-                            let inner = *inner.clone();
-                            self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = inner;
+                    let val = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    unsafe { match &(*val).data {
+                        RtData::Variant { tag_name, inner } if tag_name == "Ok" => {
+                            airl_value_retain(*inner);
+                            reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, *inner);
                         }
-                        Value::Variant(ref tag, ref inner) if tag == "Err" => {
-                            return Err(RuntimeError::Custom(format!("{}", inner)));
+                        RtData::Variant { tag_name, inner } if tag_name == "Err" => {
+                            return Err(RuntimeError::Custom(format!("{}", &**inner)));
                         }
-                        _ => return Err(RuntimeError::TryOnNonResult(format!("{}", val))),
-                    }
+                        _ => return Err(RuntimeError::TryOnNonResult(rt_display(val))),
+                    }}
                 }
 
-                // Contract assertions — check a boolean register, error if not true
+                // ── Contract assertions ──
                 Op::AssertRequires | Op::AssertEnsures | Op::AssertInvariant => {
-                    let frame = self.call_stack.last().unwrap();
-                    let bool_val = frame.registers[instr.a as usize].clone();
-                    let is_true = matches!(&bool_val, Value::Bool(true));
-                    if !is_true {
+                    let bool_val = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    if !rt_is_bool_true(bool_val) {
                         let f = self.functions.get(&func_name).unwrap();
                         let fn_name_str = match &f.constants[instr.dst as usize] {
                             Value::Str(s) => s.clone(),
@@ -517,43 +955,34 @@ impl BytecodeVm {
                         };
                         let clause_source = match &f.constants[instr.b as usize] {
                             Value::Str(s) => s.clone(),
-                            _ => "?".to_string(),
+                            _ => "?".into(),
                         };
                         let contract_kind = match instr.op {
                             Op::AssertRequires => airl_contracts::violation::ContractKind::Requires,
                             Op::AssertEnsures => airl_contracts::violation::ContractKind::Ensures,
                             _ => airl_contracts::violation::ContractKind::Invariant,
                         };
-                        // Capture parameter bindings from the current frame
                         let frame = self.call_stack.last().unwrap();
                         let arity = f.arity as usize;
-                        let mut bindings = Vec::new();
-                        // We don't have param names in BytecodeFunc, so use positional names
-                        for i in 0..arity {
-                            if i < frame.registers.len() {
-                                bindings.push((format!("arg{}", i), format!("{}", frame.registers[i])));
-                            }
-                        }
+                        let bindings: Vec<(String, String)> = (0..arity)
+                            .filter(|&i| i < frame.registers.len())
+                            .map(|i| (format!("arg{}", i), rt_display(frame.registers[i])))
+                            .collect();
                         return Err(RuntimeError::ContractViolation(
                             airl_contracts::violation::ContractViolation {
-                                function: fn_name_str,
-                                contract_kind,
-                                clause_source,
-                                bindings,
-                                evaluated: format!("{}", bool_val),
+                                function: fn_name_str, contract_kind, clause_source, bindings,
+                                evaluated: rt_display(bool_val),
                                 span: airl_syntax::Span::dummy(),
                             }
                         ));
                     }
                 }
 
-                // Ownership tracking
+                // ── Ownership tracking ──
                 Op::MarkMoved => {
                     let reg = instr.a as usize;
                     let frame = self.call_stack.last_mut().unwrap();
-                    if reg < frame.moved.len() {
-                        frame.moved[reg] = true;
-                    }
+                    if reg < frame.moved.len() { frame.moved[reg] = true; }
                 }
                 Op::CheckNotMoved => {
                     let reg = instr.a as usize;
@@ -561,16 +990,10 @@ impl BytecodeVm {
                     if reg < frame.moved.len() && frame.moved[reg] {
                         let f = self.functions.get(&func_name).unwrap();
                         let msg = if (instr.b as usize) < f.constants.len() {
-                            let name_val = &f.constants[instr.b as usize];
-                            if let Value::Str(s) = name_val {
-                                if s.contains(' ') {
-                                    // Full error message (e.g., borrow+move conflict)
-                                    s.clone()
-                                } else {
-                                    format!("use of moved value: `{}` was already moved", s)
-                                }
-                            } else {
-                                format!("use of moved value: `{}` was already moved", name_val)
+                            match &f.constants[instr.b as usize] {
+                                Value::Str(s) if s.contains(' ') => s.clone(),
+                                Value::Str(s) => format!("use of moved value: `{}` was already moved", s),
+                                other => format!("use of moved value: `{}` was already moved", other),
                             }
                         } else {
                             format!("use of moved value: register {} was already moved", reg)
@@ -579,316 +1002,245 @@ impl BytecodeVm {
                     }
                 }
 
-                // Function calls — push new frame and let the main loop execute it
+                // ── Function calls ──
                 Op::Call => {
-                    let name = {
-                        let f = self.functions.get(&func_name).unwrap();
-                        match &f.constants[instr.a as usize] {
-                            Value::Str(s) => s.clone(),
-                            _ => return Err(RuntimeError::TypeError("call: func name must be string".into())),
-                        }
+                    let name = match &self.functions.get(&func_name).unwrap().constants[instr.a as usize] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err(RuntimeError::TypeError("call: func name must be string".into())),
                     };
                     let argc = instr.b as usize;
-                    let args: Vec<Value> = {
-                        let frame = self.call_stack.last().unwrap();
-                        (0..argc).map(|i| frame.registers[instr.dst as usize + 1 + i].clone()).collect()
+                    let rt_args: Vec<*mut RtValue> = {
+                        let r = &self.call_stack.last().unwrap().registers;
+                        (0..argc).map(|i| reg_get(r, instr.dst as usize + 1 + i)).collect()
                     };
 
                     // Try JIT-full first
                     #[cfg(feature = "jit")]
-                    if let Some(ref jit_full) = self.jit_full {
-                        if let Some(val) = jit_full.try_call_native(&name, &args) {
-                            // Check if a contract violation was signaled via the thread-local error cell
-                            if let Some((kind, fn_name_idx, clause_idx)) = crate::jit_contract::take_jit_contract_error() {
-                                let f = self.functions.get(&name);
-                                let fn_name_str = f.and_then(|f| f.constants.get(fn_name_idx as usize))
-                                    .and_then(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
-                                    .unwrap_or_else(|| name.clone());
-                                let clause_source = f.and_then(|f| f.constants.get(clause_idx as usize))
-                                    .and_then(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
-                                    .unwrap_or_else(|| "?".into());
-                                let contract_kind = match kind {
-                                    0 => airl_contracts::violation::ContractKind::Requires,
-                                    1 => airl_contracts::violation::ContractKind::Ensures,
-                                    _ => airl_contracts::violation::ContractKind::Invariant,
-                                };
-                                return Err(RuntimeError::ContractViolation(
-                                    airl_contracts::violation::ContractViolation {
-                                        function: fn_name_str,
-                                        contract_kind,
-                                        clause_source,
-                                        bindings: vec![],
-                                        evaluated: "false".into(),
-                                        span: airl_syntax::Span::dummy(),
-                                    }
-                                ));
+                    {
+                        if let Some(ref jit_full) = self.jit_full {
+                            let value_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+                            if let Some(val) = jit_full.try_call_native(&name, &value_args) {
+                                if let Some((kind, fn_name_idx, clause_idx)) = crate::jit_contract::take_jit_contract_error() {
+                                    let f = self.functions.get(&name);
+                                    let fn_name_str = f.and_then(|f| f.constants.get(fn_name_idx as usize))
+                                        .and_then(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
+                                        .unwrap_or_else(|| name.clone());
+                                    let clause_source = f.and_then(|f| f.constants.get(clause_idx as usize))
+                                        .and_then(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
+                                        .unwrap_or_else(|| "?".into());
+                                    let contract_kind = match kind {
+                                        0 => airl_contracts::violation::ContractKind::Requires,
+                                        1 => airl_contracts::violation::ContractKind::Ensures,
+                                        _ => airl_contracts::violation::ContractKind::Invariant,
+                                    };
+                                    return Err(RuntimeError::ContractViolation(
+                                        airl_contracts::violation::ContractViolation {
+                                            function: fn_name_str, contract_kind, clause_source,
+                                            bindings: vec![], evaluated: "false".into(),
+                                            span: airl_syntax::Span::dummy(),
+                                        }
+                                    ));
+                                }
+                                let result_rt = value_to_rt(&val);
+                                reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result_rt);
+                                continue;
                             }
-                            self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = val;
-                            continue;
                         }
                     }
 
-                    // Special dispatch: thread-spawn needs to clone the VM
+                    // Dispatch chain
                     if name == "thread-spawn" {
-                        use crate::builtins::{NEXT_THREAD_HANDLE, thread_handles};
-                        let closure = args.into_iter().next()
-                            .ok_or_else(|| RuntimeError::Custom("thread-spawn: requires 1 argument".into()))?;
-                        let mut child_vm = self.spawn_child();
-                        let handle = std::thread::Builder::new()
-                            .stack_size(64 * 1024 * 1024)
-                            .spawn(move || -> Result<Value, String> {
-                                match closure {
-                                    Value::BytecodeClosure(bc) => {
-                                        child_vm.call_by_name(&bc.func_name, bc.captured)
-                                            .map_err(|e| format!("{}", e))
-                                    }
-                                    _ => Err("thread-spawn: argument must be a closure".into()),
-                                }
-                            })
-                            .map_err(|e| RuntimeError::Custom(format!("thread-spawn: {}", e)))?;
-                        let id = NEXT_THREAD_HANDLE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        thread_handles().lock().unwrap().insert(id, handle);
-                        self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = Value::Int(id);
-                    }
-                    // Special dispatch: fn-metadata needs access to VM's metadata map
-                    else if name == "fn-metadata" {
-                        let result = self.dispatch_fn_metadata(&args)?;
-                        self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
-                    }
-                    // Try VM-aware builtins first (map, filter, fold, sort)
-                    else if let Some(f) = self.builtins.get_with_vm(&name) {
-                        let f = *f; // Copy fn pointer to release borrow on self
-                        let result = f(self, &args)?;
-                        self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                        let result = self.dispatch_thread_spawn_rt(&rt_args)?;
+                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    } else if name == "fn-metadata" {
+                        let result = self.dispatch_fn_metadata_rt(&rt_args)?;
+                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    } else if let Some(result) = dispatch_rt_builtin(&name, &rt_args) {
+                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    } else if self.builtins.get_with_vm(&name).is_some() {
+                        let value_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+                        let f = *self.builtins.get_with_vm(&name).unwrap();
+                        let result = f(self, &value_args)?;
+                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, value_to_rt(&result));
                     } else if let Some(f) = self.builtins.get(&name) {
-                        // Try regular builtin
-                        let result = f(&args)?;
-                        self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                        let value_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+                        let result = f(&value_args)?;
+                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, value_to_rt(&result));
                     } else {
-                        // Push a new frame; return_reg is instr.dst in the current frame
-                        self.push_frame(&name, &args, instr.dst)?;
-                        // The main loop continues executing the new frame
+                        self.push_frame_rt(&name, &rt_args, instr.dst)?;
                     }
                 }
+
                 Op::CallBuiltin => {
-                    let name = {
-                        let f = self.functions.get(&func_name).unwrap();
-                        match &f.constants[instr.a as usize] {
-                            Value::Str(s) => s.clone(),
-                            _ => return Err(RuntimeError::TypeError("callbuiltin: name must be string".into())),
-                        }
+                    let name = match &self.functions.get(&func_name).unwrap().constants[instr.a as usize] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err(RuntimeError::TypeError("callbuiltin: name must be string".into())),
                     };
                     let argc = instr.b as usize;
-                    let args: Vec<Value> = {
-                        let frame = self.call_stack.last().unwrap();
-                        (0..argc).map(|i| frame.registers[instr.dst as usize + 1 + i].clone()).collect()
+                    let rt_args: Vec<*mut RtValue> = {
+                        let r = &self.call_stack.last().unwrap().registers;
+                        (0..argc).map(|i| reg_get(r, instr.dst as usize + 1 + i)).collect()
                     };
-                    // Special dispatch: thread-spawn needs to clone the VM
+
                     if name == "thread-spawn" {
-                        use crate::builtins::{NEXT_THREAD_HANDLE, thread_handles};
-                        let closure = args.into_iter().next()
-                            .ok_or_else(|| RuntimeError::Custom("thread-spawn: requires 1 argument".into()))?;
-                        let mut child_vm = self.spawn_child();
-                        let handle = std::thread::Builder::new()
-                            .stack_size(64 * 1024 * 1024)
-                            .spawn(move || -> Result<Value, String> {
-                                match closure {
-                                    Value::BytecodeClosure(bc) => {
-                                        child_vm.call_by_name(&bc.func_name, bc.captured)
-                                            .map_err(|e| format!("{}", e))
-                                    }
-                                    _ => Err("thread-spawn: argument must be a closure".into()),
-                                }
-                            })
-                            .map_err(|e| RuntimeError::Custom(format!("thread-spawn: {}", e)))?;
-                        let id = NEXT_THREAD_HANDLE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        thread_handles().lock().unwrap().insert(id, handle);
-                        self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = Value::Int(id);
-                    }
-                    // Special dispatch: fn-metadata needs access to VM's metadata map
-                    else if name == "fn-metadata" {
-                        let result = self.dispatch_fn_metadata(&args)?;
-                        self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
-                    }
-                    // Try VM-aware builtins first (map, filter, fold, sort)
-                    else if let Some(f) = self.builtins.get_with_vm(&name) {
-                        let f = *f; // Copy fn pointer to release borrow on self
-                        let result = f(self, &args)?;
-                        self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                        let result = self.dispatch_thread_spawn_rt(&rt_args)?;
+                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    } else if name == "fn-metadata" {
+                        let result = self.dispatch_fn_metadata_rt(&rt_args)?;
+                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    } else if let Some(result) = dispatch_rt_builtin(&name, &rt_args) {
+                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    } else if self.builtins.get_with_vm(&name).is_some() {
+                        let value_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+                        let f = *self.builtins.get_with_vm(&name).unwrap();
+                        let result = f(self, &value_args)?;
+                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, value_to_rt(&result));
                     } else if let Some(f) = self.builtins.get(&name) {
-                        let result = f(&args)?;
-                        self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                        let value_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+                        let result = f(&value_args)?;
+                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, value_to_rt(&result));
                     } else {
                         return Err(RuntimeError::UndefinedSymbol(name));
                     }
                 }
+
                 Op::CallReg => {
-                    let callee = self.call_stack.last().unwrap().registers[instr.a as usize].clone();
+                    let callee = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
                     let argc = instr.b as usize;
-                    let args: Vec<Value> = {
-                        let frame = self.call_stack.last().unwrap();
-                        (0..argc).map(|i| frame.registers[instr.dst as usize + 1 + i].clone()).collect()
+                    let rt_args: Vec<*mut RtValue> = {
+                        let r = &self.call_stack.last().unwrap().registers;
+                        (0..argc).map(|i| reg_get(r, instr.dst as usize + 1 + i)).collect()
                     };
-                    match callee {
+                    let callee_val = rt_to_value_no_release(callee);
+                    match callee_val {
                         Value::BytecodeClosure(ref closure) => {
                             let mut full_args = closure.captured.clone();
-                            full_args.extend(args);
+                            let args_val: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+                            full_args.extend(args_val);
                             let name = closure.func_name.clone();
 
-                            // Fast path: simple closures execute inline
                             if let Some(func) = self.functions.get(&name) {
                                 if is_simple_closure(func) {
                                     let func = func.clone();
-                                    let result = self.eval_simple(&func, full_args)?;
-                                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                                    let result_val = self.eval_simple(&func, full_args)?;
+                                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, value_to_rt(&result_val));
                                     continue;
                                 }
                             }
-
                             self.push_frame(&name, &full_args, instr.dst)?;
                         }
-                        Value::IRFuncRef(ref name) => {
+                        Value::IRFuncRef(ref name) | Value::BuiltinFn(ref name) => {
                             let name = name.clone();
+                            let value_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
                             if name == "thread-spawn" {
-                                use crate::builtins::{NEXT_THREAD_HANDLE, thread_handles};
-                                let closure = args.into_iter().next()
-                                    .ok_or_else(|| RuntimeError::Custom("thread-spawn: requires 1 argument".into()))?;
-                                let mut child_vm = self.spawn_child();
-                                let handle = std::thread::Builder::new()
-                                    .stack_size(64 * 1024 * 1024)
-                                    .spawn(move || -> Result<Value, String> {
-                                        match closure {
-                                            Value::BytecodeClosure(bc) => {
-                                                child_vm.call_by_name(&bc.func_name, bc.captured)
-                                                    .map_err(|e| format!("{}", e))
-                                            }
-                                            _ => Err("thread-spawn: argument must be a closure".into()),
-                                        }
-                                    })
-                                    .map_err(|e| RuntimeError::Custom(format!("thread-spawn: {}", e)))?;
-                                let id = NEXT_THREAD_HANDLE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                                thread_handles().lock().unwrap().insert(id, handle);
-                                self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = Value::Int(id);
+                                let result = self.dispatch_thread_spawn_rt(&rt_args)?;
+                                reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
                             } else if name == "fn-metadata" {
-                                let result = self.dispatch_fn_metadata(&args)?;
-                                self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
-                            } else if let Some(f) = self.builtins.get_with_vm(&name) {
-                                let f = *f;
-                                let result = f(self, &args)?;
-                                self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                                let result = self.dispatch_fn_metadata_rt(&rt_args)?;
+                                reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                            } else if let Some(result) = dispatch_rt_builtin(&name, &rt_args) {
+                                reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                            } else if self.builtins.get_with_vm(&name).is_some() {
+                                let f = *self.builtins.get_with_vm(&name).unwrap();
+                                let result = f(self, &value_args)?;
+                                reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, value_to_rt(&result));
                             } else if let Some(f) = self.builtins.get(&name) {
-                                let result = f(&args)?;
-                                self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
+                                let result = f(&value_args)?;
+                                reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, value_to_rt(&result));
                             } else {
-                                self.push_frame(&name, &args, instr.dst)?;
+                                self.push_frame(&name, &value_args, instr.dst)?;
                             }
                         }
-                        Value::BuiltinFn(ref name) => {
-                            let name = name.clone();
-                            if let Some(f) = self.builtins.get_with_vm(&name) {
-                                let f = *f;
-                                let result = f(self, &args)?;
-                                self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
-                            } else if let Some(f) = self.builtins.get(&name) {
-                                let result = f(&args)?;
-                                self.call_stack.last_mut().unwrap().registers[instr.dst as usize] = result;
-                            } else {
-                                return Err(RuntimeError::UndefinedSymbol(name));
-                            }
-                        }
-                        _ => return Err(RuntimeError::NotCallable(format!("{}", callee))),
+                        _ => return Err(RuntimeError::NotCallable(rt_display(callee))),
                     }
                 }
+
                 Op::TailCall => {
-                    // Reset ip to 0 for self-recursion (args already rebound by compiler)
                     let frame = self.call_stack.last_mut().unwrap();
                     frame.ip = 0;
-                    // Reset moved flags for the new iteration
                     for m in frame.moved.iter_mut() { *m = false; }
                 }
 
                 Op::Return => {
-                    let result = self.call_stack.last().unwrap().registers[instr.a as usize].clone();
+                    let result = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    airl_value_retain(result);
                     let return_reg = self.call_stack.last().unwrap().return_reg;
-                    self.call_stack.pop();
+                    let mut frame = self.call_stack.pop().unwrap();
+                    release_registers(&mut frame.registers);
                     self.recursion_depth = self.recursion_depth.saturating_sub(1);
                     if self.call_stack.len() <= min_depth {
                         return Ok(result);
                     }
-                    let caller = self.call_stack.last_mut().unwrap();
-                    caller.registers[return_reg as usize] = result;
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, return_reg as usize, result);
                 }
 
                 Op::MakeClosure => {
-                    let func_name_const = {
-                        let f = self.functions.get(&func_name).unwrap();
-                        match &f.constants[instr.a as usize] {
-                            Value::Str(s) => s.clone(),
-                            _ => return Err(RuntimeError::TypeError("closure: func name must be string".into())),
-                        }
+                    let func_name_const = match &self.functions.get(&func_name).unwrap().constants[instr.a as usize] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err(RuntimeError::TypeError("closure: func name must be string".into())),
                     };
                     let capture_count = self.functions.get(&func_name_const)
-                        .map(|f| f.capture_count as usize)
-                        .unwrap_or(0);
+                        .map(|f| f.capture_count as usize).unwrap_or(0);
                     let capture_start = instr.b as usize;
                     let captured: Vec<Value> = {
-                        let frame = self.call_stack.last().unwrap();
+                        let r = &self.call_stack.last().unwrap().registers;
                         (capture_start..capture_start + capture_count)
-                            .map(|i| frame.registers[i].clone())
+                            .map(|i| rt_to_value_no_release(reg_get(r, i)))
                             .collect()
                     };
-                    self.call_stack.last_mut().unwrap().registers[instr.dst as usize] =
-                        Value::BytecodeClosure(BytecodeClosureValue {
-                            func_name: func_name_const,
-                            captured,
-                        });
+                    let closure_val = Value::BytecodeClosure(BytecodeClosureValue {
+                        func_name: func_name_const,
+                        captured,
+                    });
+                    let closure_rt = value_to_rt(&closure_val);
+                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, closure_rt);
                 }
             }
         }
     }
 
-    /// Execute a simple closure inline without pushing a full call frame.
-    /// The function must have been verified by `is_simple_closure` first.
-    /// `args` should already include captured values prepended (same layout as push_frame).
-    fn eval_simple(
-        &mut self,
-        func: &BytecodeFunc,
-        args: Vec<Value>,
-    ) -> Result<Value, RuntimeError> {
-        let mut regs: Vec<Value> = vec![Value::Nil; func.register_count as usize];
+    /// Dispatch thread-spawn with RtValue arguments.
+    fn dispatch_thread_spawn_rt(&mut self, args: &[*mut RtValue]) -> Result<*mut RtValue, RuntimeError> {
+        use crate::builtins::{NEXT_THREAD_HANDLE, thread_handles};
+        let closure_val = args.first()
+            .map(|&p| rt_to_value_no_release(p))
+            .ok_or_else(|| RuntimeError::Custom("thread-spawn: requires 1 argument".into()))?;
+        let mut child_vm = self.spawn_child();
+        let handle = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || -> Result<Value, String> {
+                match closure_val {
+                    Value::BytecodeClosure(bc) => {
+                        child_vm.call_by_name(&bc.func_name, bc.captured)
+                            .map_err(|e| format!("{}", e))
+                    }
+                    _ => Err("thread-spawn: argument must be a closure".into()),
+                }
+            })
+            .map_err(|e| RuntimeError::Custom(format!("thread-spawn: {}", e)))?;
+        let id = NEXT_THREAD_HANDLE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        thread_handles().lock().unwrap().insert(id, handle);
+        Ok(rt_int(id))
+    }
 
-        // Load args into registers (same layout as push_frame: args occupy regs 0..N)
+    /// Execute a simple closure inline (still uses Value for speed).
+    fn eval_simple(&mut self, func: &BytecodeFunc, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let mut regs: Vec<Value> = vec![Value::Nil; func.register_count as usize];
         for (i, arg) in args.into_iter().enumerate() {
-            if i < regs.len() {
-                regs[i] = arg;
-            }
+            if i < regs.len() { regs[i] = arg; }
         }
 
         let mut pc = 0;
         while pc < func.instructions.len() {
             let instr = func.instructions[pc];
             match instr.op {
-                Op::LoadConst => {
-                    regs[instr.dst as usize] = func.constants[instr.a as usize].clone();
-                }
-                Op::LoadNil => {
-                    regs[instr.dst as usize] = Value::Nil;
-                }
-                Op::LoadTrue => {
-                    regs[instr.dst as usize] = Value::Bool(true);
-                }
-                Op::LoadFalse => {
-                    regs[instr.dst as usize] = Value::Bool(false);
-                }
-                Op::Move => {
-                    regs[instr.dst as usize] = regs[instr.a as usize].clone();
-                }
-
-                // Arithmetic — exact semantics from the main VM loop
+                Op::LoadConst => { regs[instr.dst as usize] = func.constants[instr.a as usize].clone(); }
+                Op::LoadNil => { regs[instr.dst as usize] = Value::Nil; }
+                Op::LoadTrue => { regs[instr.dst as usize] = Value::Bool(true); }
+                Op::LoadFalse => { regs[instr.dst as usize] = Value::Bool(false); }
+                Op::Move => { regs[instr.dst as usize] = regs[instr.a as usize].clone(); }
                 Op::Add => {
-                    let a = &regs[instr.a as usize];
-                    let b = &regs[instr.b as usize];
-                    regs[instr.dst as usize] = match (a, b) {
+                    regs[instr.dst as usize] = match (&regs[instr.a as usize], &regs[instr.b as usize]) {
                         (Value::Int(x), Value::Int(y)) => Value::Int(x + y),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
                         (Value::Str(x), Value::Str(y)) => Value::Str(format!("{}{}", x, y)),
@@ -896,27 +1248,21 @@ impl BytecodeVm {
                     };
                 }
                 Op::Sub => {
-                    let a = &regs[instr.a as usize];
-                    let b = &regs[instr.b as usize];
-                    regs[instr.dst as usize] = match (a, b) {
+                    regs[instr.dst as usize] = match (&regs[instr.a as usize], &regs[instr.b as usize]) {
                         (Value::Int(x), Value::Int(y)) => Value::Int(x - y),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x - y),
                         _ => return Err(RuntimeError::TypeError("sub: incompatible types".into())),
                     };
                 }
                 Op::Mul => {
-                    let a = &regs[instr.a as usize];
-                    let b = &regs[instr.b as usize];
-                    regs[instr.dst as usize] = match (a, b) {
+                    regs[instr.dst as usize] = match (&regs[instr.a as usize], &regs[instr.b as usize]) {
                         (Value::Int(x), Value::Int(y)) => Value::Int(x * y),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
                         _ => return Err(RuntimeError::TypeError("mul: incompatible types".into())),
                     };
                 }
                 Op::Div => {
-                    let a = &regs[instr.a as usize];
-                    let b = &regs[instr.b as usize];
-                    regs[instr.dst as usize] = match (a, b) {
+                    regs[instr.dst as usize] = match (&regs[instr.a as usize], &regs[instr.b as usize]) {
                         (Value::Int(_), Value::Int(0)) => return Err(RuntimeError::DivisionByZero),
                         (Value::Int(x), Value::Int(y)) => Value::Int(x / y),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x / y),
@@ -924,9 +1270,7 @@ impl BytecodeVm {
                     };
                 }
                 Op::Mod => {
-                    let a = &regs[instr.a as usize];
-                    let b = &regs[instr.b as usize];
-                    regs[instr.dst as usize] = match (a, b) {
+                    regs[instr.dst as usize] = match (&regs[instr.a as usize], &regs[instr.b as usize]) {
                         (Value::Int(x), Value::Int(y)) => Value::Int(x % y),
                         _ => return Err(RuntimeError::TypeError("mod: incompatible types".into())),
                     };
@@ -938,49 +1282,31 @@ impl BytecodeVm {
                         _ => return Err(RuntimeError::TypeError("neg: expected number".into())),
                     };
                 }
-
-                // Comparison
-                Op::Eq => {
-                    let a = &regs[instr.a as usize];
-                    let b = &regs[instr.b as usize];
-                    regs[instr.dst as usize] = Value::Bool(a == b);
-                }
-                Op::Ne => {
-                    let a = &regs[instr.a as usize];
-                    let b = &regs[instr.b as usize];
-                    regs[instr.dst as usize] = Value::Bool(a != b);
-                }
+                Op::Eq => { regs[instr.dst as usize] = Value::Bool(&regs[instr.a as usize] == &regs[instr.b as usize]); }
+                Op::Ne => { regs[instr.dst as usize] = Value::Bool(&regs[instr.a as usize] != &regs[instr.b as usize]); }
                 Op::Lt => {
-                    let a = &regs[instr.a as usize];
-                    let b = &regs[instr.b as usize];
-                    regs[instr.dst as usize] = match (a, b) {
+                    regs[instr.dst as usize] = match (&regs[instr.a as usize], &regs[instr.b as usize]) {
                         (Value::Int(x), Value::Int(y)) => Value::Bool(x < y),
                         (Value::Float(x), Value::Float(y)) => Value::Bool(x < y),
                         _ => Value::Bool(false),
                     };
                 }
                 Op::Le => {
-                    let a = &regs[instr.a as usize];
-                    let b = &regs[instr.b as usize];
-                    regs[instr.dst as usize] = match (a, b) {
+                    regs[instr.dst as usize] = match (&regs[instr.a as usize], &regs[instr.b as usize]) {
                         (Value::Int(x), Value::Int(y)) => Value::Bool(x <= y),
                         (Value::Float(x), Value::Float(y)) => Value::Bool(x <= y),
                         _ => Value::Bool(false),
                     };
                 }
                 Op::Gt => {
-                    let a = &regs[instr.a as usize];
-                    let b = &regs[instr.b as usize];
-                    regs[instr.dst as usize] = match (a, b) {
+                    regs[instr.dst as usize] = match (&regs[instr.a as usize], &regs[instr.b as usize]) {
                         (Value::Int(x), Value::Int(y)) => Value::Bool(x > y),
                         (Value::Float(x), Value::Float(y)) => Value::Bool(x > y),
                         _ => Value::Bool(false),
                     };
                 }
                 Op::Ge => {
-                    let a = &regs[instr.a as usize];
-                    let b = &regs[instr.b as usize];
-                    regs[instr.dst as usize] = match (a, b) {
+                    regs[instr.dst as usize] = match (&regs[instr.a as usize], &regs[instr.b as usize]) {
                         (Value::Int(x), Value::Int(y)) => Value::Bool(x >= y),
                         (Value::Float(x), Value::Float(y)) => Value::Bool(x >= y),
                         _ => Value::Bool(false),
@@ -992,82 +1318,58 @@ impl BytecodeVm {
                         _ => return Err(RuntimeError::TypeError("not: expected bool".into())),
                     };
                 }
-
-                // Builtins — same layout as main loop: name from constants[a], argc in b,
-                // args in registers [dst+1 .. dst+1+argc]
                 Op::CallBuiltin => {
                     let name = match &func.constants[instr.a as usize] {
                         Value::Str(s) => s.clone(),
                         _ => return Err(RuntimeError::TypeError("callbuiltin: name must be string".into())),
                     };
                     let argc = instr.b as usize;
-                    let args: Vec<Value> = (0..argc)
-                        .map(|i| regs[instr.dst as usize + 1 + i].clone())
-                        .collect();
-                    // VM-aware builtins need &mut self, so fall back to full frame for those.
-                    if self.builtins.get_with_vm(&name).is_some() {
-                        // Cannot call VM-aware builtins from eval_simple; fall through would
-                        // require &mut self. This shouldn't happen for truly simple closures
-                        // (map/filter/fold closures don't themselves call map/filter/fold).
-                        // Return a sentinel error — the caller should not have classified this
-                        // as simple.
-                        return Err(RuntimeError::Custom(
-                            format!("eval_simple: VM-aware builtin '{}' not supported inline", name),
-                        ));
-                    }
-                    if let Some(f) = self.builtins.get(&name) {
-                        regs[instr.dst as usize] = f(&args)?;
+                    let args: Vec<Value> = (0..argc).map(|i| regs[instr.dst as usize + 1 + i].clone()).collect();
+                    let rt_args: Vec<*mut RtValue> = args.iter().map(|v| value_to_rt(v)).collect();
+                    if let Some(result_rt) = dispatch_rt_builtin(&name, &rt_args) {
+                        regs[instr.dst as usize] = rt_to_value_no_release(result_rt);
+                        airl_value_release(result_rt);
+                        for p in &rt_args { airl_value_release(*p); }
                     } else {
-                        return Err(RuntimeError::UndefinedSymbol(name));
+                        for p in &rt_args { airl_value_release(*p); }
+                        if self.builtins.get_with_vm(&name).is_some() {
+                            return Err(RuntimeError::Custom(
+                                format!("eval_simple: VM-aware builtin '{}' not supported inline", name)));
+                        }
+                        if let Some(f) = self.builtins.get(&name) {
+                            regs[instr.dst as usize] = f(&args)?;
+                        } else {
+                            return Err(RuntimeError::UndefinedSymbol(name));
+                        }
                     }
                 }
-
                 Op::MakeList => {
                     let start = instr.a as usize;
                     let count = instr.b as usize;
-                    let items: Vec<Value> = (start..start + count)
-                        .map(|i| regs[i].clone())
-                        .collect();
-                    regs[instr.dst as usize] = Value::List(items);
+                    regs[instr.dst as usize] = Value::List((start..start + count).map(|i| regs[i].clone()).collect());
                 }
-
-                Op::Return => {
-                    return Ok(regs[instr.a as usize].clone());
-                }
-
-                // Ownership tracking — no-op in simple eval (these are compile-time
-                // safety checks, not semantically required for correctness)
+                Op::Return => { return Ok(regs[instr.a as usize].clone()); }
                 Op::MarkMoved | Op::CheckNotMoved => {}
-
-                _ => {
-                    // Should never happen if is_simple_closure is correct
-                    return Err(RuntimeError::Custom(format!(
-                        "eval_simple: unsupported op {:?}", instr.op
-                    )));
-                }
+                _ => return Err(RuntimeError::Custom(format!("eval_simple: unsupported op {:?}", instr.op))),
             }
             pc += 1;
         }
-        // Fell off the end without Return — implicit nil
         Ok(Value::Nil)
     }
 
-    /// Invoke a function in a nested frame, returning its result without
-    /// disturbing the outer call stack. Safe to call from within VM-aware builtins.
     fn invoke_in_nested_frame(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
         if !self.functions.contains_key(name) {
             return Err(RuntimeError::UndefinedSymbol(name.to_string()));
         }
         let target_depth = self.call_stack.len();
         self.push_frame(name, &args, 0)?;
-        self.run_with_min_depth(target_depth)
+        let result_rt = self.run_rt_with_min_depth(target_depth)?;
+        let result = rt_to_value_no_release(result_rt);
+        airl_value_release(result_rt);
+        Ok(result)
     }
 
-    /// Call a named function with the given argument values.
-    /// The function must already be loaded in the VM.
-    /// This pushes a fresh call frame and runs the VM until the function returns.
     pub fn call_by_name(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        // Verify function exists before pushing frame
         if !self.functions.contains_key(name) {
             return Err(RuntimeError::UndefinedSymbol(name.to_string()));
         }
@@ -1075,11 +1377,8 @@ impl BytecodeVm {
         self.run()
     }
 
-    /// Load functions and execute __main__
     pub fn exec_program(&mut self, functions: Vec<BytecodeFunc>, main_func: BytecodeFunc) -> Result<Value, RuntimeError> {
-        for func in functions {
-            self.load_function(func);
-        }
+        for func in functions { self.load_function(func); }
         self.load_function(main_func);
         self.exec_main()
     }
@@ -1091,8 +1390,6 @@ impl VmCaller for BytecodeVm {
             Value::BytecodeClosure(closure) => {
                 let mut full_args = closure.captured.clone();
                 full_args.extend(args);
-
-                // Fast path: simple closures execute inline without a frame push
                 let func_name = closure.func_name.clone();
                 if let Some(func) = self.functions.get(&func_name) {
                     if is_simple_closure(func) {
@@ -1100,21 +1397,17 @@ impl VmCaller for BytecodeVm {
                         return self.eval_simple(&func, full_args);
                     }
                 }
-
                 self.invoke_in_nested_frame(&func_name, full_args)
             }
             Value::IRFuncRef(ref name) | Value::BuiltinFn(ref name) => {
                 let name = name.clone();
-                // Check VM-aware builtins first
                 if let Some(f) = self.builtins.get_with_vm(&name) {
                     let f = *f;
                     return f(self, &args);
                 }
-                // Check regular builtins
                 if let Some(f) = self.builtins.get(&name) {
                     return f(&args);
                 }
-                // Then try nested frame for user functions
                 self.invoke_in_nested_frame(&name, args)
             }
             _ => Err(RuntimeError::Custom(format!("not callable: {}", callee))),
@@ -1140,14 +1433,10 @@ mod tests {
     }
 
     #[test]
-    fn test_int_literal() {
-        assert_eq!(compile_and_run(&[IRNode::Int(42)]), Value::Int(42));
-    }
+    fn test_int_literal() { assert_eq!(compile_and_run(&[IRNode::Int(42)]), Value::Int(42)); }
 
     #[test]
-    fn test_bool_literal() {
-        assert_eq!(compile_and_run(&[IRNode::Bool(true)]), Value::Bool(true));
-    }
+    fn test_bool_literal() { assert_eq!(compile_and_run(&[IRNode::Bool(true)]), Value::Bool(true)); }
 
     #[test]
     fn test_arithmetic() {
@@ -1157,30 +1446,19 @@ mod tests {
 
     #[test]
     fn test_if_true() {
-        let node = IRNode::If(
-            Box::new(IRNode::Bool(true)),
-            Box::new(IRNode::Int(1)),
-            Box::new(IRNode::Int(2)),
-        );
+        let node = IRNode::If(Box::new(IRNode::Bool(true)), Box::new(IRNode::Int(1)), Box::new(IRNode::Int(2)));
         assert_eq!(compile_and_run(&[node]), Value::Int(1));
     }
 
     #[test]
     fn test_if_false() {
-        let node = IRNode::If(
-            Box::new(IRNode::Bool(false)),
-            Box::new(IRNode::Int(1)),
-            Box::new(IRNode::Int(2)),
-        );
+        let node = IRNode::If(Box::new(IRNode::Bool(false)), Box::new(IRNode::Int(1)), Box::new(IRNode::Int(2)));
         assert_eq!(compile_and_run(&[node]), Value::Int(2));
     }
 
     #[test]
     fn test_let() {
-        let node = IRNode::Let(
-            vec![IRBinding { name: "x".into(), expr: IRNode::Int(42) }],
-            Box::new(IRNode::Load("x".into())),
-        );
+        let node = IRNode::Let(vec![IRBinding { name: "x".into(), expr: IRNode::Int(42) }], Box::new(IRNode::Load("x".into())));
         assert_eq!(compile_and_run(&[node]), Value::Int(42));
     }
 
@@ -1218,14 +1496,8 @@ mod tests {
         let node = IRNode::Match(
             Box::new(IRNode::Variant("Ok".into(), vec![IRNode::Int(42)])),
             vec![
-                IRArm {
-                    pattern: IRPattern::Variant("Ok".into(), vec![IRPattern::Bind("v".into())]),
-                    body: IRNode::Load("v".into()),
-                },
-                IRArm {
-                    pattern: IRPattern::Wild,
-                    body: IRNode::Int(0),
-                },
+                IRArm { pattern: IRPattern::Variant("Ok".into(), vec![IRPattern::Bind("v".into())]), body: IRNode::Load("v".into()) },
+                IRArm { pattern: IRPattern::Wild, body: IRNode::Int(0) },
             ],
         );
         assert_eq!(compile_and_run(&[node]), Value::Int(42));
@@ -1242,7 +1514,6 @@ mod tests {
 
     #[test]
     fn test_tco_no_overflow() {
-        // count-down(n) = if (= n 0) 0 (count-down (- n 1))
         let body = IRNode::If(
             Box::new(IRNode::Call("=".into(), vec![IRNode::Load("n".into()), IRNode::Int(0)])),
             Box::new(IRNode::Int(0)),
@@ -1257,56 +1528,34 @@ mod tests {
         assert_eq!(compile_and_run(&nodes), Value::Int(0));
     }
 
-    // ── eval_simple / inline closure tests ────────────────────────────
-
     #[test]
     fn test_map_simple_closure() {
-        // (map (fn [x] (+ x 1)) [1 2 3]) => [2 3 4]
         let nodes = vec![
             IRNode::Call("map".into(), vec![
-                IRNode::Lambda(vec!["x".into()],
-                    Box::new(IRNode::Call("+".into(), vec![
-                        IRNode::Load("x".into()), IRNode::Int(1),
-                    ]))),
+                IRNode::Lambda(vec!["x".into()], Box::new(IRNode::Call("+".into(), vec![IRNode::Load("x".into()), IRNode::Int(1)]))),
                 IRNode::List(vec![IRNode::Int(1), IRNode::Int(2), IRNode::Int(3)]),
             ]),
         ];
-        assert_eq!(
-            compile_and_run(&nodes),
-            Value::List(vec![Value::Int(2), Value::Int(3), Value::Int(4)]),
-        );
+        assert_eq!(compile_and_run(&nodes), Value::List(vec![Value::Int(2), Value::Int(3), Value::Int(4)]));
     }
 
     #[test]
     fn test_filter_simple_closure() {
-        // (filter (fn [x] (> x 2)) [1 2 3 4 5]) => [3 4 5]
         let nodes = vec![
             IRNode::Call("filter".into(), vec![
-                IRNode::Lambda(vec!["x".into()],
-                    Box::new(IRNode::Call(">".into(), vec![
-                        IRNode::Load("x".into()), IRNode::Int(2),
-                    ]))),
-                IRNode::List(vec![
-                    IRNode::Int(1), IRNode::Int(2), IRNode::Int(3),
-                    IRNode::Int(4), IRNode::Int(5),
-                ]),
+                IRNode::Lambda(vec!["x".into()], Box::new(IRNode::Call(">".into(), vec![IRNode::Load("x".into()), IRNode::Int(2)]))),
+                IRNode::List(vec![IRNode::Int(1), IRNode::Int(2), IRNode::Int(3), IRNode::Int(4), IRNode::Int(5)]),
             ]),
         ];
-        assert_eq!(
-            compile_and_run(&nodes),
-            Value::List(vec![Value::Int(3), Value::Int(4), Value::Int(5)]),
-        );
+        assert_eq!(compile_and_run(&nodes), Value::List(vec![Value::Int(3), Value::Int(4), Value::Int(5)]));
     }
 
     #[test]
     fn test_fold_simple_closure() {
-        // (fold (fn [acc x] (+ acc x)) 0 [1 2 3]) => 6
         let nodes = vec![
             IRNode::Call("fold".into(), vec![
                 IRNode::Lambda(vec!["acc".into(), "x".into()],
-                    Box::new(IRNode::Call("+".into(), vec![
-                        IRNode::Load("acc".into()), IRNode::Load("x".into()),
-                    ]))),
+                    Box::new(IRNode::Call("+".into(), vec![IRNode::Load("acc".into()), IRNode::Load("x".into())]))),
                 IRNode::Int(0),
                 IRNode::List(vec![IRNode::Int(1), IRNode::Int(2), IRNode::Int(3)]),
             ]),
@@ -1316,30 +1565,19 @@ mod tests {
 
     #[test]
     fn test_map_mul_closure() {
-        // (map (fn [x] (* x x)) [2 3 4]) => [4 9 16]
         let nodes = vec![
             IRNode::Call("map".into(), vec![
-                IRNode::Lambda(vec!["x".into()],
-                    Box::new(IRNode::Call("*".into(), vec![
-                        IRNode::Load("x".into()), IRNode::Load("x".into()),
-                    ]))),
+                IRNode::Lambda(vec!["x".into()], Box::new(IRNode::Call("*".into(), vec![IRNode::Load("x".into()), IRNode::Load("x".into())]))),
                 IRNode::List(vec![IRNode::Int(2), IRNode::Int(3), IRNode::Int(4)]),
             ]),
         ];
-        assert_eq!(
-            compile_and_run(&nodes),
-            Value::List(vec![Value::Int(4), Value::Int(9), Value::Int(16)]),
-        );
+        assert_eq!(compile_and_run(&nodes), Value::List(vec![Value::Int(4), Value::Int(9), Value::Int(16)]));
     }
 
     #[test]
     fn test_is_simple_closure_check() {
-        // Verify that is_simple_closure correctly identifies a simple function
         let simple_func = BytecodeFunc {
-            name: "test_simple".into(),
-            arity: 1,
-            register_count: 3,
-            capture_count: 0,
+            name: "test_simple".into(), arity: 1, register_count: 3, capture_count: 0,
             instructions: vec![
                 Instruction::new(Op::LoadConst, 1, 0, 0),
                 Instruction::new(Op::Add, 2, 0, 1),
@@ -1349,12 +1587,8 @@ mod tests {
         };
         assert!(is_simple_closure(&simple_func));
 
-        // A function with Call should NOT be simple
         let complex_func = BytecodeFunc {
-            name: "test_complex".into(),
-            arity: 1,
-            register_count: 3,
-            capture_count: 0,
+            name: "test_complex".into(), arity: 1, register_count: 3, capture_count: 0,
             instructions: vec![
                 Instruction::new(Op::Call, 1, 0, 1),
                 Instruction::new(Op::Return, 0, 1, 0),
