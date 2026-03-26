@@ -341,12 +341,34 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 **External dependency:** System C linker (`cc`) for final linking. Present on all Linux/macOS systems.
 
+### Self-Compilation Status (2026-03-26)
+
+**Step 1 achieved:** The Rust-hosted G3 compiler compiles itself into a 43MB native binary (`g3`). This binary contains all 282 functions (85 stdlib + 197 bootstrap/compiler) as native x86-64 code. Compilation takes ~2 hours / ~25GB RAM (bootstrap compiler running in bytecode VM on ~3500 lines of AIRL source).
+
+**Step 2 blocked:** The self-compiled `g3` binary segfaults or errors when run. Root cause: **AOT codegen divergence between Rust-compiled and bootstrap-compiled bytecode.**
+
+The same AIRL function (e.g., `fold`) produces different bytecode depending on which compiler emits it:
+- **Rust bytecode compiler** (`bytecode_compiler.rs`): produces bytecode that the AOT compiler handles correctly.
+- **Bootstrap bytecode compiler** (`bootstrap/bc_compiler.airl`): produces functionally equivalent but structurally different bytecode that triggers bugs in the AOT compiler.
+
+Specific failure: `fold` + `append` through closures in the G3 binary's `__main__` crashes with `airl_append: not a List`. The same pattern works in Rust-compiled AOT binaries. The bootstrap-compiled `fold` passes values through recursive calls differently, causing list type tags to be lost in the AOT-compiled native code.
+
+**Bugs found and fixed (v0.5.2):**
+- `compile_bytecode_to_executable` silently dropped AOT compilation errors (`let _ = compile_all(...)`) — functions could be declared but never defined, producing calls to address 0 (segfault). **Fixed:** errors now propagate.
+- Variadic `print` in functions that also call `print` with 1 argument — the 1-arg call registered `print` in `call_targets` with a 1-param Cranelift signature, then multi-arg calls tried to use that signature (Cranelift verifier error). **Fixed:** variadic check no longer depends on `call_targets` state.
+
+**Root cause (unfixed):** The AOT compiler has two fundamentally separate code paths that must agree on value representation:
+1. **Bytecode VM builtins** (`builtins.rs`): Rust functions taking `&[Value]` → `Result<Value>`
+2. **AOT extern C builtins** (`airl-rt/`): C-ABI functions taking `*mut RtValue` → `*mut RtValue`
+
+These paths can diverge — and do. ~50 builtins exist in the VM but not in AOT. The AOT compiler has hardcoded maps that silently skip unknown builtins. The bootstrap compiler may emit opcode sequences that expose representation mismatches the Rust compiler doesn't produce.
+
 ### Remaining — Next Steps
 
-1. **Self-compilation (fixpoint)** — G3 compiles itself, producing a G3-compiled G3 that produces identical binaries.
-2. **Eliminate `cc` dependency** — Replace system linker with Cranelift native ELF emission or bundled linker. Zero external dependencies.
-3. **Builtin unification** — Single source of truth for all builtins (macro codegen) to prevent divergence between VM and AOT paths.
-4. **~50 missing AOT builtin registrations** — Thread/channel, type conversion, tensor builtins not yet in Cranelift maps.
+1. **AOT unification (blocks fixpoint)** — Single builtin dispatch for both VM and AOT. Replace the two separate implementations (Rust `builtins.rs` + C-ABI `airl-rt/`) with one: auto-generate `extern "C"` wrappers from a single registration. This eliminates the divergence that blocks self-compilation.
+2. **Self-compilation (fixpoint)** — Once AOT unification is complete, G3 compiles itself and the output binary works correctly. Verify: G3₁ compiles G3 → G3₂, G3₂ compiles G3 → G3₃, G3₂ == G3₃.
+3. **Eliminate `cc` dependency** — Replace system linker with Cranelift native ELF emission or bundled linker. Zero external dependencies.
+4. **~50 missing AOT builtin registrations** — Thread/channel, type conversion, tensor builtins not yet in Cranelift maps. Subsumed by AOT unification.
 5. **Z3 verification depth** — Extend Z3 to prove list and ADT properties.
 
 ---
