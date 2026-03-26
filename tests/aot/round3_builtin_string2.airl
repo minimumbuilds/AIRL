@@ -1,0 +1,9 @@
+;; EXPECT: charCode:65|charFrom:A|charCount:5|strVariadic:a1true
+(let (cc : i64 (char-code "A"))
+     (cf : String (char-from-code 65))
+     (cnt : i64 (char-count "hello"))
+     (sv : String (str "a" 1 true))
+  (print (str "charCode:" cc
+              "|charFrom:" cf
+              "|charCount:" cnt
+              "|strVariadic:" sv)))

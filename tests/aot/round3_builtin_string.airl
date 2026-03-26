@@ -1,0 +1,29 @@
+;; EXPECT: str:hello42|charAt:e|sub:llo|chars:3|split:3|join:a-b-c|contains:t|starts:t|ends:t|indexOf:2|trim:hi|upper:HI|lower:hi|replace:hXllo
+(let (s1 : String (str "hello" 42))
+     (c1 : String (char-at "hello" 1))
+     (sb : String (substring "hello" 2 5))
+     (ch : List (chars "abc"))
+     (sp : List (split "a,b,c" ","))
+     (jn : String (join ["a" "b" "c"] "-"))
+     (cn : Bool (contains "hello" "ell"))
+     (sw : Bool (starts-with "hello" "hel"))
+     (ew : Bool (ends-with "hello" "llo"))
+     (io : i64 (index-of "hello" "llo"))
+     (tr : String (trim "  hi  "))
+     (up : String (to-upper "hi"))
+     (lo : String (to-lower "HI"))
+     (rp : String (replace "hello" "e" "X"))
+  (print (str "str:" s1
+              "|charAt:" c1
+              "|sub:" sb
+              "|chars:" (length ch)
+              "|split:" (length sp)
+              "|join:" jn
+              "|contains:" (if cn "t" "f")
+              "|starts:" (if sw "t" "f")
+              "|ends:" (if ew "t" "f")
+              "|indexOf:" io
+              "|trim:" tr
+              "|upper:" up
+              "|lower:" lo
+              "|replace:" rp)))

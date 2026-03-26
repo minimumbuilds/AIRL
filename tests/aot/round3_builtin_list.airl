@@ -1,0 +1,25 @@
+;; EXPECT: head:1|tail:2 3|empty:t f|cons:0 1 2|at-or:3 99|set-at:1 9 3|contains:t f|len:3|at:2|append:1 2 3 4
+(let (xs : List [1 2 3])
+     (h : i64 (head xs))
+     (t : List (tail xs))
+     (e1 : Bool (empty? []))
+     (e2 : Bool (empty? xs))
+     (c : List (cons 0 xs))
+     (ao1 : i64 (at-or xs 2 99))
+     (ao2 : i64 (at-or xs 10 99))
+     (sa : List (set-at xs 1 9))
+     (lc1 : Bool (list-contains? xs 2))
+     (lc2 : Bool (list-contains? xs 99))
+     (ln : i64 (length xs))
+     (a1 : i64 (at xs 1))
+     (ap : List (append xs 4))
+  (print (str "head:" h
+              "|tail:" (at t 0) " " (at t 1)
+              "|empty:" (if e1 "t" "f") " " (if e2 "t" "f")
+              "|cons:" (at c 0) " " (at c 1) " " (at c 2)
+              "|at-or:" ao1 " " ao2
+              "|set-at:" (at sa 0) " " (at sa 1) " " (at sa 2)
+              "|contains:" (if lc1 "t" "f") " " (if lc2 "t" "f")
+              "|len:" ln
+              "|at:" a1
+              "|append:" (at ap 0) " " (at ap 1) " " (at ap 2) " " (at ap 3))))

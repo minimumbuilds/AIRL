@@ -1,0 +1,14 @@
+;; EXPECT: i2s:42|f2s:3.14|s2i:ok-42|s2f:ok|typeof:int string bool list
+(let (is : String (int-to-string 42))
+     (fs : String (float-to-string 3.14))
+     (si : _ (string-to-int "42"))
+     (sf : _ (string-to-float "3.14"))
+     (t1 : String (type-of 1))
+     (t2 : String (type-of "hi"))
+     (t3 : String (type-of true))
+     (t4 : String (type-of [1 2]))
+  (print (str "i2s:" is
+              "|f2s:" fs
+              "|s2i:" (match si (Ok v) (str "ok-" v) (Err e) (str "err-" e))
+              "|s2f:" (match sf (Ok v) "ok" (Err e) (str "err-" e))
+              "|typeof:" t1 " " t2 " " t3 " " t4)))

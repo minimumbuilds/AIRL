@@ -1,0 +1,3 @@
+;; EXPECT: assert:true|print:ok
+(let (a1 : Bool (assert true "should not fail"))
+  (do (print (str "assert:" a1 "|print:ok"))))

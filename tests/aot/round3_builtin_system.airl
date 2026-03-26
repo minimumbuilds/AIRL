@@ -1,0 +1,9 @@
+;; EXPECT: getenv:err|getargs:ok|format:ok|sleep:ok
+(let (ge : _ (getenv "NONEXISTENT_VAR_XYZ"))
+     (ga : List (get-args))
+     (ft : String (format-time 0 "%Y"))
+  (do (sleep 1)
+      (print (str "getenv:" (match ge (Ok _) "ok" (Err _) "err")
+                  "|getargs:" (if (>= (length ga) 0) "ok" "bad")
+                  "|format:" (if (= ft "1970") "ok" "bad")
+                  "|sleep:ok"))))

@@ -1,0 +1,23 @@
+;; EXPECT: new:0|from:2|get:10|getOr:10 99|has:t f|set:3|remove:1|keys:a b|vals:10 20|size:2
+(let (m0 : _ (map-new))
+     (m1 : _ (map-from ["a" 10 "b" 20]))
+     (g1 : _ (map-get m1 "a"))
+     (go1 : _ (map-get-or m1 "a" 99))
+     (go2 : _ (map-get-or m1 "z" 99))
+     (h1 : Bool (map-has m1 "a"))
+     (h2 : Bool (map-has m1 "z"))
+     (ms : _ (map-set m1 "c" 30))
+     (mr : _ (map-remove m1 "b"))
+     (mk : List (map-keys m1))
+     (mv : List (map-values m1))
+     (sz : i64 (map-size m1))
+  (print (str "new:" (map-size m0)
+              "|from:" (map-size m1)
+              "|get:" g1
+              "|getOr:" go1 " " go2
+              "|has:" (if h1 "t" "f") " " (if h2 "t" "f")
+              "|set:" (map-size ms)
+              "|remove:" (map-size mr)
+              "|keys:" (at mk 0) " " (at mk 1)
+              "|vals:" (at mv 0) " " (at mv 1)
+              "|size:" sz)))

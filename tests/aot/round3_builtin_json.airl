@@ -1,0 +1,7 @@
+;; EXPECT: s1:ok|s2:ok|s3:ok
+(let (s1 : String (json-stringify 42))
+     (s2 : String (json-stringify "hello"))
+     (s3 : String (json-stringify [1 2 3]))
+  (print (str "s1:" (if (= s1 "42") "ok" "bad")
+              "|s2:" (if (contains s2 "hello") "ok" "bad")
+              "|s3:" (if (contains s3 "1") "ok" "bad"))))

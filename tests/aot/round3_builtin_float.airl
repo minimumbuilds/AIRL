@@ -1,0 +1,25 @@
+;; EXPECT: sqrt:3.0|floor:3|ceil:4|round:3|ftoi:3|itof:5.0|isnan:f|isinf:f|sin:ok|cos:ok|exp:ok|log:ok
+(let (sq : f64 (sqrt 9.0))
+     (fl : i64 (floor 3.7))
+     (cl : i64 (ceil 3.2))
+     (rn : i64 (round 3.4))
+     (fi : i64 (float-to-int 3.9))
+     (itf : f64 (int-to-float 5))
+     (nan1 : Bool (is-nan? 1.0))
+     (inf1 : Bool (is-infinite? 1.0))
+     (sn : f64 (sin 0.0))
+     (cs : f64 (cos 0.0))
+     (ex : f64 (exp 0.0))
+     (lg : f64 (log 1.0))
+  (print (str "sqrt:" sq
+              "|floor:" fl
+              "|ceil:" cl
+              "|round:" rn
+              "|ftoi:" fi
+              "|itof:" itf
+              "|isnan:" (if nan1 "t" "f")
+              "|isinf:" (if inf1 "t" "f")
+              "|sin:" (if (< sn 0.01) "ok" "bad")
+              "|cos:" (if (> cs 0.99) "ok" "bad")
+              "|exp:" (if (> ex 0.99) "ok" "bad")
+              "|log:" (if (< lg 0.01) "ok" "bad"))))

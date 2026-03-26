@@ -1,0 +1,21 @@
+;; EXPECT: i16:2|i32:4|i64:8|dec16:256|dec32:65536|str2b:5|b2str:hello|concat:4|slice:2|crc:ok
+(let (b16 : List (bytes-from-int16 256))
+     (b32 : List (bytes-from-int32 65536))
+     (b64 : List (bytes-from-int64 1))
+     (d16 : i64 (bytes-to-int16 b16 0))
+     (d32 : i64 (bytes-to-int32 b32 0))
+     (sb : List (bytes-from-string "hello"))
+     (bs : String (bytes-to-string sb 0 5))
+     (bc : List (bytes-concat [1 2] [3 4]))
+     (sl : List (bytes-slice [10 20 30 40] 1 2))
+     (cr : i64 (crc32c [1 2 3]))
+  (print (str "i16:" (length b16)
+              "|i32:" (length b32)
+              "|i64:" (length b64)
+              "|dec16:" d16
+              "|dec32:" d32
+              "|str2b:" (length sb)
+              "|b2str:" bs
+              "|concat:" (length bc)
+              "|slice:" (length sl)
+              "|crc:" (if (> cr 0) "ok" "zero"))))
