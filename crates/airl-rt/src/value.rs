@@ -33,6 +33,7 @@ pub enum RtData {
     Unit,                                                   // 9 = TAG_UNIT
 }
 
+#[repr(C)]
 pub struct RtValue {
     pub tag: u8,
     pub rc: u32,

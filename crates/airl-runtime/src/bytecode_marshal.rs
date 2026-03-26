@@ -294,15 +294,21 @@ pub fn compile_bytecode_to_executable(funcs: &[Value], output_path: &str) -> Res
 
     // Link with system cc
     let mut cmd = std::process::Command::new("cc");
-    cmd.arg(&obj_path).arg("-o").arg(output_path).arg(&rt_lib);
+    cmd.arg(&obj_path).arg("-o").arg(output_path);
 
     if needs_compiler {
-        // Link against libairl_runtime.a for compiler infrastructure (Cranelift, etc.)
+        // Link against libairl_runtime.a which contains BOTH compiler infrastructure
+        // (Cranelift, bytecode marshal) AND all airl-rt symbols (airl_call_closure, etc.)
+        // Do NOT link libairl_rt.a separately — it would cause duplicate symbol conflicts
+        // where the linker picks the wrong version of airl-rt functions.
         let runtime_lib = crate::bytecode_aot::find_lib("airl_runtime");
         if !runtime_lib.is_empty() {
             cmd.arg(&runtime_lib);
-            cmd.arg(&rt_lib); // re-add for symbol resolution order
+        } else {
+            cmd.arg(&rt_lib); // fallback: rt only (no compiler available)
         }
+    } else {
+        cmd.arg(&rt_lib);
     }
 
     let status = cmd
