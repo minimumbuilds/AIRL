@@ -1,6 +1,4 @@
-use airl_driver::pipeline::{run_file, check_file, format_diagnostic_with_source, PipelineError};
-#[cfg(feature = "jit")]
-use airl_driver::pipeline::run_file_jit_full;
+use airl_driver::pipeline::{check_file, format_diagnostic_with_source, PipelineError};
 use airl_driver::fmt::format_source;
 use airl_agent::transport::Transport;
 
@@ -22,7 +20,7 @@ fn main() {
             Some("agent") => cmd_agent(&args[2..]),
             Some("call") => cmd_call(&args[2..]),
             Some("fmt") => cmd_fmt(&args[2..]),
-            Some("--version") | Some("-V") => println!("airl 0.5.1"),
+            Some("--version") | Some("-V") => println!("airl 0.6.1"),
             _ => print_usage(),
         }
     }).expect("failed to spawn main thread");
@@ -30,64 +28,80 @@ fn main() {
 }
 
 fn cmd_run(args: &[String]) {
-    if args.is_empty() {
-        eprintln!("Usage: airl run [--load module.airl ...] [--jit-full] <file.airl>");
+    #[cfg(not(feature = "aot"))]
+    {
+        let _ = args;
+        eprintln!("airl run requires AOT compilation support: rebuild with --features jit,aot");
         std::process::exit(1);
     }
-
-    // Parse flags: --load, --jit-full, then the main file
-    let mut preloads: Vec<String> = Vec::new();
-    let mut jit_full = false;
-    let mut main_file: Option<&str> = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--load" => {
-                if i + 1 >= args.len() { eprintln!("--load requires a file path"); std::process::exit(1); }
-                preloads.push(args[i + 1].clone());
-                i += 2;
-            }
-            "--jit-full" => { jit_full = true; i += 1; }
-            "--bytecode" => { i += 1; } // accepted for compatibility, bytecode is now default
-            "--" => break, // rest are user args, handled by get-args
-            _ => {
-                main_file = Some(&args[i]);
-                break; // everything after main file is user args
-            }
-        }
-    }
-
-    let path = match main_file {
-        Some(p) => p,
-        None => { eprintln!("No input file specified"); std::process::exit(1); }
-    };
-
-    let result = if preloads.is_empty() {
-        #[cfg(feature = "jit")]
-        if jit_full {
-            run_file_jit_full(path)
-        } else {
-            run_file(path)
-        }
-        #[cfg(not(feature = "jit"))]
-        {
-            let _ = jit_full;
-            run_file(path)
-        }
-    } else {
-        airl_driver::pipeline::run_file_with_preloads(path, &preloads)
-    };
-
-    match result {
-        Ok(val) => {
-            // Only print non-unit results
-            if !matches!(val, airl_runtime::value::Value::Unit) {
-                println!("{}", val);
-            }
-        }
-        Err(e) => {
-            print_pipeline_error(&e, path);
+    #[cfg(feature = "aot")]
+    {
+        if args.is_empty() {
+            eprintln!("Usage: airl run [--load module.airl ...] <file.airl> [-- args...]");
             std::process::exit(1);
+        }
+
+        // Parse flags: --load, --jit-full (ignored), main file, -- user args
+        let mut preloads: Vec<String> = Vec::new();
+        let mut main_file: Option<String> = None;
+        let mut user_args: Vec<String> = Vec::new();
+        let mut past_separator = false;
+        let mut i = 0;
+        while i < args.len() {
+            if past_separator {
+                user_args.push(args[i].clone());
+                i += 1;
+                continue;
+            }
+            match args[i].as_str() {
+                "--load" => {
+                    if i + 1 >= args.len() { eprintln!("--load requires a file path"); std::process::exit(1); }
+                    preloads.push(args[i + 1].clone());
+                    i += 2;
+                }
+                "--jit-full" | "--bytecode" => { i += 1; } // ignored, compile path only
+                "--" => { past_separator = true; i += 1; }
+                _ => {
+                    if main_file.is_none() {
+                        main_file = Some(args[i].clone());
+                    }
+                    i += 1;
+                }
+            }
+        }
+
+        let main = match main_file {
+            Some(p) => p,
+            None => { eprintln!("No input file specified"); std::process::exit(1); }
+        };
+
+        // Build compile args: all preloads + main file + -o temp
+        let temp_bin = std::env::temp_dir().join(format!("airl_run_{}", std::process::id()));
+        let temp_str = temp_bin.to_string_lossy().to_string();
+
+        let mut compile_args: Vec<String> = Vec::new();
+        for p in &preloads {
+            compile_args.push(p.clone());
+        }
+        compile_args.push(main);
+        compile_args.push("-o".to_string());
+        compile_args.push(temp_str.clone());
+
+        cmd_compile(&compile_args);
+
+        // Execute the compiled binary with user args
+        let status = std::process::Command::new(&temp_bin)
+            .args(&user_args)
+            .status();
+
+        let _ = std::fs::remove_file(&temp_bin);
+
+        match status {
+            Ok(s) => std::process::exit(s.code().unwrap_or(1)),
+            Err(e) => {
+                eprintln!("error running compiled binary: {}", e);
+                std::process::exit(1);
+            }
         }
     }
 }
@@ -454,12 +468,12 @@ fn print_pipeline_error(err: &PipelineError, path: &str) {
 
 fn print_usage() {
     println!(
-        "airl 0.5.1 — The AIRL Language
+        "airl 0.6.1 — The AIRL Language
 
 Usage: airl <command> [args]
 
 Commands:
-  run <file>       Run an AIRL source file (JIT-compiled with contracts)
+  run <file>       Compile and run an AIRL source file
   check <file>     Parse and check a file without running
   repl             Start the interactive REPL
   agent <file>     Run an agent worker (--listen <endpoint>)
