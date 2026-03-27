@@ -101,24 +101,62 @@
           args))
       [(at result 0) (at result 1)]))
 
+;; ── Flag handling ────────────────────────────────────────
+
+(defn g3-has-flag?
+  :sig [(args : List) (flag : String) -> Bool]
+  :intent "Check if any arg matches the given flag"
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (any (fn [a] (= a flag)) args))
+
+(defn g3-print-version
+  :sig [-> Nil]
+  :requires [(valid 1)]
+  :ensures [(valid result)]
+  :body (print "g3 0.6.1\n"))
+
+(defn g3-print-help
+  :sig [-> Nil]
+  :requires [(valid 1)]
+  :ensures [(valid result)]
+  :body
+    (do (print "G3 AIRL Compiler v0.6.1\n")
+        (print "\n")
+        (print "Usage:\n")
+        (print "  g3 -- <input.airl ...> [-o output]\n")
+        (print "  g3 --version\n")
+        (print "  g3 --help\n")
+        (print "\n")
+        (print "Options:\n")
+        (print "  --          Separator before source files (required)\n")
+        (print "  -o <file>   Output binary path (default: a.out)\n")
+        (print "  --version   Show version\n")
+        (print "  --help      Show this help\n")
+        (print "\n")
+        (print "Stdlib: set AIRL_STDLIB env var or place stdlib/ in CWD\n")))
+
 ;; ── Main entry point ─────────────────────────────────────
 
 (let (raw-args : List (get-args))
-  ;; Skip args before "--"
-  (let (user-args : _ (let (found-sep : _ (fold (fn [acc a]
-          (match acc
-            (Ok args) (Ok (append args a))
-            (Err _) (if (= a "--") (Ok []) (Err "skip"))))
-          (Err "skip")
-          raw-args))
-        (match found-sep
-          (Ok args) args
-          (Err _) raw-args)))
-    (if (empty? user-args)
-      (do (print "G3 AIRL Compiler\n")
-          (print "Usage: g3_compiler.airl -- <input.airl ...> [-o output]\n")
-          (print "Stdlib: set AIRL_STDLIB or place stdlib/ in CWD\n")
-          (exit 1))
+  ;; Check flags before -- separator
+  (if (g3-has-flag? raw-args "--version")
+    (g3-print-version)
+    (if (g3-has-flag? raw-args "--help")
+      (do (g3-print-help) (exit 0))
+      ;; Normal compilation path
+      (let (user-args : _ (let (found-sep : _ (fold (fn [acc a]
+              (match acc
+                (Ok args) (Ok (append args a))
+                (Err _) (if (= a "--") (Ok []) (Err "skip"))))
+              (Err "skip")
+              raw-args))
+            (match found-sep
+              (Ok args) args
+              (Err _) raw-args)))
+        (if (empty? user-args)
+          (do (g3-print-help)
+              (exit 1))
       (let (parsed : _ (g3-parse-args user-args))
         (let (input-files : List (at parsed 0))
           (let (output-path : String (at parsed 1))
@@ -141,4 +179,4 @@
                             (do
                               (print "[g3] " (length all-funcs) " total -> " output-path "\n")
                               (compile-bytecode-to-executable all-funcs output-path)
-                              (print "[g3] done\n"))))))))))))))
+                              (print "[g3] done\n"))))))))))))))))
