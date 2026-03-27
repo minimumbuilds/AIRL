@@ -93,8 +93,8 @@ pub extern "C" fn airl_thread_spawn(closure: *mut RtValue) -> *mut RtValue {
         .stack_size(64 * 1024 * 1024)
         .spawn(move || -> ThreadResult {
             let cl = raw_closure as *mut RtValue;
-            let result = unsafe { airl_call_closure(cl, std::ptr::null(), 0) };
-            unsafe { crate::memory::airl_value_release(cl) };
+            let result = airl_call_closure(cl, std::ptr::null(), 0);
+            crate::memory::airl_value_release(cl);
             Ok(SendPtr(result))
         });
 
