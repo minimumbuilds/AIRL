@@ -49,7 +49,7 @@ All compilation logic is AIRL code. Cranelift (native code generation) and `liba
 cargo build --release --features jit,aot
 alias airl='cargo run --release --features jit,aot --'
 
-# Step 2: Compile the G3 compiler using the host binary
+# Step 2: Compile the G3 compiler using the host binary (~23 min)
 airl run --load bootstrap/lexer.airl \
          --load bootstrap/parser.airl \
          --load bootstrap/bc_compiler.airl \
@@ -64,7 +64,48 @@ airl run --load bootstrap/lexer.airl \
 ./program
 ```
 
-Step 2 takes ~23 minutes (the bootstrap compiler runs in the bytecode VM). The resulting `g3` binary is ~39MB and needs only a system C linker (`cc`) to produce executables.
+Step 2 takes ~23 minutes and ~25GB RAM (the bootstrap compiler runs in the bytecode VM, compiling ~3,500 lines of AIRL). The resulting `g3` binary is ~39MB.
+
+### Using G3
+
+**Requirements:** A system C linker (`cc`) and `libc`. No Rust toolchain, no Cranelift, no Z3 needed at the target. The runtime (`libairl_rt.a`) is embedded in the G3 binary.
+
+```bash
+# Check version
+./g3 --version
+
+# Compile a single file
+./g3 -- app.airl -o app
+./app
+
+# Compile multiple source files (concatenated)
+./g3 -- lib.airl app.airl -o app
+
+# Default output is a.out
+./g3 -- app.airl
+./a.out
+```
+
+**Important:** The `--` separator is required. Without it, G3 tries to read its own binary as a source file.
+
+### G3 Troubleshooting
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `read-file: stream did not contain valid UTF-8` | Missing `--` separator — G3 is reading its own binary as source | Add `--` before source files: `./g3 -- file.airl -o out` |
+| `cc: not found` or `linker failed` | No C linker installed | Install: `sudo apt install gcc` (Linux) or `xcode-select --install` (macOS) |
+| `undefined reference to airl_*` | Stale G3 binary built against older `libairl_rt.a` | Rebuild G3 from Step 2 above |
+| `Compilation error: AOT: unregistered builtin 'X'` | Source uses a builtin not registered in the AOT compiler | Check if the builtin exists — may need a newer G3 build |
+| `relocation against 'airl_tail' in read-only section` | Harmless linker warning (position-independent code) | Ignore — binary works correctly |
+| Segfault at runtime | Likely a register allocation bug in compiled code | Report as a bug with the source file; compile via `airl compile` as a workaround |
+| Out of memory during G3 build | Bootstrap compilation uses ~25GB | Use `--release` flag; ensure sufficient RAM or swap |
+
+### G3 Limitations
+
+- **No `airl check`** — G3 compiles only. Use the host binary for type checking and Z3 verification.
+- **No REPL** — G3 produces native binaries. Use `airl repl` from the host binary.
+- **No `--load`** — G3 compiles all source files in one pass. Pass multiple files: `./g3 -- a.airl b.airl -o out`.
+- **x86-64 Linux only** — G3 targets the host platform. macOS/ARM support requires Cranelift target triple changes (planned).
 
 ## Quick Start
 
@@ -75,35 +116,26 @@ Step 2 takes ~23 minutes (the bootstrap compiler runs in the bytecode VM). The r
 git clone <repo-url> && cd AIRL
 cargo build --release --features jit,aot
 
-# Run with JIT
-cargo run --release --features jit -- run examples/01-hello-world/hello_world.airl
+# Run a program (compiles to temp binary, executes, cleans up)
+cargo run --release --features jit,aot -- run examples/01-hello-world/hello_world.airl
 
 # Compile to native binary
 cargo run --release --features jit,aot -- compile examples/02-functions-and-contracts/functions_and_contracts.airl -o my_program
 ./my_program
 
 # Type-check and verify contracts with Z3
-cargo run --release --features jit -- check examples/03-verified-arithmetic/verified_arithmetic.airl
+cargo run --release --features jit,aot -- check examples/03-verified-arithmetic/verified_arithmetic.airl
 
 # Interactive REPL
-cargo run --release --features jit -- repl
+cargo run --release --features jit,aot -- repl
+
+# Check version
+cargo run --release --features jit,aot -- --version
 ```
 
 Requirements: Rust 1.85+, CMake, C++ compiler, Python 3 (for Z3, first build ~5-15 min).
 
 For detailed Rust toolchain instructions, see [docs/legacy-rust-toolchain.md](docs/legacy-rust-toolchain.md).
-
-### Using G3 (self-hosted compiler)
-
-```bash
-# Compile and run
-./g3 -- app.airl -o app && ./app
-
-# Compile with dependencies
-./g3 -- lib.airl app.airl -o app
-```
-
-G3 requires only a system C linker (`cc`). No Rust toolchain needed at the target.
 
 ## Why AIRL?
 
