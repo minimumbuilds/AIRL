@@ -601,56 +601,59 @@
 ;; ── defn clause walker ────────────────────────────
 
 (defn walk-defn-clauses
-  :sig [(items : List) (pos : i64) (sig : List) (intent : String) (requires : List) (ensures : List) (body : List) -> List]
+  :sig [(items : List) (pos : i64) (sig : List) (intent : String) (requires : List) (ensures : List) (body : List) (is-pub : _) -> List]
   :intent "Walk keyword clauses in defn, accumulate values"
   :requires [(valid items)]
   :ensures [(valid result)]
   :body
     (if (>= pos (length items))
       ;; Done — return accumulated values
-      (Ok [sig intent requires ensures body])
+      (Ok [sig intent requires ensures body is-pub])
       (match (at items pos)
         (SAtom tok)
           (match tok
             (Token kind value _ _)
               (if (= kind "keyword")
-                ;; Keyword clause — need value at pos+1
-                (if (>= (+ pos 1) (length items))
-                  (Err (ParseError (+ "missing value for :" value) 0 0))
-                  (let (val-sexpr : List (at items (+ pos 1)))
-                    (if (= value "sig")
-                      (match (parse-sig val-sexpr)
-                        (Ok new-sig) (walk-defn-clauses items (+ pos 2) new-sig intent requires ensures body)
-                        (Err e) (Err e))
-                    (if (= value "intent")
-                      (match val-sexpr
-                        (SAtom itok)
-                          (match itok
-                            (Token ik iv _ _)
-                              (if (= ik "string")
-                                (walk-defn-clauses items (+ pos 2) sig iv requires ensures body)
-                                (Err (ParseError "intent must be a string" 0 0))))
-                        _ (Err (ParseError "intent must be a string" 0 0)))
-                    (if (= value "requires")
-                      (match val-sexpr
-                        (SBracket req-items _ _)
-                          (match (parse-list-items req-items 0)
-                            (Ok req-exprs) (walk-defn-clauses items (+ pos 2) sig intent req-exprs ensures body)
-                            (Err e) (Err e))
-                        _ (Err (ParseError "requires must be a bracket list" 0 0)))
-                    (if (= value "ensures")
-                      (match val-sexpr
-                        (SBracket ens-items _ _)
-                          (match (parse-list-items ens-items 0)
-                            (Ok ens-exprs) (walk-defn-clauses items (+ pos 2) sig intent requires ens-exprs body)
-                            (Err e) (Err e))
-                        _ (Err (ParseError "ensures must be a bracket list" 0 0)))
-                    (if (= value "body")
-                      (match (parse-expr val-sexpr)
-                        (Ok body-node) (walk-defn-clauses items (+ pos 2) sig intent requires ensures body-node)
-                        (Err e) (Err e))
-                      ;; Unknown keyword — skip
-                      (walk-defn-clauses items (+ pos 2) sig intent requires ensures body))))))))
+                ;; :pub is a standalone flag — no value after it
+                (if (= value "pub")
+                  (walk-defn-clauses items (+ pos 1) sig intent requires ensures body true)
+                  ;; Other keywords need value at pos+1
+                  (if (>= (+ pos 1) (length items))
+                    (Err (ParseError (+ "missing value for :" value) 0 0))
+                    (let (val-sexpr : List (at items (+ pos 1)))
+                      (if (= value "sig")
+                        (match (parse-sig val-sexpr)
+                          (Ok new-sig) (walk-defn-clauses items (+ pos 2) new-sig intent requires ensures body is-pub)
+                          (Err e) (Err e))
+                      (if (= value "intent")
+                        (match val-sexpr
+                          (SAtom itok)
+                            (match itok
+                              (Token ik iv _ _)
+                                (if (= ik "string")
+                                  (walk-defn-clauses items (+ pos 2) sig iv requires ensures body is-pub)
+                                  (Err (ParseError "intent must be a string" 0 0))))
+                          _ (Err (ParseError "intent must be a string" 0 0)))
+                      (if (= value "requires")
+                        (match val-sexpr
+                          (SBracket req-items _ _)
+                            (match (parse-list-items req-items 0)
+                              (Ok req-exprs) (walk-defn-clauses items (+ pos 2) sig intent req-exprs ensures body is-pub)
+                              (Err e) (Err e))
+                          _ (Err (ParseError "requires must be a bracket list" 0 0)))
+                      (if (= value "ensures")
+                        (match val-sexpr
+                          (SBracket ens-items _ _)
+                            (match (parse-list-items ens-items 0)
+                              (Ok ens-exprs) (walk-defn-clauses items (+ pos 2) sig intent requires ens-exprs body is-pub)
+                              (Err e) (Err e))
+                          _ (Err (ParseError "ensures must be a bracket list" 0 0)))
+                      (if (= value "body")
+                        (match (parse-expr val-sexpr)
+                          (Ok body-node) (walk-defn-clauses items (+ pos 2) sig intent requires ensures body-node is-pub)
+                          (Err e) (Err e))
+                        ;; Unknown keyword — skip
+                        (walk-defn-clauses items (+ pos 2) sig intent requires ensures body is-pub)))))))))
                 ;; Non-keyword token — error
                 (Err (ParseError "expected keyword clause in defn" 0 0))))
         ;; Non-atom — error
@@ -670,7 +673,7 @@
           (match tok
             (Token kind name _ _)
               (if (= kind "symbol")
-                (match (walk-defn-clauses items 2 nil "" [] [] nil)
+                (match (walk-defn-clauses items 2 nil "" [] [] nil false)
                   (Ok clause-vals)
                     (Ok (ASTDefn name
                       (at clause-vals 0)   ;; sig
@@ -678,6 +681,7 @@
                       (at clause-vals 2)   ;; requires
                       (at clause-vals 3)   ;; ensures
                       (at clause-vals 4)   ;; body
+                      (at clause-vals 5)   ;; is-pub
                       line col))
                   (Err e) (Err e))
                 (Err (ParseError "defn name must be a symbol" line col))))
@@ -867,6 +871,85 @@
                 (Err (ParseError "deftype name must be a symbol" line col))))
         _ (Err (ParseError "deftype name must be a symbol" line col)))))
 
+;; ── import parsing ──────────────────────────────
+
+(defn extract-symbol-names
+  :sig [(items : List) (pos : i64) -> List]
+  :intent "Extract symbol names from a bracket list of atoms"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [])
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind value _ _)
+              (if (= kind "symbol")
+                (match (extract-symbol-names items (+ pos 1))
+                  (Ok rest) (Ok (cons value rest))
+                  (Err e) (Err e))
+                (Err (ParseError "import :only items must be symbols" 0 0))))
+        _ (Err (ParseError "import :only items must be symbols" 0 0)))))
+
+(defn walk-import-clauses
+  :sig [(items : List) (pos : i64) (alias : _) (only-list : _) -> List]
+  :intent "Walk :as/:only clauses in import"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [alias only-list])
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind value _ _)
+              (if (= kind "keyword")
+                (if (>= (+ pos 1) (length items))
+                  (Err (ParseError (str "missing value for :" value) 0 0))
+                  (if (= value "as")
+                    (match (at items (+ pos 1))
+                      (SAtom atok)
+                        (match atok
+                          (Token ak av _ _)
+                            (if (= ak "symbol")
+                              (walk-import-clauses items (+ pos 2) av only-list)
+                              (Err (ParseError "import :as must be a symbol" 0 0))))
+                      _ (Err (ParseError "import :as must be a symbol" 0 0)))
+                    (if (= value "only")
+                      (match (at items (+ pos 1))
+                        (SBracket only-items _ _)
+                          (match (extract-symbol-names only-items 0)
+                            (Ok names) (walk-import-clauses items (+ pos 2) alias names)
+                            (Err e) (Err e))
+                        _ (Err (ParseError "import :only must be a bracket list" 0 0)))
+                      ;; Unknown keyword — skip
+                      (walk-import-clauses items (+ pos 2) alias only-list))))
+                ;; Non-keyword — skip
+                (walk-import-clauses items (+ pos 1) alias only-list)))
+        _ (walk-import-clauses items (+ pos 1) alias only-list))))
+
+(defn parse-import
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (import path :as alias :only [names])"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    ;; items[0] = "import" symbol, items[1] = path string, items[2..] = clauses
+    (if (< (length items) 2)
+      (Err (ParseError "import requires a path string" line col))
+      (match (at items 1)
+        (SAtom tok)
+          (match tok
+            (Token kind value _ _)
+              (if (= kind "string")
+                (match (walk-import-clauses items 2 nil nil)
+                  (Ok clause-vals)
+                    (Ok (ASTImport value (at clause-vals 0) (at clause-vals 1) line col))
+                  (Err e) (Err e))
+                (Err (ParseError "import path must be a string" line col))))
+        _ (Err (ParseError "import path must be a string" line col)))))
+
 ;; ── Top-level and entry point ─────────────────────
 
 (defn parse-top-level
@@ -884,11 +967,13 @@
               (match tok
                 (Token kind value _ _)
                   (if (= kind "symbol")
-                    (if (= value "defn")
-                      (parse-defn items line col)
-                      (if (= value "deftype")
-                        (parse-deftype (tail items) line col)
-                        (parse-expr sexpr)))
+                    (if (= value "import")
+                      (parse-import items line col)
+                      (if (= value "defn")
+                        (parse-defn items line col)
+                        (if (= value "deftype")
+                          (parse-deftype (tail items) line col)
+                          (parse-expr sexpr))))
                     (parse-expr sexpr)))
             _ (parse-expr sexpr)))
       _ (parse-expr sexpr)))

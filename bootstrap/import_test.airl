@@ -1,0 +1,112 @@
+;; Test bootstrap parser import support
+
+;; ── Test helpers ──────────────────────────
+
+(defn assert-eq
+  :sig [(actual : _) (expected : _) (label : String) -> _]
+  :requires [(valid label)]
+  :ensures [(valid result)]
+  :body
+    (if (= actual expected)
+      (do (print "PASS:" label) true)
+      (do (print "FAIL:" label "expected" expected "got" actual) false)))
+
+;; ── Test: parse basic import ──────────────
+
+(defn test-import-basic
+  :sig [-> _]
+  :requires [(valid 1)]
+  :ensures [(valid result)]
+  :body
+    (match (parse "(import \"lib/math.airl\")")
+      (Ok nodes)
+        (match (head nodes)
+          (ASTImport path alias only line col)
+            (do
+              (assert-eq path "lib/math.airl" "import-basic-path")
+              (assert-eq alias nil "import-basic-alias")
+              (assert-eq only nil "import-basic-only"))
+          _ (do (print "FAIL: expected ASTImport") false))
+      (Err e) (do (print "FAIL: parse error:" e) false)))
+
+;; ── Test: parse import with alias ────────
+
+(defn test-import-alias
+  :sig [-> _]
+  :requires [(valid 1)]
+  :ensures [(valid result)]
+  :body
+    (match (parse "(import \"math.airl\" :as m)")
+      (Ok nodes)
+        (match (head nodes)
+          (ASTImport path alias only _ _)
+            (do
+              (assert-eq path "math.airl" "import-alias-path")
+              (assert-eq alias "m" "import-alias-alias")
+              (assert-eq only nil "import-alias-only"))
+          _ (do (print "FAIL: expected ASTImport") false))
+      (Err e) (do (print "FAIL: parse error:" e) false)))
+
+;; ── Test: parse import with :only ────────
+
+(defn test-import-only
+  :sig [-> _]
+  :requires [(valid 1)]
+  :ensures [(valid result)]
+  :body
+    (match (parse "(import \"math.airl\" :only [abs min])")
+      (Ok nodes)
+        (match (head nodes)
+          (ASTImport path alias only _ _)
+            (do
+              (assert-eq path "math.airl" "import-only-path")
+              (assert-eq alias nil "import-only-alias")
+              (assert-eq (length only) 2 "import-only-count")
+              (assert-eq (head only) "abs" "import-only-first")
+              (assert-eq (at only 1) "min" "import-only-second"))
+          _ (do (print "FAIL: expected ASTImport") false))
+      (Err e) (do (print "FAIL: parse error:" e) false)))
+
+;; ── Test: parse defn with :pub ───────────
+
+(defn test-defn-pub
+  :sig [-> _]
+  :requires [(valid 1)]
+  :ensures [(valid result)]
+  :body
+    (match (parse "(defn abs :pub :sig [(x : i64) -> i64] :requires [(valid x)] :ensures [(valid result)] :body (if (< x 0) (- 0 x) x))")
+      (Ok nodes)
+        (match (head nodes)
+          (ASTDefn name sig intent requires ensures body is-pub line col)
+            (do
+              (assert-eq name "abs" "defn-pub-name")
+              (assert-eq is-pub true "defn-pub-is-pub"))
+          _ (do (print "FAIL: expected ASTDefn" (head nodes)) false))
+      (Err e) (do (print "FAIL: parse error:" e) false)))
+
+;; ── Test: parse defn without :pub ────────
+
+(defn test-defn-no-pub
+  :sig [-> _]
+  :requires [(valid 1)]
+  :ensures [(valid result)]
+  :body
+    (match (parse "(defn helper :sig [(x : i64) -> i64] :requires [(valid x)] :ensures [(valid result)] :body x)")
+      (Ok nodes)
+        (match (head nodes)
+          (ASTDefn name sig intent requires ensures body is-pub line col)
+            (do
+              (assert-eq name "helper" "defn-no-pub-name")
+              (assert-eq is-pub false "defn-no-pub-is-pub"))
+          _ (do (print "FAIL: expected ASTDefn") false))
+      (Err e) (do (print "FAIL: parse error:" e) false)))
+
+;; ── Run all tests ────────────────────────
+
+(do
+  (test-import-basic)
+  (test-import-alias)
+  (test-import-only)
+  (test-defn-pub)
+  (test-defn-no-pub)
+  (print "All import parser tests complete"))

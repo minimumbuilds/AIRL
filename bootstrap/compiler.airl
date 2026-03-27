@@ -172,7 +172,7 @@
   :requires [(valid node)]
   :ensures [(valid result)]
   :body (match node
-    (ASTDefn name sig _ _ _ body _ _)
+    (ASTDefn name sig _ _ _ body _ _ _)
       (match sig
         (ASTSig params ret-name)
           (let (param-names : List (map (fn [p] (match p (ASTParam n _) n _ "?")) params))
