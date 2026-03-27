@@ -619,6 +619,11 @@ pub extern "C" fn airl_string_to_int(s: *mut RtValue) -> *mut RtValue {
 // ── System ──
 
 #[no_mangle]
+pub extern "C" fn airl_cpu_count() -> *mut RtValue {
+    rt_int(std::thread::available_parallelism().map(|n| n.get() as i64).unwrap_or(1))
+}
+
+#[no_mangle]
 pub extern "C" fn airl_time_now() -> *mut RtValue {
     use std::time::{SystemTime, UNIX_EPOCH};
     let ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;

@@ -536,6 +536,7 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "string-to-float" => airl_rt::string::airl_string_to_float(a0!()),
         "panic" => airl_rt::misc::airl_panic(a0!()),
         "assert" => airl_rt::misc::airl_assert(a0!(), a1!()),
+        "cpu-count" => airl_rt::misc::airl_cpu_count(),
         "time-now" => airl_rt::misc::airl_time_now(),
         "sleep" => airl_rt::misc::airl_sleep(a0!()),
         "format-time" => airl_rt::misc::airl_format_time(a0!(), a1!()),
@@ -638,6 +639,7 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "channel-send" => dispatch_channel_send(args),
         "channel-recv" => dispatch_channel_recv(args),
         "channel-recv-timeout" => dispatch_channel_recv_timeout(args),
+        "channel-drain" => airl_rt::thread::airl_channel_drain(a0!()),
         "channel-close" => dispatch_channel_close(args),
 
         // Compiler/bytecode

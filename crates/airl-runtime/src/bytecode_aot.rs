@@ -159,7 +159,8 @@ pub struct RuntimeImports {
     pub is_nan: FuncId,
     pub is_infinite: FuncId,
 
-    // Timing
+    // System
+    pub cpu_count: FuncId,
     pub time_now: FuncId,
 
     // Environment
@@ -273,6 +274,7 @@ pub struct RuntimeImports {
     pub channel_send: FuncId,
     pub channel_recv: FuncId,
     pub channel_recv_timeout: FuncId,
+    pub channel_drain: FuncId,
     pub channel_close: FuncId,
 
     // Contract failure
@@ -594,7 +596,8 @@ impl BytecodeAot {
         let is_nan = declare_import(m, "airl_is_nan", s1.clone());
         let is_infinite = declare_import(m, "airl_is_infinite", s1.clone());
 
-        // Timing
+        // System
+        let cpu_count = declare_import(m, "airl_cpu_count", sig_0_ptr(m));
         let time_now = declare_import(m, "airl_time_now", sig_0_ptr(m));
 
         // Environment
@@ -713,6 +716,7 @@ impl BytecodeAot {
         let channel_send = declare_import(m, "airl_channel_send", s2.clone());
         let channel_recv = declare_import(m, "airl_channel_recv", s1.clone());
         let channel_recv_timeout = declare_import(m, "airl_channel_recv_timeout", s2.clone());
+        let channel_drain = declare_import(m, "airl_channel_drain", s1.clone());
         let channel_close = declare_import(m, "airl_channel_close", s1.clone());
 
         // Contract failure: (kind: i64, fn_name_idx: i64, clause_idx: i64) -> i64
@@ -746,7 +750,7 @@ impl BytecodeAot {
             char_code, char_from_code,
             sqrt, sin, cos, tan, log, exp, floor, ceil, round,
             float_to_int, int_to_float, infinity, nan_ctor, is_nan, is_infinite,
-            time_now, getenv, http_request, json_parse, json_stringify, shell_exec,
+            cpu_count, time_now, getenv, http_request, json_parse, json_stringify, shell_exec,
             char_count, str_variadic, format_variadic,
             assert_fn, panic_fn, exit_fn, sleep_fn, format_time, read_lines,
             concat_lists, range_fn, reverse_list, take_fn, drop_fn, zip_fn,
@@ -766,7 +770,7 @@ impl BytecodeAot {
             gzip_compress, gzip_decompress, snappy_compress, snappy_decompress,
             lz4_compress, lz4_decompress, zstd_compress, zstd_decompress,
             tcp_connect, tcp_close, tcp_send, tcp_recv, tcp_recv_exact, tcp_set_timeout, tcp_connect_tls,
-            thread_spawn, thread_join, channel_new, channel_send, channel_recv, channel_recv_timeout, channel_close,
+            thread_spawn, thread_join, channel_new, channel_send, channel_recv, channel_recv_timeout, channel_drain, channel_close,
             contract_fail,
         }
     }
@@ -879,7 +883,8 @@ impl BytecodeAot {
         m.insert("is-nan?".into(),      rt.is_nan);
         m.insert("is-infinite?".into(), rt.is_infinite);
 
-        // Timing
+        // System
+        m.insert("cpu-count".into(), rt.cpu_count);
         m.insert("time-now".into(), rt.time_now);
 
         // Environment
@@ -985,6 +990,7 @@ impl BytecodeAot {
         m.insert("channel-send".into(),         rt.channel_send);
         m.insert("channel-recv".into(),         rt.channel_recv);
         m.insert("channel-recv-timeout".into(), rt.channel_recv_timeout);
+        m.insert("channel-drain".into(),        rt.channel_drain);
         m.insert("channel-close".into(),        rt.channel_close);
 
         // NOTE: map/filter/fold/sort/any/all/find are NOT registered here.
