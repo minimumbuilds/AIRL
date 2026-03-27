@@ -138,7 +138,6 @@ fn rt_to_value_no_release(ptr: *mut RtValue) -> Value {
                 // Empty-captures closure — preserve identity instead of nil.
                 Value::BuiltinFn(format!("<closure@{:p}>", func_ptr))
             }
-            _ => Value::Nil,
         }
     }
 }
@@ -1538,18 +1537,6 @@ impl BytecodeVm {
             pc += 1;
         }
         Ok(Value::Nil)
-    }
-
-    fn invoke_in_nested_frame(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        if !self.functions.contains_key(name) {
-            return Err(RuntimeError::UndefinedSymbol(name.to_string()));
-        }
-        let target_depth = self.call_stack.len();
-        self.push_frame(name, &args, 0)?;
-        let result_rt = self.run_rt_with_min_depth(target_depth)?;
-        let result = rt_to_value_no_release(result_rt);
-        airl_value_release(result_rt);
-        Ok(result)
     }
 
     pub fn call_by_name(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {

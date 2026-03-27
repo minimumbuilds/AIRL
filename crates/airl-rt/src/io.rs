@@ -1,4 +1,4 @@
-use crate::value::{rt_bool, rt_nil, rt_str, rt_unit, RtData, RtValue};
+use crate::value::{rt_bool, rt_str, rt_unit, RtData, RtValue};
 use std::io::Write;
 
 #[no_mangle]

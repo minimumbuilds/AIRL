@@ -1,4 +1,4 @@
-use crate::value::{RtData, RtValue, TAG_INT, TAG_BOOL};
+use crate::value::{RtData, RtValue, TAG_INT};
 use crate::value::{rt_str as rt_str_alloc, rt_variant, rt_bool as rt_bool_alloc};
 use crate::list::airl_list_new as airl_list_new_raw;
 use crate::closure::airl_call_closure;
@@ -85,21 +85,18 @@ pub extern "C" fn airl_thread_spawn(closure: *mut RtValue) -> *mut RtValue {
 
     // Retain the closure so the child thread owns a reference
     airl_value_retain(closure);
-    let closure_send = SendPtr(closure);
 
     // Safety: RtValue is ref-counted. We retained the closure above and release in the thread.
     // The spawned thread gets exclusive access to the closure.
-    let handle = unsafe {
-        let raw_closure = closure as usize; // usize is Send
-        std::thread::Builder::new()
-            .stack_size(64 * 1024 * 1024)
-            .spawn(move || -> ThreadResult {
-                let cl = raw_closure as *mut RtValue;
-                let result = airl_call_closure(cl, std::ptr::null(), 0);
-                crate::memory::airl_value_release(cl);
-                Ok(SendPtr(result))
-            })
-    };
+    let raw_closure = closure as usize; // usize is Send
+    let handle = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || -> ThreadResult {
+            let cl = raw_closure as *mut RtValue;
+            let result = unsafe { airl_call_closure(cl, std::ptr::null(), 0) };
+            unsafe { crate::memory::airl_value_release(cl) };
+            Ok(SendPtr(result))
+        });
 
     match handle {
         Ok(jh) => {

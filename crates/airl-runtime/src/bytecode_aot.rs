@@ -998,154 +998,6 @@ impl BytecodeAot {
     }
 
     // ──────────────────────────────────────────────────────────────────────
-    // Eligibility check for unboxed compilation
-    // ──────────────────────────────────────────────────────────────────────
-
-    /// Check if a BytecodeFunc is eligible for unboxed (primitive) compilation.
-    /// Returns false if any instruction uses non-primitive Value types.
-    fn is_eligible(
-        &self,
-        func: &BytecodeFunc,
-        all_functions: &HashMap<String, BytecodeFunc>,
-        eligible_cache: &mut HashSet<String>,
-        ineligible_cache: &mut HashSet<String>,
-    ) -> bool {
-        // Check caches first
-        if eligible_cache.contains(&func.name) {
-            return true;
-        }
-        if ineligible_cache.contains(&func.name) {
-            return false;
-        }
-
-        // Arity limit
-        if func.arity > 8 {
-            ineligible_cache.insert(func.name.clone());
-            return false;
-        }
-
-        for instr in &func.instructions {
-            match instr.op {
-                // Disqualifying opcodes — require non-primitive Value types
-                Op::MakeList | Op::MakeVariant | Op::MakeVariant0 |
-                Op::MakeClosure | Op::MatchTag | Op::JumpIfNoMatch |
-                Op::MatchWild | Op::TryUnwrap | Op::CallReg => {
-                    ineligible_cache.insert(func.name.clone());
-                    return false;
-                }
-                // CallBuiltin — whitelist pure arithmetic/comparison/logic builtins
-                // that can be inlined as native instructions in the unboxed path.
-                Op::CallBuiltin => {
-                    let name_idx = instr.a as usize;
-                    let is_whitelisted = if name_idx < func.constants.len() {
-                        if let Value::Str(s) = &func.constants[name_idx] {
-                            matches!(s.as_str(),
-                                "+" | "-" | "*" | "/" | "%" |
-                                "=" | "!=" | "<" | ">" | "<=" | ">=" |
-                                "and" | "or" | "not" | "xor" |
-                                "valid"
-                            )
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-                    if !is_whitelisted {
-                        ineligible_cache.insert(func.name.clone());
-                        return false;
-                    }
-                }
-                // Ownership tracking — disqualify from unboxed
-                Op::MarkMoved | Op::CheckNotMoved => {
-                    ineligible_cache.insert(func.name.clone());
-                    return false;
-                }
-                // LoadConst — only int/float/bool constants are valid
-                Op::LoadConst => {
-                    let idx = instr.a as usize;
-                    if idx < func.constants.len() {
-                        match &func.constants[idx] {
-                            Value::Int(_) | Value::Float(_) | Value::Bool(_) => {}
-                            _ => {
-                                ineligible_cache.insert(func.name.clone());
-                                return false;
-                            }
-                        }
-                    }
-                }
-                // Contract assertions are compilable (one conditional branch)
-                Op::AssertRequires | Op::AssertEnsures | Op::AssertInvariant => {}
-                Op::Call => {
-                    // Check if the call target is eligible
-                    let name = match &func.constants[instr.a as usize] {
-                        Value::Str(s) => s,
-                        _ => {
-                            ineligible_cache.insert(func.name.clone());
-                            return false;
-                        }
-                    };
-                    // Self-calls are fine (handled as tail-call loop)
-                    if name == &func.name {
-                        continue;
-                    }
-                    // Already known ineligible
-                    if ineligible_cache.contains(name) {
-                        ineligible_cache.insert(func.name.clone());
-                        return false;
-                    }
-                    // Already known eligible or already compiled as eligible
-                    if eligible_cache.contains(name) || self.eligible_funcs.contains(name) {
-                        continue;
-                    }
-                    // Recursively check callee
-                    if let Some(target) = all_functions.get(name) {
-                        if !self.is_eligible(target, all_functions, eligible_cache, ineligible_cache) {
-                            ineligible_cache.insert(func.name.clone());
-                            return false;
-                        }
-                    } else {
-                        // Not a user-defined function — check if it's a whitelisted
-                        // pure runtime builtin that can be called from unboxed code.
-                        // These builtins operate on boxed Values so they require
-                        // marshaling at the call boundary, but the function as a whole
-                        // can still benefit from unboxed compilation for everything else.
-                        // Currently we only whitelist `valid` (used in contract clauses).
-                        let is_safe_builtin = matches!(name.as_str(),
-                            "+" | "-" | "*" | "/" | "%" |
-                            "=" | "!=" | "<" | ">" | "<=" | ">=" |
-                            "and" | "or" | "not" | "xor" |
-                            "valid"
-                        );
-                        if !is_safe_builtin {
-                            ineligible_cache.insert(func.name.clone());
-                            return false;
-                        }
-                    }
-                }
-                Op::TailCall => {
-                    // Verify it's a self-call
-                    let name = match &func.constants[instr.a as usize] {
-                        Value::Str(s) => s,
-                        _ => {
-                            ineligible_cache.insert(func.name.clone());
-                            return false;
-                        }
-                    };
-                    if name != &func.name {
-                        ineligible_cache.insert(func.name.clone());
-                        return false;
-                    }
-                }
-                // All other opcodes are fine for primitives
-                _ => {}
-            }
-        }
-        eligible_cache.insert(func.name.clone());
-        true
-    }
-
-    // ──────────────────────────────────────────────────────────────────────
     // Compile all functions
     // ──────────────────────────────────────────────────────────────────────
 
@@ -1407,7 +1259,6 @@ impl BytecodeAot {
                     builder.ins().jump(blk, &[]);
                 }
                 builder.switch_to_block(blk);
-                last_was_terminator = false;
             }
 
             match instr.op {
@@ -2196,7 +2047,6 @@ impl BytecodeAot {
                     builder.ins().jump(blk, &[]);
                 }
                 builder.switch_to_block(blk);
-                last_was_terminator = false;
             }
 
             match instr.op {
