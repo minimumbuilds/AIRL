@@ -1,0 +1,18 @@
+(defn my-abs :pub
+  :sig [(x : i64) -> i64]
+  :requires [(valid x)]
+  :ensures [(>= result 0)]
+  :body (if (< x 0) (- 0 x) x))
+
+(defn my-square :pub
+  :sig [(x : i64) -> i64]
+  :requires [(valid x)]
+  :ensures [(>= result 0)]
+  :body (* x x))
+
+;; Private helper — should NOT be accessible from importers
+(defn internal-helper
+  :sig [(x : i64) -> i64]
+  :requires [(valid x)]
+  :ensures [(> result x)]
+  :body (+ x 1))

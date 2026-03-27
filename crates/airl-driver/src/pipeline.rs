@@ -667,9 +667,9 @@ pub fn run_file_with_imports(entry_path: &str) -> Result<Value, PipelineError> {
         let ownership_map = build_ownership_map(&filtered_tops);
         let (ir_nodes, contracts, fn_meta) = compile_tops_with_contracts(&filtered_tops);
 
-        // Rewrite qualified names for the entry module
+        // Rewrite qualified names for the entry module (with visibility checks)
         let final_ir = if is_entry && !directives.is_empty() {
-            rewrite_qualified_names(&ir_nodes, directives, &module_publics)
+            rewrite_qualified_names(&ir_nodes, directives, &module_publics)?
         } else {
             ir_nodes
         };
@@ -713,86 +713,121 @@ pub fn run_file_with_imports(entry_path: &str) -> Result<Value, PipelineError> {
 fn rewrite_qualified_names(
     nodes: &[IRNode],
     directives: &[crate::resolver::ImportDirective],
-    _module_publics: &HashMap<String, Vec<String>>,
-) -> Vec<IRNode> {
-    nodes.iter().map(|n| rewrite_ir_node(n, directives)).collect()
+    module_publics: &HashMap<String, Vec<String>>,
+) -> Result<Vec<IRNode>, PipelineError> {
+    nodes.iter()
+        .map(|n| rewrite_ir_node(n, directives, module_publics))
+        .collect()
 }
 
-fn rewrite_ir_node(node: &IRNode, directives: &[crate::resolver::ImportDirective]) -> IRNode {
+fn rewrite_ir_node(
+    node: &IRNode,
+    directives: &[crate::resolver::ImportDirective],
+    module_publics: &HashMap<String, Vec<String>>,
+) -> Result<IRNode, PipelineError> {
     match node {
         IRNode::Load(name) => {
-            if let Some(rewritten) = rewrite_name(name, directives) {
-                IRNode::Load(rewritten)
+            if let Some(rewritten) = rewrite_name(name, directives, module_publics)? {
+                Ok(IRNode::Load(rewritten))
             } else {
-                node.clone()
+                Ok(node.clone())
             }
         }
         IRNode::Call(name, args) => {
-            let new_args: Vec<IRNode> = args.iter().map(|a| rewrite_ir_node(a, directives)).collect();
-            if let Some(rewritten) = rewrite_name(name, directives) {
-                IRNode::Call(rewritten, new_args)
+            let new_args: Vec<IRNode> = args.iter()
+                .map(|a| rewrite_ir_node(a, directives, module_publics))
+                .collect::<Result<_, _>>()?;
+            if let Some(rewritten) = rewrite_name(name, directives, module_publics)? {
+                Ok(IRNode::Call(rewritten, new_args))
             } else {
-                IRNode::Call(name.clone(), new_args)
+                Ok(IRNode::Call(name.clone(), new_args))
             }
         }
         IRNode::CallExpr(callee, args) => {
-            IRNode::CallExpr(
-                Box::new(rewrite_ir_node(callee, directives)),
-                args.iter().map(|a| rewrite_ir_node(a, directives)).collect(),
-            )
+            Ok(IRNode::CallExpr(
+                Box::new(rewrite_ir_node(callee, directives, module_publics)?),
+                args.iter()
+                    .map(|a| rewrite_ir_node(a, directives, module_publics))
+                    .collect::<Result<_, _>>()?,
+            ))
         }
-        IRNode::If(c, t, e) => IRNode::If(
-            Box::new(rewrite_ir_node(c, directives)),
-            Box::new(rewrite_ir_node(t, directives)),
-            Box::new(rewrite_ir_node(e, directives)),
-        ),
-        IRNode::Do(nodes) => IRNode::Do(
-            nodes.iter().map(|n| rewrite_ir_node(n, directives)).collect(),
-        ),
+        IRNode::If(c, t, e) => Ok(IRNode::If(
+            Box::new(rewrite_ir_node(c, directives, module_publics)?),
+            Box::new(rewrite_ir_node(t, directives, module_publics)?),
+            Box::new(rewrite_ir_node(e, directives, module_publics)?),
+        )),
+        IRNode::Do(nodes) => Ok(IRNode::Do(
+            nodes.iter()
+                .map(|n| rewrite_ir_node(n, directives, module_publics))
+                .collect::<Result<_, _>>()?,
+        )),
         IRNode::Let(bindings, body) => {
-            let new_bindings: Vec<IRBinding> = bindings.iter().map(|b| IRBinding {
-                name: b.name.clone(),
-                expr: rewrite_ir_node(&b.expr, directives),
-            }).collect();
-            IRNode::Let(new_bindings, Box::new(rewrite_ir_node(body, directives)))
+            let new_bindings: Vec<IRBinding> = bindings.iter()
+                .map(|b| Ok(IRBinding {
+                    name: b.name.clone(),
+                    expr: rewrite_ir_node(&b.expr, directives, module_publics)?,
+                }))
+                .collect::<Result<_, PipelineError>>()?;
+            Ok(IRNode::Let(new_bindings, Box::new(rewrite_ir_node(body, directives, module_publics)?)))
         }
         IRNode::Func(name, params, body) => {
-            IRNode::Func(name.clone(), params.clone(), Box::new(rewrite_ir_node(body, directives)))
+            Ok(IRNode::Func(name.clone(), params.clone(), Box::new(rewrite_ir_node(body, directives, module_publics)?)))
         }
         IRNode::Lambda(params, body) => {
-            IRNode::Lambda(params.clone(), Box::new(rewrite_ir_node(body, directives)))
+            Ok(IRNode::Lambda(params.clone(), Box::new(rewrite_ir_node(body, directives, module_publics)?)))
         }
-        IRNode::List(items) => IRNode::List(
-            items.iter().map(|i| rewrite_ir_node(i, directives)).collect(),
-        ),
+        IRNode::List(items) => Ok(IRNode::List(
+            items.iter()
+                .map(|i| rewrite_ir_node(i, directives, module_publics))
+                .collect::<Result<_, _>>()?,
+        )),
         IRNode::Variant(tag, args) => {
-            IRNode::Variant(tag.clone(), args.iter().map(|a| rewrite_ir_node(a, directives)).collect())
+            Ok(IRNode::Variant(tag.clone(), args.iter()
+                .map(|a| rewrite_ir_node(a, directives, module_publics))
+                .collect::<Result<_, _>>()?))
         }
         IRNode::Match(scrutinee, arms) => {
-            IRNode::Match(
-                Box::new(rewrite_ir_node(scrutinee, directives)),
-                arms.iter().map(|arm| IRArm {
+            let new_arms: Vec<IRArm> = arms.iter()
+                .map(|arm| Ok(IRArm {
                     pattern: arm.pattern.clone(),
-                    body: rewrite_ir_node(&arm.body, directives),
-                }).collect(),
-            )
+                    body: rewrite_ir_node(&arm.body, directives, module_publics)?,
+                }))
+                .collect::<Result<_, PipelineError>>()?;
+            Ok(IRNode::Match(
+                Box::new(rewrite_ir_node(scrutinee, directives, module_publics)?),
+                new_arms,
+            ))
         }
-        IRNode::Try(inner) => IRNode::Try(Box::new(rewrite_ir_node(inner, directives))),
+        IRNode::Try(inner) => Ok(IRNode::Try(Box::new(rewrite_ir_node(inner, directives, module_publics)?))),
         // Leaf nodes: Int, Float, Str, Bool, Nil — no rewriting needed
-        _ => node.clone(),
+        _ => Ok(node.clone()),
     }
 }
 
 /// Check if a name should be rewritten based on import directives.
-/// Returns Some(new_name) if the name matches a qualified reference or an :only import.
-fn rewrite_name(name: &str, directives: &[crate::resolver::ImportDirective]) -> Option<String> {
-    // Check for qualified name: prefix.symbol (e.g., "math.abs")
+/// Returns Ok(Some(new_name)) if the name matches a qualified reference or an :only import.
+/// Returns Err if the symbol is private (not in module_publics).
+fn rewrite_name(
+    name: &str,
+    directives: &[crate::resolver::ImportDirective],
+    module_publics: &HashMap<String, Vec<String>>,
+) -> Result<Option<String>, PipelineError> {
+    // Check for qualified name: prefix.symbol (e.g., "math_lib.my-abs")
     if let Some(dot_pos) = name.find('.') {
         let prefix = &name[..dot_pos];
         let symbol = &name[dot_pos + 1..];
         for d in directives {
             if d.prefix == prefix {
-                return Some(format!("{}_{}", d.module_name, symbol));
+                // Visibility check: symbol must be in module's public_fns
+                if let Some(publics) = module_publics.get(&d.module_name) {
+                    if !publics.contains(&symbol.to_string()) {
+                        return Err(PipelineError::Io(format!(
+                            "'{}' is not public in module '{}' -- add :pub to export it",
+                            symbol, d.module_name
+                        )));
+                    }
+                }
+                return Ok(Some(format!("{}_{}", d.module_name, symbol)));
             }
         }
     }
@@ -800,11 +835,20 @@ fn rewrite_name(name: &str, directives: &[crate::resolver::ImportDirective]) -> 
     for d in directives {
         if let Some(only_list) = &d.only {
             if only_list.iter().any(|s| s == name) {
-                return Some(format!("{}_{}", d.module_name, name));
+                // Visibility check for :only imports too
+                if let Some(publics) = module_publics.get(&d.module_name) {
+                    if !publics.contains(&name.to_string()) {
+                        return Err(PipelineError::Io(format!(
+                            "'{}' is not public in module '{}' -- add :pub to export it",
+                            name, d.module_name
+                        )));
+                    }
+                }
+                return Ok(Some(format!("{}_{}", d.module_name, name)));
             }
         }
     }
-    None
+    Ok(None)
 }
 
 pub fn check_file(path: &str) -> Result<(), PipelineError> {

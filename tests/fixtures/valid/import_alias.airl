@@ -1,0 +1,3 @@
+;; EXPECT: 5
+(import "modules/math_lib.airl" :as m)
+(m.my-abs -5)

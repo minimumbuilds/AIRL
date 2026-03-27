@@ -64,6 +64,10 @@ fn valid_fixtures_all_pass() {
     let mut failures = Vec::new();
 
     for file in &files {
+        // Skip import fixtures — they use run_file_with_imports, tested separately
+        if file.file_name().map_or(false, |n| n.to_str().map_or(false, |s| s.starts_with("import_"))) {
+            continue;
+        }
         let source = fs::read_to_string(file).unwrap();
         let expected = match extract_expect(&source) {
             Some(e) => e,
@@ -238,4 +242,50 @@ fn check_type_error_fixtures() {
     }
 
     eprintln!("  {} check_type_error fixtures verified", files.len());
+}
+
+// ── Import integration tests ─────────────────────────────
+
+fn run_import_fixture(fixture_name: &str) -> Result<String, String> {
+    let path = fixtures_root().join("valid").join(fixture_name);
+    airl_driver::pipeline::run_file_with_imports(path.to_str().unwrap())
+        .map(|v| format!("{}", v))
+        .map_err(|e| format!("{}", e))
+}
+
+#[test]
+fn import_basic_prefix() {
+    let result = run_import_fixture("import_basic.airl");
+    match result {
+        Ok(v) => assert_eq!(v, "25", "import_basic.airl expected 25, got {}", v),
+        Err(e) => panic!("import_basic.airl failed: {}", e),
+    }
+}
+
+#[test]
+fn import_with_alias() {
+    let result = run_import_fixture("import_alias.airl");
+    match result {
+        Ok(v) => assert_eq!(v, "5", "import_alias.airl expected 5, got {}", v),
+        Err(e) => panic!("import_alias.airl failed: {}", e),
+    }
+}
+
+#[test]
+fn import_selective_only() {
+    let result = run_import_fixture("import_only.airl");
+    match result {
+        Ok(v) => assert_eq!(v, "25", "import_only.airl expected 25, got {}", v),
+        Err(e) => panic!("import_only.airl failed: {}", e),
+    }
+}
+
+#[test]
+fn import_private_rejected() {
+    let path = fixtures_root().join("valid").join("import_private.airl");
+    let result = airl_driver::pipeline::run_file_with_imports(path.to_str().unwrap());
+    assert!(result.is_err(), "accessing private symbol should fail");
+    let err = format!("{}", result.unwrap_err());
+    assert!(err.contains("not public") || err.contains("private") || err.contains("not found"),
+        "error should mention visibility: {}", err);
 }

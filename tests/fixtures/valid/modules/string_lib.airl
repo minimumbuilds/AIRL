@@ -1,0 +1,5 @@
+(defn greet :pub
+  :sig [(name : String) -> String]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body (str "Hello, " name "!"))
