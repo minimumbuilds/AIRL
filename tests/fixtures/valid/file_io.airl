@@ -1,50 +1,24 @@
-;; EXPECT: append OK size OK isdir OK readdir OK rename OK delete OK ALL PASSED
-;; Test all 8 new file I/O builtins
+;; EXPECT: "append OK size OK isdir OK readdir OK rename OK delete OK ALL PASSED"
+;; Test file I/O builtins — returns result string (fixture runner checks return value, not stdout)
 
-;; create-dir
-(create-dir "test_fixture_io")
+(do
+  (create-dir "test_fixture_io")
+  (write-file "test_fixture_io/log.txt" "line1\n")
+  (append-file "test_fixture_io/log.txt" "line2\n")
 
-;; write + append
-(write-file "test_fixture_io/log.txt" "line1\n")
-(append-file "test_fixture_io/log.txt" "line2\n")
-
-;; verify append
-(let (content : _ (read-file "test_fixture_io/log.txt"))
-  (if (contains content "line2")
-    (print "append OK ")
-    (print "append FAIL ")))
-
-;; file-size
-(let (sz : _ (file-size "test_fixture_io/log.txt"))
-  (if (> sz 0)
-    (print "size OK ")
-    (print "size FAIL ")))
-
-;; is-dir?
-(if (is-dir? "test_fixture_io")
-  (print "isdir OK ")
-  (print "isdir FAIL "))
-
-;; read-dir
-(let (entries : _ (read-dir "test_fixture_io"))
-  (if (= (length entries) 1)
-    (print "readdir OK ")
-    (print "readdir FAIL ")))
-
-;; rename-file
-(rename-file "test_fixture_io/log.txt" "test_fixture_io/renamed.txt")
-(if (file-exists? "test_fixture_io/renamed.txt")
-  (print "rename OK ")
-  (print "rename FAIL "))
-
-;; delete-file
-(delete-file "test_fixture_io/renamed.txt")
-(if (not (file-exists? "test_fixture_io/renamed.txt"))
-  (print "delete OK ")
-  (print "delete FAIL "))
-
-;; delete-dir
-(delete-dir "test_fixture_io")
-(if (not (file-exists? "test_fixture_io"))
-  (println "ALL PASSED")
-  (println "CLEANUP FAIL"))
+  (let (r1 : String (let (content : String (read-file "test_fixture_io/log.txt"))
+                       (if (contains content "line2") "append OK " "append FAIL ")))
+       (r2 : String (let (sz : i64 (file-size "test_fixture_io/log.txt"))
+                       (if (> sz 0) "size OK " "size FAIL ")))
+       (r3 : String (if (is-dir? "test_fixture_io") "isdir OK " "isdir FAIL "))
+       (r4 : String (let (entries : List (read-dir "test_fixture_io"))
+                       (if (= (length entries) 1) "readdir OK " "readdir FAIL ")))
+    (do
+      (rename-file "test_fixture_io/log.txt" "test_fixture_io/renamed.txt")
+      (let (r5 : String (if (file-exists? "test_fixture_io/renamed.txt") "rename OK " "rename FAIL "))
+        (do
+          (delete-file "test_fixture_io/renamed.txt")
+          (let (r6 : String (if (not (file-exists? "test_fixture_io/renamed.txt")) "delete OK " "delete FAIL "))
+            (do
+              (delete-dir "test_fixture_io")
+              (str r1 r2 r3 r4 r5 r6 "ALL PASSED"))))))))
