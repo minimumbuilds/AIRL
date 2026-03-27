@@ -83,6 +83,8 @@ pub extern "C" fn airl_assert(cond: *mut RtValue, msg: *mut RtValue) -> *mut RtV
             RtData::Str(s) => eprintln!("Assertion failed: {}", s),
             _ => eprintln!("Assertion failed"),
         }
+        // Intentional process::exit: AIRL `assert` semantics require program termination on failure.
+        // This is not a library error — the AIRL program explicitly requested abort.
         std::process::exit(1);
     }
     rt_bool(true)
@@ -97,6 +99,8 @@ pub extern "C" fn airl_panic(msg: *mut RtValue) -> *mut RtValue {
         RtData::Str(s) => eprintln!("panic: {}", s),
         _ => eprintln!("panic"),
     }
+    // Intentional process::exit: AIRL `panic` semantics require program termination.
+    // This is not a library error — the AIRL program explicitly requested abort.
     std::process::exit(1);
 }
 
@@ -109,6 +113,8 @@ pub extern "C" fn airl_exit(code: *mut RtValue) -> *mut RtValue {
         RtData::Int(n) => *n as i32,
         _ => 1,
     };
+    // Intentional process::exit: AIRL `exit` semantics require process termination.
+    // This is not a library error — the AIRL program explicitly requested exit with a code.
     std::process::exit(c);
 }
 

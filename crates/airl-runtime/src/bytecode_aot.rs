@@ -3318,8 +3318,8 @@ pub extern "C" fn airl_compile_to_executable(
             rt_nil()
         }
         Err(e) => {
-            eprintln!("Compilation error: {}", e);
-            std::process::exit(1);
+            use airl_rt::value::{rt_variant, rt_str};
+            rt_variant("Err".into(), rt_str(format!("Compilation error: {}", e)))
         }
     }
 }
