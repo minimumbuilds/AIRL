@@ -158,6 +158,23 @@ fn parse_let_expr(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Resul
         i += 1;
     }
 
+    // Check for malformed bindings: (name value) without `: Type`
+    if bindings.is_empty() && !items.is_empty() {
+        if let SExpr::List(inner, inner_span) = &items[0] {
+            if inner.len() >= 2 && inner.len() <= 3 {
+                if let Some(name) = inner[0].as_symbol() {
+                    // Looks like a binding attempt without type annotation
+                    if inner.get(1).and_then(|s| s.as_symbol()).map_or(true, |s| s != ":") {
+                        return Err(Diagnostic::error(
+                            format!("let binding '{}' is missing type annotation — use (let ({} : Type value) body)", name, name),
+                            *inner_span,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
     if i >= items.len() {
         return Err(Diagnostic::error("let requires a body expression", span));
     }
