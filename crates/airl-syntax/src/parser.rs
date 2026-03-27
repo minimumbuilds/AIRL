@@ -15,6 +15,7 @@ pub fn parse_top_level(sexpr: &SExpr, diags: &mut Diagnostics) -> Result<TopLeve
                     "module" => parse_module(&items[1..], *span, diags).map(TopLevel::Module),
                     "task" => parse_task(&items[1..], *span, diags).map(TopLevel::Task),
                     "use" => parse_use(&items[1..], *span, diags).map(TopLevel::UseDecl),
+                    "import" => parse_import(&items[1..], *span, diags),
                     _ => parse_expr(sexpr, diags).map(TopLevel::Expr),
                 }
             } else {
@@ -547,6 +548,16 @@ fn parse_defn(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Fn
 
     let name = expect_symbol(&items[0])?;
 
+    // Check for :pub modifier
+    let mut is_public = false;
+    let mut start_idx = 1;
+    if start_idx < items.len() {
+        if let Some("pub") = items[start_idx].as_keyword() {
+            is_public = true;
+            start_idx += 1;
+        }
+    }
+
     let mut params = Vec::new();
     let mut return_type = AstType { kind: AstTypeKind::Named("Unit".to_string()), span };
     let mut intent = None;
@@ -557,7 +568,7 @@ fn parse_defn(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Fn
     let mut execute_on = None;
     let mut priority = None;
 
-    let mut i = 1;
+    let mut i = start_idx;
     while i < items.len() {
         if let Some(kw) = items[i].as_keyword() {
             match kw {
@@ -656,7 +667,7 @@ fn parse_defn(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Fn
         body,
         execute_on,
         priority,
-        is_public: false,
+        is_public,
         span,
     })
 }
@@ -708,6 +719,16 @@ fn parse_deftype(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result
     let name = expect_symbol(&items[0])?;
 
     let mut idx = 1;
+
+    // Check for :pub modifier
+    let mut is_public = false;
+    if idx < items.len() {
+        if let Some("pub") = items[idx].as_keyword() {
+            is_public = true;
+            idx += 1;
+        }
+    }
+
     let mut type_params = Vec::new();
 
     // Optional type params in brackets: [T : Type, E : Type]
@@ -724,7 +745,7 @@ fn parse_deftype(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result
 
     let body = parse_type_def_body(&items[idx], diags)?;
 
-    Ok(TypeDef { name, type_params, body, is_public: false, span })
+    Ok(TypeDef { name, type_params, body, is_public, span })
 }
 
 fn parse_type_params(items: &[SExpr], diags: &mut Diagnostics) -> Result<Vec<TypeParam>, Diagnostic> {
@@ -1115,6 +1136,42 @@ fn parse_constraints(sexpr: &SExpr, diags: &mut Diagnostics) -> Result<Vec<Const
     }
 }
 
+// ── import parsing ─────────────────────────────────────
+
+fn parse_import(items: &[SExpr], span: Span, _diags: &mut Diagnostics) -> Result<TopLevel, Diagnostic> {
+    if items.is_empty() {
+        return Err(Diagnostic::error("import requires a path string", span));
+    }
+    let path = expect_string(&items[0])?;
+    let mut alias = None;
+    let mut only = None;
+    let mut i = 1;
+    while i < items.len() {
+        if let Some(kw) = items[i].as_keyword() {
+            match kw {
+                "as" => {
+                    i += 1;
+                    if i >= items.len() {
+                        return Err(Diagnostic::error("expected name after :as", span));
+                    }
+                    alias = Some(expect_symbol(&items[i])?);
+                }
+                "only" => {
+                    i += 1;
+                    if i >= items.len() {
+                        return Err(Diagnostic::error("expected symbol list after :only", span));
+                    }
+                    only = Some(parse_symbol_list(&items[i])?);
+                }
+                _ => return Err(Diagnostic::error(
+                    &format!("unknown import option :{}", kw), span)),
+            }
+        }
+        i += 1;
+    }
+    Ok(TopLevel::Import { path, alias, only, span })
+}
+
 // ── use parsing ────────────────────────────────────────
 
 fn parse_use(items: &[SExpr], span: Span, _diags: &mut Diagnostics) -> Result<UseDef, Diagnostic> {
@@ -1471,6 +1528,108 @@ mod tests {
         } else {
             panic!("expected Task");
         }
+    }
+
+    // ── Import parsing tests ───────────────────────────────
+
+    #[test]
+    fn parse_import_basic() {
+        let tops = parse_top(r#"(import "lib/math.airl")"#);
+        if let TopLevel::Import { path, alias, only, .. } = &tops[0] {
+            assert_eq!(path, "lib/math.airl");
+            assert!(alias.is_none());
+            assert!(only.is_none());
+        } else { panic!("expected Import, got {:?}", tops[0]); }
+    }
+
+    #[test]
+    fn parse_import_with_alias() {
+        let tops = parse_top(r#"(import "lib/math.airl" :as m)"#);
+        if let TopLevel::Import { path, alias, only, .. } = &tops[0] {
+            assert_eq!(path, "lib/math.airl");
+            assert_eq!(alias.as_deref(), Some("m"));
+            assert!(only.is_none());
+        } else { panic!("expected Import"); }
+    }
+
+    #[test]
+    fn parse_import_with_only() {
+        let tops = parse_top(r#"(import "lib/math.airl" :only [abs min max])"#);
+        if let TopLevel::Import { path, alias, only, .. } = &tops[0] {
+            assert_eq!(path, "lib/math.airl");
+            assert!(alias.is_none());
+            assert_eq!(only.as_ref().unwrap(), &vec!["abs".to_string(), "min".to_string(), "max".to_string()]);
+        } else { panic!("expected Import"); }
+    }
+
+    // ── :pub modifier tests ──────────────────────────────
+
+    #[test]
+    fn parse_defn_public() {
+        let tops = parse_top(r#"
+            (defn abs :pub
+              :sig [(x : i64) -> i64]
+              :intent "Absolute value"
+              :requires [(valid x)]
+              :ensures [(>= result 0)]
+              :body (if (< x 0) (- 0 x) x))
+        "#);
+        if let TopLevel::Defn(f) = &tops[0] {
+            assert_eq!(f.name, "abs");
+            assert!(f.is_public);
+        } else { panic!("expected Defn"); }
+    }
+
+    #[test]
+    fn parse_defn_private_by_default() {
+        let tops = parse_top(r#"
+            (defn helper
+              :sig [(x : i64) -> i64]
+              :intent "identity"
+              :requires [(valid x)]
+              :ensures [(= result x)]
+              :body x)
+        "#);
+        if let TopLevel::Defn(f) = &tops[0] {
+            assert!(!f.is_public);
+        } else { panic!("expected Defn"); }
+    }
+
+    #[test]
+    fn parse_deftype_public() {
+        let tops = parse_top(r#"
+            (deftype Color :pub
+              (| (Red) (Green) (Blue)))
+        "#);
+        if let TopLevel::DefType(td) = &tops[0] {
+            assert_eq!(td.name, "Color");
+            assert!(td.is_public);
+        } else { panic!("expected DefType"); }
+    }
+
+    #[test]
+    fn parse_deftype_private_by_default() {
+        let tops = parse_top(r#"
+            (deftype Color
+              (| (Red) (Green) (Blue)))
+        "#);
+        if let TopLevel::DefType(td) = &tops[0] {
+            assert_eq!(td.name, "Color");
+            assert!(!td.is_public);
+        } else { panic!("expected DefType"); }
+    }
+
+    #[test]
+    fn parse_deftype_public_with_type_params() {
+        let tops = parse_top(r#"
+            (deftype MyResult :pub [T : Type, E : Type]
+              (| (Ok T) (Err E)))
+        "#);
+        if let TopLevel::DefType(td) = &tops[0] {
+            assert_eq!(td.name, "MyResult");
+            assert!(td.is_public);
+            assert_eq!(td.type_params.len(), 2);
+        } else { panic!("expected DefType"); }
     }
 
     #[test]
