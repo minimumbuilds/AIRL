@@ -581,6 +581,7 @@ impl TypeChecker {
             }
             ast::TopLevel::Task(_) => Ok(()),
             ast::TopLevel::UseDecl(_) => Ok(()),
+            ast::TopLevel::Import { .. } => Ok(()),
         }
     }
 

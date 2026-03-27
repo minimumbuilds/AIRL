@@ -615,6 +615,242 @@ fn compile_and_load_stdlib_bytecode(vm: &mut BytecodeVm, source: &str, name: &st
     Ok(())
 }
 
+// ── Import-aware pipeline ──────────────────────────────────
+
+/// Run a file that uses `(import ...)` directives. Resolves all imports,
+/// loads dependency modules with qualified function names, then executes
+/// the entry module.
+pub fn run_file_with_imports(entry_path: &str) -> Result<Value, PipelineError> {
+    use crate::resolver::resolve_imports;
+
+    let (modules, import_map) = resolve_imports(entry_path)
+        .map_err(|e| PipelineError::Io(e.to_string()))?;
+
+    let mut module_publics: HashMap<String, Vec<String>> = HashMap::new();
+    for module in &modules {
+        module_publics.insert(module.name.clone(), module.public_fns.clone());
+    }
+
+    #[cfg(feature = "jit")]
+    let mut vm = BytecodeVm::new_with_full_jit();
+    #[cfg(not(feature = "jit"))]
+    let mut vm = BytecodeVm::new();
+
+    // Load stdlib
+    for (src, name) in &[
+        (COLLECTIONS_SOURCE, "collections"),
+        (MATH_SOURCE, "math"),
+        (RESULT_SOURCE, "result"),
+        (STRING_SOURCE, "string"),
+        (MAP_SOURCE, "map"),
+        (SET_SOURCE, "set"),
+    ] {
+        compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
+    }
+
+    let entry_canonical = std::fs::canonicalize(entry_path)
+        .map_err(|e| PipelineError::Io(e.to_string()))?;
+
+    for module in &modules {
+        let is_entry = module.path == entry_canonical;
+        let directives = import_map.get(&module.path)
+            .map(|d| d.as_slice())
+            .unwrap_or(&[]);
+
+        // Filter tops: remove Import nodes, skip Expr for non-entry modules
+        let filtered_tops: Vec<airl_syntax::ast::TopLevel> = module.tops.iter()
+            .filter(|t| !matches!(t, airl_syntax::ast::TopLevel::Import { .. }))
+            .filter(|t| is_entry || !matches!(t, airl_syntax::ast::TopLevel::Expr(_)))
+            .cloned()
+            .collect();
+
+        let ownership_map = build_ownership_map(&filtered_tops);
+        let (ir_nodes, contracts, fn_meta) = compile_tops_with_contracts(&filtered_tops);
+
+        // Rewrite qualified names for the entry module (with visibility checks)
+        let final_ir = if is_entry && !directives.is_empty() {
+            rewrite_qualified_names(&ir_nodes, directives, &module_publics)?
+        } else {
+            ir_nodes
+        };
+
+        if is_entry {
+            let mut bc_compiler = BytecodeCompiler::with_prefix("user");
+            bc_compiler.set_ownership_map(ownership_map);
+            let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&final_ir, &contracts);
+            for func in funcs {
+                vm.load_function(func);
+            }
+            vm.load_function(main_func);
+            for meta in fn_meta {
+                vm.store_fn_metadata(meta);
+            }
+        } else {
+            // Library module: compile functions with qualified names (module_funcname)
+            let mut bc_compiler = BytecodeCompiler::with_prefix(&module.name);
+            bc_compiler.set_ownership_map(ownership_map);
+            let (funcs, _main) = bc_compiler.compile_program_with_contracts(&final_ir, &contracts);
+            for mut func in funcs {
+                // Prefix function name with module name to create qualified name
+                if func.name != "__main__" {
+                    let qualified = format!("{}_{}", module.name, func.name);
+                    func.name = qualified;
+                }
+                vm.load_function(func);
+            }
+            // Execute the module's __main__ (top-level expressions, if any)
+            // For library modules we already filtered out Expr nodes, so this is a no-op
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    vm.jit_full_compile_all();
+    vm.exec_main().map_err(PipelineError::Runtime)
+}
+
+// ── Qualified name rewriting for import resolution ────────
+
+fn rewrite_qualified_names(
+    nodes: &[IRNode],
+    directives: &[crate::resolver::ImportDirective],
+    module_publics: &HashMap<String, Vec<String>>,
+) -> Result<Vec<IRNode>, PipelineError> {
+    nodes.iter()
+        .map(|n| rewrite_ir_node(n, directives, module_publics))
+        .collect()
+}
+
+fn rewrite_ir_node(
+    node: &IRNode,
+    directives: &[crate::resolver::ImportDirective],
+    module_publics: &HashMap<String, Vec<String>>,
+) -> Result<IRNode, PipelineError> {
+    match node {
+        IRNode::Load(name) => {
+            if let Some(rewritten) = rewrite_name(name, directives, module_publics)? {
+                Ok(IRNode::Load(rewritten))
+            } else {
+                Ok(node.clone())
+            }
+        }
+        IRNode::Call(name, args) => {
+            let new_args: Vec<IRNode> = args.iter()
+                .map(|a| rewrite_ir_node(a, directives, module_publics))
+                .collect::<Result<_, _>>()?;
+            if let Some(rewritten) = rewrite_name(name, directives, module_publics)? {
+                Ok(IRNode::Call(rewritten, new_args))
+            } else {
+                Ok(IRNode::Call(name.clone(), new_args))
+            }
+        }
+        IRNode::CallExpr(callee, args) => {
+            Ok(IRNode::CallExpr(
+                Box::new(rewrite_ir_node(callee, directives, module_publics)?),
+                args.iter()
+                    .map(|a| rewrite_ir_node(a, directives, module_publics))
+                    .collect::<Result<_, _>>()?,
+            ))
+        }
+        IRNode::If(c, t, e) => Ok(IRNode::If(
+            Box::new(rewrite_ir_node(c, directives, module_publics)?),
+            Box::new(rewrite_ir_node(t, directives, module_publics)?),
+            Box::new(rewrite_ir_node(e, directives, module_publics)?),
+        )),
+        IRNode::Do(nodes) => Ok(IRNode::Do(
+            nodes.iter()
+                .map(|n| rewrite_ir_node(n, directives, module_publics))
+                .collect::<Result<_, _>>()?,
+        )),
+        IRNode::Let(bindings, body) => {
+            let new_bindings: Vec<IRBinding> = bindings.iter()
+                .map(|b| Ok(IRBinding {
+                    name: b.name.clone(),
+                    expr: rewrite_ir_node(&b.expr, directives, module_publics)?,
+                }))
+                .collect::<Result<_, PipelineError>>()?;
+            Ok(IRNode::Let(new_bindings, Box::new(rewrite_ir_node(body, directives, module_publics)?)))
+        }
+        IRNode::Func(name, params, body) => {
+            Ok(IRNode::Func(name.clone(), params.clone(), Box::new(rewrite_ir_node(body, directives, module_publics)?)))
+        }
+        IRNode::Lambda(params, body) => {
+            Ok(IRNode::Lambda(params.clone(), Box::new(rewrite_ir_node(body, directives, module_publics)?)))
+        }
+        IRNode::List(items) => Ok(IRNode::List(
+            items.iter()
+                .map(|i| rewrite_ir_node(i, directives, module_publics))
+                .collect::<Result<_, _>>()?,
+        )),
+        IRNode::Variant(tag, args) => {
+            Ok(IRNode::Variant(tag.clone(), args.iter()
+                .map(|a| rewrite_ir_node(a, directives, module_publics))
+                .collect::<Result<_, _>>()?))
+        }
+        IRNode::Match(scrutinee, arms) => {
+            let new_arms: Vec<IRArm> = arms.iter()
+                .map(|arm| Ok(IRArm {
+                    pattern: arm.pattern.clone(),
+                    body: rewrite_ir_node(&arm.body, directives, module_publics)?,
+                }))
+                .collect::<Result<_, PipelineError>>()?;
+            Ok(IRNode::Match(
+                Box::new(rewrite_ir_node(scrutinee, directives, module_publics)?),
+                new_arms,
+            ))
+        }
+        IRNode::Try(inner) => Ok(IRNode::Try(Box::new(rewrite_ir_node(inner, directives, module_publics)?))),
+        // Leaf nodes: Int, Float, Str, Bool, Nil — no rewriting needed
+        _ => Ok(node.clone()),
+    }
+}
+
+/// Check if a name should be rewritten based on import directives.
+/// Returns Ok(Some(new_name)) if the name matches a qualified reference or an :only import.
+/// Returns Err if the symbol is private (not in module_publics).
+fn rewrite_name(
+    name: &str,
+    directives: &[crate::resolver::ImportDirective],
+    module_publics: &HashMap<String, Vec<String>>,
+) -> Result<Option<String>, PipelineError> {
+    // Check for qualified name: prefix.symbol (e.g., "math_lib.my-abs")
+    if let Some(dot_pos) = name.find('.') {
+        let prefix = &name[..dot_pos];
+        let symbol = &name[dot_pos + 1..];
+        for d in directives {
+            if d.prefix == prefix {
+                // Visibility check: symbol must be in module's public_fns
+                if let Some(publics) = module_publics.get(&d.module_name) {
+                    if !publics.contains(&symbol.to_string()) {
+                        return Err(PipelineError::Io(format!(
+                            "'{}' is not public in module '{}' -- add :pub to export it",
+                            symbol, d.module_name
+                        )));
+                    }
+                }
+                return Ok(Some(format!("{}_{}", d.module_name, symbol)));
+            }
+        }
+    }
+    // Check for :only imports (bare name that should be rewritten)
+    for d in directives {
+        if let Some(only_list) = &d.only {
+            if only_list.iter().any(|s| s == name) {
+                // Visibility check for :only imports too
+                if let Some(publics) = module_publics.get(&d.module_name) {
+                    if !publics.contains(&name.to_string()) {
+                        return Err(PipelineError::Io(format!(
+                            "'{}' is not public in module '{}' -- add :pub to export it",
+                            name, d.module_name
+                        )));
+                    }
+                }
+                return Ok(Some(format!("{}_{}", d.module_name, name)));
+            }
+        }
+    }
+    Ok(None)
+}
+
 pub fn check_file(path: &str) -> Result<(), PipelineError> {
     let source = std::fs::read_to_string(path)
         .map_err(|e| PipelineError::Io(e.to_string()))?;
@@ -928,6 +1164,109 @@ pub fn compile_to_object(paths: &[String]) -> Result<Vec<u8>, PipelineError> {
     all_funcs.push(main_func); // Only the user's __main__
 
     // 3. AOT compile bytecode → native object
+    let func_map: HashMap<String, BytecodeFunc> = all_funcs.iter()
+        .map(|f| (f.name.clone(), f.clone()))
+        .collect();
+
+    let mut aot = BytecodeAot::new().map_err(|e| PipelineError::Runtime(
+        airl_runtime::error::RuntimeError::TypeError(e)
+    ))?;
+
+    for func in &all_funcs {
+        aot.compile_all(std::slice::from_ref(func), &func_map)
+            .map_err(|e| PipelineError::Runtime(
+                airl_runtime::error::RuntimeError::TypeError(e)
+            ))?;
+    }
+
+    aot.emit_entry_point().map_err(|e| PipelineError::Runtime(
+        airl_runtime::error::RuntimeError::TypeError(e)
+    ))?;
+
+    Ok(aot.finish())
+}
+
+/// Compile AIRL source file with imports to a native object file.
+/// Mirrors `run_file_with_imports` but produces AOT output instead of running in VM.
+#[cfg(feature = "aot")]
+pub fn compile_to_object_with_imports(entry_path: &str) -> Result<Vec<u8>, PipelineError> {
+    use crate::resolver::resolve_imports;
+    use airl_runtime::bytecode::BytecodeFunc;
+    use airl_runtime::bytecode_aot::BytecodeAot;
+
+    let (modules, import_map) = resolve_imports(entry_path)
+        .map_err(|e| PipelineError::Io(e.to_string()))?;
+
+    let mut module_publics: HashMap<String, Vec<String>> = HashMap::new();
+    for module in &modules {
+        module_publics.insert(module.name.clone(), module.public_fns.clone());
+    }
+
+    let mut all_funcs: Vec<BytecodeFunc> = Vec::new();
+
+    // 1. Compile stdlib to bytecode
+    for (src, name) in &[
+        (COLLECTIONS_SOURCE, "collections"),
+        (MATH_SOURCE, "math"),
+        (RESULT_SOURCE, "result"),
+        (STRING_SOURCE, "string"),
+        (MAP_SOURCE, "map"),
+        (SET_SOURCE, "set"),
+    ] {
+        let (funcs, _stdlib_main) = compile_source_to_bytecode(src, name)?;
+        all_funcs.extend(funcs);
+    }
+
+    // 2. Compile each module in dependency order
+    let entry_canonical = std::fs::canonicalize(entry_path)
+        .map_err(|e| PipelineError::Io(e.to_string()))?;
+
+    for module in &modules {
+        let is_entry = module.path == entry_canonical;
+        let directives = import_map.get(&module.path)
+            .map(|d| d.as_slice())
+            .unwrap_or(&[]);
+
+        // Filter tops: remove Import nodes, skip Expr for non-entry modules
+        let filtered_tops: Vec<airl_syntax::ast::TopLevel> = module.tops.iter()
+            .filter(|t| !matches!(t, airl_syntax::ast::TopLevel::Import { .. }))
+            .filter(|t| is_entry || !matches!(t, airl_syntax::ast::TopLevel::Expr(_)))
+            .cloned()
+            .collect();
+
+        let (ir_nodes, contracts, _fn_meta) = compile_tops_with_contracts(&filtered_tops);
+
+        // Rewrite qualified names for the entry module (with visibility checks)
+        let final_ir = if is_entry && !directives.is_empty() {
+            rewrite_qualified_names(&ir_nodes, directives, &module_publics)?
+        } else {
+            ir_nodes
+        };
+
+        if is_entry {
+            let ownership_map = build_ownership_map(&filtered_tops);
+            let mut bc_compiler = BytecodeCompiler::with_prefix("user");
+            bc_compiler.set_ownership_map(ownership_map);
+            let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&final_ir, &contracts);
+            all_funcs.extend(funcs);
+            all_funcs.push(main_func); // Only entry module's __main__
+        } else {
+            // Library module: compile functions with qualified names
+            let ownership_map = build_ownership_map(&filtered_tops);
+            let mut bc_compiler = BytecodeCompiler::with_prefix(&module.name);
+            bc_compiler.set_ownership_map(ownership_map);
+            let (funcs, _main) = bc_compiler.compile_program_with_contracts(&final_ir, &contracts);
+            for mut func in funcs {
+                if func.name != "__main__" {
+                    let qualified = format!("{}_{}", module.name, func.name);
+                    func.name = qualified;
+                }
+                all_funcs.push(func);
+            }
+        }
+    }
+
+    // 3. AOT compile bytecode -> native object
     let func_map: HashMap<String, BytecodeFunc> = all_funcs.iter()
         .map(|f| (f.name.clone(), f.clone()))
         .collect();

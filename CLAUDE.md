@@ -332,6 +332,38 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 - **G3 Self-Hosted Compiler (v0.5.2)** — `bootstrap/g3_compiler.airl` (124 lines) is an AIRL compiler written entirely in AIRL. Pipeline: source → bootstrap lexer → parser → bc_compiler → BCFunc → `compile-bytecode-to-executable` (Cranelift AOT + embedded runtime) → native binary. Includes stdlib compilation (6 modules, 86 functions). New `compile-bytecode-to-executable` builtin takes BCFunc values + output path and produces linked native executables. Cranelift is a builtin, not reimplemented in AIRL (like Go's assembler is part of the Go toolchain). Usage: `airl run --load bootstrap/lexer.airl --load bootstrap/parser.airl --load bootstrap/bc_compiler.airl bootstrap/g3_compiler.airl -- input.airl -o output`.
 
+- **Module System (v0.6.1)** — File-based `(import ...)` with `:pub` visibility, qualified names (`math.abs`), `:as` aliases, `:only` selective imports. Import resolver (`crates/airl-driver/src/resolver.rs`) with circular dependency detection, diamond dependency dedup, and sandbox enforcement (no absolute paths, no `..`). Qualified name rewriting at IR level (`math.abs` → `math_abs`). Works with both VM (`airl run`) and AOT (`airl compile`) paths. Backward compatible — single-file programs unchanged. Design spec: `docs/superpowers/specs/2026-03-27-module-system.md`.
+
+---
+
+## Module System
+
+### Import Syntax
+
+```clojure
+(import "lib/math.airl")             ;; prefix access: (math.abs -5)
+(import "lib/math.airl" :as m)      ;; alias: (m.abs -5)
+(import "lib/math.airl" :only [abs]) ;; bare: (abs -5)
+```
+
+### Export
+
+```clojure
+(defn abs :pub                       ;; visible to importers
+  :sig [(x : i64) -> i64]
+  :body (if (< x 0) (- 0 x) x))
+
+(deftype Color :pub                  ;; visible to importers
+  (| (Red) (Green) (Blue)))
+```
+
+- `:pub` on defn/deftype makes it visible to importers
+- Without `:pub`, functions/types are module-private
+- Stdlib is always available without import
+- Import paths are relative to the importing file's directory
+- No absolute paths or `..` (sandbox constraint)
+- Circular dependencies are detected and rejected at compile time
+
 ---
 
 ## Milestones

@@ -1,0 +1,3 @@
+;; This should fail -- internal-helper is not :pub
+(import "modules/math_lib.airl")
+(math_lib.internal-helper 5)

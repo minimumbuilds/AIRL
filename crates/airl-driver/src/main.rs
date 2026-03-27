@@ -97,6 +97,25 @@ fn cmd_run(args: &[String]) {
             return;
         }
 
+        // Check if file uses imports — use import-aware pipeline
+        let source_check = std::fs::read_to_string(&main).unwrap_or_default();
+        if source_check.contains("(import ") {
+            use airl_driver::pipeline::run_file_with_imports;
+            let result = run_file_with_imports(&main);
+            match result {
+                Ok(val) => {
+                    if !matches!(val, airl_runtime::value::Value::Unit) {
+                        println!("{}", val);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+
         // No preloads: compile to temp binary, execute, clean up
         let temp_bin = std::env::temp_dir().join(format!("airl_run_{}", std::process::id()));
         let temp_str = temp_bin.to_string_lossy().to_string();
@@ -164,80 +183,99 @@ fn cmd_compile(args: &[String]) {
             std::process::exit(1);
         }
 
-        // Compile to object file
-        let obj_bytes = match compile_to_object(&files) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                eprintln!("Compilation error: {}", e);
-                std::process::exit(1);
+        // Check if single file with imports — use import-aware AOT path
+        let obj_bytes = if files.len() == 1 {
+            let source_check = std::fs::read_to_string(&files[0]).unwrap_or_default();
+            if source_check.contains("(import ") {
+                use airl_driver::pipeline::compile_to_object_with_imports;
+                match compile_to_object_with_imports(&files[0]) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        eprintln!("Compilation error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                match compile_to_object(&files) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        eprintln!("Compilation error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
             }
-        };
-
-        // Write object file
-        let obj_path = format!("{}.o", output);
-        std::fs::write(&obj_path, &obj_bytes).unwrap_or_else(|e| {
-            eprintln!("Failed to write {}: {}", obj_path, e);
-            std::process::exit(1);
-        });
-
-        // Find airl-rt static library (embedded or on disk)
-        let (rt_lib, runtime_lib) = find_airl_libs();
-        let rt_lib = if rt_lib == "-lairl_rt" {
-            // Embedded runtime fallback: extract compressed lib from binary
-            #[cfg(feature = "aot")]
-            match airl_runtime::bytecode_aot::extract_embedded_rt() {
-                Some(path) => path,
-                None => rt_lib, // truly not found, let linker error
-            }
-            #[cfg(not(feature = "aot"))]
-            rt_lib
         } else {
-            rt_lib
+            match compile_to_object(&files) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    eprintln!("Compilation error: {}", e);
+                    std::process::exit(1);
+                }
+            }
         };
 
-        // Check if program needs the full runtime (uses run-bytecode or compile-to-executable)
-        let needs_runtime = std::str::from_utf8(&obj_bytes).ok()
-            .map(|_| false) // binary, can't check strings easily
-            .unwrap_or(false)
-            || files.iter().any(|f| {
-                std::fs::read_to_string(f).ok()
-                    .map(|s| s.contains("run-bytecode") || s.contains("compile-to-executable") || s.contains("run-compiled-bc"))
-                    .unwrap_or(false)
-            });
+        // Link object bytes to final binary
+        link_object_to_binary(&obj_bytes, &output, &files);
+    }
+}
 
-        // Link with system cc
-        let mut cmd = std::process::Command::new("cc");
-        cmd.arg(&obj_path)
-            .arg("-o")
-            .arg(&output)
-            .arg(&rt_lib);
-        // Only link libairl_runtime.a for self-hosting programs that need bytecode VM
-        if needs_runtime && !runtime_lib.is_empty() {
-            cmd.arg(&runtime_lib);
-            cmd.arg(&rt_lib); // re-add for symbol resolution order
+/// Write object bytes to disk, link with system cc, produce final binary.
+#[cfg(feature = "aot")]
+fn link_object_to_binary(obj_bytes: &[u8], output: &str, source_files: &[String]) {
+    let obj_path = format!("{}.o", output);
+    std::fs::write(&obj_path, obj_bytes).unwrap_or_else(|e| {
+        eprintln!("Failed to write {}: {}", obj_path, e);
+        std::process::exit(1);
+    });
+
+    // Find airl-rt static library (embedded or on disk)
+    let (rt_lib, runtime_lib) = find_airl_libs();
+    let rt_lib = if rt_lib == "-lairl_rt" {
+        match airl_runtime::bytecode_aot::extract_embedded_rt() {
+            Some(path) => path,
+            None => rt_lib,
         }
-        let status = cmd
-            .arg("-lm")
-            .arg("-lpthread")
-            .arg("-ldl")
-            .arg("-lcurl")
-            .status();
+    } else {
+        rt_lib
+    };
 
-        // Clean up object file
-        let _ = std::fs::remove_file(&obj_path);
+    // Check if program needs the full runtime (uses run-bytecode or compile-to-executable)
+    let needs_runtime = source_files.iter().any(|f| {
+        std::fs::read_to_string(f).ok()
+            .map(|s| s.contains("run-bytecode") || s.contains("compile-to-executable") || s.contains("run-compiled-bc"))
+            .unwrap_or(false)
+    });
 
-        match status {
-            Ok(s) if s.success() => {
-                eprintln!("Compiled to {}", output);
-            }
-            Ok(s) => {
-                eprintln!("Linker failed with exit code {:?}", s.code());
-                std::process::exit(1);
-            }
-            Err(e) => {
-                eprintln!("Failed to run linker (cc): {}", e);
-                std::process::exit(1);
-            }
+    // Link with system cc
+    let mut cmd = std::process::Command::new("cc");
+    cmd.arg(&obj_path)
+        .arg("-o")
+        .arg(output)
+        .arg(&rt_lib);
+    if needs_runtime && !runtime_lib.is_empty() {
+        cmd.arg(&runtime_lib);
+        cmd.arg(&rt_lib);
+    }
+    let status = cmd
+        .arg("-lm")
+        .arg("-lpthread")
+        .arg("-ldl")
+        .arg("-lcurl")
+        .status();
+
+    let _ = std::fs::remove_file(&obj_path);
+
+    match status {
+        Ok(s) if s.success() => {
+            eprintln!("Compiled to {}", output);
+        }
+        Ok(s) => {
+            eprintln!("Linker failed with exit code {:?}", s.code());
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Failed to run linker (cc): {}", e);
+            std::process::exit(1);
         }
     }
 }
