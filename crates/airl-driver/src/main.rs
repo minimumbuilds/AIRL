@@ -97,6 +97,25 @@ fn cmd_run(args: &[String]) {
             return;
         }
 
+        // Check if file uses imports — use import-aware pipeline
+        let source_check = std::fs::read_to_string(&main).unwrap_or_default();
+        if source_check.contains("(import ") {
+            use airl_driver::pipeline::run_file_with_imports;
+            let result = run_file_with_imports(&main);
+            match result {
+                Ok(val) => {
+                    if !matches!(val, airl_runtime::value::Value::Unit) {
+                        println!("{}", val);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+
         // No preloads: compile to temp binary, execute, clean up
         let temp_bin = std::env::temp_dir().join(format!("airl_run_{}", std::process::id()));
         let temp_str = temp_bin.to_string_lossy().to_string();

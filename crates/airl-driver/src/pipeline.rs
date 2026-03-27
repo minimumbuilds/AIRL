@@ -615,6 +615,198 @@ fn compile_and_load_stdlib_bytecode(vm: &mut BytecodeVm, source: &str, name: &st
     Ok(())
 }
 
+// ── Import-aware pipeline ──────────────────────────────────
+
+/// Run a file that uses `(import ...)` directives. Resolves all imports,
+/// loads dependency modules with qualified function names, then executes
+/// the entry module.
+pub fn run_file_with_imports(entry_path: &str) -> Result<Value, PipelineError> {
+    use crate::resolver::resolve_imports;
+
+    let (modules, import_map) = resolve_imports(entry_path)
+        .map_err(|e| PipelineError::Io(e.to_string()))?;
+
+    let mut module_publics: HashMap<String, Vec<String>> = HashMap::new();
+    for module in &modules {
+        module_publics.insert(module.name.clone(), module.public_fns.clone());
+    }
+
+    #[cfg(feature = "jit")]
+    let mut vm = BytecodeVm::new_with_full_jit();
+    #[cfg(not(feature = "jit"))]
+    let mut vm = BytecodeVm::new();
+
+    // Load stdlib
+    for (src, name) in &[
+        (COLLECTIONS_SOURCE, "collections"),
+        (MATH_SOURCE, "math"),
+        (RESULT_SOURCE, "result"),
+        (STRING_SOURCE, "string"),
+        (MAP_SOURCE, "map"),
+        (SET_SOURCE, "set"),
+    ] {
+        compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
+    }
+
+    let entry_canonical = std::fs::canonicalize(entry_path)
+        .map_err(|e| PipelineError::Io(e.to_string()))?;
+
+    for module in &modules {
+        let is_entry = module.path == entry_canonical;
+        let directives = import_map.get(&module.path)
+            .map(|d| d.as_slice())
+            .unwrap_or(&[]);
+
+        // Filter tops: remove Import nodes, skip Expr for non-entry modules
+        let filtered_tops: Vec<airl_syntax::ast::TopLevel> = module.tops.iter()
+            .filter(|t| !matches!(t, airl_syntax::ast::TopLevel::Import { .. }))
+            .filter(|t| is_entry || !matches!(t, airl_syntax::ast::TopLevel::Expr(_)))
+            .cloned()
+            .collect();
+
+        let ownership_map = build_ownership_map(&filtered_tops);
+        let (ir_nodes, contracts, fn_meta) = compile_tops_with_contracts(&filtered_tops);
+
+        // Rewrite qualified names for the entry module
+        let final_ir = if is_entry && !directives.is_empty() {
+            rewrite_qualified_names(&ir_nodes, directives, &module_publics)
+        } else {
+            ir_nodes
+        };
+
+        if is_entry {
+            let mut bc_compiler = BytecodeCompiler::with_prefix("user");
+            bc_compiler.set_ownership_map(ownership_map);
+            let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&final_ir, &contracts);
+            for func in funcs {
+                vm.load_function(func);
+            }
+            vm.load_function(main_func);
+            for meta in fn_meta {
+                vm.store_fn_metadata(meta);
+            }
+        } else {
+            // Library module: compile functions with qualified names (module_funcname)
+            let mut bc_compiler = BytecodeCompiler::with_prefix(&module.name);
+            bc_compiler.set_ownership_map(ownership_map);
+            let (funcs, _main) = bc_compiler.compile_program_with_contracts(&final_ir, &contracts);
+            for mut func in funcs {
+                // Prefix function name with module name to create qualified name
+                if func.name != "__main__" {
+                    let qualified = format!("{}_{}", module.name, func.name);
+                    func.name = qualified;
+                }
+                vm.load_function(func);
+            }
+            // Execute the module's __main__ (top-level expressions, if any)
+            // For library modules we already filtered out Expr nodes, so this is a no-op
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    vm.jit_full_compile_all();
+    vm.exec_main().map_err(PipelineError::Runtime)
+}
+
+// ── Qualified name rewriting for import resolution ────────
+
+fn rewrite_qualified_names(
+    nodes: &[IRNode],
+    directives: &[crate::resolver::ImportDirective],
+    _module_publics: &HashMap<String, Vec<String>>,
+) -> Vec<IRNode> {
+    nodes.iter().map(|n| rewrite_ir_node(n, directives)).collect()
+}
+
+fn rewrite_ir_node(node: &IRNode, directives: &[crate::resolver::ImportDirective]) -> IRNode {
+    match node {
+        IRNode::Load(name) => {
+            if let Some(rewritten) = rewrite_name(name, directives) {
+                IRNode::Load(rewritten)
+            } else {
+                node.clone()
+            }
+        }
+        IRNode::Call(name, args) => {
+            let new_args: Vec<IRNode> = args.iter().map(|a| rewrite_ir_node(a, directives)).collect();
+            if let Some(rewritten) = rewrite_name(name, directives) {
+                IRNode::Call(rewritten, new_args)
+            } else {
+                IRNode::Call(name.clone(), new_args)
+            }
+        }
+        IRNode::CallExpr(callee, args) => {
+            IRNode::CallExpr(
+                Box::new(rewrite_ir_node(callee, directives)),
+                args.iter().map(|a| rewrite_ir_node(a, directives)).collect(),
+            )
+        }
+        IRNode::If(c, t, e) => IRNode::If(
+            Box::new(rewrite_ir_node(c, directives)),
+            Box::new(rewrite_ir_node(t, directives)),
+            Box::new(rewrite_ir_node(e, directives)),
+        ),
+        IRNode::Do(nodes) => IRNode::Do(
+            nodes.iter().map(|n| rewrite_ir_node(n, directives)).collect(),
+        ),
+        IRNode::Let(bindings, body) => {
+            let new_bindings: Vec<IRBinding> = bindings.iter().map(|b| IRBinding {
+                name: b.name.clone(),
+                expr: rewrite_ir_node(&b.expr, directives),
+            }).collect();
+            IRNode::Let(new_bindings, Box::new(rewrite_ir_node(body, directives)))
+        }
+        IRNode::Func(name, params, body) => {
+            IRNode::Func(name.clone(), params.clone(), Box::new(rewrite_ir_node(body, directives)))
+        }
+        IRNode::Lambda(params, body) => {
+            IRNode::Lambda(params.clone(), Box::new(rewrite_ir_node(body, directives)))
+        }
+        IRNode::List(items) => IRNode::List(
+            items.iter().map(|i| rewrite_ir_node(i, directives)).collect(),
+        ),
+        IRNode::Variant(tag, args) => {
+            IRNode::Variant(tag.clone(), args.iter().map(|a| rewrite_ir_node(a, directives)).collect())
+        }
+        IRNode::Match(scrutinee, arms) => {
+            IRNode::Match(
+                Box::new(rewrite_ir_node(scrutinee, directives)),
+                arms.iter().map(|arm| IRArm {
+                    pattern: arm.pattern.clone(),
+                    body: rewrite_ir_node(&arm.body, directives),
+                }).collect(),
+            )
+        }
+        IRNode::Try(inner) => IRNode::Try(Box::new(rewrite_ir_node(inner, directives))),
+        // Leaf nodes: Int, Float, Str, Bool, Nil — no rewriting needed
+        _ => node.clone(),
+    }
+}
+
+/// Check if a name should be rewritten based on import directives.
+/// Returns Some(new_name) if the name matches a qualified reference or an :only import.
+fn rewrite_name(name: &str, directives: &[crate::resolver::ImportDirective]) -> Option<String> {
+    // Check for qualified name: prefix.symbol (e.g., "math.abs")
+    if let Some(dot_pos) = name.find('.') {
+        let prefix = &name[..dot_pos];
+        let symbol = &name[dot_pos + 1..];
+        for d in directives {
+            if d.prefix == prefix {
+                return Some(format!("{}_{}", d.module_name, symbol));
+            }
+        }
+    }
+    // Check for :only imports (bare name that should be rewritten)
+    for d in directives {
+        if let Some(only_list) = &d.only {
+            if only_list.iter().any(|s| s == name) {
+                return Some(format!("{}_{}", d.module_name, name));
+            }
+        }
+    }
+    None
+}
+
 pub fn check_file(path: &str) -> Result<(), PipelineError> {
     let source = std::fs::read_to_string(path)
         .map_err(|e| PipelineError::Io(e.to_string()))?;
