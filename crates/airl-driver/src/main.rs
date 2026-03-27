@@ -75,15 +75,31 @@ fn cmd_run(args: &[String]) {
             None => { eprintln!("No input file specified"); std::process::exit(1); }
         };
 
-        // Build compile args: all preloads + main file + -o temp
+        // If --load is used, we need the VM path: --load modules must be executed
+        // sequentially to register their functions before the main file runs.
+        // This is required for G3 bootstrap (--load lexer/parser/bc_compiler).
+        if !preloads.is_empty() {
+            use airl_driver::pipeline::run_file_with_preloads;
+            let result = run_file_with_preloads(&main, &preloads);
+            match result {
+                Ok(val) => {
+                    if !matches!(val, airl_runtime::value::Value::Unit) {
+                        println!("{}", val);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+
+        // No preloads: compile to temp binary, execute, clean up
         let temp_bin = std::env::temp_dir().join(format!("airl_run_{}", std::process::id()));
         let temp_str = temp_bin.to_string_lossy().to_string();
 
-        let mut compile_args: Vec<String> = Vec::new();
-        for p in &preloads {
-            compile_args.push(p.clone());
-        }
-        compile_args.push(main);
+        let mut compile_args: Vec<String> = vec![main];
         compile_args.push("-o".to_string());
         compile_args.push(temp_str.clone());
 
