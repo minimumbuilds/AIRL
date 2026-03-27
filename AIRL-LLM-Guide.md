@@ -524,6 +524,7 @@ Binary data is represented as `IntList` (list of integers 0-255). All integer en
 | `bytes-from-string` | `(bytes-from-string s)` → IntList | UTF-8 encode string to bytes |
 | `bytes-to-string` | `(bytes-to-string buf offset len)` → Str | UTF-8 decode bytes to string |
 | `bytes-concat` | `(bytes-concat a b)` → IntList | Concatenate two byte lists |
+| `bytes-concat-all` | `(bytes-concat-all parts)` → IntList | Concatenate List[IntList] in one O(n) pass |
 | `bytes-slice` | `(bytes-slice buf offset len)` → IntList | Extract slice with bounds check |
 | `crc32c` | `(crc32c buf)` → Int | CRC32C (Castagnoli) checksum |
 
@@ -533,8 +534,10 @@ Handle-based TCP networking. Connections are managed via integer handles. All op
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
+| `tcp-listen` | `(tcp-listen port backlog)` → Result[Int, Str] | Bind + listen, returns server handle |
+| `tcp-accept` | `(tcp-accept handle)` → Result[Int, Str] | Blocking accept, returns connection handle |
 | `tcp-connect` | `(tcp-connect host port)` → Result[Int, Str] | Connect to host:port, returns handle |
-| `tcp-close` | `(tcp-close handle)` → Result[Nil, Str] | Close a connection |
+| `tcp-close` | `(tcp-close handle)` → Result[Nil, Str] | Close a connection or listener |
 | `tcp-send` | `(tcp-send handle data)` → Result[Int, Str] | Send byte list, returns bytes sent |
 | `tcp-recv` | `(tcp-recv handle max-bytes)` → Result[IntList, Str] | Receive up to max-bytes |
 | `tcp-recv-exact` | `(tcp-recv-exact handle n)` → Result[IntList, Str] | Receive exactly n bytes or error |
@@ -562,10 +565,13 @@ Thread-per-task model with message-passing channels. No shared mutable state.
 |----------|-----------|-------------|
 | `thread-spawn` | `(thread-spawn closure)` → Int | Spawn OS thread running 0-arg closure, returns handle |
 | `thread-join` | `(thread-join handle)` → Result | Block until done. Ok(value) or Err(error-msg) |
+| `thread-set-affinity` | `(thread-set-affinity core-id)` → Result | Pin calling thread to CPU core (Linux only) |
+| `cpu-count` | `(cpu-count)` → Int | Available parallelism (logical CPU count) |
 | `channel-new` | `(channel-new)` → [Int Int] | Create unbounded channel, returns [sender receiver] handles |
 | `channel-send` | `(channel-send tx value)` → Result | Send value. Err if channel closed |
 | `channel-recv` | `(channel-recv rx)` → Result | Blocking receive. Err if channel closed |
-| `channel-recv-timeout` | `(channel-recv-timeout rx ms)` → Result | Receive with timeout. Err "timeout" or "channel closed" |
+| `channel-recv-timeout` | `(channel-recv-timeout rx ms)` → Result | Receive with timeout. ms=0 is non-blocking |
+| `channel-drain` | `(channel-drain rx)` → List | Drain all available messages without blocking |
 | `channel-close` | `(channel-close handle)` → Bool | Close sender or receiver endpoint |
 
 ```lisp

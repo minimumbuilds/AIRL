@@ -298,6 +298,8 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 ```
 (thread-spawn closure) -> Int                       ; spawn thread running 0-arg closure, returns handle
 (thread-join handle) -> Result[any, Str]            ; block until done. Ok(value) or Err(msg)
+(thread-set-affinity core-id) -> Result[Nil, Str]   ; pin calling thread to CPU core (Linux only)
+(cpu-count) -> Int                                  ; available parallelism (logical CPU count)
 ```
 
 ### Channel (unbounded, std::sync::mpsc)
@@ -305,7 +307,8 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (channel-new) -> [Int Int]                          ; returns [sender-handle receiver-handle]
 (channel-send tx value) -> Result[Bool, Str]        ; send value. Err if closed
 (channel-recv rx) -> Result[any, Str]               ; blocking recv. Err if closed
-(channel-recv-timeout rx ms) -> Result[any, Str]    ; recv with timeout. Err "timeout" or "channel closed"
+(channel-recv-timeout rx ms) -> Result[any, Str]    ; recv with timeout. ms=0 is non-blocking (try_recv)
+(channel-drain rx) -> List                          ; drain all available messages without blocking
 (channel-close handle) -> Bool                      ; close sender or receiver
 ```
 
@@ -320,14 +323,17 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (bytes-from-string s) -> IntList      ; UTF-8 encode string to bytes
 (bytes-to-string buf offset len) -> Str ; UTF-8 decode bytes to string
 (bytes-concat a b) -> IntList         ; concatenate two byte lists
+(bytes-concat-all parts) -> IntList   ; concatenate List[IntList] in one O(n) pass
 (bytes-slice buf offset len) -> IntList ; extract slice with bounds check
 (crc32c buf) -> Int                   ; CRC32C checksum
 ```
 
 ### TCP (handle-based, all return Result)
 ```
+(tcp-listen port backlog) -> Result[Int, Str]      ; bind + listen, returns server handle
+(tcp-accept handle) -> Result[Int, Str]            ; blocking accept, returns connection handle
 (tcp-connect host port) -> Result[Int, Str]        ; connect, returns handle
-(tcp-close handle) -> Result[Nil, Str]             ; close connection
+(tcp-close handle) -> Result[Nil, Str]             ; close connection or listener
 (tcp-send handle data) -> Result[Int, Str]         ; send IntList, returns bytes sent
 (tcp-recv handle max-bytes) -> Result[IntList, Str] ; recv up to max-bytes
 (tcp-recv-exact handle n) -> Result[IntList, Str]  ; recv exactly n bytes or error

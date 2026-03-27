@@ -134,22 +134,27 @@ The stdlib is 6 modules (68 functions total) — mostly pure AIRL, with Rust bui
 - `bytes-to-int16`, `bytes-to-int32`, `bytes-to-int64` — decode integer from byte list at offset
 - `bytes-from-string` — UTF-8 encode string to bytes. `bytes-to-string` — UTF-8 decode bytes to string
 - `bytes-concat` — concatenate byte lists. `bytes-slice` — extract slice with bounds check
+- `bytes-concat-all` — `(bytes-concat-all parts)` concatenate List[IntList] in one O(n) pass
 - `crc32c` — CRC32C (Castagnoli) checksum
 
-**TCP socket builtins** (6) in `crates/airl-rt/`:
+**TCP socket builtins** (8) in `crates/airl-rt/`:
+- `tcp-listen` — `(tcp-listen port backlog)` → Result[Int, Str]. Bind + listen, returns server handle.
+- `tcp-accept` — `(tcp-accept handle)` → Result[Int, Str]. Blocking accept, returns connection handle.
 - `tcp-connect` — `(tcp-connect host port)` → Result[Int, Str]. Returns handle for connection.
-- `tcp-close` — close connection by handle
+- `tcp-close` — close connection or listener by handle
 - `tcp-send` — `(tcp-send handle data)` send IntList bytes, returns bytes sent
 - `tcp-recv` — receive up to max-bytes. `tcp-recv-exact` — receive exactly n bytes or error
 - `tcp-set-timeout` — set read/write timeout in milliseconds (≤0 = no timeout)
 
-**Thread/channel builtins** (7) in `crates/airl-rt/`:
-- `thread-spawn` — `(thread-spawn closure)` → Int. Spawn thread running 0-arg closure, returns handle. Each thread gets its own BytecodeVm with shared JIT via Arc.
+**Thread/channel builtins** (10) in `crates/airl-rt/`:
+- `thread-spawn` — `(thread-spawn closure)` → Int. Spawn thread running 0-arg closure, returns handle.
 - `thread-join` — `(thread-join handle)` → Result. Block until done. Ok(value) or Err(msg).
+- `thread-set-affinity` — `(thread-set-affinity core-id)` → Result[Nil, Str]. Pin calling thread to CPU core (Linux).
 - `channel-new` — `(channel-new)` → [sender-handle receiver-handle]. Unbounded mpsc channel.
-- `channel-send`, `channel-recv`, `channel-recv-timeout`, `channel-close` — message-passing operations.
+- `channel-send`, `channel-recv`, `channel-recv-timeout`, `channel-drain`, `channel-close` — message-passing operations.
 
-**System builtins** (6) in `crates/airl-rt/`:
+**System builtins** (7) in `crates/airl-rt/`:
+- `cpu-count` — `(cpu-count)` → Int. Available parallelism (logical CPU count).
 - `shell-exec` — `(shell-exec cmd args-list)` → Result with stdout/stderr/exit-code
 - `time-now` — milliseconds since epoch → Int
 - `sleep` — `(sleep ms)` pause execution for N milliseconds → Nil

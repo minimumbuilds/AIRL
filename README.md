@@ -160,7 +160,7 @@ Every existing programming language optimizes for human readability. AIRL optimi
 - First-class functions and closures
 - Thread-per-task concurrency with message-passing channels
 - **68 stdlib functions** — collections (18), math (12), result combinators (8), string (10), map (8), set (12) — auto-loaded as prelude
-- **90+ Rust builtins** — list (7), string (17), map (10), file I/O (11), float math (15), path (5), regex (4), crypto (5), bytes (11), TCP (6), threads (7), system (6), JSON (2), HTTP (1)
+- **100+ Rust builtins** — list (7), string (17), map (10), file I/O (11), float math (15), path (5), regex (4), crypto (5), bytes (12), TCP (8), threads (10), system (7), JSON (2), HTTP (1)
 
 ### Distribution Model
 
@@ -334,7 +334,7 @@ cargo run --release --features jit -- run examples/01-hello-world/hello_world.ai
 - **58 AOT tests** — all pass through both the Rust-hosted and self-compiled pipelines
 - **~520 Rust tests** across 8 crates
 - **~19,000 lines** of Rust + **~21,000 lines** of AIRL
-- **68 stdlib functions** + **90+ Rust builtins**
+- **68 stdlib functions** + **100+ Rust builtins**
 - **42x faster than Python** on pure arithmetic (AOT)
 - **Contracts always enforced** — native conditional branches in JIT and AOT
 - **Fixpoint verified** — bootstrap compiler produces identical output when self-compiled
