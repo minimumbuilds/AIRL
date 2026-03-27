@@ -86,6 +86,15 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (xor a b) -> Bool
 ```
 
+### Bitwise (2-arg -> Int)
+```
+(bitwise-and a b) -> Int    ; AND
+(bitwise-or a b) -> Int     ; OR
+(bitwise-xor a b) -> Int    ; XOR
+(bitwise-shl a n) -> Int    ; left shift
+(bitwise-shr a n) -> Int    ; LOGICAL right shift (unsigned, no sign-extend)
+```
+
 ### Collections (builtins)
 ```
 (length xs) -> Int              ; list length or string BYTE length
@@ -271,8 +280,17 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 
 ### Crypto
 ```
-(sha256 s) -> Str  (hmac-sha256 key msg) -> Str
-(base64-encode s) -> Str  (base64-decode s) -> Str
+(sha256 s) -> Str  (sha512 s) -> Str          ; hex digest of string
+(hmac-sha256 key msg) -> Str  (hmac-sha512 key msg) -> Str  ; hex HMAC of strings
+(sha256-bytes buf) -> IntList                  ; raw 32-byte hash of IntList
+(sha512-bytes buf) -> IntList                  ; raw 64-byte hash of IntList
+(hmac-sha256-bytes key data) -> IntList        ; raw HMAC of IntList inputs
+(hmac-sha512-bytes key data) -> IntList        ; raw HMAC of IntList inputs
+(pbkdf2-sha256 password salt iterations key-length) -> IntList  ; key derivation
+(pbkdf2-sha512 password salt iterations key-length) -> IntList  ; key derivation
+(base64-encode s) -> Str  (base64-decode s) -> Str             ; string base64
+(base64-encode-bytes buf) -> Str               ; encode IntList to base64 string
+(base64-decode-bytes s) -> IntList             ; decode base64 string to IntList
 (random-bytes n) -> List              ; n random bytes (0-255)
 ```
 
@@ -328,11 +346,27 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (crc32c buf) -> Int                   ; CRC32C checksum
 ```
 
+### Compression (IntList in, IntList out)
+```
+(gzip-compress buf) -> IntList
+(gzip-decompress buf) -> IntList
+(snappy-compress buf) -> IntList
+(snappy-decompress buf) -> IntList
+(lz4-compress buf) -> IntList
+(lz4-decompress buf) -> IntList
+(zstd-compress buf) -> IntList
+(zstd-decompress buf) -> IntList
+```
+
 ### TCP (handle-based, all return Result)
 ```
 (tcp-listen port backlog) -> Result[Int, Str]      ; bind + listen, returns server handle
 (tcp-accept handle) -> Result[Int, Str]            ; blocking accept, returns connection handle
 (tcp-connect host port) -> Result[Int, Str]        ; connect, returns handle
+(tcp-connect-tls host port ca-path cert-path key-path) -> Result[Int, Str]
+  ; TLS connection. ca-path: CA cert PEM ("" = system roots via webpki-roots)
+  ; cert-path/key-path: client cert/key PEM ("" = no client auth)
+  ; returned handle works with tcp-send, tcp-recv, tcp-close
 (tcp-close handle) -> Result[Nil, Str]             ; close connection or listener
 (tcp-send handle data) -> Result[Int, Str]         ; send IntList, returns bytes sent
 (tcp-recv handle max-bytes) -> Result[IntList, Str] ; recv up to max-bytes
