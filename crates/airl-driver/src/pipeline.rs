@@ -937,7 +937,10 @@ pub fn compile_to_object(paths: &[String]) -> Result<Vec<u8>, PipelineError> {
     ))?;
 
     for func in &all_funcs {
-        aot.compile_all(std::slice::from_ref(func), &func_map);
+        aot.compile_all(std::slice::from_ref(func), &func_map)
+            .map_err(|e| PipelineError::Runtime(
+                airl_runtime::error::RuntimeError::TypeError(e)
+            ))?;
     }
 
     aot.emit_entry_point().map_err(|e| PipelineError::Runtime(
