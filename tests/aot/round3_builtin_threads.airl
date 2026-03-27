@@ -1,5 +1,4 @@
 ;; EXPECT: spawn:ok|value:ok|multi:ok|compute:ok
-;; SKIP_AOT: thread-spawn/thread-join not yet registered in AOT extern C map
 (let (h1 : i64 (thread-spawn (fn [] 42)))
      (r1 : _ (thread-join h1))
      (prop1 : String (match r1 (Ok _) "ok" (Err e) (str "FAIL:" e)))

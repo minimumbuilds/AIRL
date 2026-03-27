@@ -12,3 +12,4 @@ pub mod math;
 pub mod variant;
 pub mod closure;
 pub mod misc;
+pub mod thread;

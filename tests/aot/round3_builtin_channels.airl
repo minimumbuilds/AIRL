@@ -1,5 +1,4 @@
 ;; EXPECT: create:ok|sendrecv:ok|order:ok|timeout:ok
-;; SKIP_AOT: channel-new/send/recv not yet registered in AOT extern C map
 (let (ch : List (channel-new))
      (tx : i64 (at ch 0))
      (rx : i64 (at ch 1))

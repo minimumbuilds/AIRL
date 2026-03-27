@@ -40,6 +40,12 @@ pub struct RtValue {
     pub data: RtData,
 }
 
+// Safety: RtValue is manually ref-counted. Thread-safety is managed by
+// retaining before send and releasing after receive. Required for
+// thread-spawn and channel builtins.
+unsafe impl Send for RtValue {}
+unsafe impl Sync for RtValue {}
+
 impl RtValue {
     pub fn alloc(tag: u8, data: RtData) -> *mut RtValue {
         let v = RtValue { tag, rc: 1, data };
