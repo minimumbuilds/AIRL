@@ -12,6 +12,18 @@
 ;; Stdlib is loaded from stdlib/ relative to CWD, or AIRL_STDLIB env var.
 ;; Requires: --features jit,aot on the host airl binary.
 
+;; ── Error formatting ───────────────────────────────────────
+
+(defn g3-format-error
+  :sig [(label : String) (e : _) -> String]
+  :intent "Format errors with file:line:col when available"
+  :requires [(valid label)]
+  :ensures [(valid result)]
+  :body
+    (match e
+      (ParseError msg line col) (str label ":" line ":" col ": " msg)
+      _ (str label ": " e)))
+
 ;; ── Compile a single source string to BCFunc list ────────────
 
 (defn g3-compile-source
@@ -21,13 +33,13 @@
   :ensures [(valid result)]
   :body
     (match (lex source)
-      (Err e) (Err (str "lex error (" label "): " e))
+      (Err e) (Err (g3-format-error label e))
       (Ok tokens)
         (match (parse-sexpr-all tokens)
-          (Err e) (Err (str "parse error (" label "): " e))
+          (Err e) (Err (g3-format-error label e))
           (Ok sexprs)
             (match (parse-program sexprs)
-              (Err e) (Err (str "program error (" label "): " e))
+              (Err e) (Err (g3-format-error label e))
               (Ok ast-nodes)
                 (bc-compile-program ast-nodes)))))
 
@@ -167,16 +179,40 @@
                 (Ok stdlib-funcs)
                   (do
                     (print "[g3] " (length stdlib-funcs) " stdlib functions\n")
-                    ;; Step 2: Compile user source files
-                    (let (all-source : String (fold (fn [acc path]
-                            (str acc (read-file path) "\n"))
-                          "" input-files))
-                      (match (g3-compile-source all-source "user")
-                        (Err e) (do (print "Compile error: " e "\n") (exit 1))
-                        (Ok user-funcs)
+                    ;; Step 2: Compile user source files (per-file for error attribution)
+                    (match (fold (fn [acc path]
+                              (match acc
+                                (Err e) (Err e)
+                                (Ok funcs-so-far)
+                                  (let (source : String (read-file path))
+                                    (match (g3-compile-source source path)
+                                      (Err e) (Err e)
+                                      (Ok new-funcs)
+                                        (Ok (concat funcs-so-far
+                                          (filter (fn [f]
+                                            (match f
+                                              (BCFunc name _ _ _ _ _) (if (= name "__main__") false true)
+                                              _ true))
+                                            new-funcs)))))))
+                            (Ok [])
+                            input-files)
+                      (Err e) (do (print "Compile error: " e "\n") (exit 1))
+                      (Ok user-funcs-no-main)
+                        ;; Compile last file again to get its __main__
+                        (let (last-source : String (read-file (at input-files (- (length input-files) 1))))
+                          (match (g3-compile-source last-source "main")
+                            (Err e) (do (print "Compile error: " e "\n") (exit 1))
+                            (Ok last-funcs)
+                              (let (user-funcs : List (concat user-funcs-no-main
+                                      (filter (fn [f]
+                                        (match f
+                                          (BCFunc name _ _ _ _ _) (= name "__main__")
+                                          _ false))
+                                        last-funcs)))
                           ;; Step 3: Combine and AOT compile
                           (let (all-funcs : List (concat stdlib-funcs user-funcs))
                             (do
                               (print "[g3] " (length all-funcs) " total -> " output-path "\n")
                               (compile-bytecode-to-executable all-funcs output-path)
-                              (print "[g3] done\n"))))))))))))))))
+                              (print "[g3] done\n"))))))))))))))))))
+

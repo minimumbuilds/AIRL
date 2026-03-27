@@ -70,13 +70,13 @@
                        (end-pos : i64 (at result 1))
                       ;; Check for closing rparen
                       (if (>= end-pos (length tokens))
-                        (Err (ParseError "unclosed parenthesis" line col))
+                        (Err (ParseError (str "unclosed '(' opened at line " line " col " col) line col))
                         (let (closer : List (at tokens end-pos))
                           (match closer
                             (Token ck _ _ _)
                               (if (= ck "rparen")
                                 (Ok [(SList items line col) (+ end-pos 1)])
-                                (Err (ParseError "unclosed parenthesis" line col)))))))
+                                (Err (ParseError (str "unclosed '(' opened at line " line " col " col) line col)))))))
                 (Err e) (Err e))
               (if (= kind "lbracket")
                 ;; Parse bracket contents until rbracket
@@ -85,13 +85,13 @@
                     (let (items : List (at result 0))
                          (end-pos : i64 (at result 1))
                         (if (>= end-pos (length tokens))
-                          (Err (ParseError "unclosed bracket" line col))
+                          (Err (ParseError (str "unclosed '[' opened at line " line " col " col) line col))
                           (let (closer : List (at tokens end-pos))
                             (match closer
                               (Token ck _ _ _)
                                 (if (= ck "rbracket")
                                   (Ok [(SBracket items line col) (+ end-pos 1)])
-                                  (Err (ParseError "unclosed bracket" line col)))))))
+                                  (Err (ParseError (str "unclosed '[' opened at line " line " col " col) line col)))))))
                   (Err e) (Err e))
                 (if (= kind "rparen")
                   (Err (ParseError "unexpected ')'" line col))

@@ -1336,7 +1336,7 @@
                   (Ok st4)
                     ;; Compile body
                     (match (bc-compile-expr st4 body dst-reg)
-                      (Err e) (Err e)
+                      (Err e) (Err (str "in function '" name "': " e))
                       (Ok st5)
                         ;; Bind "result" to dst-reg for ensures clauses
                         (let (st6 : _ (cs-set-local st5 "result" dst-reg))
