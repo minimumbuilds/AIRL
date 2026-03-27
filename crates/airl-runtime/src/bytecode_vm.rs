@@ -622,6 +622,9 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "tcp-set-timeout" => airl_rt::misc::airl_tcp_set_timeout(a0!(), a1!()),
         "tcp-connect-tls" => airl_rt::misc::airl_tcp_connect_tls(a0!(), a1!(), a2!(), a3!(),
             args.get(4).copied().unwrap_or(std::ptr::null_mut())),
+        "tcp-listen" => airl_rt::misc::airl_tcp_listen(a0!(), a1!()),
+        "tcp-accept" => airl_rt::misc::airl_tcp_accept(a0!()),
+        "thread-set-affinity" => airl_rt::thread::airl_thread_set_affinity(a0!()),
 
         // Compression
         "gzip-compress" => airl_rt::misc::airl_gzip_compress(a0!()),

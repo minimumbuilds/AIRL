@@ -219,6 +219,32 @@ pub extern "C" fn airl_channel_recv_timeout(rx_handle: *mut RtValue, timeout_ms:
     }
 }
 
+/// Drain all currently available messages from a channel without blocking.
+/// Returns a List of values. Single mutex lock/unlock cycle regardless of message count.
+#[no_mangle]
+pub extern "C" fn airl_channel_drain(rx_handle: *mut RtValue) -> *mut RtValue {
+    let rx_id = match extract_int(rx_handle) {
+        Some(n) => n,
+        None => return rt_err("channel-drain: handle must be Int"),
+    };
+
+    let rx = channel_receivers().lock().unwrap().remove(&rx_id);
+    match rx {
+        Some(rx) => {
+            let mut items = Vec::new();
+            loop {
+                match rx.try_recv() {
+                    Ok(SendPtr(val)) => items.push(val),
+                    Err(_) => break,
+                }
+            }
+            channel_receivers().lock().unwrap().insert(rx_id, rx);
+            crate::list::airl_list_new(items.as_ptr(), items.len())
+        }
+        None => rt_err(&format!("channel-drain: invalid receiver handle {}", rx_id)),
+    }
+}
+
 /// Close a channel handle (sender or receiver). Returns Bool.
 #[no_mangle]
 pub extern "C" fn airl_channel_close(handle: *mut RtValue) -> *mut RtValue {
@@ -229,4 +255,36 @@ pub extern "C" fn airl_channel_close(handle: *mut RtValue) -> *mut RtValue {
     let removed_tx = channel_senders().lock().unwrap().remove(&handle_id).is_some();
     let removed_rx = channel_receivers().lock().unwrap().remove(&handle_id).is_some();
     rt_bool(removed_tx || removed_rx)
+}
+
+// ── Thread affinity ────────────────────────────────────────
+
+/// Pin the calling thread to a specific CPU core.
+/// (thread-set-affinity core-id) -> Result[Nil, Str]
+#[no_mangle]
+pub extern "C" fn airl_thread_set_affinity(core_id: *mut RtValue) -> *mut RtValue {
+    let core = match extract_int(core_id) {
+        Some(n) => n as usize,
+        None => return rt_err("thread-set-affinity: core-id must be Int"),
+    };
+
+    #[cfg(target_os = "linux")]
+    {
+        unsafe {
+            let mut set: libc::cpu_set_t = std::mem::zeroed();
+            libc::CPU_ZERO(&mut set);
+            libc::CPU_SET(core, &mut set);
+            let ret = libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set);
+            if ret == 0 {
+                rt_ok(rt_bool(true))
+            } else {
+                rt_err(&format!("thread-set-affinity: sched_setaffinity failed for core {}", core))
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        rt_err(&format!("thread-set-affinity: not supported on this platform (core {})", core))
+    }
 }

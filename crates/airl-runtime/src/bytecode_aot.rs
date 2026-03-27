@@ -266,10 +266,13 @@ pub struct RuntimeImports {
     pub tcp_recv_exact: FuncId,
     pub tcp_set_timeout: FuncId,
     pub tcp_connect_tls: FuncId,
+    pub tcp_listen: FuncId,
+    pub tcp_accept: FuncId,
 
     // Threads and channels
     pub thread_spawn: FuncId,
     pub thread_join: FuncId,
+    pub thread_set_affinity: FuncId,
     pub channel_new: FuncId,
     pub channel_send: FuncId,
     pub channel_recv: FuncId,
@@ -707,10 +710,13 @@ impl BytecodeAot {
         for _ in 0..5 { sig5.params.push(AbiParam::new(PTR)); }
         sig5.returns.push(AbiParam::new(PTR));
         let tcp_connect_tls = declare_import(m, "airl_tcp_connect_tls", sig5);
+        let tcp_listen = declare_import(m, "airl_tcp_listen", s2.clone());
+        let tcp_accept = declare_import(m, "airl_tcp_accept", s1.clone());
 
         // Threads and channels
         let thread_spawn = declare_import(m, "airl_thread_spawn", s1.clone());
         let thread_join = declare_import(m, "airl_thread_join", s1.clone());
+        let thread_set_affinity = declare_import(m, "airl_thread_set_affinity", s1.clone());
         let s0_ret = sig_0_ptr(m);
         let channel_new = declare_import(m, "airl_channel_new", s0_ret);
         let channel_send = declare_import(m, "airl_channel_send", s2.clone());
@@ -769,8 +775,8 @@ impl BytecodeAot {
             bytes_from_string, bytes_to_string, bytes_concat, bytes_concat_all, bytes_slice, crc32c,
             gzip_compress, gzip_decompress, snappy_compress, snappy_decompress,
             lz4_compress, lz4_decompress, zstd_compress, zstd_decompress,
-            tcp_connect, tcp_close, tcp_send, tcp_recv, tcp_recv_exact, tcp_set_timeout, tcp_connect_tls,
-            thread_spawn, thread_join, channel_new, channel_send, channel_recv, channel_recv_timeout, channel_drain, channel_close,
+            tcp_connect, tcp_close, tcp_send, tcp_recv, tcp_recv_exact, tcp_set_timeout, tcp_connect_tls, tcp_listen, tcp_accept,
+            thread_spawn, thread_join, thread_set_affinity, channel_new, channel_send, channel_recv, channel_recv_timeout, channel_drain, channel_close,
             contract_fail,
         }
     }
@@ -982,9 +988,12 @@ impl BytecodeAot {
         m.insert("tcp-recv-exact".into(),  rt.tcp_recv_exact);
         m.insert("tcp-set-timeout".into(), rt.tcp_set_timeout);
         m.insert("tcp-connect-tls".into(), rt.tcp_connect_tls);
+        m.insert("tcp-listen".into(),      rt.tcp_listen);
+        m.insert("tcp-accept".into(),      rt.tcp_accept);
 
         // Threads and channels
         m.insert("thread-spawn".into(),         rt.thread_spawn);
+        m.insert("thread-set-affinity".into(),  rt.thread_set_affinity);
         m.insert("thread-join".into(),          rt.thread_join);
         m.insert("channel-new".into(),          rt.channel_new);
         m.insert("channel-send".into(),         rt.channel_send);

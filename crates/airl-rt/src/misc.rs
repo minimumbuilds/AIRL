@@ -862,6 +862,56 @@ fn tcp_handles() -> &'static std::sync::Mutex<std::collections::HashMap<i64, RtT
     HANDLES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
+// ── TCP server (listen/accept) ──────────────────────────────────────────
+
+static NEXT_LISTENER_HANDLE: AtomicI64 = AtomicI64::new(1);
+
+fn tcp_listeners() -> &'static std::sync::Mutex<std::collections::HashMap<i64, std::net::TcpListener>> {
+    use std::sync::{Mutex, OnceLock};
+    static LISTENERS: OnceLock<Mutex<std::collections::HashMap<i64, std::net::TcpListener>>> = OnceLock::new();
+    LISTENERS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Bind a TCP server socket. Returns Result[handle, error].
+#[no_mangle]
+pub extern "C" fn airl_tcp_listen(port: *mut RtValue, backlog: *mut RtValue) -> *mut RtValue {
+    let p = match unsafe { &(*port).data } { RtData::Int(n) => *n as u16, _ => return err_variant("tcp-listen: port must be int") };
+    let _ = match unsafe { &(*backlog).data } { RtData::Int(n) => *n, _ => 128 }; // backlog hint (OS may ignore)
+    match std::net::TcpListener::bind(format!("0.0.0.0:{}", p)) {
+        Ok(listener) => {
+            let handle = NEXT_LISTENER_HANDLE.fetch_add(1, Ordering::SeqCst);
+            tcp_listeners().lock().unwrap().insert(handle, listener);
+            ok_variant(rt_int(handle))
+        }
+        Err(e) => err_variant(&format!("tcp-listen: {}", e)),
+    }
+}
+
+/// Accept a connection on a listening socket. Blocking. Returns Result[conn-handle, error].
+/// The returned handle is a regular TCP connection handle (same as tcp-connect returns).
+#[no_mangle]
+pub extern "C" fn airl_tcp_accept(listener_handle: *mut RtValue) -> *mut RtValue {
+    let lh = match unsafe { &(*listener_handle).data } { RtData::Int(n) => *n, _ => return err_variant("tcp-accept: handle must be int") };
+    // Remove listener from map so we can block on accept without holding the lock
+    let listener = tcp_listeners().lock().unwrap().remove(&lh);
+    match listener {
+        Some(listener) => {
+            let result = match listener.accept() {
+                Ok((stream, _addr)) => {
+                    let conn_handle = NEXT_TCP_HANDLE.fetch_add(1, Ordering::SeqCst);
+                    tcp_handles().lock().unwrap().insert(conn_handle, RtTcpHandle::Plain(stream));
+                    ok_variant(rt_int(conn_handle))
+                }
+                Err(e) => err_variant(&format!("tcp-accept: {}", e)),
+            };
+            // Put listener back
+            tcp_listeners().lock().unwrap().insert(lh, listener);
+            result
+        }
+        None => err_variant(&format!("tcp-accept: invalid listener handle {}", lh)),
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn airl_tcp_connect(host: *mut RtValue, port: *mut RtValue) -> *mut RtValue {
     let h = match unsafe { &(*host).data } { RtData::Str(s) => s.clone(), _ => return err_variant("host must be string") };
