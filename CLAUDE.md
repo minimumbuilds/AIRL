@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~520 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.5.2.
+AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~520 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.6.0. **Self-hosted:** the G3 compiler is written in AIRL and produces native binaries.
 
 **Language spec:** `AIRL-Language-Specification-v0.1.0.md`
 **LLM header:** `AIRL-Header.md` — **MUST read before writing any AIRL code.** Compressed reference with all traps, syntax, signatures, and patterns (~360 lines, ~3K tokens). Replaces the 7-file pre-flight checklist.
@@ -36,7 +36,7 @@ cargo run --features jit -- check <file.airl>          # Type-check and verify
 cargo run --features jit -- repl                       # Interactive REPL
 ```
 
-**Execution model (v0.5.1):** Two paths, one runtime. `airl run` JIT-full-compiles all functions to native x86-64 via Cranelift, falling back to the bytecode VM for ineligible functions. `airl compile` AOT-compiles to standalone native executables. Both paths call builtins via `extern "C"` functions in `crates/airl-rt/` (Rust). VM-aware builtins provide native `map`/`filter`/`fold`/`sort` with IntList specialization and inline closure compilation. Eligible pure-arithmetic functions use raw `i64`/`f64` register ops (42x faster than Python). Contract assertions and ownership checks compile to native conditional branches. Thread-per-task concurrency with message-passing channels (v0.5.0).
+**Execution model (v0.6.0):** Three paths, one runtime. `airl run` JIT-compiles all functions to native x86-64 via Cranelift. `airl compile` AOT-compiles to standalone native executables. `./g3 --` uses the self-hosted AIRL compiler (bootstrap lexer/parser/bc_compiler → Cranelift AOT). All paths call builtins via `extern "C"` functions in `crates/airl-rt/` (Rust). VM-aware builtins provide native `map`/`filter`/`fold`/`sort` with IntList specialization and inline closure compilation. Contract assertions and ownership checks compile to native conditional branches. Thread-per-task concurrency with message-passing channels.
 
 **First build note:** Z3 (in `airl-solver`) compiles from C++ source on first build (~5-15 min). Requires CMake, C++ compiler, Python 3.
 
@@ -71,11 +71,11 @@ airl-driver ← airl-solver (Z3)
 
 **Location:** `stdlib/` directory (embedded in binary via `include_str!`, auto-loaded before user code)
 
-The stdlib is 5 modules (60 functions total) — mostly pure AIRL, with Rust builtins for list destructuring, string character access, file I/O, float math, and HTTP.
+The stdlib is 6 modules (68 functions total) — mostly pure AIRL, with Rust builtins for list destructuring, string character access, file I/O, float math, and HTTP.
 
 ### Primitive Builtins (Rust)
 
-**List builtins** (7) in `crates/airl-runtime/src/builtins.rs`:
+**List builtins** (7) in `crates/airl-rt/`:
 - `head` — first element of list (errors on empty)
 - `tail` — all but first element (errors on empty)
 - `empty?` — is list empty? → Bool
@@ -84,7 +84,7 @@ The stdlib is 5 modules (60 functions total) — mostly pure AIRL, with Rust bui
 - `set-at` — `(set-at list idx val)` immutable update at index, returns new list
 - `list-contains?` — `(list-contains? list val)` element membership check → Bool
 
-**String builtins** (17) in `crates/airl-runtime/src/builtins.rs`:
+**String builtins** (17) in `crates/airl-rt/`:
 - `str` — **variadic string concatenation with auto-coercion**. `(str "count: " 42 " done")` → `"count: 42 done"`. Strings included as-is (no quotes); all other types auto-coerced via Display.
 - `char-at`, `substring`, `chars` — character access (Unicode-safe)
 - `split`, `join` — split/join strings
@@ -93,13 +93,13 @@ The stdlib is 5 modules (60 functions total) — mostly pure AIRL, with Rust bui
 - `char-code` — `(char-code "A")` → `65` (Unicode codepoint of first character)
 - `char-from-code` — `(char-from-code 65)` → `"A"` (1-char string from codepoint)
 
-**Map builtins** (10) in `crates/airl-runtime/src/builtins.rs`:
+**Map builtins** (10) in `crates/airl-rt/`:
 - `map-new`, `map-from` — creation
 - `map-get`, `map-get-or`, `map-has`, `map-size` — reading
 - `map-set`, `map-remove` — mutation (returns new map)
 - `map-keys`, `map-values` — enumeration
 
-**File I/O builtins** (11) in `crates/airl-runtime/src/builtins.rs`:
+**File I/O builtins** (11) in `crates/airl-rt/`:
 - `read-file`, `write-file`, `append-file` — read/write/append file contents
 - `file-exists?`, `is-dir?` — path queries
 - `delete-file`, `delete-dir` — removal (delete-file rejects directories)
@@ -109,47 +109,47 @@ The stdlib is 5 modules (60 functions total) — mostly pure AIRL, with Rust bui
 - `file-size` — size in bytes → Int
 - All paths sandbox-validated: no absolute paths, no `..`
 
-**Float math builtins** (15) in `crates/airl-runtime/src/builtins.rs`:
+**Float math builtins** (15) in `crates/airl-rt/`:
 - `sqrt`, `sin`, `cos`, `tan`, `log` (natural), `exp` — transcendentals (accept Int or Float)
 - `floor`, `ceil`, `round` — rounding (return Int)
 - `float-to-int`, `int-to-float` — explicit numeric conversion
 - `infinity`, `nan` — IEEE 754 special values (0-arg constructors)
 - `is-nan?`, `is-infinite?` — IEEE 754 predicates → Bool
 
-**Error handling builtins** (2) in `crates/airl-runtime/src/builtins.rs`:
+**Error handling builtins** (2) in `crates/airl-rt/`:
 - `panic` — `(panic msg)` abort execution with custom error message
 - `assert` — `(assert condition msg)` abort if condition is false, returns `true` if passes
 
-**Type conversion builtins** (5) in `crates/airl-runtime/src/builtins.rs`:
+**Type conversion builtins** (5) in `crates/airl-rt/`:
 - `int-to-string`, `float-to-string` — numeric to string
 - `string-to-int`, `string-to-float` — string to numeric (returns Result)
 - `type-of` — returns type name as string
 
-**Network/JSON builtins** (3) in `crates/airl-runtime/src/builtins.rs`:
+**Network/JSON builtins** (3) in `crates/airl-rt/`:
 - `http-request` — `(http-request method url body headers)` → Result[Str, Str]. Supports GET, POST, PUT, DELETE, PATCH, HEAD.
 - `json-parse`, `json-stringify` — JSON ↔ AIRL value conversion
 
-**Byte encoding builtins** (11) in `crates/airl-runtime/src/builtins.rs`:
+**Byte encoding builtins** (11) in `crates/airl-rt/`:
 - `bytes-from-int16`, `bytes-from-int32`, `bytes-from-int64` — integer to big-endian byte list (IntList)
 - `bytes-to-int16`, `bytes-to-int32`, `bytes-to-int64` — decode integer from byte list at offset
 - `bytes-from-string` — UTF-8 encode string to bytes. `bytes-to-string` — UTF-8 decode bytes to string
 - `bytes-concat` — concatenate byte lists. `bytes-slice` — extract slice with bounds check
 - `crc32c` — CRC32C (Castagnoli) checksum
 
-**TCP socket builtins** (6) in `crates/airl-runtime/src/builtins.rs`:
+**TCP socket builtins** (6) in `crates/airl-rt/`:
 - `tcp-connect` — `(tcp-connect host port)` → Result[Int, Str]. Returns handle for connection.
 - `tcp-close` — close connection by handle
 - `tcp-send` — `(tcp-send handle data)` send IntList bytes, returns bytes sent
 - `tcp-recv` — receive up to max-bytes. `tcp-recv-exact` — receive exactly n bytes or error
 - `tcp-set-timeout` — set read/write timeout in milliseconds (≤0 = no timeout)
 
-**Thread/channel builtins** (7) in `crates/airl-runtime/src/builtins.rs`:
+**Thread/channel builtins** (7) in `crates/airl-rt/`:
 - `thread-spawn` — `(thread-spawn closure)` → Int. Spawn thread running 0-arg closure, returns handle. Each thread gets its own BytecodeVm with shared JIT via Arc.
 - `thread-join` — `(thread-join handle)` → Result. Block until done. Ok(value) or Err(msg).
 - `channel-new` — `(channel-new)` → [sender-handle receiver-handle]. Unbounded mpsc channel.
 - `channel-send`, `channel-recv`, `channel-recv-timeout`, `channel-close` — message-passing operations.
 
-**System builtins** (6) in `crates/airl-runtime/src/builtins.rs`:
+**System builtins** (6) in `crates/airl-rt/`:
 - `shell-exec` — `(shell-exec cmd args-list)` → Result with stdout/stderr/exit-code
 - `time-now` — milliseconds since epoch → Int
 - `sleep` — `(sleep ms)` pause execution for N milliseconds → Nil
@@ -341,35 +341,24 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 **External dependency:** System C linker (`cc`) for final linking. Present on all Linux/macOS systems.
 
-### Self-Compilation Status (2026-03-26)
+### Self-Compilation — ACHIEVED (v0.6.0)
 
-**Step 1 achieved:** The Rust-hosted G3 compiler compiles itself into a 43MB native binary (`g3`). This binary contains all 282 functions (85 stdlib + 197 bootstrap/compiler) as native x86-64 code. Compilation takes ~2 hours / ~25GB RAM (bootstrap compiler running in bytecode VM on ~3500 lines of AIRL source).
+**The AIRL compiler compiles itself.** The G3 binary (39MB, ~23 min compile time) correctly compiles and runs all 58 AOT test programs covering bootstrap compiler, 68 stdlib functions, and 90+ Rust builtins.
 
-**Step 2 blocked:** The self-compiled `g3` binary segfaults or errors when run. Root cause: **AOT codegen divergence between Rust-compiled and bootstrap-compiled bytecode.**
+**Bug that blocked self-compilation (fixed in v0.6.0):** `bc-compile-if` in `bootstrap/bc_compiler.airl` freed the condition register back to `dst+1` instead of `cond-reg`, allowing subsequent register allocations to overwrite let-bound variables. This caused `airl_add: type mismatch` when string concat and int arithmetic coexisted in let bodies under if branches. Single-line fix.
 
-The same AIRL function (e.g., `fold`) produces different bytecode depending on which compiler emits it:
-- **Rust bytecode compiler** (`bytecode_compiler.rs`): produces bytecode that the AOT compiler handles correctly.
-- **Bootstrap bytecode compiler** (`bootstrap/bc_compiler.airl`): produces functionally equivalent but structurally different bytecode that triggers bugs in the AOT compiler.
+**Earlier bugs fixed (v0.5.2):**
+- `compile_bytecode_to_executable` silently dropped AOT compilation errors — functions could be declared but never defined (segfault). Fixed: errors now propagate.
+- Variadic `print` arity conflict — 1-arg call registered wrong Cranelift signature for multi-arg calls. Fixed: variadic check no longer depends on `call_targets` state.
 
-Specific failure: `fold` + `append` through closures in the G3 binary's `__main__` crashes with `airl_append: not a List`. The same pattern works in Rust-compiled AOT binaries. The bootstrap-compiled `fold` passes values through recursive calls differently, causing list type tags to be lost in the AOT-compiled native code.
-
-**Bugs found and fixed (v0.5.2):**
-- `compile_bytecode_to_executable` silently dropped AOT compilation errors (`let _ = compile_all(...)`) — functions could be declared but never defined, producing calls to address 0 (segfault). **Fixed:** errors now propagate.
-- Variadic `print` in functions that also call `print` with 1 argument — the 1-arg call registered `print` in `call_targets` with a 1-param Cranelift signature, then multi-arg calls tried to use that signature (Cranelift verifier error). **Fixed:** variadic check no longer depends on `call_targets` state.
-
-**Root cause (unfixed):** The AOT compiler has two fundamentally separate code paths that must agree on value representation:
-1. **Bytecode VM builtins** (`builtins.rs`): Rust functions taking `&[Value]` → `Result<Value>`
-2. **AOT extern C builtins** (`airl-rt/`): C-ABI functions taking `*mut RtValue` → `*mut RtValue`
-
-These paths can diverge — and do. ~50 builtins exist in the VM but not in AOT. The AOT compiler has hardcoded maps that silently skip unknown builtins. The bootstrap compiler may emit opcode sequences that expose representation mismatches the Rust compiler doesn't produce.
+**AOT unification (v0.6.0):** Deleted `builtins.rs` (-5,472 lines). VM now uses `RtValue` registers and calls the same `extern "C"` functions as AOT. Single builtin dispatch path eliminates the representation divergence that caused G3 crashes.
 
 ### Remaining — Next Steps
 
-1. **AOT unification (blocks fixpoint)** — Single builtin dispatch for both VM and AOT. Replace the two separate implementations (Rust `builtins.rs` + C-ABI `airl-rt/`) with one: auto-generate `extern "C"` wrappers from a single registration. This eliminates the divergence that blocks self-compilation.
-2. **Self-compilation (fixpoint)** — Once AOT unification is complete, G3 compiles itself and the output binary works correctly. Verify: G3₁ compiles G3 → G3₂, G3₂ compiles G3 → G3₃, G3₂ == G3₃.
-3. **Eliminate `cc` dependency** — Replace system linker with Cranelift native ELF emission or bundled linker. Zero external dependencies.
-4. **~50 missing AOT builtin registrations** — Thread/channel, type conversion, tensor builtins not yet in Cranelift maps. Subsumed by AOT unification.
-5. **Z3 verification depth** — Extend Z3 to prove list and ADT properties.
+1. **Eliminate `cc` dependency** — Replace system linker with Cranelift native ELF emission or bundled linker. Zero external dependencies.
+2. **macOS/ARM support** — Make Cranelift target triple dynamic (currently hardcoded to x86-64-linux). ~50 lines of changes + testing on Apple Silicon.
+3. **Z3 verification depth** — Extend Z3 to prove list and ADT properties.
+4. **G3₂ fixpoint** — Verify G3₁ compiles G3 → G3₂, G3₂ compiles G3 → G3₃, G3₂ == G3₃ (binary-level fixpoint).
 
 ---
 
@@ -389,6 +378,9 @@ cargo run --release --features jit -- run bootstrap/compiler_test.airl    # IR c
 cargo run --release --features jit -- run bootstrap/compiler_integration_test.airl  # IR compiler integration tests
 cargo run --release --features jit -- run bootstrap/equivalence_test.airl           # Interpreted vs compiled equivalence (32 tests)
 cargo run --release --features jit -- run bootstrap/fixpoint_test.airl              # Compiler fixpoint test (slow, ~60min release)
+
+# G2 AOT test suite (58 tests — compile via bootstrap compiler, run as native binaries)
+bash tests/aot/run_aot_tests.sh
 ```
 
 **Important AIRL constraints for bootstrap code:**
