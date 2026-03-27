@@ -213,6 +213,8 @@
                           (let (all-funcs : List (concat stdlib-funcs user-funcs))
                             (do
                               (print "[g3] " (length all-funcs) " total -> " output-path "\n")
-                              (compile-bytecode-to-executable all-funcs output-path)
-                              (print "[g3] done\n"))))))))))))))))))
+                              (let (compile-result : _ (compile-bytecode-to-executable all-funcs output-path))
+                                (match compile-result
+                                  (Err e) (do (print "[g3] COMPILE ERROR: " e "\n") (exit 1))
+                                  _ (print "[g3] done\n"))))))))))))))))))))
 
