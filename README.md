@@ -11,7 +11,7 @@ AIRL is a typed, contract-verified programming language for inter-agent communic
 (defn safe-divide
   :sig [(a : i32) (b : i32) -> Result[i32, DivError]]
   :intent "Divide a by b, returning Err on division by zero"
-  :requires [(valid a) (valid b)]
+  :[requires](requires) [(valid a) (valid b)]
   :ensures [(match result
               (Ok v)  (= (* v b) a)
               (Err _) (= b 0))]
@@ -179,17 +179,18 @@ The runtime library (`libairl_rt.a`) is embedded in the compiler binary — comp
 
 ### Compilation & Execution
 
-Two execution modes, both sharing the same Rust runtime (`crates/airl-rt/`):
+AIRL compiles to **native x86-64 executables** via Cranelift. All code goes through the same compilation pipeline:
 
-**`airl run` (JIT)** — All functions compiled to native x86-64 via Cranelift at load time. Falls back to bytecode VM for ineligible functions.
-
-**`airl compile` / `g3` (AOT)** — Produces standalone native executables. Functions compile with `*mut RtValue` heap-allocated values via `airl-rt` runtime calls. Contract assertions compile to native conditional branches.
-
-Both modes share the same frontend pipeline:
 1. **Source → AST** — Hand-written recursive descent parser (LL(1))
 2. **Static analysis** — Type checking, linearity checking, Z3 contract verification
 3. **AST → Bytecode** — Contracts compiled as assertion opcodes, ownership as move-tracking opcodes
-4. **Cranelift compilation** — JIT (in-memory) or AOT (object file → link → native executable)
+4. **Cranelift AOT** — Bytecode → object file → link with `libairl_rt.a` → native executable
+
+**`airl compile`** — Produces standalone native executables.
+**`airl run`** — Compiles to a temp binary, executes it, cleans up (convenience wrapper).
+**`./g3`** — Self-hosted compiler, same AOT pipeline written in AIRL.
+
+Contract assertions compile to native conditional branches — essentially free on the happy path.
 
 ### Performance
 
@@ -337,7 +338,7 @@ cargo run --release --features jit -- run examples/01-hello-world/hello_world.ai
 - **42x faster than Python** on pure arithmetic (AOT)
 - **Contracts always enforced** — native conditional branches in JIT and AOT
 - **Fixpoint verified** — bootstrap compiler produces identical output when self-compiled
-- **Zero external deps** for core crates (Cranelift behind `jit`/`aot` features; Z3 in `airl-solver`)
+- **Zero external deps** for core crates (Cranelift behind `jit,aot` features; Z3 in `airl-solver`)
 
 ## Specification
 
