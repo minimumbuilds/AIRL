@@ -116,6 +116,13 @@ The stdlib is 6 modules (68 functions total) — mostly pure AIRL, with Rust bui
 - `infinity`, `nan` — IEEE 754 special values (0-arg constructors)
 - `is-nan?`, `is-infinite?` — IEEE 754 predicates → Bool
 
+**Bitwise builtins** (5) in `crates/airl-rt/`:
+- `bitwise-and` — `(bitwise-and a b)` → Int. Bitwise AND.
+- `bitwise-or` — `(bitwise-or a b)` → Int. Bitwise OR.
+- `bitwise-xor` — `(bitwise-xor a b)` → Int. Bitwise XOR.
+- `bitwise-shl` — `(bitwise-shl a n)` → Int. Left shift.
+- `bitwise-shr` — `(bitwise-shr a n)` → Int. Logical right shift (unsigned, no sign-extend).
+
 **Error handling builtins** (2) in `crates/airl-rt/`:
 - `panic` — `(panic msg)` abort execution with custom error message
 - `assert` — `(assert condition msg)` abort if condition is false, returns `true` if passes
@@ -137,10 +144,33 @@ The stdlib is 6 modules (68 functions total) — mostly pure AIRL, with Rust bui
 - `bytes-concat-all` — `(bytes-concat-all parts)` concatenate List[IntList] in one O(n) pass
 - `crc32c` — CRC32C (Castagnoli) checksum
 
-**TCP socket builtins** (8) in `crates/airl-rt/`:
+**Compression builtins** (8) in `crates/airl-rt/`:
+- `gzip-compress`, `gzip-decompress` — gzip compression/decompression (IntList in, IntList out)
+- `snappy-compress`, `snappy-decompress` — Snappy compression/decompression (IntList in, IntList out)
+- `lz4-compress`, `lz4-decompress` — LZ4 compression/decompression (IntList in, IntList out)
+- `zstd-compress`, `zstd-decompress` — Zstandard compression/decompression (IntList in, IntList out)
+
+**Crypto builtins** (13) in `crates/airl-rt/`:
+- `sha256` — `(sha256 s)` → Str. Hex digest of string.
+- `sha512` — `(sha512 s)` → Str. Hex digest of string.
+- `hmac-sha256` — `(hmac-sha256 key msg)` → Str. Hex HMAC of strings.
+- `hmac-sha512` — `(hmac-sha512 key msg)` → Str. Hex HMAC of strings.
+- `sha256-bytes` — `(sha256-bytes buf)` → IntList. Raw 32-byte hash of IntList.
+- `sha512-bytes` — `(sha512-bytes buf)` → IntList. Raw 64-byte hash of IntList.
+- `hmac-sha256-bytes` — `(hmac-sha256-bytes key data)` → IntList. Raw HMAC of IntList inputs.
+- `hmac-sha512-bytes` — `(hmac-sha512-bytes key data)` → IntList. Raw HMAC of IntList inputs.
+- `pbkdf2-sha256` — `(pbkdf2-sha256 password salt iterations key-length)` → IntList. Key derivation.
+- `pbkdf2-sha512` — `(pbkdf2-sha512 password salt iterations key-length)` → IntList. Key derivation.
+- `base64-encode`, `base64-decode` — string base64 encode/decode
+- `base64-encode-bytes` — `(base64-encode-bytes buf)` → Str. Encode IntList to base64 string.
+- `base64-decode-bytes` — `(base64-decode-bytes s)` → IntList. Decode base64 string to IntList.
+- `random-bytes` — `(random-bytes n)` → List. N random bytes (0-255).
+
+**TCP socket builtins** (9) in `crates/airl-rt/`:
 - `tcp-listen` — `(tcp-listen port backlog)` → Result[Int, Str]. Bind + listen, returns server handle.
 - `tcp-accept` — `(tcp-accept handle)` → Result[Int, Str]. Blocking accept, returns connection handle.
 - `tcp-connect` — `(tcp-connect host port)` → Result[Int, Str]. Returns handle for connection.
+- `tcp-connect-tls` — `(tcp-connect-tls host port ca-path cert-path key-path)` → Result[Int, Str]. TLS connection. `ca-path`: CA cert PEM (`""` = system roots via webpki-roots). `cert-path`/`key-path`: client cert/key PEM (`""` = no client auth). Returned handle works with `tcp-send`, `tcp-recv`, `tcp-close`.
 - `tcp-close` — close connection or listener by handle
 - `tcp-send` — `(tcp-send handle data)` send IntList bytes, returns bytes sent
 - `tcp-recv` — receive up to max-bytes. `tcp-recv-exact` — receive exactly n bytes or error

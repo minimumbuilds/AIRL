@@ -1952,7 +1952,9 @@ impl BytecodeAot {
                                 .declare_function(callee_name, Linkage::Local, &call_sig)
                                 .map_err(|e| format!("call declare (eligible): {}", e))?;
                             call_targets.insert(callee_name.clone(), callee_id);
-                        } else {
+                        } else if all_functions.contains_key(callee_name.as_str())
+                            || self.compiled_funcs.contains_key(callee_name.as_str())
+                        {
                             let mut call_sig = self.module.make_signature();
                             for _ in 0..argc {
                                 call_sig.params.push(AbiParam::new(PTR));
@@ -1963,6 +1965,12 @@ impl BytecodeAot {
                                 .declare_function(callee_name, Linkage::Local, &call_sig)
                                 .map_err(|e| format!("call declare: {}", e))?;
                             call_targets.insert(callee_name.clone(), callee_id);
+                        } else {
+                            return Err(format!(
+                                "unresolved function: '{}' (called from '{}'). \
+                                 Not found in compiled functions or builtins.",
+                                callee_name, func.name
+                            ));
                         }
                     }
                 }
@@ -3689,5 +3697,31 @@ mod tests {
             let result = aot.compile_func_unboxed(&func, &all);
             assert!(result.is_ok(), "CallBuiltin('{}') unboxed compilation failed: {:?}", op_name, result.err());
         }
+    }
+
+    #[test]
+    fn unresolved_function_produces_error() {
+        // Calling a function that doesn't exist should produce a compile-time error,
+        // not a silent declaration that leads to a segfault at runtime.
+        let func = BytecodeFunc {
+            name: "caller".into(),
+            arity: 0,
+            register_count: 4,
+            capture_count: 0,
+            instructions: vec![
+                Instruction::new(Op::LoadConst, 0, 0, 0),  // r0 = 42
+                Instruction::new(Op::Move, 2, 0, 0),       // r2 = r0 (arg slot)
+                Instruction::new(Op::Call, 1, 1, 1),        // r1 = nonexistent-fn(r2); name_idx=1, argc=1
+                Instruction::new(Op::Return, 0, 1, 0),
+            ],
+            constants: vec![Value::Int(42), Value::Str("nonexistent-function".into())],
+        };
+        let all: HashMap<String, BytecodeFunc> = HashMap::new();
+        let mut aot = BytecodeAot::new().unwrap();
+        let result = aot.compile_func(&func, &all);
+        assert!(result.is_err(), "Expected error for unresolved function, got Ok");
+        let err = result.unwrap_err();
+        assert!(err.contains("unresolved function"), "Error should mention 'unresolved function', got: {}", err);
+        assert!(err.contains("nonexistent-function"), "Error should mention the function name, got: {}", err);
     }
 }
