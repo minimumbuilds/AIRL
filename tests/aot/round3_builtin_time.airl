@@ -1,0 +1,20 @@
+;; EXPECT: now:ok|monotonic:ok|sleep:ok|format:ok|epoch:ok
+;; Tests: time-now returns positive int, monotonic, sleep delays, format-time
+(let (t1 : i64 (time-now))
+     (prop1 : String (if (> t1 0) "ok" "FAIL:not-positive"))
+     ;; monotonic: t2 >= t1
+     (t2 : i64 (time-now))
+     (prop2 : String (if (>= t2 t1) "ok" "FAIL:not-monotonic"))
+     ;; sleep: at least 10ms passes
+     (before : i64 (time-now))
+  (do (sleep 50)
+      (let (after : i64 (time-now))
+           (elapsed : i64 (- after before))
+           (prop3 : String (if (>= elapsed 40) "ok" (str "FAIL:elapsed=" elapsed)))
+           ;; format-time: epoch 0 = 1970-01-01
+           (formatted : String (format-time 0 "%Y-%m-%d"))
+           (prop4 : String (if (= formatted "1970-01-01") "ok" (str "FAIL:" formatted)))
+           ;; format-time: known date (2024-01-01 00:00:00 UTC = 1704067200000 ms)
+           (f2 : String (format-time 1704067200000 "%Y"))
+           (prop5 : String (if (= f2 "2024") "ok" (str "FAIL:" f2)))
+        (print (str "now:" prop1 "|monotonic:" prop2 "|sleep:" prop3 "|format:" prop4 "|epoch:" prop5)))))

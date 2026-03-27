@@ -16,11 +16,19 @@ mkdir -p "$CACHE_DIR"
 PASS=0
 FAIL=0
 COMPILE_FAIL=0
+SKIP=0
 ERRORS=""
 
 for test in tests/aot/round*.airl; do
   name=$(basename "$test" .airl)
   expected=$(head -1 "$test" | sed 's/^;; EXPECT: //')
+
+  # Skip tests marked SKIP_AOT
+  if grep -q '^;; SKIP_AOT:' "$test"; then
+    echo "SKIP: $name ($(grep '^;; SKIP_AOT:' "$test" | sed 's/^;; SKIP_AOT: //'))"
+    SKIP=$((SKIP + 1))
+    continue
+  fi
 
   # Extract DEPS from second line if present
   deps_line=$(sed -n '2p' "$test")
@@ -84,7 +92,7 @@ for test in tests/aot/round*.airl; do
 done
 
 echo ""
-echo "Results: $PASS passed, $FAIL failed, $COMPILE_FAIL compile errors"
+echo "Results: $PASS passed, $FAIL failed, $COMPILE_FAIL compile errors, $SKIP skipped"
 if [ $FAIL -gt 0 ] || [ $COMPILE_FAIL -gt 0 ]; then
   echo -e "Failures:$ERRORS"
   exit 1

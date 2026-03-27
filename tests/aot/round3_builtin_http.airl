@@ -1,0 +1,6 @@
+;; EXPECT: bad-url:ok|bad-method:ok
+(let (r1 : _ (http-request "GET" "http://127.0.0.1:1/nonexistent" "" []))
+     (prop1 : String (match r1 (Ok _) "FAIL:should-err" (Err _) "ok"))
+     (r2 : _ (http-request "INVALID" "http://127.0.0.1:1/" "" []))
+     (prop2 : String (match r2 (Ok _) "FAIL:should-err" (Err _) "ok"))
+  (print (str "bad-url:" prop1 "|bad-method:" prop2)))
