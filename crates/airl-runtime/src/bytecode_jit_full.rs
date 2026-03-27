@@ -1335,9 +1335,9 @@ impl BytecodeJitFull {
                     airl_rt::memory::airl_value_retain(inner_copy);
                     Value::Variant(tag_name.clone(), Box::new(Self::rt_to_value(inner_copy)))
                 }
-                RtData::Closure { .. } => {
-                    // Cannot round-trip closures through interpreter Value easily.
-                    Value::Nil
+                RtData::Closure { func_ptr, .. } => {
+                    // Preserve closure identity instead of silently dropping to nil.
+                    Value::BuiltinFn(format!("<closure@{:p}>", func_ptr))
                 }
             }
         };

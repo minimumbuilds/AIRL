@@ -118,7 +118,7 @@ fn rt_to_value_no_release(ptr: *mut RtValue) -> Value {
             RtData::Variant { tag_name, inner } => {
                 Value::Variant(tag_name.clone(), Box::new(rt_to_value_no_release(*inner)))
             }
-            RtData::Closure { captures, .. } if !captures.is_empty() => {
+            RtData::Closure { captures, func_ptr } if !captures.is_empty() => {
                 let first = &*captures[0];
                 if let RtData::Str(name) = &first.data {
                     let mut captured_values = Vec::new();
@@ -130,8 +130,13 @@ fn rt_to_value_no_release(ptr: *mut RtValue) -> Value {
                         captured: captured_values,
                     })
                 } else {
-                    Value::Nil
+                    // First capture is not a name string — preserve identity instead of nil.
+                    Value::BuiltinFn(format!("<closure@{:p}>", func_ptr))
                 }
+            }
+            RtData::Closure { func_ptr, .. } => {
+                // Empty-captures closure — preserve identity instead of nil.
+                Value::BuiltinFn(format!("<closure@{:p}>", func_ptr))
             }
             _ => Value::Nil,
         }
