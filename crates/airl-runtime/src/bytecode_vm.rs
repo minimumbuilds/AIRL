@@ -609,6 +609,7 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "bytes-from-string" => airl_rt::misc::airl_bytes_from_string(a0!()),
         "bytes-to-string" => airl_rt::misc::airl_bytes_to_string(a0!(), a1!(), a2!()),
         "bytes-concat" => airl_rt::misc::airl_bytes_concat(a0!(), a1!()),
+        "bytes-concat-all" => airl_rt::misc::airl_bytes_concat_all(a0!()),
         "bytes-slice" => airl_rt::misc::airl_bytes_slice(a0!(), a1!(), a2!()),
         "crc32c" => airl_rt::misc::airl_crc32c(a0!()),
 

@@ -243,6 +243,7 @@ pub struct RuntimeImports {
     pub bytes_from_string: FuncId,
     pub bytes_to_string: FuncId,
     pub bytes_concat: FuncId,
+    pub bytes_concat_all: FuncId,
     pub bytes_slice: FuncId,
     pub crc32c: FuncId,
 
@@ -678,6 +679,7 @@ impl BytecodeAot {
         let bytes_from_string = declare_import(m, "airl_bytes_from_string", s1.clone());
         let bytes_to_string = declare_import(m, "airl_bytes_to_string", sig_3_ptr(m));
         let bytes_concat = declare_import(m, "airl_bytes_concat", s2.clone());
+        let bytes_concat_all = declare_import(m, "airl_bytes_concat_all", s1.clone());
         let bytes_slice = declare_import(m, "airl_bytes_slice", sig_3_ptr(m));
         let crc32c = declare_import(m, "airl_crc32c", s1.clone());
 
@@ -760,7 +762,7 @@ impl BytecodeAot {
             bitwise_xor, bitwise_and, bitwise_or, bitwise_shr, bitwise_shl,
             bytes_from_int16, bytes_from_int32, bytes_from_int64,
             bytes_to_int16, bytes_to_int32, bytes_to_int64,
-            bytes_from_string, bytes_to_string, bytes_concat, bytes_slice, crc32c,
+            bytes_from_string, bytes_to_string, bytes_concat, bytes_concat_all, bytes_slice, crc32c,
             gzip_compress, gzip_decompress, snappy_compress, snappy_decompress,
             lz4_compress, lz4_decompress, zstd_compress, zstd_decompress,
             tcp_connect, tcp_close, tcp_send, tcp_recv, tcp_recv_exact, tcp_set_timeout, tcp_connect_tls,
@@ -953,6 +955,7 @@ impl BytecodeAot {
         m.insert("bytes-from-string".into(), rt.bytes_from_string);
         m.insert("bytes-to-string".into(),   rt.bytes_to_string);
         m.insert("bytes-concat".into(),      rt.bytes_concat);
+        m.insert("bytes-concat-all".into(), rt.bytes_concat_all);
         m.insert("bytes-slice".into(),       rt.bytes_slice);
         m.insert("crc32c".into(),            rt.crc32c);
 

@@ -1036,6 +1036,32 @@ pub extern "C" fn airl_bytes_concat(a: *mut RtValue, b: *mut RtValue) -> *mut Rt
     rt_list(ab.iter().map(|b| rt_int(*b as i64)).collect())
 }
 
+/// Concatenate a list of byte lists in one O(n) pass.
+/// Input: List[List[u8]]. Output: List[u8].
+/// Replaces the O(n²) `(fold (fn [acc part] (bytes-concat acc part)) [] parts)` pattern.
+#[no_mangle]
+pub extern "C" fn airl_bytes_concat_all(parts: *mut RtValue) -> *mut RtValue {
+    let part_lists = match unsafe { &(*parts).data } {
+        RtData::List(items) => items,
+        _ => return rt_list(vec![]),
+    };
+    // Measure total size, allocate once
+    let mut total = 0usize;
+    let extracted: Vec<Vec<u8>> = part_lists.iter().map(|p| {
+        let bytes = extract_bytes(*p);
+        total += bytes.len();
+        bytes
+    }).collect();
+    // Build result in one pass
+    let mut result = Vec::with_capacity(total);
+    for bytes in &extracted {
+        for &b in bytes {
+            result.push(rt_int(b as i64));
+        }
+    }
+    rt_list(result)
+}
+
 #[no_mangle]
 pub extern "C" fn airl_bytes_slice(buf: *mut RtValue, offset: *mut RtValue, len: *mut RtValue) -> *mut RtValue {
     let off = match unsafe { &(*offset).data } { RtData::Int(n) => *n as usize, _ => 0 };
