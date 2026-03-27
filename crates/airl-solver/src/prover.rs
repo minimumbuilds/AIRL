@@ -213,6 +213,7 @@ mod tests {
             body: Expr { kind: ExprKind::IntLit(0), span: Span::dummy() },
             execute_on: None,
             priority: None,
+            is_public: false,
             span: Span::dummy(),
         }
     }

@@ -656,6 +656,7 @@ fn parse_defn(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Fn
         body,
         execute_on,
         priority,
+        is_public: false,
         span,
     })
 }
@@ -723,7 +724,7 @@ fn parse_deftype(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result
 
     let body = parse_type_def_body(&items[idx], diags)?;
 
-    Ok(TypeDef { name, type_params, body, span })
+    Ok(TypeDef { name, type_params, body, is_public: false, span })
 }
 
 fn parse_type_params(items: &[SExpr], diags: &mut Diagnostics) -> Result<Vec<TypeParam>, Diagnostic> {

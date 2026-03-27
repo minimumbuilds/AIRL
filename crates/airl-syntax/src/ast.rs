@@ -11,6 +11,12 @@ pub enum TopLevel {
     DefType(TypeDef),
     Task(TaskDef),
     UseDecl(UseDef),
+    Import {
+        path: String,
+        alias: Option<String>,
+        only: Option<Vec<String>>,
+        span: Span,
+    },
     Expr(Expr), // bare expression at top level (REPL)
 }
 
@@ -68,6 +74,7 @@ pub struct FnDef {
     pub body: Expr,
     pub execute_on: Option<ExecTarget>,
     pub priority: Option<Priority>,
+    pub is_public: bool,
     pub span: Span,
 }
 
@@ -104,6 +111,7 @@ pub struct TypeDef {
     pub name: Symbol,
     pub type_params: Vec<TypeParam>,
     pub body: TypeDefBody,
+    pub is_public: bool,
     pub span: Span,
 }
 
@@ -462,5 +470,36 @@ mod tests {
         };
         let _ = e.clone();
         let _ = format!("{:?}", e);
+    }
+
+    #[test]
+    fn import_ast_node_constructable() {
+        let import = TopLevel::Import {
+            path: "lib/math.airl".to_string(),
+            alias: Some("m".to_string()),
+            only: None,
+            span: Span::dummy(),
+        };
+        let _ = import.clone();
+        let _ = format!("{:?}", import);
+    }
+
+    #[test]
+    fn fn_def_has_is_public() {
+        let f = FnDef {
+            name: "test".to_string(),
+            params: vec![],
+            return_type: AstType { kind: AstTypeKind::Named("Unit".to_string()), span: Span::dummy() },
+            intent: None,
+            requires: vec![],
+            ensures: vec![],
+            invariants: vec![],
+            body: Expr { kind: ExprKind::NilLit, span: Span::dummy() },
+            execute_on: None,
+            priority: None,
+            is_public: true,
+            span: Span::dummy(),
+        };
+        assert!(f.is_public);
     }
 }
