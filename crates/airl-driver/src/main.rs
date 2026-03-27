@@ -20,7 +20,9 @@ fn main() {
             Some("agent") => cmd_agent(&args[2..]),
             Some("call") => cmd_call(&args[2..]),
             Some("fmt") => cmd_fmt(&args[2..]),
-            Some("--version") | Some("-V") => println!("airl 0.6.1"),
+            Some("--version") | Some("-V") => {
+                println!("airl {} (built {})", env!("CARGO_PKG_VERSION"), env!("AIRL_BUILD_TIME"));
+            }
             _ => print_usage(),
         }
     }).expect("failed to spawn main thread");
