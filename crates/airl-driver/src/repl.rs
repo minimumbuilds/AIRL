@@ -52,7 +52,10 @@ pub fn run_repl() {
 
     // Create bytecode VM and load stdlib
     let mut vm = BytecodeVm::new();
-    compile_and_load_stdlib_bytecode_repl(&mut vm);
+    if let Err(e) = compile_and_load_stdlib_bytecode_repl(&mut vm) {
+        eprintln!("fatal: stdlib load failed: {}", e);
+        return;
+    }
 
     println!("AIRL v0.2.0 — Type :help for commands, :quit to exit");
 
@@ -187,7 +190,7 @@ mod tests {
     #[test]
     fn eval_repl_simple() {
         let mut vm = BytecodeVm::new();
-        compile_and_load_stdlib_bytecode_repl(&mut vm);
+        compile_and_load_stdlib_bytecode_repl(&mut vm).expect("stdlib load failed");
         let result = compile_and_run_repl_input("(+ 10 20)", &mut vm).unwrap();
         assert_eq!(format!("{}", result), "30");
     }
@@ -195,7 +198,7 @@ mod tests {
     #[test]
     fn eval_repl_defn() {
         let mut vm = BytecodeVm::new();
-        compile_and_load_stdlib_bytecode_repl(&mut vm);
+        compile_and_load_stdlib_bytecode_repl(&mut vm).expect("stdlib load failed");
         let input = r#"
             (defn double
               :sig [(x : i32) -> i32]

@@ -663,7 +663,7 @@ fn compile_and_load_stdlib_bytecode(vm: &mut BytecodeVm, source: &str, name: &st
     for sexpr in &sexprs {
         match parser::parse_top_level(sexpr, &mut diags) {
             Ok(top) => tops.push(top),
-            Err(d) => panic!("{} parse error: {}", name, d.message),
+            Err(d) => return Err(PipelineError::Io(format!("{} parse error: {}", name, d.message))),
         }
     }
 
@@ -675,7 +675,7 @@ fn compile_and_load_stdlib_bytecode(vm: &mut BytecodeVm, source: &str, name: &st
         vm.load_function(func);
     }
     vm.load_function(main_func);
-    vm.exec_main().unwrap_or_else(|e| panic!("{} stdlib load failed: {}", name, e));
+    vm.exec_main().map_err(|e| PipelineError::Runtime(e))?;
 
     Ok(())
 }
@@ -824,8 +824,7 @@ pub fn format_diagnostic_with_source(diag: &Diagnostic, source: &str, filename: 
 // ── REPL helpers ────────────────────────────────────────────
 
 /// Load stdlib into a bytecode VM for use by the REPL.
-/// Panics on stdlib errors since stdlib is trusted code.
-pub fn compile_and_load_stdlib_bytecode_repl(vm: &mut BytecodeVm) {
+pub fn compile_and_load_stdlib_bytecode_repl(vm: &mut BytecodeVm) -> Result<(), PipelineError> {
     for (src, name) in &[
         (COLLECTIONS_SOURCE, "collections"),
         (MATH_SOURCE, "math"),
@@ -834,9 +833,9 @@ pub fn compile_and_load_stdlib_bytecode_repl(vm: &mut BytecodeVm) {
         (MAP_SOURCE, "map"),
         (SET_SOURCE, "set"),
     ] {
-        compile_and_load_stdlib_bytecode(vm, src, name)
-            .unwrap_or_else(|e| panic!("stdlib {} load failed: {}", name, e));
+        compile_and_load_stdlib_bytecode(vm, src, name)?;
     }
+    Ok(())
 }
 
 /// Compile AIRL source and run it in an existing bytecode VM (for incremental REPL use).
