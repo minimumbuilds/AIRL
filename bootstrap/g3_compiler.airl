@@ -126,14 +126,14 @@
   :sig [-> Nil]
   :requires [(valid 1)]
   :ensures [(valid result)]
-  :body (print "g3 0.6.1\n"))
+  :body (print "g3 0.7.0\n"))
 
 (defn g3-print-help
   :sig [-> Nil]
   :requires [(valid 1)]
   :ensures [(valid result)]
   :body
-    (do (print "G3 AIRL Compiler v0.6.1\n")
+    (do (print "G3 AIRL Compiler v0.7.0\n")
         (print "\n")
         (print "Usage:\n")
         (print "  g3 -- <input.airl ...> [-o output]\n")
