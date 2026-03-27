@@ -343,7 +343,7 @@
   :requires [(valid node)]
   :ensures [(valid result)]
   :body (match node
-    (ASTDefn name sig intent requires ensures body _ _)
+    (ASTDefn name sig intent requires ensures body _ _ _)
       (match sig
         (ASTSig params ret-name)
           (let (fn-env : List (type-env-push env))
@@ -390,7 +390,7 @@
   :requires [(valid node)]
   :ensures [(valid result)]
   :body (match node
-    (ASTDefn name _ _ _ _ _ _ _)
+    (ASTDefn name _ _ _ _ _ _ _ _)
       (match (check-fn node env reg)
         (Err e) (Err e)
         (Ok result)
@@ -456,7 +456,7 @@
   :requires [(valid node)]
   :ensures [(valid result)]
   :body (match node
-    (ASTDefn name sig _ _ _ _ _ _)
+    (ASTDefn name sig _ _ _ _ _ _ _)
       (match sig
         (ASTSig params ret-name)
           (match (bind-fn-param-types params reg [])

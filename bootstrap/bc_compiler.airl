@@ -1402,7 +1402,7 @@
   :requires [(valid node)]
   :ensures [(valid result)]
   :body (match node
-    (ASTDefn name sig _ requires ensures body _ _)
+    (ASTDefn name sig _ requires ensures body _ _ _)
       (match sig
         (ASTSig params ret-name)
           (let (param-names : List (map (fn [p] (match p (ASTParam n _) n _ "?")) params))
@@ -1412,6 +1412,9 @@
                   (Err e) (Err e)
                   (Ok func) (Ok [func []])))))
         _ (Err "bc-compile-top-level: defn requires sig"))
+    (ASTImport _ _ _ _ _)
+      ;; Import is compile-time only, no bytecode emitted
+      (Ok [nil []])
     (ASTDefType _ _ _ _ _)
       ;; Type definitions are compile-time only, emit nil
       (Ok [nil []])
@@ -1462,8 +1465,10 @@
     (if (empty? nodes) [defns exprs]
       (let (node : _ (head nodes))
         (match node
-          (ASTDefn _ _ _ _ _ _ _ _)
+          (ASTDefn _ _ _ _ _ _ _ _ _)
             (bc-split-loop (tail nodes) (append defns node) exprs)
+          (ASTImport _ _ _ _ _)
+            (bc-split-loop (tail nodes) defns exprs)
           (ASTDefType _ _ _ _ _)
             (bc-split-loop (tail nodes) defns exprs)
           _ (bc-split-loop (tail nodes) defns (append exprs node))))))
@@ -1476,7 +1481,7 @@
   :body
     (if (empty? defns) (Ok [])
       (match (head defns)
-        (ASTDefn name sig _ _ _ body _ _)
+        (ASTDefn name sig _ _ _ body _ _ _)
           (match sig
             (ASTSig params ret-name)
               (let (param-names : List (map (fn [p] (match p (ASTParam n _) n _ "?")) params))
