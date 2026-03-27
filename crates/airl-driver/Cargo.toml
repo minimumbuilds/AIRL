@@ -20,6 +20,9 @@ airl-runtime = { path = "../airl-runtime" }
 airl-agent = { path = "../airl-agent" }
 airl-solver = { path = "../airl-solver" }
 
+[dev-dependencies]
+tempfile = "3"
+
 [features]
 mlir = ["airl-runtime/mlir"]
 cuda = ["airl-runtime/cuda"]
