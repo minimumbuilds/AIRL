@@ -1186,6 +1186,109 @@ pub fn compile_to_object(paths: &[String]) -> Result<Vec<u8>, PipelineError> {
     Ok(aot.finish())
 }
 
+/// Compile AIRL source file with imports to a native object file.
+/// Mirrors `run_file_with_imports` but produces AOT output instead of running in VM.
+#[cfg(feature = "aot")]
+pub fn compile_to_object_with_imports(entry_path: &str) -> Result<Vec<u8>, PipelineError> {
+    use crate::resolver::resolve_imports;
+    use airl_runtime::bytecode::BytecodeFunc;
+    use airl_runtime::bytecode_aot::BytecodeAot;
+
+    let (modules, import_map) = resolve_imports(entry_path)
+        .map_err(|e| PipelineError::Io(e.to_string()))?;
+
+    let mut module_publics: HashMap<String, Vec<String>> = HashMap::new();
+    for module in &modules {
+        module_publics.insert(module.name.clone(), module.public_fns.clone());
+    }
+
+    let mut all_funcs: Vec<BytecodeFunc> = Vec::new();
+
+    // 1. Compile stdlib to bytecode
+    for (src, name) in &[
+        (COLLECTIONS_SOURCE, "collections"),
+        (MATH_SOURCE, "math"),
+        (RESULT_SOURCE, "result"),
+        (STRING_SOURCE, "string"),
+        (MAP_SOURCE, "map"),
+        (SET_SOURCE, "set"),
+    ] {
+        let (funcs, _stdlib_main) = compile_source_to_bytecode(src, name)?;
+        all_funcs.extend(funcs);
+    }
+
+    // 2. Compile each module in dependency order
+    let entry_canonical = std::fs::canonicalize(entry_path)
+        .map_err(|e| PipelineError::Io(e.to_string()))?;
+
+    for module in &modules {
+        let is_entry = module.path == entry_canonical;
+        let directives = import_map.get(&module.path)
+            .map(|d| d.as_slice())
+            .unwrap_or(&[]);
+
+        // Filter tops: remove Import nodes, skip Expr for non-entry modules
+        let filtered_tops: Vec<airl_syntax::ast::TopLevel> = module.tops.iter()
+            .filter(|t| !matches!(t, airl_syntax::ast::TopLevel::Import { .. }))
+            .filter(|t| is_entry || !matches!(t, airl_syntax::ast::TopLevel::Expr(_)))
+            .cloned()
+            .collect();
+
+        let (ir_nodes, contracts, _fn_meta) = compile_tops_with_contracts(&filtered_tops);
+
+        // Rewrite qualified names for the entry module (with visibility checks)
+        let final_ir = if is_entry && !directives.is_empty() {
+            rewrite_qualified_names(&ir_nodes, directives, &module_publics)?
+        } else {
+            ir_nodes
+        };
+
+        if is_entry {
+            let ownership_map = build_ownership_map(&filtered_tops);
+            let mut bc_compiler = BytecodeCompiler::with_prefix("user");
+            bc_compiler.set_ownership_map(ownership_map);
+            let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&final_ir, &contracts);
+            all_funcs.extend(funcs);
+            all_funcs.push(main_func); // Only entry module's __main__
+        } else {
+            // Library module: compile functions with qualified names
+            let ownership_map = build_ownership_map(&filtered_tops);
+            let mut bc_compiler = BytecodeCompiler::with_prefix(&module.name);
+            bc_compiler.set_ownership_map(ownership_map);
+            let (funcs, _main) = bc_compiler.compile_program_with_contracts(&final_ir, &contracts);
+            for mut func in funcs {
+                if func.name != "__main__" {
+                    let qualified = format!("{}_{}", module.name, func.name);
+                    func.name = qualified;
+                }
+                all_funcs.push(func);
+            }
+        }
+    }
+
+    // 3. AOT compile bytecode -> native object
+    let func_map: HashMap<String, BytecodeFunc> = all_funcs.iter()
+        .map(|f| (f.name.clone(), f.clone()))
+        .collect();
+
+    let mut aot = BytecodeAot::new().map_err(|e| PipelineError::Runtime(
+        airl_runtime::error::RuntimeError::TypeError(e)
+    ))?;
+
+    for func in &all_funcs {
+        aot.compile_all(std::slice::from_ref(func), &func_map)
+            .map_err(|e| PipelineError::Runtime(
+                airl_runtime::error::RuntimeError::TypeError(e)
+            ))?;
+    }
+
+    aot.emit_entry_point().map_err(|e| PipelineError::Runtime(
+        airl_runtime::error::RuntimeError::TypeError(e)
+    ))?;
+
+    Ok(aot.finish())
+}
+
 /// Compile source string to bytecode functions (shared by run and AOT paths).
 #[cfg(feature = "aot")]
 fn compile_source_to_bytecode(source: &str, prefix: &str) -> Result<(Vec<airl_runtime::bytecode::BytecodeFunc>, airl_runtime::bytecode::BytecodeFunc), PipelineError> {
