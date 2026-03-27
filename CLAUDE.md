@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~520 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.6.0. **Self-hosted:** the G3 compiler is written in AIRL and produces native binaries.
+AIRL (AI Intermediate Representation Language) is a programming language designed for AI systems. It's a Rust Cargo workspace with 9 crates, ~520 tests, ~19K lines of Rust + ~21K lines of AIRL. Version 0.7.0. **Self-hosted:** the G3 compiler is written in AIRL and produces native binaries.
 
 **Language spec:** `AIRL-Language-Specification-v0.1.0.md`
 **LLM header:** `AIRL-Header.md` — **MUST read before writing any AIRL code.** Compressed reference with all traps, syntax, signatures, and patterns (~360 lines, ~3K tokens). Replaces the 7-file pre-flight checklist.
@@ -36,7 +36,7 @@ cargo run --features jit -- check <file.airl>          # Type-check and verify
 cargo run --features jit -- repl                       # Interactive REPL
 ```
 
-**Execution model (v0.6.0):** Three paths, one runtime. `airl run` JIT-compiles all functions to native x86-64 via Cranelift. `airl compile` AOT-compiles to standalone native executables. `./g3 --` uses the self-hosted AIRL compiler (bootstrap lexer/parser/bc_compiler → Cranelift AOT). All paths call builtins via `extern "C"` functions in `crates/airl-rt/` (Rust). VM-aware builtins provide native `map`/`filter`/`fold`/`sort` with IntList specialization and inline closure compilation. Contract assertions and ownership checks compile to native conditional branches. Thread-per-task concurrency with message-passing channels.
+**Execution model (v0.7.0):** Three paths, one runtime. `airl run` JIT-compiles all functions to native x86-64 via Cranelift. `airl compile` AOT-compiles to standalone native executables. `./g3 --` uses the self-hosted AIRL compiler (bootstrap lexer/parser/bc_compiler → Cranelift AOT). All paths call builtins via `extern "C"` functions in `crates/airl-rt/` (Rust). VM-aware builtins provide native `map`/`filter`/`fold`/`sort` with IntList specialization and inline closure compilation. Contract assertions and ownership checks compile to native conditional branches. Thread-per-task concurrency with message-passing channels.
 
 **First build note:** Z3 (in `airl-solver`) compiles from C++ source on first build (~5-15 min). Requires CMake, C++ compiler, Python 3.
 
@@ -362,7 +362,7 @@ See `stdlib/map.md` for full documentation including the 10 Rust builtins.
 
 - **G3 Self-Hosted Compiler (v0.5.2)** — `bootstrap/g3_compiler.airl` (124 lines) is an AIRL compiler written entirely in AIRL. Pipeline: source → bootstrap lexer → parser → bc_compiler → BCFunc → `compile-bytecode-to-executable` (Cranelift AOT + embedded runtime) → native binary. Includes stdlib compilation (6 modules, 86 functions). New `compile-bytecode-to-executable` builtin takes BCFunc values + output path and produces linked native executables. Cranelift is a builtin, not reimplemented in AIRL (like Go's assembler is part of the Go toolchain). Usage: `airl run --load bootstrap/lexer.airl --load bootstrap/parser.airl --load bootstrap/bc_compiler.airl bootstrap/g3_compiler.airl -- input.airl -o output`.
 
-- **Module System (v0.6.1)** — File-based `(import ...)` with `:pub` visibility, qualified names (`math.abs`), `:as` aliases, `:only` selective imports. Import resolver (`crates/airl-driver/src/resolver.rs`) with circular dependency detection, diamond dependency dedup, and sandbox enforcement (no absolute paths, no `..`). Qualified name rewriting at IR level (`math.abs` → `math_abs`). Works with both VM (`airl run`) and AOT (`airl compile`) paths. Backward compatible — single-file programs unchanged. Design spec: `docs/superpowers/specs/2026-03-27-module-system.md`.
+- **Module System (v0.7.0)** — File-based `(import ...)` with `:pub` visibility, qualified names (`math.abs`), `:as` aliases, `:only` selective imports. Import resolver (`crates/airl-driver/src/resolver.rs`) with circular dependency detection, diamond dependency dedup, and sandbox enforcement (no absolute paths, no `..`). Qualified name rewriting at IR level (`math.abs` → `math_abs`). Works with both VM (`airl run`) and AOT (`airl compile`) paths. Backward compatible — single-file programs unchanged. Design spec: `docs/superpowers/specs/2026-03-27-module-system.md`.
 
 ---
 
