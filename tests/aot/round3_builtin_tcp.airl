@@ -1,0 +1,8 @@
+;; EXPECT: connect-fail:ok|send-bad:ok|close-bad:ok
+(let (r1 : _ (tcp-connect "127.0.0.1" 1))
+     (prop1 : String (match r1 (Ok _) "FAIL:should-err" (Err _) "ok"))
+     (r2 : _ (tcp-send 999999 [72 73]))
+     (prop2 : String (match r2 (Ok _) "FAIL:should-err" (Err _) "ok"))
+     (r3 : _ (tcp-close 999999))
+     (prop3 : String (match r3 (Ok _) "FAIL:should-err" (Err _) "ok"))
+  (print (str "connect-fail:" prop1 "|send-bad:" prop2 "|close-bad:" prop3)))

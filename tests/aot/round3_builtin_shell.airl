@@ -1,0 +1,10 @@
+;; EXPECT: echo:ok|true:ok|false:ok|args:ok
+(let (r1 : _ (shell-exec "echo" ["hello"]))
+     (prop1 : String (match r1 (Ok s) (if (contains s "hello") "ok" "FAIL:no-hello") (Err e) (str "FAIL:" e)))
+     (r2 : _ (shell-exec "true" []))
+     (prop2 : String (match r2 (Ok _) "ok" (Err e) (str "FAIL:" e)))
+     (r3 : _ (shell-exec "false" []))
+     (prop3 : String (match r3 (Ok s) (if (= s "") "ok" "FAIL:output") (Err _) "ok"))
+     (r4 : _ (shell-exec "echo" ["-n" "abc"]))
+     (prop4 : String (match r4 (Ok s) (if (contains s "abc") "ok" "FAIL:no-abc") (Err e) (str "FAIL:" e)))
+  (print (str "echo:" prop1 "|true:" prop2 "|false:" prop3 "|args:" prop4)))

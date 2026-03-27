@@ -1,0 +1,18 @@
+;; EXPECT: spawn:ok|value:ok|multi:ok|compute:ok
+;; SKIP_AOT: thread-spawn/thread-join not yet registered in AOT extern C map
+(let (h1 : i64 (thread-spawn (fn [] 42)))
+     (r1 : _ (thread-join h1))
+     (prop1 : String (match r1 (Ok _) "ok" (Err e) (str "FAIL:" e)))
+     (prop2 : String (match r1 (Ok v) (if (= v 42) "ok" (str "FAIL:val=" v)) (Err e) (str "FAIL:" e)))
+     (h2 : i64 (thread-spawn (fn [] 10)))
+     (h3 : i64 (thread-spawn (fn [] 20)))
+     (h4 : i64 (thread-spawn (fn [] 30)))
+     (r2 : _ (thread-join h2))
+     (r3 : _ (thread-join h3))
+     (r4 : _ (thread-join h4))
+     (sum : i64 (+ (+ (unwrap-or r2 0) (unwrap-or r3 0)) (unwrap-or r4 0)))
+     (prop3 : String (if (= sum 60) "ok" (str "FAIL:sum=" sum)))
+     (h5 : i64 (thread-spawn (fn [] (fold (fn [a x] (+ a x)) 0 [1 2 3 4 5]))))
+     (r5 : _ (thread-join h5))
+     (prop4 : String (match r5 (Ok v) (if (= v 15) "ok" (str "FAIL:v=" v)) (Err e) (str "FAIL:" e)))
+  (print (str "spawn:" prop1 "|value:" prop2 "|multi:" prop3 "|compute:" prop4)))

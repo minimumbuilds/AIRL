@@ -1,0 +1,11 @@
+;; EXPECT: len0:ok|len4:ok|len32:ok|nonempty:ok|distinct:ok
+(let (r0 : String (random-bytes 0))
+     (r4 : String (random-bytes 4))
+     (r32 : String (random-bytes 32))
+     (r32b : String (random-bytes 32))
+     (prop1 : String (if (= (length r0) 0) "ok" "FAIL:len0"))
+     (prop2 : String (if (= (length r4) 8) "ok" (str "FAIL:len=" (length r4))))
+     (prop3 : String (if (= (length r32) 64) "ok" (str "FAIL:len=" (length r32))))
+     (prop4 : String (if (> (length r4) 0) "ok" "FAIL:empty"))
+     (prop5 : String (if (!= r32 r32b) "ok" "FAIL:identical"))
+  (print (str "len0:" prop1 "|len4:" prop2 "|len32:" prop3 "|nonempty:" prop4 "|distinct:" prop5)))
