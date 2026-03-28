@@ -31,6 +31,13 @@
   :intent "Compile source string to list of BCFunc values"
   :requires [(valid source)]
   :ensures [(valid result)]
+  :body (g3-compile-source-with-prefix source label ""))
+
+(defn g3-compile-source-with-prefix
+  :sig [(source : String) (label : String) (mod-prefix : String) -> _]
+  :intent "Compile source string to list of BCFunc values with module prefix"
+  :requires [(valid source)]
+  :ensures [(valid result)]
   :body
     (match (lex source)
       (Err e) (Err (g3-format-error label e))
@@ -41,7 +48,7 @@
             (match (parse-program sexprs)
               (Err e) (Err (g3-format-error label e))
               (Ok ast-nodes)
-                (bc-compile-program ast-nodes)))))
+                (bc-compile-program-with-prefix ast-nodes mod-prefix)))))
 
 ;; ── Locate stdlib directory ──────────────────────────────
 
@@ -59,38 +66,37 @@
 
 (defn g3-compile-stdlib
   :sig [-> _]
-  :intent "Compile each stdlib module separately to avoid lambda name collisions"
+  :intent "Compile each stdlib module separately with module prefix for lambda naming"
   :requires [(valid 1)]
   :ensures [(valid result)]
   :body
     (let (stdlib-dir : String (g3-find-stdlib-dir))
-      (let (stdlib-files : List [(str stdlib-dir "/prelude.airl")
-                                 (str stdlib-dir "/math.airl")
-                                 (str stdlib-dir "/result.airl")
-                                 (str stdlib-dir "/string.airl")
-                                 (str stdlib-dir "/map.airl")
-                                 (str stdlib-dir "/set.airl")])
-        ;; Compile each module separately. Each gets its own lambda counter
-        ;; starting at 0, so lambda names are __lambda_0, __lambda_1 etc.
-        ;; Since modules are compiled independently, there are no collisions
-        ;; as long as each module's lambdas are internal to that module.
-        ;; NOTE: cross-module references (e.g. math's sum-list calling
-        ;; prelude's fold) work because fold is a named defn, not a lambda.
-        (fold (fn [acc path]
+      (let (stdlib-modules : List [[(str stdlib-dir "/prelude.airl") "collections"]
+                                   [(str stdlib-dir "/math.airl") "math"]
+                                   [(str stdlib-dir "/result.airl") "result"]
+                                   [(str stdlib-dir "/string.airl") "string"]
+                                   [(str stdlib-dir "/map.airl") "map"]
+                                   [(str stdlib-dir "/set.airl") "set"]])
+        ;; Compile each module separately with its own prefix.
+        ;; Lambda names become __lambda_collections_0, __lambda_math_0 etc.
+        ;; matching the Rust compiler's naming convention.
+        (fold (fn [acc entry]
                 (match acc
                   (Err e) (Err e)
                   (Ok funcs-so-far)
-                    (let (source : String (read-file path))
-                      (match (g3-compile-source source path)
-                        (Err e) (Err e)
-                        (Ok new-funcs) (Ok (concat funcs-so-far
-                          (filter (fn [f]
-                            (match f
-                              (BCFunc name _ _ _ _ _) (if (= name "__main__") false true)
-                              _ true))
-                            new-funcs)))))))
+                    (let (path : String (at entry 0))
+                      (let (mod-prefix : String (at entry 1))
+                        (let (source : String (read-file path))
+                          (match (g3-compile-source-with-prefix source path mod-prefix)
+                            (Err e) (Err e)
+                            (Ok new-funcs) (Ok (concat funcs-so-far
+                              (filter (fn [f]
+                                (match f
+                                  (BCFunc name _ _ _ _ _) (if (= name "__main__") false true)
+                                  _ true))
+                                new-funcs)))))))))
               (Ok [])
-              stdlib-files))))
+              stdlib-modules))))
 
 ;; ── Parse CLI arguments ──────────────────────────────────
 
@@ -185,7 +191,7 @@
                                 (Err e) (Err e)
                                 (Ok funcs-so-far)
                                   (let (source : String (read-file path))
-                                    (match (g3-compile-source source path)
+                                    (match (g3-compile-source-with-prefix source path "user")
                                       (Err e) (Err e)
                                       (Ok new-funcs)
                                         (Ok (concat funcs-so-far
@@ -200,7 +206,7 @@
                       (Ok user-funcs-no-main)
                         ;; Compile last file again to get its __main__
                         (let (last-source : String (read-file (at input-files (- (length input-files) 1))))
-                          (match (g3-compile-source last-source "main")
+                          (match (g3-compile-source-with-prefix last-source "main" "user")
                             (Err e) (do (print "Compile error: " e "\n") (exit 1))
                             (Ok last-funcs)
                               (let (user-funcs : List (concat user-funcs-no-main
