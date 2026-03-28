@@ -272,14 +272,16 @@
 
 (defn cs-next-lambda-name
   :sig [(st : _) -> List]
-  :intent "Generate unique lambda name, return [new-state name]"
+  :intent "Generate unique lambda name, return [new-state name]. Uses module-prefix if set."
   :requires [(valid st)]
   :ensures [(valid result)]
   :body
     (let (ctr : Int (cs-lambda-ctr st))
       (let (fn-name : String (map-get-or st "func-name" "anon"))
-        (let (name : String (str "__lambda_" fn-name "_" (bc-int-to-string ctr)))
-          [(map-set st "lambda-ctr" (+ ctr 1)) name]))))
+        (let (mod-prefix : String (map-get-or st "module-prefix" ""))
+          (let (prefix : String (if (= mod-prefix "") fn-name (str mod-prefix "_" fn-name)))
+            (let (name : String (str "__lambda_" prefix "_" (bc-int-to-string ctr)))
+              [(map-set st "lambda-ctr" (+ ctr 1)) name]))))))
 
 (defn cs-ensure-above-dst
   :sig [(st : _) (dst : Int) -> _]
@@ -1252,23 +1254,28 @@
               (let (captured : List (bc-filter-to-locals st2 free))
                 (let (capture-names : List (map (fn [pair] (at pair 0)) captured))
                   (let (all-params : List (concat capture-names params))
-                    ;; Compile the lambda body as a separate function
-                    (match (bc-compile-function lambda-name all-params body (length captured))
-                      (Err e) (Err e)
-                      (Ok result-pair)
-                        (let (func : _ (at result-pair 0))
-                          (let (sub-lambdas : List (at result-pair 1))
-                            ;; Add lambda + any sub-lambdas to compiler state
-                            (let (st3 : _ (bc-add-all-lambdas (cs-add-lambda st2 func) sub-lambdas))
-                              ;; Emit MakeClosure: copy captures to consecutive regs
-                              (let (capture-start : Int (cs-next-reg st3))
-                                (let (st4 : _ (bc-emit-captures st3 captured))
-                                  (let (name-const-pair : List (cs-add-const st4 lambda-name))
-                                    (let (st5 : _ (at name-const-pair 0))
-                                      (let (name-idx : Int (at name-const-pair 1))
-                                        (let (st6 : _ (cs-emit st5 (op-make-closure) dst name-idx capture-start))
-                                          (let (free-to : Int (if (> capture-start (+ dst 1)) capture-start (+ dst 1)))
-                                            (Ok (cs-free-reg-to st6 free-to))))))))))))))))))))))
+                    ;; Compile the lambda body, threading parent module-prefix and lambda counter
+                    (let (parent-mod : String (map-get-or st2 "module-prefix" ""))
+                      (let (parent-ctr : Int (cs-lambda-ctr st2))
+                        (match (bc-compile-function-ext lambda-name all-params body (length captured) [] [] parent-mod parent-ctr)
+                          (Err e) (Err e)
+                          (Ok result-triple)
+                            (let (func : _ (at result-triple 0))
+                              (let (sub-lambdas : List (at result-triple 1))
+                                (let (final-ctr : Int (at result-triple 2))
+                                  ;; Update parent state lambda counter to continue from inner's final
+                                  (let (st2b : _ (map-set st2 "lambda-ctr" final-ctr))
+                                    ;; Add lambda + any sub-lambdas to compiler state
+                                    (let (st3 : _ (bc-add-all-lambdas (cs-add-lambda st2b func) sub-lambdas))
+                                      ;; Emit MakeClosure: copy captures to consecutive regs
+                                      (let (capture-start : Int (cs-next-reg st3))
+                                        (let (st4 : _ (bc-emit-captures st3 captured))
+                                          (let (name-const-pair : List (cs-add-const st4 lambda-name))
+                                            (let (st5 : _ (at name-const-pair 0))
+                                              (let (name-idx : Int (at name-const-pair 1))
+                                                (let (st6 : _ (cs-emit st5 (op-make-closure) dst name-idx capture-start))
+                                                  (let (free-to : Int (if (> capture-start (+ dst 1)) capture-start (+ dst 1)))
+                                                    (Ok (cs-free-reg-to st6 free-to))))))))))))))))))))))))))
 
 (defn bc-filter-to-locals
   :sig [(st : _) (names : List) -> List]
@@ -1314,15 +1321,26 @@
   :intent "Compile a function body into a BCFunc value. Returns (Ok [BCFunc [lambdas...]]) or (Err msg)."
   :requires [(valid name)]
   :ensures [(valid result)]
-  :body (bc-compile-function-with-contracts name params body capture-count [] []))
+  :body (match (bc-compile-function-ext name params body capture-count [] [] "" 0)
+    (Ok triple) (Ok [(at triple 0) (at triple 1)])
+    (Err e) (Err e)))
 
 (defn bc-compile-function-with-contracts
   :sig [(name : String) (params : List) (body : _) (capture-count : Int) (requires-clauses : List) (ensures-clauses : List) -> _]
-  :intent "Compile a function with contract assertions."
+  :intent "Compile a function with contract assertions. Returns (Ok [BCFunc [lambdas...]]) or (Err msg)."
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body (match (bc-compile-function-ext name params body capture-count requires-clauses ensures-clauses "" 0)
+    (Ok triple) (Ok [(at triple 0) (at triple 1)])
+    (Err e) (Err e)))
+
+(defn bc-compile-function-ext
+  :sig [(name : String) (params : List) (body : _) (capture-count : Int) (requires-clauses : List) (ensures-clauses : List) (mod-prefix : String) (init-lambda-ctr : Int) -> _]
+  :intent "Compile function with module prefix and lambda counter. Returns (Ok [BCFunc lambdas final-lambda-ctr])."
   :requires [(valid name)]
   :ensures [(valid result)]
   :body
-    (let (st : _ (make-compiler-state-named name))
+    (let (st : _ (map-set (map-set (make-compiler-state-named name) "module-prefix" mod-prefix) "lambda-ctr" init-lambda-ctr))
       ;; Bind params to first N registers
       (let (st2 : _ (bc-bind-params st params 0))
         (let (arity : Int (length params))
@@ -1348,7 +1366,7 @@
                               (let (st8 : _ (cs-emit st7 (op-return) 0 dst-reg 0))
                                 ;; Build BCFunc
                                 (let (func : _ (BCFunc name arity (cs-max-reg st8) capture-count (cs-consts st8) (cs-instrs st8)))
-                                  (Ok [func (cs-lambdas st8)]))))))))))))))
+                                  (Ok [func (cs-lambdas st8) (cs-lambda-ctr st8)]))))))))))))))
 
 (defn bc-emit-contract-assertions
   :sig [(st : _) (fn-name : String) (clauses : List) (assert-op : Int) (dst-reg : Int) -> _]
