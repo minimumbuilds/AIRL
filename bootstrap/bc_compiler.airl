@@ -1468,6 +1468,30 @@
                       (let (main-lambdas : List (at result-pair 1))
                         (Ok (concat func-list (concat main-lambdas [main-func]))))))))))))
 
+(defn bc-compile-program-with-prefix
+  :sig [(ast-nodes : List) (mod-prefix : String) -> _]
+  :intent "Compile all AST nodes with module prefix for lambda naming."
+  :requires [(valid ast-nodes)]
+  :ensures [(valid result)]
+  :body
+    (let (split : List (bc-split-top-levels ast-nodes))
+      (let (defns : List (at split 0))
+        (let (exprs : List (at split 1))
+          (match (bc-compile-defns-prefixed defns mod-prefix)
+            (Err e) (Err e)
+            (Ok func-list)
+              (let (main-body : _ (if (empty? exprs)
+                                    (ASTNil 0 0)
+                                    (if (= (length exprs) 1)
+                                      (head exprs)
+                                      (ASTDo exprs 0 0))))
+                (match (bc-compile-function-ext "__main__" [] main-body 0 [] [] mod-prefix 0)
+                  (Err e) (Err e)
+                  (Ok result-triple)
+                    (let (main-func : _ (at result-triple 0))
+                      (let (main-lambdas : List (at result-triple 1))
+                        (Ok (concat func-list (concat main-lambdas [main-func]))))))))))))
+
 (defn bc-split-top-levels
   :sig [(nodes : List) -> List]
   :intent "Split AST nodes into [defns exprs]"
@@ -1496,6 +1520,13 @@
   :intent "Compile all defn nodes into BCFunc list (including lambdas)"
   :requires [(valid defns)]
   :ensures [(valid result)]
+  :body (bc-compile-defns-prefixed defns ""))
+
+(defn bc-compile-defns-prefixed
+  :sig [(defns : List) (mod-prefix : String) -> _]
+  :intent "Compile all defn nodes with module prefix for lambda naming"
+  :requires [(valid defns)]
+  :ensures [(valid result)]
   :body
     (if (empty? defns) (Ok [])
       (match (head defns)
@@ -1503,12 +1534,12 @@
           (match sig
             (ASTSig params ret-name)
               (let (param-names : List (map (fn [p] (match p (ASTParam n _) n _ "?")) params))
-                (match (bc-compile-function name param-names body 0)
+                (match (bc-compile-function-ext name param-names body 0 [] [] mod-prefix 0)
                   (Err e) (Err e)
-                  (Ok result-pair)
-                    (let (func : _ (at result-pair 0))
-                      (let (sub-lambdas : List (at result-pair 1))
-                        (match (bc-compile-defns (tail defns))
+                  (Ok result-triple)
+                    (let (func : _ (at result-triple 0))
+                      (let (sub-lambdas : List (at result-triple 1))
+                        (match (bc-compile-defns-prefixed (tail defns) mod-prefix)
                           (Err e) (Err e)
                           (Ok rest) (Ok (concat (cons func sub-lambdas) rest)))))))
             _ (Err "bc-compile-defns: defn requires sig"))
