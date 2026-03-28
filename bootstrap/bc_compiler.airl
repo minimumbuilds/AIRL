@@ -74,8 +74,7 @@
                    "max-reg" 0
                    "lambdas" []
                    "lambda-ctr" 0
-                   "func-name" func-name
-                   "module-prefix" ""]))
+                   "func-name" func-name]))
 
 ;; ── Accessors ───────────────────────────────────────────
 
@@ -278,19 +277,11 @@
   :ensures [(valid result)]
   :body
     (let (ctr : Int (cs-lambda-ctr st))
-<<<<<<< HEAD
       (let (fn-name : String (map-get-or st "func-name" "anon"))
         (let (mod-prefix : String (map-get-or st "module-prefix" ""))
           (let (prefix : String (if (= mod-prefix "") fn-name (str mod-prefix "_" fn-name)))
             (let (name : String (str "__lambda_" prefix "_" (bc-int-to-string ctr)))
               [(map-set st "lambda-ctr" (+ ctr 1)) name]))))))
-=======
-      (let (mod-prefix : String (map-get-or st "module-prefix" ""))
-        (let (name : String (if (= mod-prefix "")
-                              (str "__lambda_" (bc-int-to-string ctr))
-                              (str "__lambda_" mod-prefix "_" (bc-int-to-string ctr))))
-          [(map-set st "lambda-ctr" (+ ctr 1)) name]))))
->>>>>>> feat/bc-convergence
 
 (defn cs-ensure-above-dst
   :sig [(st : _) (dst : Int) -> _]
@@ -1263,7 +1254,6 @@
               (let (captured : List (bc-filter-to-locals st2 free))
                 (let (capture-names : List (map (fn [pair] (at pair 0)) captured))
                   (let (all-params : List (concat capture-names params))
-<<<<<<< HEAD
                     ;; Compile the lambda body, threading parent module-prefix and lambda counter
                     (let (parent-mod : String (map-get-or st2 "module-prefix" ""))
                       (let (parent-ctr : Int (cs-lambda-ctr st2))
@@ -1286,25 +1276,6 @@
                                                 (let (st6 : _ (cs-emit st5 (op-make-closure) dst name-idx capture-start))
                                                   (let (free-to : Int (if (> capture-start (+ dst 1)) capture-start (+ dst 1)))
                                                     (Ok (cs-free-reg-to st6 free-to))))))))))))))))))))))))))
-=======
-                    ;; Compile the lambda body as a separate function
-                    (match (bc-compile-function lambda-name all-params body (length captured) (map-get-or st2 "module-prefix" ""))
-                      (Err e) (Err e)
-                      (Ok result-pair)
-                        (let (func : _ (at result-pair 0))
-                          (let (sub-lambdas : List (at result-pair 1))
-                            ;; Add lambda + any sub-lambdas to compiler state
-                            (let (st3 : _ (bc-add-all-lambdas (cs-add-lambda st2 func) sub-lambdas))
-                              ;; Emit MakeClosure: copy captures to consecutive regs
-                              (let (capture-start : Int (cs-next-reg st3))
-                                (let (st4 : _ (bc-emit-captures st3 captured))
-                                  (let (name-const-pair : List (cs-add-const st4 lambda-name))
-                                    (let (st5 : _ (at name-const-pair 0))
-                                      (let (name-idx : Int (at name-const-pair 1))
-                                        (let (st6 : _ (cs-emit st5 (op-make-closure) dst name-idx capture-start))
-                                          (let (free-to : Int (if (> capture-start (+ dst 1)) capture-start (+ dst 1)))
-                                            (Ok (cs-free-reg-to st6 free-to))))))))))))))))))))))
->>>>>>> feat/bc-convergence
 
 (defn bc-filter-to-locals
   :sig [(st : _) (names : List) -> List]
@@ -1343,314 +1314,13 @@
                 (let (st3 : _ (cs-emit st2 (op-move) r slot 0))
                   (bc-emit-captures st3 (tail captured))))))))))
 
-;; ── Tail-position compilation ──────────────────────────
-;; bc-compile-expr-tail handles 5 tail-position forms:
-;;   1. Self-call → TailCall opcode (parallel-move args to r0..rN)
-;;   2. If → propagate tail to both branches
-;;   3. Do → propagate tail to last expression
-;;   4. Let → propagate tail to body
-;;   5. Match → propagate tail to each arm body
-;; Everything else falls through to bc-compile-expr.
-
-(defn bc-compile-expr-tail
-  :sig [(st : _) (node : _) (dst : Int) (fn-name : String) -> _]
-  :intent "Compile expression in tail position, emitting TailCall for self-recursive calls"
-  :requires [(valid st)]
-  :ensures [(valid result)]
-  :body (match node
-    ;; Self-recursive call
-    (ASTCall callee args _ _)
-      (match callee
-        (ASTSymbol name _ _)
-          (if (= name fn-name)
-            ;; Emit tail call: compile args to temps, move to r0..rN, emit TailCall
-            (bc-compile-tail-self-call st fn-name args dst)
-            ;; Not a self-call — regular compilation
-            (bc-compile-expr st node dst))
-        _ (bc-compile-expr st node dst))
-
-    ;; If: propagate tail to both branches
-    (ASTIf cond then-br else-br _ _)
-      (bc-compile-if-tail st cond then-br else-br dst fn-name)
-
-    ;; Do: propagate tail to last expression
-    (ASTDo exprs _ _)
-      (bc-compile-do-tail st exprs dst fn-name)
-
-    ;; Let: propagate tail to body
-    (ASTLet bindings body _ _)
-      (bc-compile-let-tail st bindings body dst fn-name)
-
-    ;; Match: propagate tail to arm bodies
-    (ASTMatch scrutinee arms _ _)
-      (bc-compile-match-tail st scrutinee arms dst fn-name)
-
-    ;; Everything else — fall through to regular compilation
-    _ (bc-compile-expr st node dst)))
-
-(defn bc-compile-tail-self-call
-  :sig [(st : _) (fn-name : String) (args : List) (dst : Int) -> _]
-  :intent "Compile a self-recursive call as TailCall opcode"
-  :requires [(valid st)]
-  :ensures [(valid result)]
-  :body
-    (let (save : Int (cs-next-reg st))
-      ;; Compile all args to temp registers (parallel-move safety)
-      (match (bc-compile-args-to-temps st args)
-        (Err e) (Err e)
-        (Ok pair)
-          (let (st2 : _ (at pair 0))
-            (let (tmp-regs : List (at pair 1))
-              ;; Move temps to r0, r1, ... rN
-              (let (st3 : _ (bc-move-temps-to-params st2 tmp-regs 0))
-                (let (st4 : _ (cs-free-reg-to st3 save))
-                  ;; Emit TailCall: op=TailCall, dst=0, a=name_idx, b=argc
-                  (let (name-pair : List (cs-add-const st4 fn-name))
-                    (let (st5 : _ (at name-pair 0))
-                      (let (name-idx : Int (at name-pair 1))
-                        (Ok (cs-emit st5 (op-tail-call) 0 name-idx (length args)))))))))))))
-
-(defn bc-move-temps-to-params
-  :sig [(st : _) (tmp-regs : List) (i : Int) -> _]
-  :intent "Move temp registers to parameter slots r0, r1, ..."
-  :requires [(valid st)]
-  :ensures [(valid result)]
-  :body
-    (if (empty? tmp-regs) st
-      (let (tmp : Int (head tmp-regs))
-        (if (= tmp i)
-          (bc-move-temps-to-params st (tail tmp-regs) (+ i 1))
-          (let (st2 : _ (cs-emit st (op-move) i tmp 0))
-            (bc-move-temps-to-params st2 (tail tmp-regs) (+ i 1)))))))
-
-(defn bc-compile-if-tail
-  :sig [(st : _) (cond : _) (then-br : _) (else-br : _) (dst : Int) (fn-name : String) -> _]
-  :intent "Compile if with tail propagation to both branches"
-  :requires [(valid st)]
-  :ensures [(valid result)]
-  :body
-    (let (pair : List (cs-alloc-reg st))
-      (let (st2 : _ (at pair 0))
-        (let (cond-reg : Int (at pair 1))
-          (match (bc-compile-expr st2 cond cond-reg)
-            (Err e) (Err e)
-            (Ok st3)
-              (let (jump-to-else-idx : Int (cs-instr-count st3))
-                (let (st4 : _ (cs-emit st3 (op-jump-if-false) 0 cond-reg 0))
-                  (let (free-to : Int cond-reg)
-                    (let (st5 : _ (cs-free-reg-to st4 free-to))
-                      ;; Then branch in tail position
-                      (match (bc-compile-expr-tail st5 then-br dst fn-name)
-                        (Err e) (Err e)
-                        (Ok st6)
-                          (let (jump-to-end-idx : Int (cs-instr-count st6))
-                            (let (st7 : _ (cs-emit st6 (op-jump) 0 0 0))
-                              (let (else-start : Int (cs-instr-count st7))
-                                ;; Else branch in tail position
-                                (match (bc-compile-expr-tail st7 else-br dst fn-name)
-                                  (Err e) (Err e)
-                                  (Ok st8)
-                                    (let (end-idx : Int (cs-instr-count st8))
-                                      (let (st9 : _ (cs-patch-jump st8 jump-to-else-idx "b" (- (- else-start jump-to-else-idx) 1)))
-                                        (Ok (cs-patch-jump st9 jump-to-end-idx "a" (- (- end-idx jump-to-end-idx) 1)))))))))))))))))))
-
-(defn bc-compile-do-tail
-  :sig [(st : _) (exprs : List) (dst : Int) (fn-name : String) -> _]
-  :intent "Compile do block with tail propagation to last expression"
-  :requires [(valid st)]
-  :ensures [(valid result)]
-  :body
-    (if (empty? exprs)
-      (Ok (cs-emit st (op-load-nil) dst 0 0))
-      (if (= (length exprs) 1)
-        (bc-compile-expr-tail st (head exprs) dst fn-name)
-        (bc-compile-do-tail-loop st exprs dst (cs-next-reg st) fn-name))))
-
-(defn bc-compile-do-tail-loop
-  :sig [(st : _) (exprs : List) (dst : Int) (save-reg : Int) (fn-name : String) -> _]
-  :intent "Compile do-block with tail on last expression"
-  :requires [(valid st)]
-  :ensures [(valid result)]
-  :body
-    (if (= (length exprs) 1)
-      ;; Last expression in tail position
-      (match (bc-compile-expr-tail st (head exprs) dst fn-name)
-        (Err e) (Err e)
-        (Ok st2)
-          (let (free-to : Int (if (> save-reg (+ dst 1)) save-reg (+ dst 1)))
-            (Ok (cs-free-reg-to st2 free-to))))
-      ;; Not last -> compile normally
-      (let (pair : List (cs-alloc-reg st))
-        (let (st2 : _ (at pair 0))
-          (let (tmp : Int (at pair 1))
-            (match (bc-compile-expr st2 (head exprs) tmp)
-              (Err e) (Err e)
-              (Ok st3) (bc-compile-do-tail-loop st3 (tail exprs) dst save-reg fn-name)))))))
-
-(defn bc-compile-let-tail
-  :sig [(st : _) (bindings : List) (body : _) (dst : Int) (fn-name : String) -> _]
-  :intent "Compile let with tail propagation to body"
-  :requires [(valid st)]
-  :ensures [(valid result)]
-  :body
-    (let (save-reg : Int (cs-next-reg st))
-      (let (st2 : _ (cs-ensure-above-dst st dst))
-        (match (bc-compile-let-bindings st2 bindings)
-          (Err e) (Err e)
-          (Ok pair)
-            (let (st3 : _ (at pair 0))
-              (let (bound-names : List (at pair 1))
-                ;; Body in tail position
-                (match (bc-compile-expr-tail st3 body dst fn-name)
-                  (Err e) (Err e)
-                  (Ok st4)
-                    (let (st5 : _ (bc-unbind-let st4 bound-names))
-                      (let (free-to : Int (if (> save-reg (+ dst 1)) save-reg (+ dst 1)))
-                        (Ok (cs-free-reg-to st5 free-to)))))))))))
-
-(defn bc-compile-match-tail
-  :sig [(st : _) (scrutinee : _) (arms : List) (dst : Int) (fn-name : String) -> _]
-  :intent "Compile match with tail propagation to arm bodies"
-  :requires [(valid st)]
-  :ensures [(valid result)]
-  :body
-    (let (pair : List (cs-alloc-reg st))
-      (let (st2 : _ (at pair 0))
-        (let (scr-reg : Int (at pair 1))
-          (match (bc-compile-expr st2 scrutinee scr-reg)
-            (Err e) (Err e)
-            (Ok st3)
-              (match (bc-compile-match-arms-tail st3 arms scr-reg dst [] fn-name)
-                (Err e) (Err e)
-                (Ok pair2)
-                  (let (st4 : _ (at pair2 0))
-                    (let (end-jumps : List (at pair2 1))
-                      (let (st5 : _ (bc-patch-end-jumps st4 end-jumps))
-                        (let (free-to : Int (if (> scr-reg (+ dst 1)) scr-reg (+ dst 1)))
-                          (Ok (cs-free-reg-to st5 free-to))))))))))))
-
-(defn bc-compile-match-arms-tail
-  :sig [(st : _) (arms : List) (scr-reg : Int) (dst : Int) (end-jumps : List) (fn-name : String) -> _]
-  :intent "Compile match arms with tail propagation"
-  :requires [(valid st)]
-  :ensures [(valid result)]
-  :body
-    (if (empty? arms) (Ok [st end-jumps])
-      (match (head arms)
-        (ASTArm pat body)
-          (match (bc-compile-one-arm-tail st pat body scr-reg dst fn-name)
-            (Err e) (Err e)
-            (Ok pair)
-              (let (st2 : _ (at pair 0))
-                (let (new-end-jumps : List (at pair 1))
-                  (bc-compile-match-arms-tail st2 (tail arms) scr-reg dst (concat end-jumps new-end-jumps) fn-name))))
-        _ (Err "bc-compile-match-arms-tail: invalid arm"))))
-
-(defn bc-compile-one-arm-tail
-  :sig [(st : _) (pat : _) (body : _) (scr-reg : Int) (dst : Int) (fn-name : String) -> _]
-  :intent "Compile one match arm with tail propagation to body"
-  :requires [(valid st)]
-  :ensures [(valid result)]
-  :body (match pat
-    (PatWild _ _)
-      (let (st2 : _ (cs-emit st (op-match-wild) dst scr-reg 0))
-        (match (bc-compile-expr-tail st2 body dst fn-name)
-          (Err e) (Err e)
-          (Ok st3) (Ok [st3 []])))
-
-    (PatBind name _ _)
-      (let (st2 : _ (cs-set-local st name scr-reg))
-        (match (bc-compile-expr-tail st2 body dst fn-name)
-          (Err e) (Err e)
-          (Ok st3)
-            (let (st4 : _ (cs-remove-local st3 name))
-              (Ok [st4 []]))))
-
-    (PatLit value _ _)
-      (let (pair : List (cs-alloc-reg st))
-        (let (st2 : _ (at pair 0))
-          (let (val-reg : Int (at pair 1))
-            (let (const-pair : List (cs-add-const st2 value))
-              (let (st3 : _ (at const-pair 0))
-                (let (idx : Int (at const-pair 1))
-                  (let (st4 : _ (cs-emit st3 (op-load-const) val-reg idx 0))
-                    (let (st5 : _ (cs-emit st4 (op-eq) val-reg scr-reg val-reg))
-                      (let (skip-idx : Int (cs-instr-count st5))
-                        (let (st6 : _ (cs-emit st5 (op-jump-if-false) 0 val-reg 0))
-                          (let (st7 : _ (cs-free-reg-to st6 (if (> val-reg (+ dst 1)) val-reg (+ dst 1))))
-                            (match (bc-compile-expr-tail st7 body dst fn-name)
-                              (Err e) (Err e)
-                              (Ok st8)
-                                (let (end-jump-idx : Int (cs-instr-count st8))
-                                  (let (st9 : _ (cs-emit st8 (op-jump) 0 0 0))
-                                    (let (here : Int (cs-instr-count st9))
-                                      (let (st10 : _ (cs-patch-jump st9 skip-idx "b" (- (- here skip-idx) 1)))
-                                        (Ok [st10 [end-jump-idx]])))))))))))))))))
-
-    (PatVariant tag sub-pats _ _)
-      (let (tag-pair : List (cs-add-const st tag))
-        (let (st2 : _ (at tag-pair 0))
-          (let (tag-idx : Int (at tag-pair 1))
-            (let (pair : List (cs-alloc-reg st2))
-              (let (st3 : _ (at pair 0))
-                (let (inner-reg : Int (at pair 1))
-                  (let (st4 : _ (cs-emit st3 (op-match-tag) inner-reg scr-reg tag-idx))
-                    (let (skip-idx : Int (cs-instr-count st4))
-                      (let (st5 : _ (cs-emit st4 (op-jump-if-no-match) 0 0 0))
-                        (if (empty? sub-pats)
-                          ;; No sub-patterns
-                          (match (bc-compile-expr-tail st5 body dst fn-name)
-                            (Err e) (Err e)
-                            (Ok st6)
-                              (let (free-to : Int (if (> inner-reg (+ dst 1)) inner-reg (+ dst 1)))
-                                (let (st7 : _ (cs-free-reg-to st6 free-to))
-                                  (let (end-jump-idx : Int (cs-instr-count st7))
-                                    (let (st8 : _ (cs-emit st7 (op-jump) 0 0 0))
-                                      (let (here : Int (cs-instr-count st8))
-                                        (let (st9 : _ (cs-patch-jump st8 skip-idx "a" (- (- here skip-idx) 1)))
-                                          (Ok [st9 [end-jump-idx]]))))))))
-                          (if (= (length sub-pats) 1)
-                            ;; Single sub-pattern
-                            (match (bc-bind-single-pattern st5 (head sub-pats) inner-reg)
-                              (Err e) (Err e)
-                              (Ok st6)
-                                (match (bc-compile-expr-tail st6 body dst fn-name)
-                                  (Err e) (Err e)
-                                  (Ok st7)
-                                    (let (st8 : _ (bc-unbind-sub-patterns st7 sub-pats))
-                                      (let (free-to : Int (if (> inner-reg (+ dst 1)) inner-reg (+ dst 1)))
-                                        (let (st9 : _ (cs-free-reg-to st8 free-to))
-                                          (let (end-jump-idx : Int (cs-instr-count st9))
-                                            (let (st10 : _ (cs-emit st9 (op-jump) 0 0 0))
-                                              (let (here : Int (cs-instr-count st10))
-                                                (let (st11 : _ (cs-patch-jump st10 skip-idx "a" (- (- here skip-idx) 1)))
-                                                  (Ok [st11 [end-jump-idx]]))))))))))
-                            ;; Multi sub-patterns
-                            (match (bc-bind-multi-field st5 sub-pats inner-reg 0)
-                              (Err e) (Err e)
-                              (Ok st6)
-                                (match (bc-compile-expr-tail st6 body dst fn-name)
-                                  (Err e) (Err e)
-                                  (Ok st7)
-                                    (let (st8 : _ (bc-unbind-sub-patterns st7 sub-pats))
-                                      (let (free-to : Int (if (> inner-reg (+ dst 1)) inner-reg (+ dst 1)))
-                                        (let (st9 : _ (cs-free-reg-to st8 free-to))
-                                          (let (end-jump-idx : Int (cs-instr-count st9))
-                                            (let (st10 : _ (cs-emit st9 (op-jump) 0 0 0))
-                                              (let (here : Int (cs-instr-count st10))
-                                                (let (st11 : _ (cs-patch-jump st10 skip-idx "a" (- (- here skip-idx) 1)))
-                                                  (Ok [st11 [end-jump-idx]])))))))))))))))))))))
-
-    _ (Err "bc-compile-one-arm-tail: unknown pattern type")))
-
 ;; ── Function compilation ────────────────────────────────
 
 (defn bc-compile-function
-  :sig [(name : String) (params : List) (body : _) (capture-count : Int) (mod-prefix : String) -> _]
+  :sig [(name : String) (params : List) (body : _) (capture-count : Int) -> _]
   :intent "Compile a function body into a BCFunc value. Returns (Ok [BCFunc [lambdas...]]) or (Err msg)."
   :requires [(valid name)]
   :ensures [(valid result)]
-<<<<<<< HEAD
   :body (match (bc-compile-function-ext name params body capture-count [] [] "" 0)
     (Ok triple) (Ok [(at triple 0) (at triple 1)])
     (Err e) (Err e)))
@@ -1667,20 +1337,6 @@
 (defn bc-compile-function-ext
   :sig [(name : String) (params : List) (body : _) (capture-count : Int) (requires-clauses : List) (ensures-clauses : List) (mod-prefix : String) (init-lambda-ctr : Int) -> _]
   :intent "Compile function with module prefix and lambda counter. Returns (Ok [BCFunc lambdas final-lambda-ctr])."
-=======
-  :body (bc-compile-function-with-contracts name params body capture-count [] [] mod-prefix 0))
-
-(defn bc-compile-function-ctr
-  :sig [(name : String) (params : List) (body : _) (capture-count : Int) (mod-prefix : String) (lambda-ctr : Int) -> _]
-  :intent "Compile a function body with explicit lambda counter. Returns (Ok [BCFunc [lambdas...] new-ctr]) or (Err msg)."
-  :requires [(valid name)]
-  :ensures [(valid result)]
-  :body (bc-compile-function-with-contracts name params body capture-count [] [] mod-prefix lambda-ctr))
-
-(defn bc-compile-function-with-contracts
-  :sig [(name : String) (params : List) (body : _) (capture-count : Int) (requires-clauses : List) (ensures-clauses : List) (mod-prefix : String) (init-lambda-ctr : Int) -> _]
-  :intent "Compile a function with contract assertions. Returns (Ok [BCFunc [lambdas...] final-lambda-ctr]) or (Err msg)."
->>>>>>> feat/bc-convergence
   :requires [(valid name)]
   :ensures [(valid result)]
   :body
@@ -1696,8 +1352,8 @@
                 (match (bc-emit-contract-assertions st3 name requires-clauses (op-assert-requires) dst-reg)
                   (Err e) (Err e)
                   (Ok st4)
-                    ;; Compile body (in tail position for self-TCO)
-                    (match (bc-compile-expr-tail st4 body dst-reg name)
+                    ;; Compile body
+                    (match (bc-compile-expr st4 body dst-reg)
                       (Err e) (Err (str "in function '" name "': " e))
                       (Ok st5)
                         ;; Bind "result" to dst-reg for ensures clauses
@@ -1759,7 +1415,7 @@
 ;; ── Top-level compilation ───────────────────────────────
 
 (defn bc-compile-top-level
-  :sig [(node : _) (mod-prefix : String) -> _]
+  :sig [(node : _) -> _]
   :intent "Compile a top-level AST node. Returns (Ok [bcfunc-or-nil lambdas]) or (Err msg)."
   :requires [(valid node)]
   :ensures [(valid result)]
@@ -1770,7 +1426,7 @@
           (let (param-names : List (map (fn [p] (match p (ASTParam n _) n _ "?")) params))
             (let (req-list : List (if (= requires nil) [] requires))
               (let (ens-list : List (if (= ensures nil) [] ensures))
-                (match (bc-compile-function-with-contracts name param-names body 0 req-list ens-list mod-prefix)
+                (match (bc-compile-function-with-contracts name param-names body 0 req-list ens-list)
                   (Err e) (Err e)
                   (Ok func) (Ok [func []])))))
         _ (Err "bc-compile-top-level: defn requires sig"))
@@ -1796,7 +1452,7 @@
       (let (defns : List (at split 0))
         (let (exprs : List (at split 1))
           ;; Compile each defn
-          (match (bc-compile-defns defns "")
+          (match (bc-compile-defns defns)
             (Err e) (Err e)
             (Ok func-list)
               ;; Compile remaining expressions as __main__
@@ -1805,31 +1461,7 @@
                                     (if (= (length exprs) 1)
                                       (head exprs)
                                       (ASTDo exprs 0 0))))
-                (match (bc-compile-function "__main__" [] main-body 0 "")
-                  (Err e) (Err e)
-                  (Ok result-pair)
-                    (let (main-func : _ (at result-pair 0))
-                      (let (main-lambdas : List (at result-pair 1))
-                        (Ok (concat func-list (concat main-lambdas [main-func]))))))))))))
-
-(defn bc-compile-program-with-prefix
-  :sig [(ast-nodes : List) (mod-prefix : String) -> _]
-  :intent "Compile all AST nodes with module prefix for lambda naming."
-  :requires [(valid ast-nodes)]
-  :ensures [(valid result)]
-  :body
-    (let (split : List (bc-split-top-levels ast-nodes))
-      (let (defns : List (at split 0))
-        (let (exprs : List (at split 1))
-          (match (bc-compile-defns defns mod-prefix)
-            (Err e) (Err e)
-            (Ok func-list)
-              (let (main-body : _ (if (empty? exprs)
-                                    (ASTNil 0 0)
-                                    (if (= (length exprs) 1)
-                                      (head exprs)
-                                      (ASTDo exprs 0 0))))
-                (match (bc-compile-function "__main__" [] main-body 0 mod-prefix)
+                (match (bc-compile-function "__main__" [] main-body 0)
                   (Err e) (Err e)
                   (Ok result-pair)
                     (let (main-func : _ (at result-pair 0))
@@ -1860,15 +1492,8 @@
           _ (bc-split-loop (tail nodes) defns (append exprs node))))))
 
 (defn bc-compile-defns
-  :sig [(defns : List) (mod-prefix : String) -> _]
+  :sig [(defns : List) -> _]
   :intent "Compile all defn nodes into BCFunc list (including lambdas)"
-  :requires [(valid defns)]
-  :ensures [(valid result)]
-  :body (bc-compile-defns-ctr defns mod-prefix 0))
-
-(defn bc-compile-defns-ctr
-  :sig [(defns : List) (mod-prefix : String) (lambda-ctr : Int) -> _]
-  :intent "Compile all defn nodes with shared lambda counter"
   :requires [(valid defns)]
   :ensures [(valid result)]
   :body
@@ -1878,17 +1503,16 @@
           (match sig
             (ASTSig params ret-name)
               (let (param-names : List (map (fn [p] (match p (ASTParam n _) n _ "?")) params))
-                (match (bc-compile-function-ctr name param-names body 0 mod-prefix lambda-ctr)
+                (match (bc-compile-function name param-names body 0)
                   (Err e) (Err e)
                   (Ok result-pair)
                     (let (func : _ (at result-pair 0))
                       (let (sub-lambdas : List (at result-pair 1))
-                        (let (new-ctr : Int (at result-pair 2))
-                          (match (bc-compile-defns-ctr (tail defns) mod-prefix new-ctr)
-                            (Err e) (Err e)
-                            (Ok rest) (Ok (concat (cons func sub-lambdas) rest))))))))
-            _ (Err "bc-compile-defns-ctr: defn requires sig"))
-        _ (Err "bc-compile-defns-ctr: expected defn"))))
+                        (match (bc-compile-defns (tail defns))
+                          (Err e) (Err e)
+                          (Ok rest) (Ok (concat (cons func sub-lambdas) rest)))))))
+            _ (Err "bc-compile-defns: defn requires sig"))
+        _ (Err "bc-compile-defns: expected defn"))))
 
 ;; ── Full pipeline ───────────────────────────────────────
 
