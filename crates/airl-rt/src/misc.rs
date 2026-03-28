@@ -935,9 +935,18 @@ pub extern "C" fn airl_tcp_send(handle: *mut RtValue, data: *mut RtValue) -> *mu
         RtData::List(items) => items.iter().map(|i| match unsafe { &(**i).data } { RtData::Int(n) => *n as u8, _ => 0 }).collect(),
         _ => return err_variant("data must be list"),
     };
-    let mut handles = tcp_handles().lock().unwrap();
-    match handles.get_mut(&h) {
-        Some(stream) => match stream.write_all(&bytes) { Ok(()) => ok_variant(rt_int(bytes.len() as i64)), Err(e) => err_variant(&format!("tcp-send: {}", e)) },
+    // Remove handle from map during I/O to avoid holding the mutex across blocking write.
+    // This prevents deadlock when multiple threads do concurrent TCP operations.
+    let stream = tcp_handles().lock().unwrap().remove(&h);
+    match stream {
+        Some(mut s) => {
+            let result = match s.write_all(&bytes) {
+                Ok(()) => ok_variant(rt_int(bytes.len() as i64)),
+                Err(e) => err_variant(&format!("tcp-send: {}", e)),
+            };
+            tcp_handles().lock().unwrap().insert(h, s);
+            result
+        }
         None => err_variant("invalid handle"),
     }
 }
@@ -946,9 +955,17 @@ pub extern "C" fn airl_tcp_send(handle: *mut RtValue, data: *mut RtValue) -> *mu
 pub extern "C" fn airl_tcp_recv(handle: *mut RtValue, max_bytes: *mut RtValue) -> *mut RtValue {
     let h = match unsafe { &(*handle).data } { RtData::Int(n) => *n, _ => return err_variant("handle must be int") };
     let max = match unsafe { &(*max_bytes).data } { RtData::Int(n) => *n as usize, _ => return err_variant("max must be int") };
-    let mut handles = tcp_handles().lock().unwrap();
-    match handles.get_mut(&h) {
-        Some(stream) => { let mut buf = vec![0u8; max]; match stream.read(&mut buf) { Ok(n) => { buf.truncate(n); ok_variant(rt_list(buf.iter().map(|b| rt_int(*b as i64)).collect())) }, Err(e) => err_variant(&format!("tcp-recv: {}", e)) } }
+    let stream = tcp_handles().lock().unwrap().remove(&h);
+    match stream {
+        Some(mut s) => {
+            let mut buf = vec![0u8; max];
+            let result = match s.read(&mut buf) {
+                Ok(n) => { buf.truncate(n); ok_variant(rt_list(buf.iter().map(|b| rt_int(*b as i64)).collect())) }
+                Err(e) => err_variant(&format!("tcp-recv: {}", e)),
+            };
+            tcp_handles().lock().unwrap().insert(h, s);
+            result
+        }
         None => err_variant("invalid handle"),
     }
 }
@@ -957,9 +974,17 @@ pub extern "C" fn airl_tcp_recv(handle: *mut RtValue, max_bytes: *mut RtValue) -
 pub extern "C" fn airl_tcp_recv_exact(handle: *mut RtValue, count: *mut RtValue) -> *mut RtValue {
     let h = match unsafe { &(*handle).data } { RtData::Int(n) => *n, _ => return err_variant("handle must be int") };
     let n = match unsafe { &(*count).data } { RtData::Int(n) => *n as usize, _ => return err_variant("count must be int") };
-    let mut handles = tcp_handles().lock().unwrap();
-    match handles.get_mut(&h) {
-        Some(stream) => { let mut buf = vec![0u8; n]; match stream.read_exact(&mut buf) { Ok(()) => ok_variant(rt_list(buf.iter().map(|b| rt_int(*b as i64)).collect())), Err(e) => err_variant(&format!("tcp-recv-exact: {}", e)) } }
+    let stream = tcp_handles().lock().unwrap().remove(&h);
+    match stream {
+        Some(mut s) => {
+            let mut buf = vec![0u8; n];
+            let result = match s.read_exact(&mut buf) {
+                Ok(()) => ok_variant(rt_list(buf.iter().map(|b| rt_int(*b as i64)).collect())),
+                Err(e) => err_variant(&format!("tcp-recv-exact: {}", e)),
+            };
+            tcp_handles().lock().unwrap().insert(h, s);
+            result
+        }
         None => err_variant("invalid handle"),
     }
 }
