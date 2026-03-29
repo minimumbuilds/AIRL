@@ -311,10 +311,12 @@ pub fn compile_bytecode_to_executable(funcs: &[Value], output_path: &str) -> Res
         cmd.arg(&rt_lib);
     }
 
+    #[cfg(target_os = "linux")]
+    { cmd.arg("-lm").arg("-lpthread").arg("-ldl"); }
+    #[cfg(target_os = "macos")]
+    { cmd.arg("-lSystem"); }
+
     let status = cmd
-        .arg("-lm")
-        .arg("-lpthread")
-        .arg("-ldl")
         .status()
         .map_err(|e| RuntimeError::Custom(format!("linker: {}", e)))?;
 

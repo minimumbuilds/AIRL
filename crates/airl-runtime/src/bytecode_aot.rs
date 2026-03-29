@@ -3098,7 +3098,10 @@ pub fn compile_to_executable_impl(
             if !rt_lib.is_empty() { cmd.arg(&rt_lib); }
         }
     }
-    cmd.arg("-lm").arg("-lpthread").arg("-ldl");
+    #[cfg(target_os = "linux")]
+    { cmd.arg("-lm").arg("-lpthread").arg("-ldl"); }
+    #[cfg(target_os = "macos")]
+    { cmd.arg("-lSystem"); }
 
     let status = cmd.status().map_err(|e| format!("linker: {}", e))?;
     let _ = std::fs::remove_file(&obj_path);
@@ -3287,11 +3290,13 @@ mod tests {
         aot.compile_func(&func, &all).unwrap();
         aot.emit_entry_point().unwrap();
         let bytes = aot.finish();
-        // Object file should have ELF magic bytes (0x7f ELF) on Linux
         assert!(bytes.len() > 4, "object file too small: {} bytes", bytes.len());
-        // Check ELF magic on Linux
         if cfg!(target_os = "linux") {
             assert_eq!(&bytes[..4], b"\x7fELF", "not a valid ELF object file");
+        }
+        if cfg!(target_os = "macos") {
+            // Mach-O 64-bit magic (little-endian): 0xfeedfacf
+            assert_eq!(&bytes[..4], b"\xcf\xfa\xed\xfe", "not a valid Mach-O object file");
         }
     }
 
