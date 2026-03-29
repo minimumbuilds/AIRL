@@ -55,8 +55,7 @@ unsafe fn free_value(ptr: *mut RtValue) {
         }
         _ => {}
     }
-    std::ptr::drop_in_place(ptr);
-    crate::pool::pool_release(ptr);
+    drop(Box::from_raw(ptr));
 }
 
 /// Clone a value. For primitives: allocate new. For containers: shallow — retain shared items.
@@ -82,11 +81,14 @@ pub extern "C" fn airl_value_clone(ptr: *mut RtValue) -> *mut RtValue {
                 crate::value::rt_list(items.clone())
             }
             RtData::Map(m) => {
-                // Retain each value and share; Arc::clone for keys (no heap alloc)
+                // Retain each value and share
                 for &val in m.values() {
                     airl_value_retain(val);
                 }
-                let new_map = m.iter().map(|(k, &v)| (std::sync::Arc::clone(k), v)).collect();
+                let mut new_map: HashMap<String, *mut RtValue> = HashMap::new();
+                for (k, &v) in m {
+                    new_map.insert(k.clone(), v);
+                }
                 crate::value::rt_map(new_map)
             }
             RtData::Variant { tag_name, inner } => {
