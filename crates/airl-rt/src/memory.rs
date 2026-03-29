@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::value::{rt_bool, rt_float, rt_int, rt_nil, rt_str, rt_unit, rt_variant, RtData, RtValue};
+use crate::value::{rt_bool, rt_bytes, rt_float, rt_int, rt_nil, rt_str, rt_unit, rt_variant, RtData, RtValue};
 
 /// Increment refcount. Null-safe.
 #[no_mangle]
@@ -72,6 +72,7 @@ pub extern "C" fn airl_value_clone(ptr: *mut RtValue) -> *mut RtValue {
             RtData::Float(v) => rt_float(*v),
             RtData::Bool(v) => rt_bool(*v),
             RtData::Str(s) => rt_str(s.clone()),
+            RtData::Bytes(v) => rt_bytes(v.clone()),
             RtData::List(items) => {
                 // Retain each item and share
                 for &item in items {

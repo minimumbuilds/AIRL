@@ -1339,6 +1339,7 @@ impl BytecodeJitFull {
                     // Preserve closure identity instead of silently dropping to nil.
                     Value::BuiltinFn(format!("<closure@{:p}>", func_ptr))
                 }
+                RtData::Bytes(v) => Value::Bytes(v.clone()),
             }
         };
 

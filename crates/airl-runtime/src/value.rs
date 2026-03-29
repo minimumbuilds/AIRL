@@ -22,6 +22,7 @@ pub enum Value {
     BuiltinFn(String),
     IRFuncRef(String),
     BytecodeClosure(crate::bytecode::BytecodeClosureValue),
+    Bytes(Vec<u8>),
 }
 
 impl fmt::Display for Value {
@@ -82,6 +83,7 @@ impl fmt::Display for Value {
             Value::BuiltinFn(name) => write!(f, "<builtin {}>", name),
             Value::IRFuncRef(name) => write!(f, "<ir-fn:{}>", name),
             Value::BytecodeClosure(_) => write!(f, "<bytecode-closure>"),
+            Value::Bytes(v) => write!(f, "<Bytes len={}>", v.len()),
         }
     }
 }
@@ -114,6 +116,7 @@ impl PartialEq for Value {
             (Value::IRFuncRef(a), Value::IRFuncRef(b)) => a == b,
             (Value::IRFuncRef(_), _) => false,
             (Value::BytecodeClosure(_), _) => false,
+            (Value::Bytes(a), Value::Bytes(b)) => a == b,
             _ => false,
         }
     }
@@ -126,6 +129,7 @@ impl Value {
         match self {
             Value::List(items) => items,
             Value::IntList(items) => items.into_iter().map(Value::Int).collect(),
+            Value::Bytes(v) => v.into_iter().map(|b| Value::Int(b as i64)).collect(),
             other => vec![other],
         }
     }
