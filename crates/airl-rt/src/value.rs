@@ -1,12 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
 
 use crate::error::rt_error;
-
-/// Map key type. Arc<str> avoids cloning strings on every map-set/map-remove.
-/// Arc (not Rc) because maps can cross threads via channel-send.
-pub type MapKey = Arc<str>;
 
 // Tag constants
 pub const TAG_NIL: u8 = 0;
@@ -33,7 +28,7 @@ pub enum RtData {
     Bool(bool),                                             // 3 = TAG_BOOL
     Str(String),                                            // 4 = TAG_STR
     List(Vec<*mut RtValue>),                                // 5 = TAG_LIST
-    Map(HashMap<MapKey, *mut RtValue>),                      // 6 = TAG_MAP
+    Map(HashMap<String, *mut RtValue>),                     // 6 = TAG_MAP
     Variant { tag_name: String, inner: *mut RtValue },      // 7 = TAG_VARIANT
     Closure { func_ptr: *const u8, captures: Vec<*mut RtValue> }, // 8 = TAG_CLOSURE
     Unit,                                                   // 9 = TAG_UNIT
@@ -55,9 +50,8 @@ unsafe impl Sync for RtValue {}
 
 impl RtValue {
     pub fn alloc(tag: u8, data: RtData) -> *mut RtValue {
-        let ptr = crate::pool::pool_alloc();
-        unsafe { ptr.write(RtValue { tag, rc: 1, data }); }
-        ptr
+        let v = RtValue { tag, rc: 1, data };
+        Box::into_raw(Box::new(v))
     }
 }
 
@@ -90,7 +84,7 @@ pub fn rt_list(items: Vec<*mut RtValue>) -> *mut RtValue {
     RtValue::alloc(TAG_LIST, RtData::List(items))
 }
 
-pub fn rt_map(m: HashMap<MapKey, *mut RtValue>) -> *mut RtValue {
+pub fn rt_map(m: HashMap<String, *mut RtValue>) -> *mut RtValue {
     RtValue::alloc(TAG_MAP, RtData::Map(m))
 }
 
@@ -182,7 +176,7 @@ impl RtValue {
         }
     }
 
-    pub fn as_map(&self) -> &HashMap<MapKey, *mut RtValue> {
+    pub fn as_map(&self) -> &HashMap<String, *mut RtValue> {
         match &self.data {
             RtData::Map(m) => m,
             _ => rt_error("as_map: not a Map"),
@@ -224,7 +218,7 @@ impl fmt::Display for RtValue {
                 write!(f, "]")
             }
             RtData::Map(m) => {
-                let mut keys: Vec<&MapKey> = m.keys().collect();
+                let mut keys: Vec<&String> = m.keys().collect();
                 keys.sort();
                 write!(f, "{{")?;
                 for (i, key) in keys.iter().enumerate() {
@@ -251,8 +245,7 @@ mod tests {
     use super::*;
 
     unsafe fn free_value(ptr: *mut RtValue) {
-        std::ptr::drop_in_place(ptr);
-        crate::pool::pool_release(ptr);
+        drop(Box::from_raw(ptr));
     }
 
     #[test]
@@ -324,8 +317,12 @@ mod tests {
             let c = rt_int(3);
             let list = rt_list(vec![a, b, c]);
             assert_eq!(format!("{}", *list), "[1 2 3]");
-            // Free via release (handles children recursively)
-            crate::memory::airl_value_release(list);
+            // Free items then list (shallow free for test)
+            let items = (*list).as_list().clone();
+            drop(Box::from_raw(list));
+            for item in items {
+                free_value(item);
+            }
         }
     }
 
@@ -335,8 +332,13 @@ mod tests {
             let inner = rt_int(42);
             let v = rt_variant("Ok".to_string(), inner);
             assert_eq!(format!("{}", *v), "(Ok 42)");
-            // Free via release (handles inner recursively)
-            crate::memory::airl_value_release(v);
+            // Free inner then variant
+            let inner_ptr = match &(*v).data {
+                RtData::Variant { inner, .. } => *inner,
+                _ => panic!(),
+            };
+            drop(Box::from_raw(v));
+            free_value(inner_ptr);
         }
     }
 
