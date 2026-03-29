@@ -2,7 +2,6 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub mod value;
-pub mod pool;
 pub mod memory;
 pub mod error;
 pub mod arithmetic;
