@@ -256,12 +256,12 @@ fn link_object_to_binary(obj_bytes: &[u8], output: &str, source_files: &[String]
         cmd.arg(&runtime_lib);
         cmd.arg(&rt_lib);
     }
-    let status = cmd
-        .arg("-lm")
-        .arg("-lpthread")
-        .arg("-ldl")
-        .arg("-lcurl")
-        .status();
+    #[cfg(target_os = "linux")]
+    { cmd.arg("-lm").arg("-lpthread").arg("-ldl").arg("-lcurl"); }
+    #[cfg(target_os = "macos")]
+    { cmd.arg("-lSystem").arg("-lcurl"); }
+
+    let status = cmd.status();
 
     let _ = std::fs::remove_file(&obj_path);
 
