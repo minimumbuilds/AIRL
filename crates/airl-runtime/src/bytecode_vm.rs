@@ -386,7 +386,7 @@ fn dispatch_compile_bytecode_to_executable(args: &[*mut RtValue]) -> *mut RtValu
     #[cfg(feature = "aot")]
     {
         match crate::bytecode_marshal::compile_bytecode_to_executable(&func_list, &output_path) {
-            Ok(()) => rt_str(format!("Compiled to {}", output_path)),
+            Ok(()) => rt_variant("Ok".into(), rt_str(format!("Compiled to {}", output_path))),
             Err(e) => rt_variant("Err".into(), rt_str(format!("{}", e))),
         }
     }
