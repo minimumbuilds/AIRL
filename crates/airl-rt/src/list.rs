@@ -1,6 +1,6 @@
 use crate::error::rt_error;
 use crate::memory::airl_value_retain;
-use crate::value::{rt_bool, rt_int, rt_list, RtData, RtValue};
+use crate::value::{rt_bool, rt_bytes, rt_int, rt_list, RtData, RtValue};
 
 #[no_mangle]
 pub extern "C" fn airl_head(list: *mut RtValue) -> *mut RtValue {
@@ -59,7 +59,8 @@ pub extern "C" fn airl_empty(list: *mut RtValue) -> *mut RtValue {
     let v = unsafe { &*list };
     match &v.data {
         RtData::List(items) => rt_bool(items.is_empty()),
-        _ => rt_error("airl_empty: not a List"),
+        RtData::Bytes(v) => rt_bool(v.is_empty()),
+        _ => rt_error("airl_empty: not a List or Bytes"),
     }
 }
 
@@ -84,7 +85,8 @@ pub extern "C" fn airl_length(v: *mut RtValue) -> *mut RtValue {
         RtData::List(items) => rt_int(items.len() as i64),
         RtData::Str(s) => rt_int(s.chars().count() as i64),
         RtData::Map(m) => rt_int(m.len() as i64),
-        _ => rt_error("airl_length: not a List, Str, or Map"),
+        RtData::Bytes(v) => rt_int(v.len() as i64),
+        _ => rt_error("airl_length: not a List, Str, Map, or Bytes"),
     }
 }
 
@@ -105,7 +107,13 @@ pub extern "C" fn airl_at(list: *mut RtValue, index: *mut RtValue) -> *mut RtVal
             airl_value_retain(item);
             item
         }
-        _ => rt_error("airl_at: not a List"),
+        RtData::Bytes(bytes) => {
+            if i < 0 || i as usize >= bytes.len() {
+                rt_error("airl_at: index out of bounds");
+            }
+            rt_int(bytes[i as usize] as i64)
+        }
+        _ => rt_error("airl_at: not a List or Bytes"),
     }
 }
 
@@ -123,7 +131,16 @@ pub extern "C" fn airl_append(list: *mut RtValue, elem: *mut RtValue) -> *mut Rt
             new_items.push(elem);
             rt_list(new_items)
         }
-        _ => rt_error("airl_append: not a List"),
+        RtData::Bytes(bytes) => {
+            let b = match unsafe { &(*elem).data } {
+                RtData::Int(n) => *n as u8,
+                _ => rt_error("airl_append: Bytes can only append Int"),
+            };
+            let mut new_bytes = bytes.clone();
+            new_bytes.push(b);
+            rt_bytes(new_bytes)
+        }
+        _ => rt_error("airl_append: not a List or Bytes"),
     }
 }
 

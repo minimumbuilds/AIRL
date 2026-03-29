@@ -1,0 +1,16 @@
+;; Test native Bytes type — length, indexing, roundtrip, concat, equality
+;; EXPECT: true
+
+(if (= (length (bytes-from-string "hello")) 5)
+  (if (= (at (bytes-from-string "hello") 0) 104)
+    (if (= (type-of (bytes-from-string "x")) "bytes")
+      (if (= (bytes-from-string "hi") (bytes-from-string "hi"))
+        (if (= (bytes-to-string (bytes-from-string "hello") 0 5) "hello")
+          (if (= (length (bytes-concat (bytes-from-string "ab") (bytes-from-string "cd"))) 4)
+            true
+            false)
+          false)
+        false)
+      false)
+    false)
+  false)

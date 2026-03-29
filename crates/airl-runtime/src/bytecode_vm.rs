@@ -87,6 +87,7 @@ fn value_to_rt(v: &Value) -> *mut RtValue {
                 caps.len(),
             )
         }
+        Value::Bytes(v) => airl_rt::value::rt_bytes(v.clone()),
         Value::BuiltinFn(_) | Value::IRFuncRef(_) => rt_nil(),
     }
 }
@@ -138,6 +139,7 @@ fn rt_to_value_no_release(ptr: *mut RtValue) -> Value {
                 // Empty-captures closure — preserve identity instead of nil.
                 Value::BuiltinFn(format!("<closure@{:p}>", func_ptr))
             }
+            RtData::Bytes(v) => Value::Bytes(v.clone()),
         }
     }
 }

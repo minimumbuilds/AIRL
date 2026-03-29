@@ -36,6 +36,7 @@ pub struct RuntimeImports {
     pub nil_ctor:   FuncId,
     pub unit_ctor:  FuncId,
     pub str_ctor:   FuncId,
+    pub bytes_ctor: FuncId,
 
     // Logic
     pub as_bool_raw: FuncId,
@@ -484,6 +485,7 @@ impl BytecodeAot {
         let nil_ctor   = declare_import(m, "airl_nil",   sig_0_ptr(m));
         let unit_ctor  = declare_import(m, "airl_unit",  sig_0_ptr(m));
         let str_ctor   = declare_import(m, "airl_str",   sig_ptr_i64_ret_ptr(m));
+        let bytes_ctor = declare_import(m, "airl_bytes_new", sig_ptr_i64_ret_ptr(m));
 
         let as_bool_raw = declare_import(m, "airl_as_bool_raw", sig_1_ptr_ret_i64(m));
         let as_int_raw  = declare_import(m, "airl_as_int_raw",  sig_1_ptr_ret_i64(m));
@@ -735,7 +737,7 @@ impl BytecodeAot {
 
         RuntimeImports {
             value_retain, value_release, value_clone,
-            int_ctor, float_ctor, bool_ctor, nil_ctor, unit_ctor, str_ctor,
+            int_ctor, float_ctor, bool_ctor, nil_ctor, unit_ctor, str_ctor, bytes_ctor,
             as_bool_raw, as_int_raw,
             add, sub, mul, div, modulo,
             eq, ne, lt, gt, le, ge,

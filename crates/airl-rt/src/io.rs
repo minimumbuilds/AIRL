@@ -270,6 +270,7 @@ pub extern "C" fn airl_type_of(v: *mut RtValue) -> *mut RtValue {
         RtData::Map(_) => "map",
         RtData::Variant { .. } => "variant",
         RtData::Closure { .. } => "closure",
+        RtData::Bytes(_) => "bytes",
     };
     rt_str(name.to_string())
 }

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::value::{rt_bool, rt_float, rt_int, rt_list, rt_map, rt_nil, rt_str, rt_variant, RtData, RtValue};
+use crate::value::{rt_bool, rt_bytes, rt_float, rt_int, rt_list, rt_map, rt_nil, rt_str, rt_variant, RtData, RtValue};
 
 fn ok_variant(inner: *mut RtValue) -> *mut RtValue {
     rt_variant("Ok".into(), inner)
@@ -486,7 +486,7 @@ pub extern "C" fn airl_sha256_bytes(data: *mut RtValue) -> *mut RtValue {
     let bytes = extract_bytes(data);
     use sha2::Digest;
     let hash = sha2::Sha256::digest(&bytes);
-    rt_list(hash.iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(hash.to_vec())
 }
 
 #[no_mangle]
@@ -494,7 +494,7 @@ pub extern "C" fn airl_sha512_bytes(data: *mut RtValue) -> *mut RtValue {
     let bytes = extract_bytes(data);
     use sha2::Digest;
     let hash = sha2::Sha512::digest(&bytes);
-    rt_list(hash.iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(hash.to_vec())
 }
 
 #[no_mangle]
@@ -504,7 +504,7 @@ pub extern "C" fn airl_hmac_sha256_bytes(key: *mut RtValue, data: *mut RtValue) 
     let d = extract_bytes(data);
     let mut mac = Hmac::<sha2::Sha256>::new_from_slice(&k).unwrap();
     mac.update(&d);
-    rt_list(mac.finalize().into_bytes().iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(mac.finalize().into_bytes().to_vec())
 }
 
 #[no_mangle]
@@ -514,29 +514,29 @@ pub extern "C" fn airl_hmac_sha512_bytes(key: *mut RtValue, data: *mut RtValue) 
     let d = extract_bytes(data);
     let mut mac = Hmac::<sha2::Sha512>::new_from_slice(&k).unwrap();
     mac.update(&d);
-    rt_list(mac.finalize().into_bytes().iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(mac.finalize().into_bytes().to_vec())
 }
 
 #[no_mangle]
 pub extern "C" fn airl_pbkdf2_sha256(password: *mut RtValue, salt: *mut RtValue, iterations: *mut RtValue, key_len: *mut RtValue) -> *mut RtValue {
-    let pw = match unsafe { &(*password).data } { RtData::Str(s) => s.clone(), _ => return rt_list(vec![]) };
+    let pw = match unsafe { &(*password).data } { RtData::Str(s) => s.clone(), _ => return rt_bytes(vec![]) };
     let salt_bytes = extract_bytes(salt);
     let iters = match unsafe { &(*iterations).data } { RtData::Int(n) => *n as u32, _ => 4096 };
     let klen = match unsafe { &(*key_len).data } { RtData::Int(n) => *n as usize, _ => 32 };
     let mut derived = vec![0u8; klen];
     pbkdf2::pbkdf2_hmac::<sha2::Sha256>(pw.as_bytes(), &salt_bytes, iters, &mut derived);
-    rt_list(derived.iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(derived)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_pbkdf2_sha512(password: *mut RtValue, salt: *mut RtValue, iterations: *mut RtValue, key_len: *mut RtValue) -> *mut RtValue {
-    let pw = match unsafe { &(*password).data } { RtData::Str(s) => s.clone(), _ => return rt_list(vec![]) };
+    let pw = match unsafe { &(*password).data } { RtData::Str(s) => s.clone(), _ => return rt_bytes(vec![]) };
     let salt_bytes = extract_bytes(salt);
     let iters = match unsafe { &(*iterations).data } { RtData::Int(n) => *n as u32, _ => 4096 };
     let klen = match unsafe { &(*key_len).data } { RtData::Int(n) => *n as usize, _ => 64 };
     let mut derived = vec![0u8; klen];
     pbkdf2::pbkdf2_hmac::<sha2::Sha512>(pw.as_bytes(), &salt_bytes, iters, &mut derived);
-    rt_list(derived.iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(derived)
 }
 
 #[no_mangle]
@@ -544,8 +544,8 @@ pub extern "C" fn airl_base64_decode_bytes(data: *mut RtValue) -> *mut RtValue {
     use base64::Engine;
     let bytes = extract_bytes(data);
     match base64::engine::general_purpose::STANDARD.decode(&bytes) {
-        Ok(decoded) => rt_list(decoded.iter().map(|b| rt_int(*b as i64)).collect()),
-        Err(_) => rt_list(vec![]),
+        Ok(decoded) => rt_bytes(decoded),
+        Err(_) => rt_bytes(vec![]),
     }
 }
 
@@ -554,7 +554,7 @@ pub extern "C" fn airl_base64_encode_bytes(data: *mut RtValue) -> *mut RtValue {
     use base64::Engine;
     let bytes = extract_bytes(data);
     let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    rt_list(encoded.as_bytes().iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(encoded.into_bytes())
 }
 
 #[no_mangle]
@@ -813,6 +813,7 @@ pub extern "C" fn airl_json_stringify(val: *mut RtValue) -> *mut RtValue {
                 }
             }
             RtData::Closure { .. } => "\"<closure>\"".to_string(),
+            RtData::Bytes(v) => format!("\"<Bytes len={}>\"", v.len()),
         }
     }
     let v = unsafe { &*val };
@@ -932,8 +933,9 @@ pub extern "C" fn airl_tcp_close(handle: *mut RtValue) -> *mut RtValue {
 pub extern "C" fn airl_tcp_send(handle: *mut RtValue, data: *mut RtValue) -> *mut RtValue {
     let h = match unsafe { &(*handle).data } { RtData::Int(n) => *n, _ => return err_variant("handle must be int") };
     let bytes: Vec<u8> = match unsafe { &(*data).data } {
+        RtData::Bytes(v) => v.clone(),
         RtData::List(items) => items.iter().map(|i| match unsafe { &(**i).data } { RtData::Int(n) => *n as u8, _ => 0 }).collect(),
-        _ => return err_variant("data must be list"),
+        _ => return err_variant("data must be bytes or list"),
     };
     // Remove handle from map during I/O to avoid holding the mutex across blocking write.
     // This prevents deadlock when multiple threads do concurrent TCP operations.
@@ -960,7 +962,7 @@ pub extern "C" fn airl_tcp_recv(handle: *mut RtValue, max_bytes: *mut RtValue) -
         Some(mut s) => {
             let mut buf = vec![0u8; max];
             let result = match s.read(&mut buf) {
-                Ok(n) => { buf.truncate(n); ok_variant(rt_list(buf.iter().map(|b| rt_int(*b as i64)).collect())) }
+                Ok(n) => { buf.truncate(n); ok_variant(rt_bytes(buf)) }
                 Err(e) => err_variant(&format!("tcp-recv: {}", e)),
             };
             tcp_handles().lock().unwrap().insert(h, s);
@@ -979,7 +981,7 @@ pub extern "C" fn airl_tcp_recv_exact(handle: *mut RtValue, count: *mut RtValue)
         Some(mut s) => {
             let mut buf = vec![0u8; n];
             let result = match s.read_exact(&mut buf) {
-                Ok(()) => ok_variant(rt_list(buf.iter().map(|b| rt_int(*b as i64)).collect())),
+                Ok(()) => ok_variant(rt_bytes(buf)),
                 Err(e) => err_variant(&format!("tcp-recv-exact: {}", e)),
             };
             tcp_handles().lock().unwrap().insert(h, s);
@@ -1044,30 +1046,32 @@ pub extern "C" fn airl_tcp_connect_tls(host: *mut RtValue, port: *mut RtValue, c
 #[no_mangle]
 pub extern "C" fn airl_bytes_from_int16(n: *mut RtValue) -> *mut RtValue {
     let val = match unsafe { &(*n).data } { RtData::Int(n) => *n as i16, _ => 0 };
-    rt_list(val.to_be_bytes().iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(val.to_be_bytes().to_vec())
 }
 
 #[no_mangle]
 pub extern "C" fn airl_bytes_from_int32(n: *mut RtValue) -> *mut RtValue {
     let val = match unsafe { &(*n).data } { RtData::Int(n) => *n as i32, _ => 0 };
-    rt_list(val.to_be_bytes().iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(val.to_be_bytes().to_vec())
 }
 
 #[no_mangle]
 pub extern "C" fn airl_bytes_from_int64(n: *mut RtValue) -> *mut RtValue {
     let val = match unsafe { &(*n).data } { RtData::Int(n) => *n, _ => 0 };
-    rt_list(val.to_be_bytes().iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(val.to_be_bytes().to_vec())
 }
 
-fn extract_bytes(list: *mut RtValue) -> Vec<u8> {
-    match unsafe { &(*list).data } {
+fn extract_bytes(val: *mut RtValue) -> Vec<u8> {
+    match unsafe { &(*val).data } {
+        RtData::Bytes(v) => v.clone(),
         RtData::List(items) => items.iter().map(|i| match unsafe { &(**i).data } { RtData::Int(n) => *n as u8, _ => 0 }).collect(),
         _ => vec![],
     }
 }
 
-fn byte_at(list: *mut RtValue, offset: usize) -> u8 {
-    match unsafe { &(*list).data } {
+fn byte_at(val: *mut RtValue, offset: usize) -> u8 {
+    match unsafe { &(*val).data } {
+        RtData::Bytes(v) => if offset < v.len() { v[offset] } else { 0 },
         RtData::List(items) => if offset < items.len() { match unsafe { &(*items[offset]).data } { RtData::Int(n) => *n as u8, _ => 0 } } else { 0 },
         _ => 0,
     }
@@ -1098,7 +1102,7 @@ pub extern "C" fn airl_bytes_to_int64(buf: *mut RtValue, offset: *mut RtValue) -
 #[no_mangle]
 pub extern "C" fn airl_bytes_from_string(s: *mut RtValue) -> *mut RtValue {
     let input = match unsafe { &(*s).data } { RtData::Str(s) => s.clone(), _ => String::new() };
-    rt_list(input.as_bytes().iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(input.into_bytes())
 }
 
 #[no_mangle]
@@ -1113,7 +1117,7 @@ pub extern "C" fn airl_bytes_to_string(buf: *mut RtValue, offset: *mut RtValue, 
 #[no_mangle]
 pub extern "C" fn airl_bytes_concat(a: *mut RtValue, b: *mut RtValue) -> *mut RtValue {
     let mut ab = extract_bytes(a); ab.extend_from_slice(&extract_bytes(b));
-    rt_list(ab.iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(ab)
 }
 
 /// Concatenate a list of byte lists in one O(n) pass.
@@ -1123,7 +1127,7 @@ pub extern "C" fn airl_bytes_concat(a: *mut RtValue, b: *mut RtValue) -> *mut Rt
 pub extern "C" fn airl_bytes_concat_all(parts: *mut RtValue) -> *mut RtValue {
     let part_lists = match unsafe { &(*parts).data } {
         RtData::List(items) => items,
-        _ => return rt_list(vec![]),
+        _ => return rt_bytes(vec![]),
     };
     // Measure total size, allocate once
     let mut total = 0usize;
@@ -1135,11 +1139,9 @@ pub extern "C" fn airl_bytes_concat_all(parts: *mut RtValue) -> *mut RtValue {
     // Build result in one pass
     let mut result = Vec::with_capacity(total);
     for bytes in &extracted {
-        for &b in bytes {
-            result.push(rt_int(b as i64));
-        }
+        result.extend_from_slice(bytes);
     }
-    rt_list(result)
+    rt_bytes(result)
 }
 
 #[no_mangle]
@@ -1147,8 +1149,8 @@ pub extern "C" fn airl_bytes_slice(buf: *mut RtValue, offset: *mut RtValue, len:
     let off = match unsafe { &(*offset).data } { RtData::Int(n) => *n as usize, _ => 0 };
     let slen = match unsafe { &(*len).data } { RtData::Int(n) => *n as usize, _ => 0 };
     let bytes = extract_bytes(buf);
-    if off + slen > bytes.len() { return rt_list(vec![]); }
-    rt_list(bytes[off..off+slen].iter().map(|b| rt_int(*b as i64)).collect())
+    if off + slen > bytes.len() { return rt_bytes(vec![]); }
+    rt_bytes(bytes[off..off+slen].to_vec())
 }
 
 #[no_mangle]
@@ -1167,7 +1169,7 @@ pub extern "C" fn airl_gzip_compress(data: *mut RtValue) -> *mut RtValue {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     std::io::Write::write_all(&mut encoder, &bytes).unwrap();
     let compressed = encoder.finish().unwrap();
-    rt_list(compressed.iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(compressed)
 }
 
 #[no_mangle]
@@ -1177,49 +1179,49 @@ pub extern "C" fn airl_gzip_decompress(data: *mut RtValue) -> *mut RtValue {
     let mut decoder = GzDecoder::new(&bytes[..]);
     let mut decompressed = Vec::new();
     std::io::Read::read_to_end(&mut decoder, &mut decompressed).unwrap();
-    rt_list(decompressed.iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(decompressed)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_snappy_compress(data: *mut RtValue) -> *mut RtValue {
     let bytes = extract_bytes(data);
     let compressed = snap::raw::Encoder::new().compress_vec(&bytes).unwrap();
-    rt_list(compressed.iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(compressed)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_snappy_decompress(data: *mut RtValue) -> *mut RtValue {
     let bytes = extract_bytes(data);
     let decompressed = snap::raw::Decoder::new().decompress_vec(&bytes).unwrap();
-    rt_list(decompressed.iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(decompressed)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_lz4_compress(data: *mut RtValue) -> *mut RtValue {
     let bytes = extract_bytes(data);
     let compressed = lz4_flex::compress_prepend_size(&bytes);
-    rt_list(compressed.iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(compressed)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_lz4_decompress(data: *mut RtValue) -> *mut RtValue {
     let bytes = extract_bytes(data);
     let decompressed = lz4_flex::decompress_size_prepended(&bytes).unwrap();
-    rt_list(decompressed.iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(decompressed)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_zstd_compress(data: *mut RtValue) -> *mut RtValue {
     let bytes = extract_bytes(data);
     let compressed = zstd::encode_all(&bytes[..], 3).unwrap();
-    rt_list(compressed.iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(compressed)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_zstd_decompress(data: *mut RtValue) -> *mut RtValue {
     let bytes = extract_bytes(data);
     let decompressed = zstd::decode_all(&bytes[..]).unwrap();
-    rt_list(decompressed.iter().map(|b| rt_int(*b as i64)).collect())
+    rt_bytes(decompressed)
 }
 
 // airl_run_bytecode and airl_compile_to_executable are defined elsewhere in airl-runtime

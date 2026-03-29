@@ -14,8 +14,9 @@ pub const TAG_MAP: u8 = 6;
 pub const TAG_VARIANT: u8 = 7;
 pub const TAG_CLOSURE: u8 = 8;
 pub const TAG_UNIT: u8 = 9;
+pub const TAG_BYTES: u8 = 10;
 
-/// Variant order MUST match TAG_* constants (0-9).
+/// Variant order MUST match TAG_* constants (0-10).
 /// The Rust compiler assigns discriminants by position,
 /// and airl-rt functions match on RtData using these discriminants.
 /// AOT-compiled code checks the `tag` byte directly.
@@ -31,6 +32,7 @@ pub enum RtData {
     Variant { tag_name: String, inner: *mut RtValue },      // 7 = TAG_VARIANT
     Closure { func_ptr: *const u8, captures: Vec<*mut RtValue> }, // 8 = TAG_CLOSURE
     Unit,                                                   // 9 = TAG_UNIT
+    Bytes(Vec<u8>),                                         // 10 = TAG_BYTES
 }
 
 #[repr(C)]
@@ -90,6 +92,10 @@ pub fn rt_variant(tag_name: String, inner: *mut RtValue) -> *mut RtValue {
     RtValue::alloc(TAG_VARIANT, RtData::Variant { tag_name, inner })
 }
 
+pub fn rt_bytes(v: Vec<u8>) -> *mut RtValue {
+    RtValue::alloc(TAG_BYTES, RtData::Bytes(v))
+}
+
 // C-ABI constructors
 #[no_mangle]
 pub extern "C" fn airl_int(v: i64) -> *mut RtValue {
@@ -121,6 +127,12 @@ pub extern "C" fn airl_str(ptr: *const u8, len: usize) -> *mut RtValue {
     let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
     let s = std::str::from_utf8(slice).unwrap_or_else(|_| rt_error("airl_str: invalid utf8"));
     rt_str(s.to_string())
+}
+
+#[no_mangle]
+pub extern "C" fn airl_bytes_new(ptr: *const u8, len: usize) -> *mut RtValue {
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+    rt_bytes(slice.to_vec())
 }
 
 // Rust-side accessors
@@ -170,6 +182,13 @@ impl RtValue {
             _ => rt_error("as_map: not a Map"),
         }
     }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        match &self.data {
+            RtData::Bytes(v) => v,
+            _ => rt_error("as_bytes: not Bytes"),
+        }
+    }
 }
 
 impl fmt::Display for RtValue {
@@ -216,6 +235,7 @@ impl fmt::Display for RtValue {
                 write!(f, "({} {})", tag_name, val)
             }
             RtData::Closure { .. } => write!(f, "<closure>"),
+            RtData::Bytes(v) => write!(f, "<Bytes len={}>", v.len()),
         }
     }
 }
@@ -319,6 +339,27 @@ mod tests {
             };
             drop(Box::from_raw(v));
             free_value(inner_ptr);
+        }
+    }
+
+    #[test]
+    fn test_bytes_roundtrip() {
+        unsafe {
+            let v = rt_bytes(vec![1, 2, 3, 255]);
+            assert_eq!((*v).tag, TAG_BYTES);
+            assert_eq!((*v).as_bytes(), &[1, 2, 3, 255]);
+            assert_eq!(format!("{}", *v), "<Bytes len=4>");
+            free_value(v);
+        }
+    }
+
+    #[test]
+    fn test_bytes_empty() {
+        unsafe {
+            let v = rt_bytes(vec![]);
+            assert_eq!((*v).as_bytes(), &[] as &[u8]);
+            assert_eq!(format!("{}", *v), "<Bytes len=0>");
+            free_value(v);
         }
     }
 }

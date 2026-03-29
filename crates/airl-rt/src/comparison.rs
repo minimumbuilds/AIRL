@@ -22,6 +22,7 @@ pub fn rt_values_equal(a: *mut RtValue, b: *mut RtValue) -> bool {
          RtData::Variant { tag_name: tn_b, inner: inner_b }) => {
             tn_a == tn_b && rt_values_equal(*inner_a, *inner_b)
         }
+        (RtData::Bytes(a), RtData::Bytes(b)) => a == b,
         // Cross-type = false
         _ => false,
     }
