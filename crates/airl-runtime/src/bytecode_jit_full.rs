@@ -1262,9 +1262,9 @@ impl BytecodeJitFull {
             }
             Value::Map(map) => {
                 use std::collections::HashMap as HM;
-                let mut rt_map_data: HM<String, *mut RtValue> = HM::new();
+                let mut rt_map_data: HM<airl_rt::value::MapKey, *mut RtValue> = HM::new();
                 for (k, val) in map {
-                    rt_map_data.insert(k.clone(), Self::value_to_rt_with_compiled(val, compiled));
+                    rt_map_data.insert(std::sync::Arc::from(k.as_str()), Self::value_to_rt_with_compiled(val, compiled));
                 }
                 rt_map(rt_map_data)
             }
@@ -1326,7 +1326,7 @@ impl BytecodeJitFull {
                     let mut result_map = std::collections::HashMap::new();
                     for (k, &val) in map {
                         airl_rt::memory::airl_value_retain(val);
-                        result_map.insert(k.clone(), Self::rt_to_value(val));
+                        result_map.insert(k.to_string(), Self::rt_to_value(val));
                     }
                     Value::Map(result_map)
                 }

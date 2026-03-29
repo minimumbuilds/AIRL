@@ -69,9 +69,9 @@ fn value_to_rt(v: &Value) -> *mut RtValue {
             rt_variant(tag.clone(), inner_ptr)
         }
         Value::Map(map) => {
-            let mut rt_map_data: HashMap<String, *mut RtValue> = HashMap::new();
+            let mut rt_map_data: HashMap<airl_rt::value::MapKey, *mut RtValue> = HashMap::new();
             for (k, val) in map {
-                rt_map_data.insert(k.clone(), value_to_rt(val));
+                rt_map_data.insert(std::sync::Arc::from(k.as_str()), value_to_rt(val));
             }
             rt_map(rt_map_data)
         }
@@ -112,7 +112,7 @@ fn rt_to_value_no_release(ptr: *mut RtValue) -> Value {
             RtData::Map(map) => {
                 let mut result_map = HashMap::new();
                 for (k, &val) in map {
-                    result_map.insert(k.clone(), rt_to_value_no_release(val));
+                    result_map.insert(k.to_string(), rt_to_value_no_release(val));
                 }
                 Value::Map(result_map)
             }
@@ -748,14 +748,14 @@ impl BytecodeVm {
         };
         match self.fn_metadata.get(&fname) {
             Some(meta) => {
-                let mut m: HashMap<String, *mut RtValue> = HashMap::new();
-                m.insert("name".into(), rt_str(meta.name.clone()));
-                m.insert("intent".into(), meta.intent.as_ref().map_or_else(rt_nil, |s| rt_str(s.clone())));
-                m.insert("param-names".into(), rt_list(meta.param_names.iter().map(|s| rt_str(s.clone())).collect()));
-                m.insert("param-types".into(), rt_list(meta.param_types.iter().map(|s| rt_str(s.clone())).collect()));
-                m.insert("return-type".into(), rt_str(meta.return_type.clone()));
-                m.insert("requires".into(), rt_list(meta.requires.iter().map(|s| rt_str(s.clone())).collect()));
-                m.insert("ensures".into(), rt_list(meta.ensures.iter().map(|s| rt_str(s.clone())).collect()));
+                let mut m: HashMap<airl_rt::value::MapKey, *mut RtValue> = HashMap::new();
+                m.insert(std::sync::Arc::from("name"), rt_str(meta.name.clone()));
+                m.insert(std::sync::Arc::from("intent"), meta.intent.as_ref().map_or_else(rt_nil, |s| rt_str(s.clone())));
+                m.insert(std::sync::Arc::from("param-names"), rt_list(meta.param_names.iter().map(|s| rt_str(s.clone())).collect()));
+                m.insert(std::sync::Arc::from("param-types"), rt_list(meta.param_types.iter().map(|s| rt_str(s.clone())).collect()));
+                m.insert(std::sync::Arc::from("return-type"), rt_str(meta.return_type.clone()));
+                m.insert(std::sync::Arc::from("requires"), rt_list(meta.requires.iter().map(|s| rt_str(s.clone())).collect()));
+                m.insert(std::sync::Arc::from("ensures"), rt_list(meta.ensures.iter().map(|s| rt_str(s.clone())).collect()));
                 Ok(rt_variant("Ok".into(), rt_map(m)))
             }
             None => Ok(rt_variant("Err".into(), rt_str(format!("function not found: {}", fname)))),
