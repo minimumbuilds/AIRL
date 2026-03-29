@@ -761,12 +761,12 @@ fn parse_json_array(s: &str) -> Option<(*mut RtValue, &str)> {
 
 fn parse_json_object(s: &str) -> Option<(*mut RtValue, &str)> {
     let mut rest = s[1..].trim_start(); // skip '{'
-    let mut map: HashMap<String, *mut RtValue> = HashMap::new();
+    let mut map: HashMap<crate::value::MapKey, *mut RtValue> = HashMap::new();
     if rest.starts_with('}') { return Some((rt_map(map), &rest[1..])); }
     loop {
         // Parse key (must be string)
         let (key_val, r) = parse_json_string(rest.trim_start())?;
-        let key = unsafe { match &(*key_val).data { RtData::Str(s) => s.clone(), _ => return None } };
+        let key: crate::value::MapKey = unsafe { match &(*key_val).data { RtData::Str(s) => std::sync::Arc::from(s.as_str()), _ => return None } };
         crate::memory::airl_value_release(key_val);
         rest = r.trim_start();
         if !rest.starts_with(':') { return None; }
@@ -797,11 +797,11 @@ pub extern "C" fn airl_json_stringify(val: *mut RtValue) -> *mut RtValue {
                 format!("[{}]", parts.join(","))
             }
             RtData::Map(m) => {
-                let mut keys: Vec<&String> = m.keys().collect();
+                let mut keys: Vec<&crate::value::MapKey> = m.keys().collect();
                 keys.sort();
                 let parts: Vec<String> = keys.iter().map(|k| {
                     let val = unsafe { &*m[*k] };
-                    format!("\"{}\":{}", k, to_json(val))
+                    format!("\"{}\":{}", &**k, to_json(val))
                 }).collect();
                 format!("{{{}}}", parts.join(","))
             }

@@ -1,8 +1,9 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::error::rt_error;
 use crate::memory::{airl_value_retain, airl_value_release};
-use crate::value::{rt_bool, rt_int, rt_list, rt_map, rt_nil, rt_str, RtData, RtValue};
+use crate::value::{rt_bool, rt_int, rt_list, rt_map, rt_nil, rt_str, MapKey, RtData, RtValue};
 
 /// Return an empty map.
 #[no_mangle]
@@ -20,14 +21,14 @@ pub extern "C" fn airl_map_from(pairs: *mut RtValue) -> *mut RtValue {
             if items.len() % 2 != 0 {
                 rt_error("airl_map_from: list must have even length (alternating key-value pairs)");
             }
-            let mut map: HashMap<String, *mut RtValue> = HashMap::new();
+            let mut map: HashMap<MapKey, *mut RtValue> = HashMap::new();
             let mut i = 0;
             while i < items.len() {
                 let key_ptr = items[i];
                 let val_ptr = items[i + 1];
                 let key = unsafe { &*key_ptr };
-                let k = match &key.data {
-                    RtData::Str(s) => s.clone(),
+                let k: MapKey = match &key.data {
+                    RtData::Str(s) => Arc::from(s.as_str()),
                     _ => rt_error("airl_map_from: key must be a Str"),
                 };
                 airl_value_retain(val_ptr);
@@ -99,21 +100,21 @@ pub extern "C" fn airl_map_set(
 ) -> *mut RtValue {
     let map_v = unsafe { &*m };
     let key_v = unsafe { &*key };
-    let k = match &key_v.data {
-        RtData::Str(s) => s.clone(),
+    let k: MapKey = match &key_v.data {
+        RtData::Str(s) => Arc::from(s.as_str()),
         _ => rt_error("airl_map_set: key must be a Str"),
     };
     match &map_v.data {
         RtData::Map(map) => {
-            // Clone the map, retaining all existing values.
-            let mut new_map: HashMap<String, *mut RtValue> = HashMap::with_capacity(map.len() + 1);
+            // Clone the map with Arc::clone for keys (refcount bump, no heap alloc).
+            let mut new_map: HashMap<MapKey, *mut RtValue> = HashMap::with_capacity(map.len() + 1);
             for (existing_key, &existing_val) in map {
                 airl_value_retain(existing_val);
-                new_map.insert(existing_key.clone(), existing_val);
+                new_map.insert(Arc::clone(existing_key), existing_val);
             }
             // If key already exists, the old value in new_map will be overwritten.
             // We retained it above, so release it now to balance.
-            if let Some(&old_val) = new_map.get(&k) {
+            if let Some(&old_val) = new_map.get(&*k) {
                 airl_value_release(old_val);
             }
             airl_value_retain(val);
@@ -151,14 +152,13 @@ pub extern "C" fn airl_map_remove(m: *mut RtValue, key: *mut RtValue) -> *mut Rt
     };
     match &map_v.data {
         RtData::Map(map) => {
-            let mut new_map: HashMap<String, *mut RtValue> = HashMap::with_capacity(map.len());
+            let mut new_map: HashMap<MapKey, *mut RtValue> = HashMap::with_capacity(map.len());
             for (existing_key, &existing_val) in map {
-                if existing_key.as_str() == k {
-                    // Skip this entry — do not retain it in new_map.
+                if &**existing_key == k {
                     continue;
                 }
                 airl_value_retain(existing_val);
-                new_map.insert(existing_key.clone(), existing_val);
+                new_map.insert(Arc::clone(existing_key), existing_val);
             }
             rt_map(new_map)
         }
@@ -172,9 +172,9 @@ pub extern "C" fn airl_map_keys(m: *mut RtValue) -> *mut RtValue {
     let map_v = unsafe { &*m };
     match &map_v.data {
         RtData::Map(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
+            let mut keys: Vec<&MapKey> = map.keys().collect();
             keys.sort();
-            let items: Vec<*mut RtValue> = keys.iter().map(|k| rt_str((*k).clone())).collect();
+            let items: Vec<*mut RtValue> = keys.iter().map(|k| rt_str(k.to_string())).collect();
             rt_list(items)
         }
         _ => rt_error("airl_map_keys: argument must be a Map"),
@@ -187,7 +187,7 @@ pub extern "C" fn airl_map_values(m: *mut RtValue) -> *mut RtValue {
     let map_v = unsafe { &*m };
     match &map_v.data {
         RtData::Map(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
+            let mut keys: Vec<&MapKey> = map.keys().collect();
             keys.sort();
             let items: Vec<*mut RtValue> = keys
                 .iter()
