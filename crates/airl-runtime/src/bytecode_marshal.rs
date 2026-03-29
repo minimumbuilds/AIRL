@@ -238,7 +238,10 @@ pub extern "C" fn airl_compile_bytecode_to_executable(
     };
 
     match compile_bytecode_to_executable(&funcs, &output_path) {
-        Ok(()) => BytecodeJitFull::value_to_rt(&Value::Str(format!("Compiled to {}", output_path))),
+        Ok(()) => {
+            use airl_rt::value::{rt_variant, rt_str};
+            rt_variant("Ok".into(), rt_str(format!("Compiled to {}", output_path)))
+        }
         Err(e) => {
             use airl_rt::value::{rt_variant, rt_str};
             rt_variant("Err".into(), rt_str(format!("Compilation error: {}", e)))
