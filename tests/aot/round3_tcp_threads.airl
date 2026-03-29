@@ -1,6 +1,5 @@
 ;; EXPECT: echo:hello|send-err:invalid handle|recv-err:invalid handle|exact-err:invalid handle
-;; Test: TCP operations from spawned threads (deadlock regression)
-;; Tests error paths for invalid handles.
+;; Test: TCP operations from spawned threads with nested match patterns.
 (defn run-server
   :sig [(port : i64) -> Nil]
   :requires [(> port 0)]
@@ -18,15 +17,17 @@
       (tcp-close server))
     (Err _) nil))
 
-(defn send-and-recv
+(defn test-send-in-thread
   :sig [(conn : i64) -> String]
   :requires [(valid conn)]
   :ensures [(valid result)]
-  :body (do
-    (tcp-send conn (bytes-from-string "hello"))
-    (match (tcp-recv conn 1024)
-      (Ok data) (bytes-to-string data 0 (length data))
-      (Err e) (str "err:" e))))
+  :body
+    (let (payload : List (bytes-from-string "hello"))
+      (match (tcp-send conn payload)
+        (Ok _) (match (tcp-recv conn 1024)
+          (Ok data) (bytes-to-string data 0 (length data))
+          (Err e) (str "recv-err:" e))
+        (Err e) (str "send-err:" e))))
 
 (defn test-send-invalid
   :sig [-> String]
@@ -52,13 +53,13 @@
     (Ok _) "unexpected-ok"
     (Err e) (str e)))
 
-(let (port : i64 19891)
+(let (port : i64 19896)
      (srv : i64 (thread-spawn (fn [] (run-server port))))
      (_ : _ (sleep 200))
      (conn-r : _ (tcp-connect "127.0.0.1" port))
   (match conn-r
     (Ok conn)
-      (let (h1 : i64 (thread-spawn (fn [] (send-and-recv conn))))
+      (let (h1 : i64 (thread-spawn (fn [] (test-send-in-thread conn))))
            (r1 : _ (thread-join h1))
            (v1 : String (match r1 (Ok v) (str v) (Err e) (str "ERR:" e)))
            (h2 : i64 (thread-spawn (fn [] (test-send-invalid))))

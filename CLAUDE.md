@@ -98,4 +98,4 @@ bash scripts/build-g3.sh    # Builds G3 with all 4 bootstrap files as input
 2. **JIT extern "C" errors are non-recoverable:** `process::exit(1)` on type mismatch. Prevented by type checker.
 3. **Type checker incomplete for builtins:** 45+ builtins registered as `TypeVar("builtin")` — no compile-time type checking. Runtime panics catch errors. See `docs/superpowers/specs/2026-03-28-verification-gaps-assessment.md`.
 4. **Z3 verification informational only:** Disproven contracts print warnings but don't block execution. Runtime assertions are the enforcement mechanism.
-5. **G3 nested-match edge case:** Certain nested `match` patterns inside thread closures crash in G3-compiled binaries but work via `airl compile`. Bootstrap bytecode convergence issue.
+5. **G3 rebuild after runtime changes:** After modifying `crates/airl-rt/`, rebuild G3 via `bash scripts/build-g3.sh` to pick up the new embedded runtime. The `build.rs` tracks `libairl_rt.a` automatically, but G3 is a separate binary that needs explicit rebuilding.
