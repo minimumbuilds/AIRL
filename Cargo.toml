@@ -29,6 +29,10 @@ default-members = [
     "crates/airl-rt",
 ]
 
+[profile.release]
+lto = "thin"
+debug = false
+
 [workspace.package]
 version = "0.8.0"
 edition = "2021"
