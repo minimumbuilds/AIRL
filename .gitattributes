@@ -1,0 +1,3 @@
+# AIRL — Rust + AIRL
+*.rs linguist-language=Rust
+*.airl linguist-language=AIRL
