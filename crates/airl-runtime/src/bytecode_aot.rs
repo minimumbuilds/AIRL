@@ -12,6 +12,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use cranelift_codegen::ir::{self, condcodes::{FloatCC, IntCC}, types, AbiParam, InstBuilder, MemFlags, StackSlotData};
+use cranelift_codegen::settings::Configurable;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
@@ -424,14 +425,29 @@ pub struct BytecodeAot {
     closure_targets: HashSet<String>,
 }
 
+
+/// Remap user function names to avoid clashes with C symbols.
+/// In particular, user "main" → "__airl_user_main" so C entry point can be emitted.
+fn aot_symbol_name(name: &str) -> String {
+    if name == "main" {
+        "__airl_user_main".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
 impl BytecodeAot {
     /// Create a new AOT compiler context targeting the host triple.
     pub fn new() -> Result<Self, String> {
+        let mut settings_builder = cranelift_codegen::settings::builder();
+        // Disable unwind info and enable PIC to avoid unsupported AArch64 relocations
+        // on ARM64 targets (macOS). Harmless on x86_64.
+        let _ = settings_builder.set("unwind_info", "false");
+        let _ = settings_builder.set("is_pic", "true");
+        let _ = settings_builder.set("enable_probestack", "false");
         let isa = cranelift_codegen::isa::lookup(target_lexicon::Triple::host())
             .map_err(|e| format!("ISA lookup: {}", e))?
-            .finish(cranelift_codegen::settings::Flags::new(
-                cranelift_codegen::settings::builder(),
-            ))
+            .finish(cranelift_codegen::settings::Flags::new(settings_builder))
             .map_err(|e| format!("ISA build: {}", e))?;
 
         let builder = ObjectBuilder::new(
@@ -1168,7 +1184,7 @@ impl BytecodeAot {
         // ── 2. Declare function in object module ─────────────────────────
         let func_id = self
             .module
-            .declare_function(&func.name, Linkage::Local, &sig)
+            .declare_function(&aot_symbol_name(&func.name), Linkage::Local, &sig)
             .map_err(|e| format!("declare: {}", e))?;
         self.compiled_funcs.insert(func.name.clone(), func_id);
         self.eligible_funcs.insert(func.name.clone());
@@ -1205,7 +1221,7 @@ impl BytecodeAot {
                         call_sig.returns.push(AbiParam::new(types::I64));
                         let callee_id = self
                             .module
-                            .declare_function(callee_name, Linkage::Local, &call_sig)
+                            .declare_function(&aot_symbol_name(callee_name), Linkage::Local, &call_sig)
                             .map_err(|e| format!("call declare: {}", e))?;
                         call_targets.insert(callee_name.clone(), callee_id);
                     }
@@ -1927,7 +1943,7 @@ impl BytecodeAot {
         // ── 2. Declare function in object module ─────────────────────────
         let func_id = self
             .module
-            .declare_function(&func.name, Linkage::Local, &sig)
+            .declare_function(&aot_symbol_name(&func.name), Linkage::Local, &sig)
             .map_err(|e| format!("declare: {}", e))?;
         // NOTE: insert into compiled_funcs BEFORE body compilation so that
         // self-recursive calls and emit_entry_point can find the function.
@@ -1963,7 +1979,7 @@ impl BytecodeAot {
                             call_sig.returns.push(AbiParam::new(types::I64));
                             let callee_id = self
                                 .module
-                                .declare_function(callee_name, Linkage::Local, &call_sig)
+                                .declare_function(&aot_symbol_name(callee_name), Linkage::Local, &call_sig)
                                 .map_err(|e| format!("call declare (eligible): {}", e))?;
                             call_targets.insert(callee_name.clone(), callee_id);
                         } else if all_functions.contains_key(callee_name.as_str())
@@ -1976,7 +1992,7 @@ impl BytecodeAot {
                             call_sig.returns.push(AbiParam::new(PTR));
                             let callee_id = self
                                 .module
-                                .declare_function(callee_name, Linkage::Local, &call_sig)
+                                .declare_function(&aot_symbol_name(callee_name), Linkage::Local, &call_sig)
                                 .map_err(|e| format!("call declare: {}", e))?;
                             call_targets.insert(callee_name.clone(), callee_id);
                         } else {
@@ -1995,7 +2011,7 @@ impl BytecodeAot {
                             call_sig.returns.push(AbiParam::new(PTR));
                             let callee_id = self
                                 .module
-                                .declare_function(callee_name, Linkage::Local, &call_sig)
+                                .declare_function(&aot_symbol_name(callee_name), Linkage::Local, &call_sig)
                                 .map_err(|e| format!("call declare: {}", e))?;
                             call_targets.insert(callee_name.clone(), callee_id);
                         }
@@ -2916,7 +2932,11 @@ impl BytecodeAot {
         }
 
         // Pre-verify to get detailed error
-        let flags = cranelift_codegen::settings::Flags::new(cranelift_codegen::settings::builder());
+        let mut vb = cranelift_codegen::settings::builder();
+        let _ = vb.set("unwind_info", "false");
+        let _ = vb.set("is_pic", "true");
+        let _ = vb.set("enable_probestack", "false");
+        let flags = cranelift_codegen::settings::Flags::new(vb);
         if let Err(errs) = cranelift_codegen::verify_function(&ctx.func, &flags) {
             eprintln!("[AOT] VERIFIER ERRORS for '{}':\n{}", func.name, errs);
             eprintln!("[AOT] Full IR:\n{}", ctx.func.display());
