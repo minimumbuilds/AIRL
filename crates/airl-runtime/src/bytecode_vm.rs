@@ -495,6 +495,10 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
             }
         }
         "println" => airl_rt::io::airl_println(a0!()),
+        "eprint" => airl_rt::io::airl_eprint(a0!()),
+        "eprintln" => airl_rt::io::airl_eprintln(a0!()),
+        "read-line" => airl_rt::io::airl_read_line(),
+        "read-stdin" => airl_rt::io::airl_read_stdin(),
 
         // Variadic str / format
         "str" => airl_rt::misc::airl_str_variadic(args.as_ptr(), argc as i64),

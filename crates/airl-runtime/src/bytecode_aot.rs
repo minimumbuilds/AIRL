@@ -87,6 +87,10 @@ pub struct RuntimeImports {
     // I/O / misc
     pub print:        FuncId,
     pub println:      FuncId,
+    pub eprint:       FuncId,
+    pub eprintln:     FuncId,
+    pub read_line:    FuncId,
+    pub read_stdin:   FuncId,
     pub print_values: FuncId,
     pub type_of:      FuncId,
     pub valid:        FuncId,
@@ -530,6 +534,10 @@ impl BytecodeAot {
 
         let print        = declare_import(m, "airl_print",        s1.clone());
         let println      = declare_import(m, "airl_println",      s1.clone());
+        let eprint       = declare_import(m, "airl_eprint",       s1.clone());
+        let eprintln     = declare_import(m, "airl_eprintln",     s1.clone());
+        let read_line    = declare_import(m, "airl_read_line",    sig_0_ptr(m));
+        let read_stdin   = declare_import(m, "airl_read_stdin",   sig_0_ptr(m));
         let print_values = declare_import(m, "airl_print_values", sig_ptr_i64_ret_ptr(m));
         let type_of      = declare_import(m, "airl_type_of",      s1.clone());
         let valid        = declare_import(m, "airl_valid",        s1.clone());
@@ -745,7 +753,7 @@ impl BytecodeAot {
             head, tail, cons, empty, length, at, append, list_new, at_or, set_at, list_contains,
             make_variant, match_tag,
             make_closure, call_closure,
-            print, println, print_values, type_of, valid,
+            print, println, eprint, eprintln, read_line, read_stdin, print_values, type_of, valid,
             char_at, substring, chars, split, join, contains, starts_with,
             ends_with, index_of, trim, to_upper, to_lower, replace,
             map_new, map_from, map_get, map_get_or, map_set, map_has,
@@ -819,8 +827,12 @@ impl BytecodeAot {
         m.insert("set-at".into(),         rt.set_at);
         m.insert("list-contains?".into(), rt.list_contains);
 
-        m.insert("print".into(),   rt.print);
-        m.insert("println".into(), rt.println);
+        m.insert("print".into(),      rt.print);
+        m.insert("println".into(),    rt.println);
+        m.insert("eprint".into(),     rt.eprint);
+        m.insert("eprintln".into(),   rt.eprintln);
+        m.insert("read-line".into(),  rt.read_line);
+        m.insert("read-stdin".into(), rt.read_stdin);
         m.insert("type-of".into(), rt.type_of);
         m.insert("valid".into(),   rt.valid);
 
