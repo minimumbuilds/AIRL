@@ -171,7 +171,7 @@
               raw-args))
             (match found-sep
               (Ok args) args
-              (Err _) raw-args)))
+              (Err _) [])))
         (if (empty? user-args)
           (do (g3-print-help)
               (exit 1))
