@@ -1,4 +1,4 @@
-use crate::value::{rt_bool, rt_str, rt_unit, RtData, RtValue};
+use crate::value::{rt_bool, rt_nil, rt_str, rt_unit, rt_variant, RtData, RtValue};
 use std::io::Write;
 
 #[no_mangle]
@@ -39,6 +39,57 @@ pub extern "C" fn airl_print_values(args: *const *mut RtValue, count: i64) -> *m
     }
     println!();
     rt_unit()
+}
+
+/// Read one line from stdin (blocking). Returns the line as a Str with trailing newline stripped.
+/// Returns (Ok line) on success, (Err msg) on EOF or I/O error.
+#[no_mangle]
+pub extern "C" fn airl_read_line() -> *mut RtValue {
+    use std::io::BufRead;
+    let _ = std::io::stdout().flush(); // flush any pending prompt
+    let mut line = String::new();
+    match std::io::stdin().lock().read_line(&mut line) {
+        Ok(0) => rt_variant("Err".into(), rt_str("EOF".into())),
+        Ok(_) => {
+            if line.ends_with('\n') { line.pop(); }
+            if line.ends_with('\r') { line.pop(); }
+            rt_variant("Ok".into(), rt_str(line))
+        }
+        Err(e) => rt_variant("Err".into(), rt_str(format!("read-line: {}", e))),
+    }
+}
+
+/// Read all of stdin as a single string (blocking, reads until EOF).
+/// Returns (Ok contents) on success, (Err msg) on I/O error.
+#[no_mangle]
+pub extern "C" fn airl_read_stdin() -> *mut RtValue {
+    let mut buf = String::new();
+    match std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut buf) {
+        Ok(_) => rt_variant("Ok".into(), rt_str(buf)),
+        Err(e) => rt_variant("Err".into(), rt_str(format!("read-stdin: {}", e))),
+    }
+}
+
+/// Print to stderr. Returns nil.
+#[no_mangle]
+pub extern "C" fn airl_eprint(v: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*v };
+    match &val.data {
+        RtData::Str(s) => eprint!("{}", s),
+        _ => eprint!("{}", val),
+    }
+    rt_nil()
+}
+
+/// Print to stderr with newline. Returns nil.
+#[no_mangle]
+pub extern "C" fn airl_eprintln(v: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*v };
+    match &val.data {
+        RtData::Str(s) => eprintln!("{}", s),
+        _ => eprintln!("{}", val),
+    }
+    rt_nil()
 }
 
 /// Flush stdout — called at program exit to ensure all print output is visible.
