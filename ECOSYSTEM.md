@@ -55,6 +55,17 @@ Full Kafka client implementing the binary TCP protocol from scratch. 13 Kafka AP
 | **Status** | Functional. Production-quality protocol implementation. |
 | **Depends on** | 41 runtime builtins (bytes, crypto, compression, bitwise) |
 
+### AirLift (airl_kafka_cli) -- Kafka CLI
+
+Full-featured Kafka command-line client implementing the binary wire protocol over raw TCP. 20+ Kafka APIs, SASL/PLAIN and SCRAM-SHA-256 auth, gzip/snappy compression, consumer groups, and multiple output formats (text, JSON, CSV). Built with CairLI for subcommand parsing. Named binary: `airlift`.
+
+| | |
+|---|---|
+| **Location** | `../airl_kafka_cli` |
+| **Size** | 2,563 LOC (10 modules), 1,258 LOC tests (335+ assertions) |
+| **Commits** | 6 |
+| **Status** | Functional. Complete CLI with produce, consume, admin, and group operations. |
+
 ### AIReqL -- HTTP Client
 
 HTTP client library built from raw TCP. Requests-like API with sessions, cookies, and basic/bearer authentication. Implements HTTP/1.1 request construction and response parsing, URL encoding (RFC 3986), and Set-Cookie handling.
@@ -164,6 +175,7 @@ Measures how well language models generate AIRL code. 100 tasks across 4 difficu
 | AIRL | Rust + AIRL | 58,759 | 443 | v0.9.0, self-hosted |
 | AIRL_castle | AIRL | 7,100 | 50 | Functional |
 | AIRLOS | C + asm | 6,100 | 55+ | Prototype |
+| AirLift | AIRL | 2,563 | 6 | Functional |
 | airtools | AIRL | 2,005 | 1 | Functional |
 | AIRL_bench | AIRL | 847 | 21 | Functional |
 | AirTraffic | AIRL | 936 | 1 | Functional |
@@ -171,7 +183,7 @@ Measures how well language models generate AIRL code. 100 tasks across 4 difficu
 | AIRLchart | AIRL | 770 | — | Functional |
 | CairLI | AIRL | 707 | 3 | Stable (v0.2.0) |
 | AIReqL | AIRL | 678 | 17 | Functional |
-| **Total** | | **~78,635** | **612+** | |
+| **Total** | | **~81,198** | **618+** | |
 
 ## Building
 
