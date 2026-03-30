@@ -22,9 +22,9 @@ AIRL is a typed, contract-verified programming language for inter-agent communic
 
 **[Project Analysis — Milestones, Strengths & Differentiators](docs/PROJECT-ANALYSIS.md)**
 
-## Self-Hosted Compiler (v0.6.0)
+## Self-Hosted Compiler (v0.9.0)
 
-**AIRL compiles itself.** The G3 compiler is written entirely in AIRL and produces native x86-64 binaries:
+**AIRL compiles itself.** The G3 compiler is written entirely in AIRL and produces native x86-64 and ARM64 binaries:
 
 ```bash
 # Compile an AIRL program using the AIRL compiler
@@ -146,7 +146,7 @@ Every existing programming language optimizes for human readability. AIRL optimi
 - **Messages are programs** — Agents exchange AIRL source text as both the message format and the execution format. No protobuf, no gRPC, no separate serialization.
 - **Formal verification** — Z3 SMT solver proves contracts at compile time. What can't be proven is checked at runtime.
 - **Linear ownership** — Rust-style move semantics with static linearity analysis. No garbage collector.
-- **Self-hosted** — The compiler is written in its own language (v0.6.0). Fixpoint verified.
+- **Self-hosted** — The compiler is written in its own language (since v0.6.0). Fixpoint verified.
 
 ## Features
 
@@ -330,10 +330,10 @@ cargo run --release --features jit -- run examples/01-hello-world/hello_world.ai
 
 ## Project Stats
 
-- **Self-hosted compiler** — AIRL compiles itself to native binaries (v0.6.0)
-- **58 AOT tests** — all pass through both the Rust-hosted and self-compiled pipelines
-- **~520 Rust tests** across 8 crates
-- **~19,000 lines** of Rust + **~21,000 lines** of AIRL
+- **Self-hosted compiler** — AIRL compiles itself to native binaries (since v0.6.0, current v0.9.0)
+- **68 AOT tests** — all pass through both the Rust-hosted and self-compiled pipelines
+- **~478 Rust tests** across 10 crates
+- **Cross-platform** — Linux x86-64 and macOS ARM64
 - **68 stdlib functions** + **100+ Rust builtins**
 - **42x faster than Python** on pure arithmetic (AOT)
 - **Contracts always enforced** — native conditional branches in JIT and AOT
@@ -346,4 +346,4 @@ The complete language specification is in [`AIRL-Language-Specification-v0.1.0.m
 
 ## License
 
-MIT
+PolyForm Noncommercial 1.0.0 — free for personal, academic, research, and nonprofit use. See [LICENSE](LICENSE) for details.

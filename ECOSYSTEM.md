@@ -137,7 +137,7 @@ Measures how well language models generate AIRL code. 100 tasks across 4 difficu
 | **Commits** | 21 |
 | **Key results** | qwen3-coder: 100/100 (100%). AIRL is 2.7x more token-efficient than Python. |
 
-**Progression:** 44% (no guide) -> 68% (+ guide) -> 80% (+ few-shot) -> 100% (v0.6.0 stdlib improvements).
+**Progression:** 44% (no guide) -> 68% (+ guide) -> 80% (+ few-shot) -> 100% (v0.6.0+ stdlib improvements).
 
 ---
 
