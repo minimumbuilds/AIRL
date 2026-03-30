@@ -5,4 +5,9 @@ edition.workspace = true
 
 [dependencies]
 airl-syntax = { path = "../airl-syntax" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
 z3 = { version = "0.12", features = ["static-link-z3"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+z3 = { version = "0.12" }
