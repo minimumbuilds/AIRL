@@ -113,7 +113,7 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
                         // because the solver does not constrain `result` to the
                         // function body's return value.
                         if clause.contains("result") {
-                            // Suppress — known false positive
+                            eprintln!("note: postcondition referencing 'result' in `{}` is checked at runtime only (static verification not yet supported)", f.name);
                         } else {
                             let msg = format!("contract disproven in `{}`: {} (counterexample: {:?})",
                                 f.name, clause, counterexample);
