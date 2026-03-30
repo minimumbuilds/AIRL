@@ -150,6 +150,18 @@ Measures how well language models generate AIRL code. 100 tasks across 4 difficu
 
 **Progression:** 44% (no guide) -> 68% (+ guide) -> 80% (+ few-shot) -> 100% (v0.6.0+ stdlib improvements).
 
+### kafka_sdk_bench -- Kafka SDK Performance Benchmark
+
+Benchmarks AIRL_castle's Kafka producer against Confluent's librdkafka (Python wrapper). Measures sync, batch, and async producer throughput on a single localhost broker. Includes detailed performance analysis identifying per-component costs (TCP, encoding, cluster management) and root causes for performance gaps.
+
+| | |
+|---|---|
+| **Location** | `../kafka_sdk_bench` |
+| **Languages** | AIRL (producer) + Python/librdkafka (baseline) |
+| **Size** | ~750 LOC (AIRL benchmark + Python baseline + orchestrator + analysis) |
+| **Key results** | Sync: AIRL 5.9K vs Confluent 7.9K msg/s (75%). Batch: 46K msg/s. Root cause: per-byte value boxing. |
+| **Status** | Functional. 14 optimization specs documenting improvement roadmap. |
+
 ---
 
 ## Operating System
@@ -183,7 +195,8 @@ Measures how well language models generate AIRL code. 100 tasks across 4 difficu
 | AIRLchart | AIRL | 770 | — | Functional |
 | CairLI | AIRL | 707 | 3 | Stable (v0.2.0) |
 | AIReqL | AIRL | 678 | 17 | Functional |
-| **Total** | | **~81,198** | **618+** | |
+| kafka_sdk_bench | AIRL + Python | 750 | — | Functional |
+| **Total** | | **~81,948** | **618+** | |
 
 ## Building
 
