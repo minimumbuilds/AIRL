@@ -4,3 +4,4 @@ benchmarks/artifacts/
 g3_debug_compile.log
 g3
 builds/
+tests/aot/cache/
