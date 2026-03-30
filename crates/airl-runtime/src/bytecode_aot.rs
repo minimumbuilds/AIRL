@@ -172,9 +172,6 @@ pub struct RuntimeImports {
     // Environment
     pub getenv: FuncId,
 
-    // HTTP
-    pub http_request: FuncId,
-
     // JSON
     pub json_parse: FuncId,
     pub json_stringify: FuncId,
@@ -632,9 +629,6 @@ impl BytecodeAot {
         // Environment
         let getenv = declare_import(m, "airl_getenv", s1.clone());
 
-        // HTTP
-        let http_request = declare_import(m, "airl_http_request", sig_4_ptr(m));
-
         // JSON
         let json_parse = declare_import(m, "airl_json_parse", s1.clone());
         let json_stringify = declare_import(m, "airl_json_stringify", s1.clone());
@@ -782,7 +776,7 @@ impl BytecodeAot {
             char_code, char_from_code,
             sqrt, sin, cos, tan, log, exp, floor, ceil, round,
             float_to_int, int_to_float, infinity, nan_ctor, is_nan, is_infinite,
-            cpu_count, time_now, getenv, http_request, json_parse, json_stringify, shell_exec,
+            cpu_count, time_now, getenv, json_parse, json_stringify, shell_exec,
             char_count, str_variadic, format_variadic,
             assert_fn, panic_fn, exit_fn, sleep_fn, format_time, read_lines,
             concat_lists, range_fn, reverse_list, take_fn, drop_fn, zip_fn,
@@ -925,9 +919,6 @@ impl BytecodeAot {
 
         // Environment
         m.insert("getenv".into(), rt.getenv);
-
-        // HTTP
-        m.insert("http-request".into(), rt.http_request);
 
         // JSON
         m.insert("json-parse".into(),     rt.json_parse);

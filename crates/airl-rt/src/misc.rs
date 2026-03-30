@@ -654,13 +654,6 @@ pub extern "C" fn airl_shell_exec(cmd: *mut RtValue, args_list: *mut RtValue) ->
     }
 }
 
-// ── HTTP stub ──
-
-#[no_mangle]
-pub extern "C" fn airl_http_request(_method: *mut RtValue, _url: *mut RtValue, _body: *mut RtValue, _headers: *mut RtValue) -> *mut RtValue {
-    err_variant("http-request: not available in AOT — link with libcurl for HTTP support")
-}
-
 // ── JSON ──
 
 #[no_mangle]

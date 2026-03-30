@@ -547,7 +547,6 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "sleep" => airl_rt::misc::airl_sleep(a0!()),
         "format-time" => airl_rt::misc::airl_format_time(a0!(), a1!()),
         "getenv" => airl_rt::misc::airl_getenv(a0!()),
-        "http-request" => airl_rt::misc::airl_http_request(a0!(), a1!(), a2!(), a3!()),
         "json-parse" => airl_rt::misc::airl_json_parse(a0!()),
         "json-stringify" => airl_rt::misc::airl_json_stringify(a0!()),
         "shell-exec" => airl_rt::misc::airl_shell_exec(a0!(), a1!()),

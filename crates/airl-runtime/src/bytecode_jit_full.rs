@@ -250,7 +250,6 @@ pub struct RuntimeImports {
     pub time_now: FuncId,
     pub getenv: FuncId,
     pub shell_exec: FuncId,
-    pub http_request: FuncId,
     pub json_parse: FuncId,
     pub json_stringify: FuncId,
 
@@ -603,7 +602,6 @@ impl BytecodeJitFull {
         builder.symbol("airl_time_now",          misc::airl_time_now          as *const u8);
         builder.symbol("airl_getenv",            misc::airl_getenv            as *const u8);
         builder.symbol("airl_shell_exec",        misc::airl_shell_exec        as *const u8);
-        builder.symbol("airl_http_request",      misc::airl_http_request      as *const u8);
         builder.symbol("airl_json_parse",        misc::airl_json_parse        as *const u8);
         builder.symbol("airl_json_stringify",    misc::airl_json_stringify    as *const u8);
 
@@ -940,7 +938,6 @@ impl BytecodeJitFull {
         let time_now = declare_import(m, "airl_time_now", sig_0_ptr(m));
         let getenv = declare_import(m, "airl_getenv", s1.clone());
         let shell_exec = declare_import(m, "airl_shell_exec", s2.clone());
-        let http_request = declare_import(m, "airl_http_request", sig_4_ptr(m));
         let json_parse = declare_import(m, "airl_json_parse", s1.clone());
         let json_stringify = declare_import(m, "airl_json_stringify", s1.clone());
 
@@ -1004,7 +1001,7 @@ impl BytecodeJitFull {
             at_or, set_at, list_contains,
             char_code, char_from_code,
             int_to_string, float_to_string, string_to_int,
-            time_now, getenv, shell_exec, http_request, json_parse, json_stringify,
+            time_now, getenv, shell_exec, json_parse, json_stringify,
             sqrt, sin, cos, tan, log, exp, floor, ceil, round,
             float_to_int, int_to_float, infinity, nan, is_nan, is_infinite,
         }
@@ -1195,7 +1192,6 @@ impl BytecodeJitFull {
         m.insert("time-now".into(),        rt.time_now);
         m.insert("getenv".into(),          rt.getenv);
         m.insert("shell-exec".into(),      rt.shell_exec);
-        m.insert("http-request".into(),    rt.http_request);
         m.insert("json-parse".into(),      rt.json_parse);
         m.insert("json-stringify".into(),  rt.json_stringify);
 

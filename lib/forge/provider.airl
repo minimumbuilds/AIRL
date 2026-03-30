@@ -1,4 +1,5 @@
 ;; provider.airl — LLM Provider abstraction for Forge (Anthropic API)
+;; Requires AIReqL: compile with aireql-util.airl aireql-transport.airl aireql.airl
 
 (defn make-provider
   :sig [(name : String) (api-url : String) (api-key : String) (model : String) -> Map]
@@ -48,14 +49,11 @@
        (headers : _ (map-from ["Content-Type" "application/json"
                                 "x-api-key" api-key
                                 "anthropic-version" "2023-06-01"]))
-       (http-result : _ (http-request "POST" api-url body-str headers))
-    (match http-result
-      (Err e) (Err e)
-      (Ok resp-str)
-        (let (parse-result : _ (json-parse resp-str))
-          (match parse-result
-            (Err e) (Err (str "Failed to parse response: " e))
-            (Ok resp) (Ok resp))))))
+       (opts : _ (map-from ["body" body-str "headers" headers]))
+       (resp : _ (aireql-post-with-opts api-url opts))
+    (if (aireql-ok? resp)
+      (Ok (aireql-json resp))
+      (Err (str "HTTP " (aireql-status-code resp) ": " (aireql-text resp))))))
 
 (defn extract-text-content
   :sig [(response : Map) -> _]
