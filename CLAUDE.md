@@ -83,6 +83,7 @@ All signatures in `AIRL-Header.md`. Key categories:
 | Stdio | 4 | `read-line`, `read-stdin`, `eprint`, `eprintln` |
 | System | 7 | `shell-exec`, `time-now`, `sleep`, `getenv`, `get-args`, `cpu-count` |
 | Stdlib (AIRL) | 68 | `map`, `filter`, `fold`, `sort`, `abs`, `min`, `is-ok?`, `words`, `set-*` |
+| HTTP (AIReqL) | 20+ | `aireql-get`, `aireql-post-with-opts`, `aireql-request`, `aireql-json` (lib: `../AIReqL`) |
 
 ## Bootstrap Compiler
 

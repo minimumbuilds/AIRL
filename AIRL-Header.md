@@ -306,11 +306,21 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 
 ### Network/JSON
 ```
-(http-request method url body headers) -> Result[Str, Str]
-  ; method: "GET"/"POST"/"PUT"/"DELETE"/"PATCH"/"HEAD"
 (json-parse s) -> any
 (json-stringify v) -> Str
 ```
+
+**HTTP:** Use the AIReqL library (`../AIReqL`). Provides a requests-like API over raw TCP:
+```
+(aireql-get url) -> Map                         ; simple GET
+(aireql-post-with-opts url opts-map) -> Map     ; POST with body/headers
+(aireql-request method url opts-map) -> Map     ; generic request
+(aireql-status-code resp) -> Int                ; 200, 404, etc.
+(aireql-text resp) -> Str                       ; response body
+(aireql-json resp) -> any                       ; parse body as JSON
+(aireql-ok? resp) -> Bool                       ; true if 2xx
+```
+Compile with: `g3 -- aireql-util.airl aireql-transport.airl aireql.airl aireql-session.airl your-app.airl`
 
 ### Thread (thread-per-task, message-passing only)
 ```
