@@ -1,0 +1,19 @@
+(defn running-average
+  :sig [(xs : List) -> List]
+  :requires [(valid xs)]
+  :ensures [(= (length result) (length xs))]
+  :body
+    (if (empty? xs)
+      []
+      (let (first-val : i64 (head xs))
+        (fold (fn [acc x]
+                (let (current-sum : i64 (at acc 0))
+                     (current-count : i64 (at acc 1))
+                     (new-sum : i64 (+ current-sum x))
+                     (new-count : i64 (+ current-count 1))
+                     (avg : i64 (/ new-sum new-count))
+                  [new-sum new-count (append (at acc 2) avg)]))
+              [first-val 1 [first-val]]
+              (tail xs)))))
+  
+(print (running-average [10 20 30 40 50]))

@@ -105,7 +105,6 @@ dependencies = [
  "base64",
  "cranelift-codegen",
  "cranelift-frontend",
- "cranelift-jit",
  "cranelift-module",
  "cranelift-object",
  "crc32c",

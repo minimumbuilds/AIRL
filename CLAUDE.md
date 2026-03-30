@@ -15,12 +15,12 @@ AIRL (AI Intermediate Representation Language) is a programming language for AI 
 ```bash
 cargo build -p airl-rt                                 # Build runtime library FIRST (fresh build)
 cargo clean -p airl-runtime                            # Force build.rs re-run to find libairl_rt.a
-cargo build --features jit,aot                         # Full build (embeds libairl_rt.a)
+cargo build --features aot                         # Full build (embeds libairl_rt.a)
 cargo test -p airl-syntax -p airl-types -p airl-contracts -p airl-runtime -p airl-agent -p airl-driver
-cargo run --features jit,aot -- run <file.airl>        # Run (AOT compile → execute)
-cargo run --features jit,aot -- compile <file.airl> -o <binary>  # AOT compile
-cargo run --features jit -- check <file.airl>          # Type-check only
-cargo run --features jit -- repl                       # REPL
+cargo run --features aot -- run <file.airl>        # Run (AOT compile → execute)
+cargo run --features aot -- compile <file.airl> -o <binary>  # AOT compile
+cargo run --features aot -- check <file.airl>          # Type-check only
+cargo run --features aot -- repl                       # REPL
 bash scripts/build-g3.sh                               # Rebuild G3 (~23 min)
 bash tests/aot/run_aot_tests.sh                        # G3 AOT test suite (68 tests)
 ```
@@ -38,7 +38,7 @@ airl-syntax → airl-types → airl-contracts → airl-runtime ← airl-codegen 
                                                 ↓
                                             airl-agent → airl-driver ← airl-solver (Z3)
 
-airl-rt: extern "C" runtime (builtins for AOT/JIT)
+airl-rt: extern "C" runtime (builtins for AOT)
 ```
 
 **Execution:** `airl run` AOT-compiles to temp binary. `airl compile` produces standalone executable. `./g3` is the self-hosted compiler (AIRL front-end → Cranelift AOT). All paths share `libairl_rt.a` builtins.
@@ -103,7 +103,7 @@ bash scripts/build-g3.sh    # Builds G3 with all 4 bootstrap files as input
 ## Known Issues
 
 1. **MLIR requires system libs:** `libzstd-dev`, LLVM 19+. Excluded from default build. Use `--features mlir`.
-2. **JIT extern "C" errors are non-recoverable:** `process::exit(1)` on type mismatch. Prevented by type checker.
+2. **AOT extern "C" errors are non-recoverable:** `process::exit(1)` on type mismatch. Prevented by type checker.
 3. **Type checker incomplete for builtins:** 45+ builtins registered as `TypeVar("builtin")` — no compile-time type checking. Runtime panics catch errors. See `docs/superpowers/specs/2026-03-28-verification-gaps-assessment.md`.
 4. **Z3 verification informational only:** Disproven contracts print warnings but don't block execution. Runtime assertions are the enforcement mechanism.
 5. **G3 rebuild after runtime changes:** After modifying `crates/airl-rt/`, rebuild G3 via `bash scripts/build-g3.sh` to pick up the new embedded runtime. The `build.rs` tracks `libairl_rt.a` automatically, but G3 is a separate binary that needs explicit rebuilding.

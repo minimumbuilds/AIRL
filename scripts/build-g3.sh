@@ -47,10 +47,10 @@ TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 BUILD_NAME="g3-${COMMIT}-${TIMESTAMP}"
 BUILD_PATH="${BUILDS_DIR}/${BUILD_NAME}"
 
-AIRL_BIN="${AIRL_BIN:-cargo run --release --features jit,aot --}"
+AIRL_BIN="${AIRL_BIN:-cargo run --release --features aot --}"
 
 echo "[build-g3] Building host binary..."
-cargo build --release --features jit,aot
+cargo build --release --features aot
 
 echo "[build-g3] Compiling G3 -> ${BUILD_PATH} (this takes ~23 minutes)..."
 $AIRL_BIN run \

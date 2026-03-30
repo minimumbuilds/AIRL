@@ -184,13 +184,10 @@ pub fn run_bytecode_program(funcs: &[Value]) -> Result<Value, RuntimeError> {
 ///
 /// This allows AOT-compiled native binaries to execute bytecode at runtime
 /// (needed for the self-hosting compiler pipeline).
-#[cfg(feature = "jit")]
 #[no_mangle]
 pub extern "C" fn airl_run_bytecode(prog: *mut airl_rt::value::RtValue) -> *mut airl_rt::value::RtValue {
-    use crate::bytecode_jit_full::BytecodeJitFull;
-
     // Convert the RtValue list → Vec<Value>
-    let val = BytecodeJitFull::rt_to_value(prog);
+    let val = crate::bytecode_vm::rt_to_value(prog);
     let funcs = match &val {
         Value::List(items) => items.clone(),
         _ => {
@@ -199,7 +196,7 @@ pub extern "C" fn airl_run_bytecode(prog: *mut airl_rt::value::RtValue) -> *mut 
         }
     };
     match run_bytecode_program(&funcs) {
-        Ok(result) => BytecodeJitFull::value_to_rt(&result),
+        Ok(result) => crate::bytecode_vm::value_to_rt(&result),
         Err(e) => {
             eprintln!("Runtime error: {}", e);
             airl_rt::value::rt_nil()
@@ -211,16 +208,14 @@ pub extern "C" fn airl_run_bytecode(prog: *mut airl_rt::value::RtValue) -> *mut 
 /// Takes a list of BCFunc values and an output path string.
 /// Compiles bytecode to a native binary via Cranelift AOT.
 /// This allows AOT-compiled G3 compiler binaries to produce native executables.
-#[cfg(all(feature = "aot", feature = "jit"))]
+#[cfg(feature = "aot")]
 #[no_mangle]
 pub extern "C" fn airl_compile_bytecode_to_executable(
     funcs_val: *mut airl_rt::value::RtValue,
     output_val: *mut airl_rt::value::RtValue,
 ) -> *mut airl_rt::value::RtValue {
-    use crate::bytecode_jit_full::BytecodeJitFull;
-
-    let funcs_value = BytecodeJitFull::rt_to_value(funcs_val);
-    let output_value = BytecodeJitFull::rt_to_value(output_val);
+    let funcs_value = crate::bytecode_vm::rt_to_value(funcs_val);
+    let output_value = crate::bytecode_vm::rt_to_value(output_val);
 
     let funcs = match &funcs_value {
         Value::List(items) => items.clone(),

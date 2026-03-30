@@ -44,7 +44,7 @@ fn is_simple_closure(func: &BytecodeFunc) -> bool {
 // ── Value / RtValue conversion helpers ──────────────────────────────
 
 /// Convert interpreter Value to *mut RtValue. Caller owns the returned pointer (rc=1).
-fn value_to_rt(v: &Value) -> *mut RtValue {
+pub fn value_to_rt(v: &Value) -> *mut RtValue {
     match v {
         Value::Int(n)   => rt_int(*n),
         Value::Float(f) => rt_float(*f),
@@ -93,7 +93,7 @@ fn value_to_rt(v: &Value) -> *mut RtValue {
 }
 
 /// Convert *mut RtValue back to interpreter Value (non-owning read).
-fn rt_to_value_no_release(ptr: *mut RtValue) -> Value {
+pub fn rt_to_value_no_release(ptr: *mut RtValue) -> Value {
     if ptr.is_null() {
         return Value::Nil;
     }
@@ -145,8 +145,7 @@ fn rt_to_value_no_release(ptr: *mut RtValue) -> Value {
 }
 
 /// Convert *mut RtValue back to interpreter Value. Also releases the pointer.
-#[allow(dead_code)]
-fn rt_to_value(ptr: *mut RtValue) -> Value {
+pub fn rt_to_value(ptr: *mut RtValue) -> Value {
     let result = rt_to_value_no_release(ptr);
     airl_value_release(ptr);
     result
@@ -673,8 +672,6 @@ pub struct BytecodeVm {
     fn_metadata: HashMap<String, crate::bytecode::FnDefMetadata>,
     call_stack: Vec<CallFrame>,
     recursion_depth: usize,
-    #[cfg(feature = "jit")]
-    jit_full: Option<std::sync::Arc<crate::bytecode_jit_full::BytecodeJitFull>>,
 }
 
 impl BytecodeVm {
@@ -684,33 +681,6 @@ impl BytecodeVm {
             fn_metadata: HashMap::new(),
             call_stack: Vec::new(),
             recursion_depth: 0,
-            #[cfg(feature = "jit")]
-            jit_full: None,
-        }
-    }
-
-    #[cfg(feature = "jit")]
-    pub fn new_with_full_jit() -> Self {
-        BytecodeVm {
-            functions: HashMap::new(),
-            fn_metadata: HashMap::new(),
-            call_stack: Vec::new(),
-            recursion_depth: 0,
-            jit_full: crate::bytecode_jit_full::BytecodeJitFull::new().ok().map(std::sync::Arc::new),
-        }
-    }
-
-    #[cfg(feature = "jit")]
-    pub fn jit_full_compile_all(&mut self) {
-        if let Some(ref mut jit) = self.jit_full {
-            let jit = std::sync::Arc::get_mut(jit)
-                .expect("jit_full_compile_all: Arc must have single owner during compilation");
-            let names: Vec<String> = self.functions.keys().cloned().collect();
-            for name in &names {
-                if let Some(func) = self.functions.get(name) {
-                    jit.try_compile_full(func, &self.functions);
-                }
-            }
         }
     }
 
@@ -721,8 +691,6 @@ impl BytecodeVm {
             fn_metadata: self.fn_metadata.clone(),
             call_stack: Vec::new(),
             recursion_depth: 0,
-            #[cfg(feature = "jit")]
-            jit_full: self.jit_full.clone(),
         }
     }
 
@@ -1239,40 +1207,6 @@ impl BytecodeVm {
                         let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (0..argc).map(|i| reg_get(r, instr.dst as usize + 1 + i)).collect()
                     };
-
-                    // Try JIT-full first
-                    #[cfg(feature = "jit")]
-                    {
-                        if let Some(ref jit_full) = self.jit_full {
-                            let value_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
-                            if let Some(val) = jit_full.try_call_native(&name, &value_args) {
-                                if let Some((kind, fn_name_idx, clause_idx)) = crate::jit_contract::take_jit_contract_error() {
-                                    let f = self.functions.get(&name);
-                                    let fn_name_str = f.and_then(|f| f.constants.get(fn_name_idx as usize))
-                                        .and_then(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
-                                        .unwrap_or_else(|| name.clone());
-                                    let clause_source = f.and_then(|f| f.constants.get(clause_idx as usize))
-                                        .and_then(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
-                                        .unwrap_or_else(|| "?".into());
-                                    let contract_kind = match kind {
-                                        0 => airl_contracts::violation::ContractKind::Requires,
-                                        1 => airl_contracts::violation::ContractKind::Ensures,
-                                        _ => airl_contracts::violation::ContractKind::Invariant,
-                                    };
-                                    return Err(RuntimeError::ContractViolation(
-                                        airl_contracts::violation::ContractViolation {
-                                            function: fn_name_str, contract_kind, clause_source,
-                                            bindings: vec![], evaluated: "false".into(),
-                                            span: airl_syntax::Span::dummy(),
-                                        }
-                                    ));
-                                }
-                                let result_rt = value_to_rt(&val);
-                                reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result_rt);
-                                continue;
-                            }
-                        }
-                    }
 
                     // Dispatch chain: special cases first, then airl-rt, then push frame
                     if name == "thread-spawn" {
