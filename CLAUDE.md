@@ -13,7 +13,9 @@ AIRL (AI Intermediate Representation Language) is a programming language for AI 
 ## Build & Test
 
 ```bash
-cargo build --features jit,aot                        # Full build (recommended)
+cargo build -p airl-rt                                 # Build runtime library FIRST (fresh build)
+cargo clean -p airl-runtime                            # Force build.rs re-run to find libairl_rt.a
+cargo build --features jit,aot                         # Full build (embeds libairl_rt.a)
 cargo test -p airl-syntax -p airl-types -p airl-contracts -p airl-runtime -p airl-agent -p airl-driver
 cargo run --features jit,aot -- run <file.airl>        # Run (AOT compile → execute)
 cargo run --features jit,aot -- compile <file.airl> -o <binary>  # AOT compile
@@ -23,7 +25,11 @@ bash scripts/build-g3.sh                               # Rebuild G3 (~23 min)
 bash tests/aot/run_aot_tests.sh                        # G3 AOT test suite (68 tests)
 ```
 
+**Fresh build order:** `airl-runtime` embeds a compressed `libairl_rt.a` at build time. On a fresh checkout: (1) `cargo build -p airl-rt` to produce the `.a`, (2) `cargo clean -p airl-runtime` to invalidate the cached "not found" result, (3) full build. If you see `libairl_rt.a not found`, repeat all three steps.
+
 **First build:** Z3 compiles from C++ source (~5-15 min). Requires CMake, C++ compiler, Python 3.
+
+**macOS prerequisites:** `xcode-select --install` (provides C/C++ compiler and linker). `brew install cmake z3`. Python 3 is required for Z3's build system. Set `export LIBRARY_PATH="$(brew --prefix z3)/lib"` so the linker finds Z3.
 
 ## Architecture
 

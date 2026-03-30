@@ -46,7 +46,9 @@ All compilation logic is AIRL code. Cranelift (native code generation) and `liba
 
 ```bash
 # Step 1: Build the host binary (one-time, requires Rust toolchain)
-cargo build --release --features jit,aot
+cargo build -p airl-rt --release              # runtime library first
+cargo clean -p airl-runtime --release         # force build.rs re-run
+cargo build --release --features jit,aot      # full build (embeds libairl_rt.a)
 alias airl='cargo run --release --features jit,aot --'
 
 # Step 2: Compile the G3 compiler using the host binary (~23 min)
@@ -112,9 +114,11 @@ Step 2 takes ~23 minutes and ~25GB RAM (the bootstrap compiler runs in the bytec
 ### Using the host binary (recommended for development)
 
 ```bash
-# Build
+# Build (fresh checkout requires three steps — see note below)
 git clone <repo-url> && cd AIRL
-cargo build --release --features jit,aot
+cargo build -p airl-rt --release                    # 1. Build runtime library first
+cargo clean -p airl-runtime --release               # 2. Force airl-runtime to re-run build.rs
+cargo build --release --features jit,aot            # 3. Full build (embeds libairl_rt.a)
 
 # Run a program (compiles to temp binary, executes, cleans up)
 cargo run --release --features jit,aot -- run examples/01-hello-world/hello_world.airl
@@ -134,6 +138,16 @@ cargo run --release --features jit,aot -- --version
 ```
 
 Requirements: Rust 1.85+, CMake, C++ compiler, Python 3 (for Z3, first build ~5-15 min).
+
+**macOS:** `xcode-select --install` (C/C++ compiler + linker), `brew install cmake z3`, Python 3 (usually pre-installed or `brew install python3`). Homebrew's Z3 library path must be visible to the linker:
+
+```bash
+export LIBRARY_PATH="$(brew --prefix z3)/lib"
+```
+
+Add this to your shell profile (`.zshrc` / `.bashrc`) to avoid repeating it every session.
+
+**Note:** On a fresh checkout, three steps are required: (1) `cargo build -p airl-rt` to produce `libairl_rt.a`, (2) `cargo clean -p airl-runtime` to force `build.rs` to re-run (it caches the "not found" result), (3) full build. If you see `libairl_rt.a not found — AOT compile will search at link time`, repeat steps 1-3.
 
 For detailed Rust toolchain instructions, see [docs/legacy-rust-toolchain.md](docs/legacy-rust-toolchain.md).
 
