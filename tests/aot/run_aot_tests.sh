@@ -57,7 +57,7 @@ for test in tests/aot/round*.airl; do
 
   if [ "$need_compile" -eq 1 ]; then
     # Build command
-    cmd="cargo run --release --features jit,aot -- run"
+    cmd="cargo run --release --features aot -- run"
     cmd="$cmd --load bootstrap/lexer.airl"
     cmd="$cmd --load bootstrap/parser.airl"
     cmd="$cmd --load bootstrap/bc_compiler.airl"

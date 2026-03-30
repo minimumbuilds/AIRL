@@ -26,5 +26,4 @@ tempfile = "3"
 [features]
 mlir = ["airl-runtime/mlir"]
 cuda = ["airl-runtime/cuda"]
-jit = ["airl-runtime/jit"]
 aot = ["airl-runtime/aot"]

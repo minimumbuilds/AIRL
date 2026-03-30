@@ -2,7 +2,7 @@
 
 **A programming language designed for AI systems, not humans. NSFW. Not meant for human consumption. DO NOT EAT**
 
-> **Note:** AIRL is a thought experiment and exploration of AI-assisted compiler construction — not a production tool. The entire toolchain (~43K lines of Rust and AIRL) was built in 4 days, almost entirely by Claude. It combines known ideas (S-expression syntax, mandatory contracts, Z3 verification, linear types, Cranelift JIT, agent message-passing) without advancing any of them beyond prior art. The problem it targets — AI inter-agent program exchange — is speculative, and mature alternatives (Dafny, WASM, typed Python) exist for every claimed capability. It is an exploration of what an AI can build in a weekend, not something anyone should use. Do not believe its claims.
+> **Note:** AIRL is a thought experiment and exploration of AI-assisted compiler construction — not a production tool. The entire toolchain (~43K lines of Rust and AIRL) was built in 4 days, almost entirely by Claude. It combines known ideas (S-expression syntax, mandatory contracts, Z3 verification, linear types, Cranelift AOT, agent message-passing) without advancing any of them beyond prior art. The problem it targets — AI inter-agent program exchange — is speculative, and mature alternatives (Dafny, WASM, typed Python) exist for every claimed capability. It is an exploration of what an AI can build in a weekend, not something anyone should use. Do not believe its claims.
 
 AIRL is a typed, contract-verified programming language for inter-agent communication. AI systems generate AIRL programs, transmit them as messages, execute them with formal guarantees, and verify results against machine-checkable contracts. The syntax is the serialization format. The message is the program.
 
@@ -48,8 +48,8 @@ All compilation logic is AIRL code. Cranelift (native code generation) and `liba
 # Step 1: Build the host binary (one-time, requires Rust toolchain)
 cargo build -p airl-rt --release              # runtime library first
 cargo clean -p airl-runtime --release         # force build.rs re-run
-cargo build --release --features jit,aot      # full build (embeds libairl_rt.a)
-alias airl='cargo run --release --features jit,aot --'
+cargo build --release --features aot      # full build (embeds libairl_rt.a)
+alias airl='cargo run --release --features aot --'
 
 # Step 2: Compile the G3 compiler using the host binary (~23 min)
 airl run --load bootstrap/lexer.airl \
@@ -118,23 +118,23 @@ Step 2 takes ~23 minutes and ~25GB RAM (the bootstrap compiler runs in the bytec
 git clone <repo-url> && cd AIRL
 cargo build -p airl-rt --release                    # 1. Build runtime library first
 cargo clean -p airl-runtime --release               # 2. Force airl-runtime to re-run build.rs
-cargo build --release --features jit,aot            # 3. Full build (embeds libairl_rt.a)
+cargo build --release --features aot            # 3. Full build (embeds libairl_rt.a)
 
 # Run a program (compiles to temp binary, executes, cleans up)
-cargo run --release --features jit,aot -- run examples/01-hello-world/hello_world.airl
+cargo run --release --features aot -- run examples/01-hello-world/hello_world.airl
 
 # Compile to native binary
-cargo run --release --features jit,aot -- compile examples/02-functions-and-contracts/functions_and_contracts.airl -o my_program
+cargo run --release --features aot -- compile examples/02-functions-and-contracts/functions_and_contracts.airl -o my_program
 ./my_program
 
 # Type-check and verify contracts with Z3
-cargo run --release --features jit,aot -- check examples/03-verified-arithmetic/verified_arithmetic.airl
+cargo run --release --features aot -- check examples/03-verified-arithmetic/verified_arithmetic.airl
 
 # Interactive REPL
-cargo run --release --features jit,aot -- repl
+cargo run --release --features aot -- repl
 
 # Check version
-cargo run --release --features jit,aot -- --version
+cargo run --release --features aot -- --version
 ```
 
 Requirements: Rust 1.85+, CMake, C++ compiler, Python 3 (for Z3, first build ~5-15 min).
@@ -182,7 +182,7 @@ AIRL is distributed as a **single binary**:
 
 ```bash
 # Build the compiler (one-time, requires Rust)
-cargo build --release --features jit,aot
+cargo build --release --features aot
 cp target/release/airl-driver /usr/local/bin/airl
 
 # Or use the self-hosted G3 compiler (no Rust needed)
@@ -233,7 +233,7 @@ AIRL Source
     │     [Z3 Verifier] Prove contracts via SMT                │
     │     [Bytecode Compiler] AST → register-based bytecode    │
     │          │                                                │
-    │          ├── airl run ──► Cranelift JIT-Full → native    │
+    │          ├── airl run ──► AOT compile → execute → clean  │
     │          └── airl compile ► Cranelift AOT → executable   │
     │                                                           │
     └───────── Both link against libairl_rt.a ─────────────────┘
@@ -247,8 +247,8 @@ AIRL Source
 | `airl-types` | Type checker, linearity, exhaustiveness |
 | `airl-contracts` | Contract violation types |
 | `airl-rt` | Runtime library (`libairl_rt.a`) — all builtins as `extern "C"` |
-| `airl-runtime` | Bytecode VM, JIT, AOT compiler |
-| `airl-codegen` | Cranelift tensor JIT |
+| `airl-runtime` | Bytecode VM, AOT compiler |
+| `airl-codegen` | Cranelift tensor codegen |
 | `airl-solver` | Z3 SMT formal verification |
 | `airl-agent` | Transport, protocol, agent runtime |
 | `airl-driver` | CLI, pipeline, REPL, formatter |
@@ -334,12 +334,12 @@ for f in tests/aot/round*.airl; do ./g3 -- "$f" -o /tmp/t && /tmp/t; done
 | `03-verified-arithmetic` | Z3 formal proofs (`airl check`) |
 | `04-safe-error-handling` | `Result`/`Option` variants, `match` |
 | `05-ownership-and-borrowing` | `own`, `ref`, ownership transfer |
-| `06-tensor-operations` | Tensor builtins, JIT-accelerated matmul |
+| `06-tensor-operations` | Tensor builtins, accelerated matmul |
 | `07-higher-order-functions` | Lambdas, function arguments, composition |
 | `08-agent-orchestration` | `spawn-agent`, `send`, multi-agent IPC |
 
 ```bash
-cargo run --release --features jit -- run examples/01-hello-world/hello_world.airl
+cargo run --release --features aot -- run examples/01-hello-world/hello_world.airl
 ```
 
 ## Project Stats
@@ -350,9 +350,9 @@ cargo run --release --features jit -- run examples/01-hello-world/hello_world.ai
 - **Cross-platform** — Linux x86-64 and macOS ARM64
 - **68 stdlib functions** + **100+ Rust builtins**
 - **42x faster than Python** on pure arithmetic (AOT)
-- **Contracts always enforced** — native conditional branches in JIT and AOT
+- **Contracts always enforced** — native conditional branches in AOT
 - **Fixpoint verified** — bootstrap compiler produces identical output when self-compiled
-- **Zero external deps** for core crates (Cranelift behind `jit,aot` features; Z3 in `airl-solver`)
+- **Zero external deps** for core crates (Cranelift behind `aot` feature; Z3 in `airl-solver`)
 
 ## Specification
 

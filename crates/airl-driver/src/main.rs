@@ -33,7 +33,7 @@ fn cmd_run(args: &[String]) {
     #[cfg(not(feature = "aot"))]
     {
         let _ = args;
-        eprintln!("airl run requires AOT compilation support: rebuild with --features jit,aot");
+        eprintln!("airl run requires AOT compilation support: rebuild with --features aot");
         std::process::exit(1);
     }
     #[cfg(feature = "aot")]
@@ -61,8 +61,8 @@ fn cmd_run(args: &[String]) {
                     preloads.push(args[i + 1].clone());
                     i += 2;
                 }
-                "--jit-full" | "--bytecode" => { i += 1; } // ignored, compile path only
-                "--" => { past_separator = true; i += 1; }
+                "--bytecode" => { i += 1; } // ignored, compile path only
+                "--" => { past_separator = true; user_args.push("--".to_string()); i += 1; }
                 _ => {
                     if main_file.is_none() {
                         main_file = Some(args[i].clone());
@@ -77,43 +77,64 @@ fn cmd_run(args: &[String]) {
             None => { eprintln!("No input file specified"); std::process::exit(1); }
         };
 
-        // If --load is used, we need the VM path: --load modules must be executed
-        // sequentially to register their functions before the main file runs.
-        // This is required for G3 bootstrap (--load lexer/parser/bc_compiler).
+        // If --load is used, compile all preloads + main to a temp binary, execute, clean up.
         if !preloads.is_empty() {
-            use airl_driver::pipeline::run_file_with_preloads;
-            let result = run_file_with_preloads(&main, &preloads);
-            match result {
-                Ok(val) => {
-                    if !matches!(val, airl_runtime::value::Value::Unit) {
-                        println!("{}", val);
-                    }
-                }
+            let temp_bin = std::env::temp_dir().join(format!("airl_run_{}", std::process::id()));
+            let temp_str = temp_bin.to_string_lossy().to_string();
+
+            let mut compile_args: Vec<String> = preloads.clone();
+            compile_args.push(main);
+            compile_args.push("-o".to_string());
+            compile_args.push(temp_str.clone());
+
+            cmd_compile(&compile_args);
+
+            let status = std::process::Command::new(&temp_bin)
+                .args(&user_args)
+                .status();
+
+            let _ = std::fs::remove_file(&temp_bin);
+
+            match status {
+                Ok(s) => std::process::exit(s.code().unwrap_or(1)),
                 Err(e) => {
-                    eprintln!("{}", e);
+                    eprintln!("error running compiled binary: {}", e);
                     std::process::exit(1);
                 }
             }
-            return;
         }
 
-        // Check if file uses imports — use import-aware pipeline
+        // Check if file uses imports — compile via import-aware AOT path
         let source_check = std::fs::read_to_string(&main).unwrap_or_default();
         if source_check.contains("(import ") {
-            use airl_driver::pipeline::run_file_with_imports;
-            let result = run_file_with_imports(&main);
-            match result {
-                Ok(val) => {
-                    if !matches!(val, airl_runtime::value::Value::Unit) {
-                        println!("{}", val);
-                    }
-                }
+            use airl_driver::pipeline::compile_to_object_with_imports;
+
+            let temp_bin = std::env::temp_dir().join(format!("airl_run_{}", std::process::id()));
+            let temp_str = temp_bin.to_string_lossy().to_string();
+
+            let obj_bytes = match compile_to_object_with_imports(&main) {
+                Ok(bytes) => bytes,
                 Err(e) => {
-                    eprintln!("{}", e);
+                    eprintln!("Compilation error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            link_object_to_binary(&obj_bytes, &temp_str, &[main]);
+
+            let status = std::process::Command::new(&temp_bin)
+                .args(&user_args)
+                .status();
+
+            let _ = std::fs::remove_file(&temp_bin);
+
+            match status {
+                Ok(s) => std::process::exit(s.code().unwrap_or(1)),
+                Err(e) => {
+                    eprintln!("error running compiled binary: {}", e);
                     std::process::exit(1);
                 }
             }
-            return;
         }
 
         // No preloads: compile to temp binary, execute, clean up

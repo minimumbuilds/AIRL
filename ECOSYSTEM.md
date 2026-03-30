@@ -205,7 +205,7 @@ All AIRL ecosystem projects require the g3 compiler and `libairl_rt.a` from the 
 ```bash
 # Build the host toolchain (one-time, ~5-15 min)
 cd AIRL
-cargo build --release --features jit,aot
+cargo build --release --features aot
 
 # Build g3 self-hosted compiler (one-time, ~23 min)
 bash scripts/build-g3.sh

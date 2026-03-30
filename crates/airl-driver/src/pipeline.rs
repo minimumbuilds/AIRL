@@ -141,11 +141,6 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
 
     // Create VM, load stdlib, execute
-    // When JIT feature is enabled, use jit-full (compiles ALL functions to native x86-64).
-    // Bytecode VM still executes __main__ and dispatches to native code for each call.
-    #[cfg(feature = "jit")]
-    let mut vm = BytecodeVm::new_with_full_jit();
-    #[cfg(not(feature = "jit"))]
     let mut vm = BytecodeVm::new();
     for (src, name) in &[
         (COLLECTIONS_SOURCE, "collections"),
@@ -165,9 +160,6 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
     for meta in fn_meta {
         vm.store_fn_metadata(meta);
     }
-    // JIT-full: compile all loaded functions to native code before execution
-    #[cfg(feature = "jit")]
-    vm.jit_full_compile_all();
     vm.exec_main().map_err(PipelineError::Runtime)
 }
 
@@ -205,9 +197,6 @@ pub fn run_file_with_preloads(path: &str, preloads: &[String]) -> Result<Value, 
     bc_compiler.set_ownership_map(ownership_map);
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
 
-    #[cfg(feature = "jit")]
-    let mut vm = BytecodeVm::new_with_full_jit();
-    #[cfg(not(feature = "jit"))]
     let mut vm = BytecodeVm::new();
 
     // Load stdlib
@@ -631,9 +620,6 @@ pub fn run_file_with_imports(entry_path: &str) -> Result<Value, PipelineError> {
         module_publics.insert(module.name.clone(), module.public_fns.clone());
     }
 
-    #[cfg(feature = "jit")]
-    let mut vm = BytecodeVm::new_with_full_jit();
-    #[cfg(not(feature = "jit"))]
     let mut vm = BytecodeVm::new();
 
     // Load stdlib
@@ -703,8 +689,6 @@ pub fn run_file_with_imports(entry_path: &str) -> Result<Value, PipelineError> {
         }
     }
 
-    #[cfg(feature = "jit")]
-    vm.jit_full_compile_all();
     vm.exec_main().map_err(PipelineError::Runtime)
 }
 
