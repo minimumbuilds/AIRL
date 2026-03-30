@@ -72,8 +72,9 @@ All signatures in `AIRL-Header.md`. Key categories:
 | TCP | 9 | `tcp-listen`, `tcp-accept`, `tcp-connect`, `tcp-connect-tls`, `tcp-send`, `tcp-recv` |
 | Threads | 10 | `thread-spawn`, `thread-join`, `channel-new`, `channel-send`, `channel-recv` |
 | Crypto | 13 | `sha256`, `sha512`, `hmac-*`, `pbkdf2-*`, `base64-*`, `random-bytes` |
-| Compression | 8 | `gzip-*`, `snappy-*`, `lz4-*`, `zstd-*` (all IntList in/out) |
+| Compression | 8 | `gzip-*`, `snappy-*`, `lz4-*`, `zstd-*` (all Bytes in/out) |
 | Bytes | 11 | `bytes-from-int{16,32,64}`, `bytes-to-*`, `bytes-concat`, `crc32c` |
+| Stdio | 4 | `read-line`, `read-stdin`, `eprint`, `eprintln` |
 | System | 7 | `shell-exec`, `time-now`, `sleep`, `getenv`, `get-args`, `cpu-count` |
 | Stdlib (AIRL) | 68 | `map`, `filter`, `fold`, `sort`, `abs`, `min`, `is-ok?`, `words`, `set-*` |
 
