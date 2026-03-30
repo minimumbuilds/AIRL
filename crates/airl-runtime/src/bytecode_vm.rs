@@ -241,7 +241,7 @@ fn dispatch_thread_join(args: &[*mut RtValue]) -> *mut RtValue {
         },
         _ => return rt_variant("Err".into(), rt_str("thread-join: requires 1 argument".into())),
     };
-    let join_handle = match thread_handles().lock().unwrap().remove(&handle_id) {
+    let join_handle = match thread_handles().lock().expect("thread handles lock poisoned").remove(&handle_id) {
         Some(h) => h,
         None => return rt_variant("Err".into(), rt_str(format!("thread-join: invalid or already-joined handle {}", handle_id))),
     };
@@ -259,8 +259,8 @@ fn dispatch_channel_new(_args: &[*mut RtValue]) -> *mut RtValue {
     let (tx, rx) = std::sync::mpsc::channel();
     let tx_id = NEXT_CHANNEL_HANDLE.fetch_add(1, Ordering::SeqCst);
     let rx_id = NEXT_CHANNEL_HANDLE.fetch_add(1, Ordering::SeqCst);
-    channel_senders().lock().unwrap().insert(tx_id, tx);
-    channel_receivers().lock().unwrap().insert(rx_id, rx);
+    channel_senders().lock().expect("channel lock poisoned").insert(tx_id, tx);
+    channel_receivers().lock().expect("channel lock poisoned").insert(rx_id, rx);
     rt_list(vec![rt_int(tx_id), rt_int(rx_id)])
 }
 
@@ -272,7 +272,7 @@ fn dispatch_channel_send(args: &[*mut RtValue]) -> *mut RtValue {
         _ => return rt_variant("Err".into(), rt_str("channel-send: requires 2 arguments".into())),
     };
     let value = args.get(1).map(|&p| rt_to_value_no_release(p)).unwrap_or(Value::Nil);
-    let senders = channel_senders().lock().unwrap();
+    let senders = channel_senders().lock().expect("channel lock poisoned");
     match senders.get(&tx_id) {
         Some(tx) => match tx.send(value) {
             Ok(()) => rt_variant("Ok".into(), rt_bool(true)),
@@ -289,14 +289,14 @@ fn dispatch_channel_recv(args: &[*mut RtValue]) -> *mut RtValue {
         },
         _ => return rt_variant("Err".into(), rt_str("channel-recv: requires 1 argument".into())),
     };
-    let rx = channel_receivers().lock().unwrap().remove(&rx_id);
+    let rx = channel_receivers().lock().expect("channel lock poisoned").remove(&rx_id);
     match rx {
         Some(rx) => {
             let result = match rx.recv() {
                 Ok(val) => rt_variant("Ok".into(), value_to_rt(&val)),
                 Err(_) => rt_variant("Err".into(), rt_str("channel closed".into())),
             };
-            channel_receivers().lock().unwrap().insert(rx_id, rx);
+            channel_receivers().lock().expect("channel lock poisoned").insert(rx_id, rx);
             result
         },
         None => rt_variant("Err".into(), rt_str(format!("channel-recv: invalid receiver handle {}", rx_id))),
@@ -316,7 +316,7 @@ fn dispatch_channel_recv_timeout(args: &[*mut RtValue]) -> *mut RtValue {
         },
         _ => return rt_variant("Err".into(), rt_str("channel-recv-timeout: requires 2 arguments".into())),
     };
-    let rx = channel_receivers().lock().unwrap().remove(&rx_id);
+    let rx = channel_receivers().lock().expect("channel lock poisoned").remove(&rx_id);
     match rx {
         Some(rx) => {
             let duration = std::time::Duration::from_millis(timeout_ms as u64);
@@ -325,7 +325,7 @@ fn dispatch_channel_recv_timeout(args: &[*mut RtValue]) -> *mut RtValue {
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => rt_variant("Err".into(), rt_str("timeout".into())),
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => rt_variant("Err".into(), rt_str("channel closed".into())),
             };
-            channel_receivers().lock().unwrap().insert(rx_id, rx);
+            channel_receivers().lock().expect("channel lock poisoned").insert(rx_id, rx);
             result
         },
         None => rt_variant("Err".into(), rt_str(format!("channel-recv-timeout: invalid receiver handle {}", rx_id))),
@@ -339,8 +339,8 @@ fn dispatch_channel_close(args: &[*mut RtValue]) -> *mut RtValue {
         },
         _ => return rt_bool(false),
     };
-    let removed_tx = channel_senders().lock().unwrap().remove(&handle_id).is_some();
-    let removed_rx = channel_receivers().lock().unwrap().remove(&handle_id).is_some();
+    let removed_tx = channel_senders().lock().expect("channel lock poisoned").remove(&handle_id).is_some();
+    let removed_rx = channel_receivers().lock().expect("channel lock poisoned").remove(&handle_id).is_some();
     rt_bool(removed_tx || removed_rx)
 }
 
@@ -866,57 +866,57 @@ impl BytecodeVm {
     fn run_rt_with_min_depth(&mut self, min_depth: usize) -> Result<*mut RtValue, RuntimeError> {
         loop {
             let (func_name, ip, func_len) = {
-                let frame = self.call_stack.last().unwrap();
+                let frame = self.call_stack.last().expect("internal: call stack empty");
                 (frame.func_name.clone(), frame.ip, {
-                    self.functions.get(&frame.func_name).unwrap().instructions.len()
+                    self.functions.get(&frame.func_name).expect("internal: function not in map").instructions.len()
                 })
             };
 
             if ip >= func_len {
-                let return_reg = self.call_stack.last().unwrap().return_reg;
-                let mut frame = self.call_stack.pop().unwrap();
+                let return_reg = self.call_stack.last().expect("internal: call stack empty").return_reg;
+                let mut frame = self.call_stack.pop().expect("internal: call stack empty");
                 release_registers(&mut frame.registers);
                 self.recursion_depth = self.recursion_depth.saturating_sub(1);
                 if self.call_stack.len() <= min_depth {
                     return Ok(rt_nil());
                 }
-                let caller = self.call_stack.last_mut().unwrap();
+                let caller = self.call_stack.last_mut().expect("internal: call stack empty");
                 reg_set(&mut caller.registers, return_reg as usize, rt_nil());
                 continue;
             }
 
-            let instr = self.functions.get(&func_name).unwrap().instructions[ip];
-            self.call_stack.last_mut().unwrap().ip += 1;
+            let instr = self.functions.get(&func_name).expect("internal: function not in map").instructions[ip];
+            self.call_stack.last_mut().expect("internal: call stack empty").ip += 1;
 
             match instr.op {
                 Op::LoadConst => {
-                    let val = value_to_rt(&self.functions.get(&func_name).unwrap().constants[instr.a as usize]);
-                    let frame = self.call_stack.last_mut().unwrap();
+                    let val = value_to_rt(&self.functions.get(&func_name).expect("internal: function not in map").constants[instr.a as usize]);
+                    let frame = self.call_stack.last_mut().expect("internal: call stack empty");
                     reg_set(&mut frame.registers, instr.dst as usize, val);
                 }
                 Op::LoadNil => {
-                    let frame = self.call_stack.last_mut().unwrap();
+                    let frame = self.call_stack.last_mut().expect("internal: call stack empty");
                     reg_set(&mut frame.registers, instr.dst as usize, rt_nil());
                 }
                 Op::LoadTrue => {
-                    let frame = self.call_stack.last_mut().unwrap();
+                    let frame = self.call_stack.last_mut().expect("internal: call stack empty");
                     reg_set(&mut frame.registers, instr.dst as usize, rt_bool(true));
                 }
                 Op::LoadFalse => {
-                    let frame = self.call_stack.last_mut().unwrap();
+                    let frame = self.call_stack.last_mut().expect("internal: call stack empty");
                     reg_set(&mut frame.registers, instr.dst as usize, rt_bool(false));
                 }
                 Op::Move => {
-                    let src = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    let src = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
                     airl_value_retain(src);
-                    let frame = self.call_stack.last_mut().unwrap();
+                    let frame = self.call_stack.last_mut().expect("internal: call stack empty");
                     reg_set(&mut frame.registers, instr.dst as usize, src);
                 }
 
                 // ── Arithmetic (inline for proper error returns) ──
                 Op::Add => {
                     let (a, b) = {
-                        let r = &self.call_stack.last().unwrap().registers;
+                        let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
                     let result = unsafe { match (&(*a).data, &(*b).data) {
@@ -925,11 +925,11 @@ impl BytecodeVm {
                         (RtData::Str(x), RtData::Str(y)) => rt_str(format!("{}{}", x, y)),
                         _ => return Err(RuntimeError::TypeError("add: incompatible types".into())),
                     }};
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Sub => {
                     let (a, b) = {
-                        let r = &self.call_stack.last().unwrap().registers;
+                        let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
                     let result = unsafe { match (&(*a).data, &(*b).data) {
@@ -937,11 +937,11 @@ impl BytecodeVm {
                         (RtData::Float(x), RtData::Float(y)) => rt_float(x - y),
                         _ => return Err(RuntimeError::TypeError("sub: incompatible types".into())),
                     }};
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Mul => {
                     let (a, b) = {
-                        let r = &self.call_stack.last().unwrap().registers;
+                        let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
                     let result = unsafe { match (&(*a).data, &(*b).data) {
@@ -949,11 +949,11 @@ impl BytecodeVm {
                         (RtData::Float(x), RtData::Float(y)) => rt_float(x * y),
                         _ => return Err(RuntimeError::TypeError("mul: incompatible types".into())),
                     }};
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Div => {
                     let (a, b) = {
-                        let r = &self.call_stack.last().unwrap().registers;
+                        let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
                     let result = unsafe { match (&(*a).data, &(*b).data) {
@@ -962,49 +962,49 @@ impl BytecodeVm {
                         (RtData::Float(x), RtData::Float(y)) => rt_float(x / y),
                         _ => return Err(RuntimeError::TypeError("div: incompatible types".into())),
                     }};
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Mod => {
                     let (a, b) = {
-                        let r = &self.call_stack.last().unwrap().registers;
+                        let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
                     let result = unsafe { match (&(*a).data, &(*b).data) {
                         (RtData::Int(x), RtData::Int(y)) => rt_int(x % y),
                         _ => return Err(RuntimeError::TypeError("mod: incompatible types".into())),
                     }};
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Neg => {
-                    let a = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    let a = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
                     let result = unsafe { match &(*a).data {
                         RtData::Int(x) => rt_int(-x),
                         RtData::Float(x) => rt_float(-x),
                         _ => return Err(RuntimeError::TypeError("neg: expected number".into())),
                     }};
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
 
                 // ── Comparison ──
                 Op::Eq => {
                     let (a, b) = {
-                        let r = &self.call_stack.last().unwrap().registers;
+                        let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
                     let result = rt_bool(airl_rt::comparison::rt_values_equal(a, b));
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Ne => {
                     let (a, b) = {
-                        let r = &self.call_stack.last().unwrap().registers;
+                        let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
                     let result = rt_bool(!airl_rt::comparison::rt_values_equal(a, b));
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Lt => {
                     let (a, b) = {
-                        let r = &self.call_stack.last().unwrap().registers;
+                        let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
                     let result = unsafe { match (&(*a).data, &(*b).data) {
@@ -1013,11 +1013,11 @@ impl BytecodeVm {
                         (RtData::Str(x), RtData::Str(y)) => rt_bool(x < y),
                         _ => rt_bool(false),
                     }};
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Le => {
                     let (a, b) = {
-                        let r = &self.call_stack.last().unwrap().registers;
+                        let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
                     let result = unsafe { match (&(*a).data, &(*b).data) {
@@ -1026,11 +1026,11 @@ impl BytecodeVm {
                         (RtData::Str(x), RtData::Str(y)) => rt_bool(x <= y),
                         _ => rt_bool(false),
                     }};
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Gt => {
                     let (a, b) = {
-                        let r = &self.call_stack.last().unwrap().registers;
+                        let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
                     let result = unsafe { match (&(*a).data, &(*b).data) {
@@ -1039,11 +1039,11 @@ impl BytecodeVm {
                         (RtData::Str(x), RtData::Str(y)) => rt_bool(x > y),
                         _ => rt_bool(false),
                     }};
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Ge => {
                     let (a, b) = {
-                        let r = &self.call_stack.last().unwrap().registers;
+                        let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
                     let result = unsafe { match (&(*a).data, &(*b).data) {
@@ -1052,37 +1052,37 @@ impl BytecodeVm {
                         (RtData::Str(x), RtData::Str(y)) => rt_bool(x >= y),
                         _ => rt_bool(false),
                     }};
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Not => {
-                    let a = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    let a = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
                     let result = unsafe { match &(*a).data {
                         RtData::Bool(b) => rt_bool(!b),
                         _ => return Err(RuntimeError::TypeError("not: expected bool".into())),
                     }};
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
 
                 // ── Control flow ──
                 Op::Jump => {
                     let offset = instr.a as i16;
-                    let frame = self.call_stack.last_mut().unwrap();
+                    let frame = self.call_stack.last_mut().expect("internal: call stack empty");
                     frame.ip = (frame.ip as i32 + offset as i32) as usize;
                 }
                 Op::JumpIfFalse => {
-                    let val = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    let val = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
                     if rt_is_bool_false(val) {
                         let offset = instr.b as i16;
-                        self.call_stack.last_mut().unwrap().ip =
-                            (self.call_stack.last().unwrap().ip as i32 + offset as i32) as usize;
+                        self.call_stack.last_mut().expect("internal: call stack empty").ip =
+                            (self.call_stack.last().expect("internal: call stack empty").ip as i32 + offset as i32) as usize;
                     }
                 }
                 Op::JumpIfTrue => {
-                    let val = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    let val = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
                     if rt_is_bool_true(val) {
                         let offset = instr.b as i16;
-                        self.call_stack.last_mut().unwrap().ip =
-                            (self.call_stack.last().unwrap().ip as i32 + offset as i32) as usize;
+                        self.call_stack.last_mut().expect("internal: call stack empty").ip =
+                            (self.call_stack.last().expect("internal: call stack empty").ip as i32 + offset as i32) as usize;
                     }
                 }
 
@@ -1091,74 +1091,74 @@ impl BytecodeVm {
                     let start = instr.a as usize;
                     let count = instr.b as usize;
                     let items: Vec<*mut RtValue> = {
-                        let r = &self.call_stack.last().unwrap().registers;
+                        let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (start..start+count).map(|i| { let p = reg_get(r, i); airl_value_retain(p); p }).collect()
                     };
                     let list = rt_list(items);
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, list);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, list);
                 }
                 Op::MakeVariant => {
-                    let tag = match &self.functions.get(&func_name).unwrap().constants[instr.a as usize] {
+                    let tag = match &self.functions.get(&func_name).expect("internal: function not in map").constants[instr.a as usize] {
                         Value::Str(s) => s.clone(),
                         _ => return Err(RuntimeError::TypeError("variant tag must be string".into())),
                     };
-                    let inner = reg_get(&self.call_stack.last().unwrap().registers, instr.b as usize);
+                    let inner = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.b as usize);
                     airl_value_retain(inner);
                     let variant = rt_variant(tag, inner);
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, variant);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, variant);
                 }
                 Op::MakeVariant0 => {
-                    let tag = match &self.functions.get(&func_name).unwrap().constants[instr.a as usize] {
+                    let tag = match &self.functions.get(&func_name).expect("internal: function not in map").constants[instr.a as usize] {
                         Value::Str(s) => s.clone(),
                         _ => return Err(RuntimeError::TypeError("variant tag must be string".into())),
                     };
                     let variant = rt_variant(tag, rt_nil());
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, variant);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, variant);
                 }
 
                 // ── Pattern matching ──
                 Op::MatchTag => {
-                    let tag = match &self.functions.get(&func_name).unwrap().constants[instr.b as usize] {
+                    let tag = match &self.functions.get(&func_name).expect("internal: function not in map").constants[instr.b as usize] {
                         Value::Str(s) => s.clone(),
                         _ => return Err(RuntimeError::TypeError("match tag must be string".into())),
                     };
-                    let scr = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    let scr = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
                     unsafe {
                         match &(*scr).data {
                             RtData::Variant { tag_name, inner } if *tag_name == tag => {
                                 airl_value_retain(*inner);
-                                let frame = self.call_stack.last_mut().unwrap();
+                                let frame = self.call_stack.last_mut().expect("internal: call stack empty");
                                 reg_set(&mut frame.registers, instr.dst as usize, *inner);
                                 frame.match_flag = true;
                             }
                             _ => {
-                                self.call_stack.last_mut().unwrap().match_flag = false;
+                                self.call_stack.last_mut().expect("internal: call stack empty").match_flag = false;
                             }
                         }
                     }
                 }
                 Op::JumpIfNoMatch => {
-                    if !self.call_stack.last().unwrap().match_flag {
+                    if !self.call_stack.last().expect("internal: call stack empty").match_flag {
                         let offset = instr.a as i16;
-                        let frame = self.call_stack.last_mut().unwrap();
+                        let frame = self.call_stack.last_mut().expect("internal: call stack empty");
                         frame.ip = (frame.ip as i32 + offset as i32) as usize;
                     }
                 }
                 Op::MatchWild => {
-                    let val = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    let val = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
                     airl_value_retain(val);
-                    let frame = self.call_stack.last_mut().unwrap();
+                    let frame = self.call_stack.last_mut().expect("internal: call stack empty");
                     reg_set(&mut frame.registers, instr.dst as usize, val);
                     frame.match_flag = true;
                 }
 
                 // ── TryUnwrap ──
                 Op::TryUnwrap => {
-                    let val = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    let val = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
                     unsafe { match &(*val).data {
                         RtData::Variant { tag_name, inner } if tag_name == "Ok" => {
                             airl_value_retain(*inner);
-                            reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, *inner);
+                            reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, *inner);
                         }
                         RtData::Variant { tag_name, inner } if tag_name == "Err" => {
                             return Err(RuntimeError::Custom(format!("{}", &**inner)));
@@ -1169,9 +1169,9 @@ impl BytecodeVm {
 
                 // ── Contract assertions ──
                 Op::AssertRequires | Op::AssertEnsures | Op::AssertInvariant => {
-                    let bool_val = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    let bool_val = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
                     if !rt_is_bool_true(bool_val) {
-                        let f = self.functions.get(&func_name).unwrap();
+                        let f = self.functions.get(&func_name).expect("internal: function not in map");
                         let fn_name_str = match &f.constants[instr.dst as usize] {
                             Value::Str(s) => s.clone(),
                             _ => func_name.clone(),
@@ -1185,7 +1185,7 @@ impl BytecodeVm {
                             Op::AssertEnsures => airl_contracts::violation::ContractKind::Ensures,
                             _ => airl_contracts::violation::ContractKind::Invariant,
                         };
-                        let frame = self.call_stack.last().unwrap();
+                        let frame = self.call_stack.last().expect("internal: call stack empty");
                         let arity = f.arity as usize;
                         let bindings: Vec<(String, String)> = (0..arity)
                             .filter(|&i| i < frame.registers.len())
@@ -1204,14 +1204,14 @@ impl BytecodeVm {
                 // ── Ownership tracking ──
                 Op::MarkMoved => {
                     let reg = instr.a as usize;
-                    let frame = self.call_stack.last_mut().unwrap();
+                    let frame = self.call_stack.last_mut().expect("internal: call stack empty");
                     if reg < frame.moved.len() { frame.moved[reg] = true; }
                 }
                 Op::CheckNotMoved => {
                     let reg = instr.a as usize;
-                    let frame = self.call_stack.last().unwrap();
+                    let frame = self.call_stack.last().expect("internal: call stack empty");
                     if reg < frame.moved.len() && frame.moved[reg] {
-                        let f = self.functions.get(&func_name).unwrap();
+                        let f = self.functions.get(&func_name).expect("internal: function not in map");
                         let msg = if (instr.b as usize) < f.constants.len() {
                             match &f.constants[instr.b as usize] {
                                 Value::Str(s) if s.contains(' ') => s.clone(),
@@ -1227,13 +1227,13 @@ impl BytecodeVm {
 
                 // ── Function calls ──
                 Op::Call => {
-                    let name = match &self.functions.get(&func_name).unwrap().constants[instr.a as usize] {
+                    let name = match &self.functions.get(&func_name).expect("internal: function not in map").constants[instr.a as usize] {
                         Value::Str(s) => s.clone(),
                         _ => return Err(RuntimeError::TypeError("call: func name must be string".into())),
                     };
                     let argc = instr.b as usize;
                     let rt_args: Vec<*mut RtValue> = {
-                        let r = &self.call_stack.last().unwrap().registers;
+                        let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (0..argc).map(|i| reg_get(r, instr.dst as usize + 1 + i)).collect()
                     };
 
@@ -1265,7 +1265,7 @@ impl BytecodeVm {
                                     ));
                                 }
                                 let result_rt = value_to_rt(&val);
-                                reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result_rt);
+                                reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result_rt);
                                 continue;
                             }
                         }
@@ -1274,46 +1274,46 @@ impl BytecodeVm {
                     // Dispatch chain: special cases first, then airl-rt, then push frame
                     if name == "thread-spawn" {
                         let result = self.dispatch_thread_spawn_rt(&rt_args)?;
-                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                        reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                     } else if name == "fn-metadata" {
                         let result = self.dispatch_fn_metadata_rt(&rt_args)?;
-                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                        reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                     } else if let Some(result) = dispatch_rt_builtin(&name, &rt_args) {
-                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                        reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                     } else {
                         self.push_frame_rt(&name, &rt_args, instr.dst)?;
                     }
                 }
 
                 Op::CallBuiltin => {
-                    let name = match &self.functions.get(&func_name).unwrap().constants[instr.a as usize] {
+                    let name = match &self.functions.get(&func_name).expect("internal: function not in map").constants[instr.a as usize] {
                         Value::Str(s) => s.clone(),
                         _ => return Err(RuntimeError::TypeError("callbuiltin: name must be string".into())),
                     };
                     let argc = instr.b as usize;
                     let rt_args: Vec<*mut RtValue> = {
-                        let r = &self.call_stack.last().unwrap().registers;
+                        let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (0..argc).map(|i| reg_get(r, instr.dst as usize + 1 + i)).collect()
                     };
 
                     if name == "thread-spawn" {
                         let result = self.dispatch_thread_spawn_rt(&rt_args)?;
-                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                        reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                     } else if name == "fn-metadata" {
                         let result = self.dispatch_fn_metadata_rt(&rt_args)?;
-                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                        reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                     } else if let Some(result) = dispatch_rt_builtin(&name, &rt_args) {
-                        reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                        reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                     } else {
                         return Err(RuntimeError::UndefinedSymbol(name));
                     }
                 }
 
                 Op::CallReg => {
-                    let callee = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    let callee = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
                     let argc = instr.b as usize;
                     let rt_args: Vec<*mut RtValue> = {
-                        let r = &self.call_stack.last().unwrap().registers;
+                        let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (0..argc).map(|i| reg_get(r, instr.dst as usize + 1 + i)).collect()
                     };
                     let callee_val = rt_to_value_no_release(callee);
@@ -1328,7 +1328,7 @@ impl BytecodeVm {
                                 if is_simple_closure(func) {
                                     let func = func.clone();
                                     let result_val = self.eval_simple(&func, full_args)?;
-                                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, value_to_rt(&result_val));
+                                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, value_to_rt(&result_val));
                                     continue;
                                 }
                             }
@@ -1338,12 +1338,12 @@ impl BytecodeVm {
                             let name = name.clone();
                             if name == "thread-spawn" {
                                 let result = self.dispatch_thread_spawn_rt(&rt_args)?;
-                                reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                                reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                             } else if name == "fn-metadata" {
                                 let result = self.dispatch_fn_metadata_rt(&rt_args)?;
-                                reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                                reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                             } else if let Some(result) = dispatch_rt_builtin(&name, &rt_args) {
-                                reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, result);
+                                reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                             } else {
                                 let value_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
                                 self.push_frame(&name, &value_args, instr.dst)?;
@@ -1354,26 +1354,26 @@ impl BytecodeVm {
                 }
 
                 Op::TailCall => {
-                    let frame = self.call_stack.last_mut().unwrap();
+                    let frame = self.call_stack.last_mut().expect("internal: call stack empty");
                     frame.ip = 0;
                     for m in frame.moved.iter_mut() { *m = false; }
                 }
 
                 Op::Return => {
-                    let result = reg_get(&self.call_stack.last().unwrap().registers, instr.a as usize);
+                    let result = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
                     airl_value_retain(result);
-                    let return_reg = self.call_stack.last().unwrap().return_reg;
-                    let mut frame = self.call_stack.pop().unwrap();
+                    let return_reg = self.call_stack.last().expect("internal: call stack empty").return_reg;
+                    let mut frame = self.call_stack.pop().expect("internal: call stack empty");
                     release_registers(&mut frame.registers);
                     self.recursion_depth = self.recursion_depth.saturating_sub(1);
                     if self.call_stack.len() <= min_depth {
                         return Ok(result);
                     }
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, return_reg as usize, result);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, return_reg as usize, result);
                 }
 
                 Op::MakeClosure => {
-                    let func_name_const = match &self.functions.get(&func_name).unwrap().constants[instr.a as usize] {
+                    let func_name_const = match &self.functions.get(&func_name).expect("internal: function not in map").constants[instr.a as usize] {
                         Value::Str(s) => s.clone(),
                         _ => return Err(RuntimeError::TypeError("closure: func name must be string".into())),
                     };
@@ -1381,7 +1381,7 @@ impl BytecodeVm {
                         .map(|f| f.capture_count as usize).unwrap_or(0);
                     let capture_start = instr.b as usize;
                     let captured: Vec<Value> = {
-                        let r = &self.call_stack.last().unwrap().registers;
+                        let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (capture_start..capture_start + capture_count)
                             .map(|i| rt_to_value_no_release(reg_get(r, i)))
                             .collect()
@@ -1391,7 +1391,7 @@ impl BytecodeVm {
                         captured,
                     });
                     let closure_rt = value_to_rt(&closure_val);
-                    reg_set(&mut self.call_stack.last_mut().unwrap().registers, instr.dst as usize, closure_rt);
+                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, closure_rt);
                 }
             }
         }
@@ -1416,7 +1416,7 @@ impl BytecodeVm {
             })
             .map_err(|e| RuntimeError::Custom(format!("thread-spawn: {}", e)))?;
         let id = NEXT_THREAD_HANDLE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        thread_handles().lock().unwrap().insert(id, handle);
+        thread_handles().lock().expect("thread handles lock poisoned").insert(id, handle);
         Ok(rt_int(id))
     }
 
@@ -1571,7 +1571,7 @@ mod tests {
         let mut compiler = BytecodeCompiler::new();
         let (funcs, main_func) = compiler.compile_program(nodes);
         let mut vm = BytecodeVm::new();
-        vm.exec_program(funcs, main_func).unwrap()
+        vm.exec_program(funcs, main_func).expect("test: exec_program failed")
     }
 
     #[test]
