@@ -289,89 +289,95 @@ pub struct RuntimeImports {
 // Signature helpers (ObjectModule versions)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PTR: types::Type = types::I64;
+fn ptr_type_for(triple: &target_lexicon::Triple) -> types::Type {
+    if triple.pointer_width().unwrap().bits() == 32 {
+        types::I32
+    } else {
+        types::I64
+    }
+}
 
-fn sig_0_ptr(m: &ObjectModule) -> cranelift_codegen::ir::Signature {
+fn sig_0_ptr(m: &ObjectModule, ptr: types::Type) -> cranelift_codegen::ir::Signature {
     let mut sig = m.make_signature();
-    sig.returns.push(AbiParam::new(PTR));
+    sig.returns.push(AbiParam::new(ptr));
     sig
 }
 
-fn sig_1_ptr(m: &ObjectModule) -> cranelift_codegen::ir::Signature {
+fn sig_1_ptr(m: &ObjectModule, ptr: types::Type) -> cranelift_codegen::ir::Signature {
     let mut sig = m.make_signature();
-    sig.params.push(AbiParam::new(PTR));
-    sig.returns.push(AbiParam::new(PTR));
+    sig.params.push(AbiParam::new(ptr));
+    sig.returns.push(AbiParam::new(ptr));
     sig
 }
 
-fn sig_2_ptr(m: &ObjectModule) -> cranelift_codegen::ir::Signature {
+fn sig_2_ptr(m: &ObjectModule, ptr: types::Type) -> cranelift_codegen::ir::Signature {
     let mut sig = m.make_signature();
-    sig.params.push(AbiParam::new(PTR));
-    sig.params.push(AbiParam::new(PTR));
-    sig.returns.push(AbiParam::new(PTR));
+    sig.params.push(AbiParam::new(ptr));
+    sig.params.push(AbiParam::new(ptr));
+    sig.returns.push(AbiParam::new(ptr));
     sig
 }
 
-fn sig_3_ptr(m: &ObjectModule) -> cranelift_codegen::ir::Signature {
+fn sig_3_ptr(m: &ObjectModule, ptr: types::Type) -> cranelift_codegen::ir::Signature {
     let mut sig = m.make_signature();
-    sig.params.push(AbiParam::new(PTR));
-    sig.params.push(AbiParam::new(PTR));
-    sig.params.push(AbiParam::new(PTR));
-    sig.returns.push(AbiParam::new(PTR));
+    sig.params.push(AbiParam::new(ptr));
+    sig.params.push(AbiParam::new(ptr));
+    sig.params.push(AbiParam::new(ptr));
+    sig.returns.push(AbiParam::new(ptr));
     sig
 }
 
-fn sig_4_ptr(m: &ObjectModule) -> cranelift_codegen::ir::Signature {
+fn sig_4_ptr(m: &ObjectModule, ptr: types::Type) -> cranelift_codegen::ir::Signature {
     let mut sig = m.make_signature();
-    sig.params.push(AbiParam::new(PTR));
-    sig.params.push(AbiParam::new(PTR));
-    sig.params.push(AbiParam::new(PTR));
-    sig.params.push(AbiParam::new(PTR));
-    sig.returns.push(AbiParam::new(PTR));
+    sig.params.push(AbiParam::new(ptr));
+    sig.params.push(AbiParam::new(ptr));
+    sig.params.push(AbiParam::new(ptr));
+    sig.params.push(AbiParam::new(ptr));
+    sig.returns.push(AbiParam::new(ptr));
     sig
 }
 
-fn sig_1_ptr_ret_i64(m: &ObjectModule) -> cranelift_codegen::ir::Signature {
+fn sig_1_ptr_ret_i64(m: &ObjectModule, ptr: types::Type) -> cranelift_codegen::ir::Signature {
     let mut sig = m.make_signature();
-    sig.params.push(AbiParam::new(PTR));
+    sig.params.push(AbiParam::new(ptr));
     sig.returns.push(AbiParam::new(types::I64));
     sig
 }
 
-fn sig_1_ptr_ret_void(m: &ObjectModule) -> cranelift_codegen::ir::Signature {
+fn sig_1_ptr_ret_void(m: &ObjectModule, ptr: types::Type) -> cranelift_codegen::ir::Signature {
     let mut sig = m.make_signature();
-    sig.params.push(AbiParam::new(PTR));
+    sig.params.push(AbiParam::new(ptr));
     sig
 }
 
-fn sig_i64_ret_ptr(m: &ObjectModule) -> cranelift_codegen::ir::Signature {
+fn sig_i64_ret_ptr(m: &ObjectModule, ptr: types::Type) -> cranelift_codegen::ir::Signature {
     let mut sig = m.make_signature();
     sig.params.push(AbiParam::new(types::I64));
-    sig.returns.push(AbiParam::new(PTR));
+    sig.returns.push(AbiParam::new(ptr));
     sig
 }
 
-fn sig_ptr_i64_ret_ptr(m: &ObjectModule) -> cranelift_codegen::ir::Signature {
+fn sig_ptr_i64_ret_ptr(m: &ObjectModule, ptr: types::Type) -> cranelift_codegen::ir::Signature {
     let mut sig = m.make_signature();
-    sig.params.push(AbiParam::new(PTR));
+    sig.params.push(AbiParam::new(ptr));
     sig.params.push(AbiParam::new(types::I64));
-    sig.returns.push(AbiParam::new(PTR));
+    sig.returns.push(AbiParam::new(ptr));
     sig
 }
 
-fn sig_ptr_ptr_i64_ret_ptr(m: &ObjectModule) -> cranelift_codegen::ir::Signature {
+fn sig_ptr_ptr_i64_ret_ptr(m: &ObjectModule, ptr: types::Type) -> cranelift_codegen::ir::Signature {
     let mut sig = m.make_signature();
-    sig.params.push(AbiParam::new(PTR));
-    sig.params.push(AbiParam::new(PTR));
+    sig.params.push(AbiParam::new(ptr));
+    sig.params.push(AbiParam::new(ptr));
     sig.params.push(AbiParam::new(types::I64));
-    sig.returns.push(AbiParam::new(PTR));
+    sig.returns.push(AbiParam::new(ptr));
     sig
 }
 
-fn sig_f64_ret_ptr(m: &ObjectModule) -> cranelift_codegen::ir::Signature {
+fn sig_f64_ret_ptr(m: &ObjectModule, ptr: types::Type) -> cranelift_codegen::ir::Signature {
     let mut sig = m.make_signature();
     sig.params.push(AbiParam::new(types::F64));
-    sig.returns.push(AbiParam::new(PTR));
+    sig.returns.push(AbiParam::new(ptr));
     sig
 }
 
@@ -405,6 +411,10 @@ pub struct BytecodeAot {
     module: ObjectModule,
     rt: RuntimeImports,
     builtin_map: HashMap<String, FuncId>,
+    /// Target triple (stored for linker decisions)
+    target_triple: target_lexicon::Triple,
+    /// Pointer type for the target (I32 for i686, I64 for x86-64)
+    ptr: types::Type,
     /// String constants stored as (DataId, byte_length) in the object file's
     /// data section — replaces the JIT's heap-pointer approach.
     stable_strings: Vec<(cranelift_module::DataId, usize)>,
@@ -432,16 +442,30 @@ fn aot_symbol_name(name: &str) -> String {
 }
 
 impl BytecodeAot {
-    /// Create a new AOT compiler context targeting the host triple.
-    pub fn new() -> Result<Self, String> {
+    /// Create a new AOT compiler context. If `target` is None, targets the host.
+    /// Accepted target strings: "x86-64", "i686", "i686-airlos", or any valid triple.
+    pub fn new_with_target(target: Option<&str>) -> Result<Self, String> {
         let mut settings_builder = cranelift_codegen::settings::builder();
-        // Disable unwind info and enable PIC to avoid unsupported AArch64 relocations
-        // on ARM64 targets (macOS). Harmless on x86_64.
         let _ = settings_builder.set("unwind_info", "false");
         let _ = settings_builder.set("is_pic", "true");
         let _ = settings_builder.set("enable_probestack", "false");
-        let isa = cranelift_codegen::isa::lookup(target_lexicon::Triple::host())
-            .map_err(|e| format!("ISA lookup: {}", e))?
+
+        let triple = match target {
+            Some("x86-64") | None => target_lexicon::Triple::host(),
+            Some("i686") => "i686-unknown-linux-gnu".parse::<target_lexicon::Triple>()
+                .map_err(|e| format!("invalid triple: {}", e))?,
+            Some("i686-airlos") => "i686-unknown-none".parse::<target_lexicon::Triple>()
+                .map_err(|e| format!("invalid triple: {}", e))?,
+            Some("aarch64") => "aarch64-unknown-linux-gnu".parse::<target_lexicon::Triple>()
+                .map_err(|e| format!("invalid triple: {}", e))?,
+            Some(t) => t.parse::<target_lexicon::Triple>()
+                .map_err(|e| format!("invalid target triple '{}': {}", t, e))?,
+        };
+
+        let ptr = ptr_type_for(&triple);
+
+        let isa = cranelift_codegen::isa::lookup(triple.clone())
+            .map_err(|e| format!("ISA lookup for {:?}: {}", triple, e))?
             .finish(cranelift_codegen::settings::Flags::new(settings_builder))
             .map_err(|e| format!("ISA build: {}", e))?;
 
@@ -453,19 +477,26 @@ impl BytecodeAot {
         .map_err(|e| format!("ObjectBuilder: {}", e))?;
 
         let mut module = ObjectModule::new(builder);
-        let rt = Self::declare_runtime_imports(&mut module);
+        let rt = Self::declare_runtime_imports(&mut module, ptr);
         let builtin_map = Self::build_builtin_map(&rt);
 
         Ok(Self {
             module,
             rt,
             builtin_map,
+            target_triple: triple,
+            ptr,
             stable_strings: Vec::new(),
             compiled_funcs: HashMap::new(),
             eligible_funcs: HashSet::new(),
             eligible_return_hints: HashMap::new(),
             closure_targets: HashSet::new(),
         })
+    }
+
+    /// Create a new AOT compiler context targeting the host triple.
+    pub fn new() -> Result<Self, String> {
+        Self::new_with_target(None)
     }
 
     /// Intern a string constant into the object file's data section.
@@ -488,24 +519,24 @@ impl BytecodeAot {
     // Declare all runtime imports
     // ──────────────────────────────────────────────────────────────────────
 
-    fn declare_runtime_imports(m: &mut ObjectModule) -> RuntimeImports {
-        let void_1 = sig_1_ptr_ret_void(m);
+    fn declare_runtime_imports(m: &mut ObjectModule, ptr: types::Type) -> RuntimeImports {
+        let void_1 = sig_1_ptr_ret_void(m, ptr);
         let value_retain  = declare_import(m, "airl_value_retain",  void_1.clone());
         let value_release = declare_import(m, "airl_value_release", void_1);
-        let value_clone   = declare_import(m, "airl_value_clone",   sig_1_ptr(m));
+        let value_clone   = declare_import(m, "airl_value_clone",   sig_1_ptr(m, ptr));
 
-        let int_ctor   = declare_import(m, "airl_int",   sig_i64_ret_ptr(m));
-        let float_ctor = declare_import(m, "airl_float", sig_f64_ret_ptr(m));
-        let bool_ctor  = declare_import(m, "airl_bool",  sig_i64_ret_ptr(m));
-        let nil_ctor   = declare_import(m, "airl_nil",   sig_0_ptr(m));
-        let unit_ctor  = declare_import(m, "airl_unit",  sig_0_ptr(m));
-        let str_ctor   = declare_import(m, "airl_str",   sig_ptr_i64_ret_ptr(m));
-        let bytes_ctor = declare_import(m, "airl_bytes_new", sig_ptr_i64_ret_ptr(m));
+        let int_ctor   = declare_import(m, "airl_int",   sig_i64_ret_ptr(m, ptr));
+        let float_ctor = declare_import(m, "airl_float", sig_f64_ret_ptr(m, ptr));
+        let bool_ctor  = declare_import(m, "airl_bool",  sig_i64_ret_ptr(m, ptr));
+        let nil_ctor   = declare_import(m, "airl_nil",   sig_0_ptr(m, ptr));
+        let unit_ctor  = declare_import(m, "airl_unit",  sig_0_ptr(m, ptr));
+        let str_ctor   = declare_import(m, "airl_str",   sig_ptr_i64_ret_ptr(m, ptr));
+        let bytes_ctor = declare_import(m, "airl_bytes_new", sig_ptr_i64_ret_ptr(m, ptr));
 
-        let as_bool_raw = declare_import(m, "airl_as_bool_raw", sig_1_ptr_ret_i64(m));
-        let as_int_raw  = declare_import(m, "airl_as_int_raw",  sig_1_ptr_ret_i64(m));
+        let as_bool_raw = declare_import(m, "airl_as_bool_raw", sig_1_ptr_ret_i64(m, ptr));
+        let as_int_raw  = declare_import(m, "airl_as_int_raw",  sig_1_ptr_ret_i64(m, ptr));
 
-        let s2 = sig_2_ptr(m);
+        let s2 = sig_2_ptr(m, ptr);
         let add    = declare_import(m, "airl_add", s2.clone());
         let sub    = declare_import(m, "airl_sub", s2.clone());
         let mul    = declare_import(m, "airl_mul", s2.clone());
@@ -519,7 +550,7 @@ impl BytecodeAot {
         let le = declare_import(m, "airl_le", s2.clone());
         let ge = declare_import(m, "airl_ge", s2.clone());
 
-        let s1 = sig_1_ptr(m);
+        let s1 = sig_1_ptr(m, ptr);
         let not = declare_import(m, "airl_not", s1.clone());
         let and = declare_import(m, "airl_and", s2.clone());
         let or  = declare_import(m, "airl_or",  s2.clone());
@@ -532,29 +563,29 @@ impl BytecodeAot {
         let length = declare_import(m, "airl_length", s1.clone());
         let at     = declare_import(m, "airl_at",     s2.clone());
         let append = declare_import(m, "airl_append", s2.clone());
-        let list_new = declare_import(m, "airl_list_new", sig_ptr_i64_ret_ptr(m));
-        let at_or = declare_import(m, "airl_at_or", sig_3_ptr(m));
-        let set_at = declare_import(m, "airl_set_at", sig_3_ptr(m));
+        let list_new = declare_import(m, "airl_list_new", sig_ptr_i64_ret_ptr(m, ptr));
+        let at_or = declare_import(m, "airl_at_or", sig_3_ptr(m, ptr));
+        let set_at = declare_import(m, "airl_set_at", sig_3_ptr(m, ptr));
         let list_contains = declare_import(m, "airl_list_contains", s2.clone());
 
         let make_variant = declare_import(m, "airl_make_variant", s2.clone());
         let match_tag    = declare_import(m, "airl_match_tag",    s2.clone());
 
-        let make_closure = declare_import(m, "airl_make_closure", sig_ptr_ptr_i64_ret_ptr(m));
-        let call_closure = declare_import(m, "airl_call_closure", sig_ptr_ptr_i64_ret_ptr(m));
+        let make_closure = declare_import(m, "airl_make_closure", sig_ptr_ptr_i64_ret_ptr(m, ptr));
+        let call_closure = declare_import(m, "airl_call_closure", sig_ptr_ptr_i64_ret_ptr(m, ptr));
 
         let print        = declare_import(m, "airl_print",        s1.clone());
         let println      = declare_import(m, "airl_println",      s1.clone());
         let eprint       = declare_import(m, "airl_eprint",       s1.clone());
         let eprintln     = declare_import(m, "airl_eprintln",     s1.clone());
-        let read_line    = declare_import(m, "airl_read_line",    sig_0_ptr(m));
-        let read_stdin   = declare_import(m, "airl_read_stdin",   sig_0_ptr(m));
-        let print_values = declare_import(m, "airl_print_values", sig_ptr_i64_ret_ptr(m));
+        let read_line    = declare_import(m, "airl_read_line",    sig_0_ptr(m, ptr));
+        let read_stdin   = declare_import(m, "airl_read_stdin",   sig_0_ptr(m, ptr));
+        let print_values = declare_import(m, "airl_print_values", sig_ptr_i64_ret_ptr(m, ptr));
         let type_of      = declare_import(m, "airl_type_of",      s1.clone());
         let valid        = declare_import(m, "airl_valid",        s1.clone());
 
         let char_at     = declare_import(m, "airl_char_at",     s2.clone());
-        let substring   = declare_import(m, "airl_substring",   sig_3_ptr(m));
+        let substring   = declare_import(m, "airl_substring",   sig_3_ptr(m, ptr));
         let chars       = declare_import(m, "airl_chars",       s1.clone());
         let split       = declare_import(m, "airl_split",       s2.clone());
         let join        = declare_import(m, "airl_join",        s2.clone());
@@ -565,13 +596,13 @@ impl BytecodeAot {
         let trim        = declare_import(m, "airl_trim",        s1.clone());
         let to_upper    = declare_import(m, "airl_to_upper",    s1.clone());
         let to_lower    = declare_import(m, "airl_to_lower",    s1.clone());
-        let replace     = declare_import(m, "airl_replace",     sig_3_ptr(m));
+        let replace     = declare_import(m, "airl_replace",     sig_3_ptr(m, ptr));
 
-        let map_new    = declare_import(m, "airl_map_new",    sig_0_ptr(m));
+        let map_new    = declare_import(m, "airl_map_new",    sig_0_ptr(m, ptr));
         let map_from   = declare_import(m, "airl_map_from",   s1.clone());
         let map_get    = declare_import(m, "airl_map_get",    s2.clone());
-        let map_get_or = declare_import(m, "airl_map_get_or", sig_3_ptr(m));
-        let map_set    = declare_import(m, "airl_map_set",    sig_3_ptr(m));
+        let map_get_or = declare_import(m, "airl_map_get_or", sig_3_ptr(m, ptr));
+        let map_set    = declare_import(m, "airl_map_set",    sig_3_ptr(m, ptr));
         let map_has    = declare_import(m, "airl_map_has",    s2.clone());
         let map_remove = declare_import(m, "airl_map_remove", s2.clone());
         let map_keys   = declare_import(m, "airl_map_keys",   s1.clone());
@@ -590,7 +621,7 @@ impl BytecodeAot {
         let create_dir  = declare_import(m, "airl_create_dir",  s1.clone());
         let file_size   = declare_import(m, "airl_file_size",   s1.clone());
         let is_dir      = declare_import(m, "airl_is_dir",      s1.clone());
-        let get_args    = declare_import(m, "airl_get_args",    sig_0_ptr(m));
+        let get_args    = declare_import(m, "airl_get_args",    sig_0_ptr(m, ptr));
         let run_bytecode = declare_import(m, "airl_run_bytecode", s1.clone());
         let compile_to_exe = declare_import(m, "airl_compile_to_executable", s2.clone());
         let compile_bc_to_exe = declare_import(m, "airl_compile_bytecode_to_executable", s2.clone());
@@ -615,14 +646,14 @@ impl BytecodeAot {
         let round = declare_import(m, "airl_round", s1.clone());
         let float_to_int = declare_import(m, "airl_float_to_int", s1.clone());
         let int_to_float = declare_import(m, "airl_int_to_float", s1.clone());
-        let infinity = declare_import(m, "airl_infinity", sig_0_ptr(m));
-        let nan_ctor = declare_import(m, "airl_nan", sig_0_ptr(m));
+        let infinity = declare_import(m, "airl_infinity", sig_0_ptr(m, ptr));
+        let nan_ctor = declare_import(m, "airl_nan", sig_0_ptr(m, ptr));
         let is_nan = declare_import(m, "airl_is_nan", s1.clone());
         let is_infinite = declare_import(m, "airl_is_infinite", s1.clone());
 
         // System
-        let cpu_count = declare_import(m, "airl_cpu_count", sig_0_ptr(m));
-        let time_now = declare_import(m, "airl_time_now", sig_0_ptr(m));
+        let cpu_count = declare_import(m, "airl_cpu_count", sig_0_ptr(m, ptr));
+        let time_now = declare_import(m, "airl_time_now", sig_0_ptr(m, ptr));
 
         // Environment
         let getenv = declare_import(m, "airl_getenv", s1.clone());
@@ -636,8 +667,8 @@ impl BytecodeAot {
 
         // Misc builtins
         let char_count = declare_import(m, "airl_char_count", s1.clone());
-        let str_variadic = declare_import(m, "airl_str_variadic", sig_ptr_i64_ret_ptr(m));
-        let format_variadic = declare_import(m, "airl_format_variadic", sig_ptr_i64_ret_ptr(m));
+        let str_variadic = declare_import(m, "airl_str_variadic", sig_ptr_i64_ret_ptr(m, ptr));
+        let format_variadic = declare_import(m, "airl_format_variadic", sig_ptr_i64_ret_ptr(m, ptr));
         let assert_fn = declare_import(m, "airl_assert", s2.clone());
         let panic_fn = declare_import(m, "airl_panic", s1.clone());
         let exit_fn = declare_import(m, "airl_exit", s1.clone());
@@ -655,7 +686,7 @@ impl BytecodeAot {
         // Higher-order list ops (closure + list -> result)
         let map_ho = declare_import(m, "airl_map", s2.clone());
         let filter_ho = declare_import(m, "airl_filter", s2.clone());
-        let s3 = sig_3_ptr(m);
+        let s3 = sig_3_ptr(m, ptr);
         let fold_ho = declare_import(m, "airl_fold", s3);
         let sort_ho = declare_import(m, "airl_sort", s2.clone());
         let any_ho = declare_import(m, "airl_any", s2.clone());
@@ -668,7 +699,7 @@ impl BytecodeAot {
         let is_absolute = declare_import(m, "airl_is_absolute", s1.clone());
         let regex_match = declare_import(m, "airl_regex_match", s2.clone());
         let regex_find_all = declare_import(m, "airl_regex_find_all", s2.clone());
-        let regex_replace = declare_import(m, "airl_regex_replace", sig_3_ptr(m));
+        let regex_replace = declare_import(m, "airl_regex_replace", sig_3_ptr(m, ptr));
         let regex_split = declare_import(m, "airl_regex_split", s2.clone());
         let sha256 = declare_import(m, "airl_sha256", s1.clone());
         let hmac_sha256 = declare_import(m, "airl_hmac_sha256", s2.clone());
@@ -683,8 +714,8 @@ impl BytecodeAot {
         let sha512_bytes = declare_import(m, "airl_sha512_bytes", s1.clone());
         let hmac_sha256_bytes = declare_import(m, "airl_hmac_sha256_bytes", s2.clone());
         let hmac_sha512_bytes = declare_import(m, "airl_hmac_sha512_bytes", s2.clone());
-        let pbkdf2_sha256 = declare_import(m, "airl_pbkdf2_sha256", sig_4_ptr(m));
-        let pbkdf2_sha512 = declare_import(m, "airl_pbkdf2_sha512", sig_4_ptr(m));
+        let pbkdf2_sha256 = declare_import(m, "airl_pbkdf2_sha256", sig_4_ptr(m, ptr));
+        let pbkdf2_sha512 = declare_import(m, "airl_pbkdf2_sha512", sig_4_ptr(m, ptr));
         let base64_decode_bytes = declare_import(m, "airl_base64_decode_bytes", s1.clone());
         let base64_encode_bytes = declare_import(m, "airl_base64_encode_bytes", s1.clone());
         let bitwise_xor = declare_import(m, "airl_bitwise_xor", s2.clone());
@@ -701,10 +732,10 @@ impl BytecodeAot {
         let bytes_to_int32 = declare_import(m, "airl_bytes_to_int32", s2.clone());
         let bytes_to_int64 = declare_import(m, "airl_bytes_to_int64", s2.clone());
         let bytes_from_string = declare_import(m, "airl_bytes_from_string", s1.clone());
-        let bytes_to_string = declare_import(m, "airl_bytes_to_string", sig_3_ptr(m));
+        let bytes_to_string = declare_import(m, "airl_bytes_to_string", sig_3_ptr(m, ptr));
         let bytes_concat = declare_import(m, "airl_bytes_concat", s2.clone());
         let bytes_concat_all = declare_import(m, "airl_bytes_concat_all", s1.clone());
-        let bytes_slice = declare_import(m, "airl_bytes_slice", sig_3_ptr(m));
+        let bytes_slice = declare_import(m, "airl_bytes_slice", sig_3_ptr(m, ptr));
         let crc32c = declare_import(m, "airl_crc32c", s1.clone());
 
         // Compression
@@ -725,8 +756,8 @@ impl BytecodeAot {
         let tcp_recv_exact = declare_import(m, "airl_tcp_recv_exact", s2.clone());
         let tcp_set_timeout = declare_import(m, "airl_tcp_set_timeout", s2.clone());
         let mut sig5 = m.make_signature();
-        for _ in 0..5 { sig5.params.push(AbiParam::new(PTR)); }
-        sig5.returns.push(AbiParam::new(PTR));
+        for _ in 0..5 { sig5.params.push(AbiParam::new(ptr)); }
+        sig5.returns.push(AbiParam::new(ptr));
         let tcp_connect_tls = declare_import(m, "airl_tcp_connect_tls", sig5);
         let tcp_listen = declare_import(m, "airl_tcp_listen", s2.clone());
         let tcp_accept = declare_import(m, "airl_tcp_accept", s1.clone());
@@ -735,7 +766,7 @@ impl BytecodeAot {
         let thread_spawn = declare_import(m, "airl_thread_spawn", s1.clone());
         let thread_join = declare_import(m, "airl_thread_join", s1.clone());
         let thread_set_affinity = declare_import(m, "airl_thread_set_affinity", s1.clone());
-        let s0_ret = sig_0_ptr(m);
+        let s0_ret = sig_0_ptr(m, ptr);
         let channel_new = declare_import(m, "airl_channel_new", s0_ret);
         let channel_send = declare_import(m, "airl_channel_send", s2.clone());
         let channel_recv = declare_import(m, "airl_channel_recv", s1.clone());
@@ -1192,7 +1223,7 @@ impl BytecodeAot {
             "valid",
         ].into_iter().collect();
 
-        // Pre-declare call targets with I64 signatures (not PTR).
+        // Pre-declare call targets with I64 signatures (not self.ptr).
         // Skip builtins that will be inlined as native instructions.
         let mut call_targets: HashMap<String, cranelift_module::FuncId> = HashMap::new();
         for instr in &func.instructions {
@@ -1925,9 +1956,9 @@ impl BytecodeAot {
         // ── 1. Build Cranelift signature ──────────────────────────────────
         let mut sig = self.module.make_signature();
         for _ in 0..func.arity {
-            sig.params.push(AbiParam::new(PTR));
+            sig.params.push(AbiParam::new(self.ptr));
         }
-        sig.returns.push(AbiParam::new(PTR));
+        sig.returns.push(AbiParam::new(self.ptr));
 
         // ── 2. Declare function in object module ─────────────────────────
         let func_id = self
@@ -1976,9 +2007,9 @@ impl BytecodeAot {
                         {
                             let mut call_sig = self.module.make_signature();
                             for _ in 0..argc {
-                                call_sig.params.push(AbiParam::new(PTR));
+                                call_sig.params.push(AbiParam::new(self.ptr));
                             }
-                            call_sig.returns.push(AbiParam::new(PTR));
+                            call_sig.returns.push(AbiParam::new(self.ptr));
                             let callee_id = self
                                 .module
                                 .declare_function(&aot_symbol_name(callee_name), Linkage::Local, &call_sig)
@@ -1995,9 +2026,9 @@ impl BytecodeAot {
                             );
                             let mut call_sig = self.module.make_signature();
                             for _ in 0..argc {
-                                call_sig.params.push(AbiParam::new(PTR));
+                                call_sig.params.push(AbiParam::new(self.ptr));
                             }
-                            call_sig.returns.push(AbiParam::new(PTR));
+                            call_sig.returns.push(AbiParam::new(self.ptr));
                             let callee_id = self
                                 .module
                                 .declare_function(&aot_symbol_name(callee_name), Linkage::Local, &call_sig)
@@ -2065,7 +2096,7 @@ impl BytecodeAot {
         // ── Declare Cranelift Variables ───────────────────────────────────
         let mut vars: Vec<Variable> = Vec::with_capacity(reg_count + 1);
         for _ in 0..reg_count {
-            let var = builder.declare_var(PTR);
+            let var = builder.declare_var(self.ptr);
             vars.push(var);
         }
         let match_flag_var = builder.declare_var(types::I64);
@@ -2080,7 +2111,7 @@ impl BytecodeAot {
             }
         }
         for r in func.arity as usize..reg_count {
-            let zero = builder.ins().iconst(PTR, 0);
+            let zero = builder.ins().iconst(self.ptr, 0);
             builder.def_var(vars[r], zero);
         }
         {
@@ -2136,7 +2167,7 @@ impl BytecodeAot {
                             let (data_id, slen) = self.intern_string(s);
                             let str_ref = self.module.declare_func_in_func(self.rt.str_ctor, builder.func);
                             let gv = self.module.declare_data_in_func(data_id, builder.func);
-                            let ptr_val = builder.ins().global_value(PTR, gv);
+                            let ptr_val = builder.ins().global_value(self.ptr, gv);
                             let len_val = builder.ins().iconst(types::I64, slen as i64);
                             let call = builder.ins().call(str_ref, &[ptr_val, len_val]);
                             let result = builder.inst_results(call)[0];
@@ -2146,9 +2177,9 @@ impl BytecodeAot {
                             // Function reference: create a closure with zero captures
                             if let Some(&func_id) = self.compiled_funcs.get(name) {
                                 let callee_ref = self.module.declare_func_in_func(func_id, builder.func);
-                                let fn_ptr_val = builder.ins().func_addr(PTR, callee_ref);
+                                let fn_ptr_val = builder.ins().func_addr(self.ptr, callee_ref);
                                 let make_closure_ref = self.module.declare_func_in_func(self.rt.make_closure, builder.func);
-                                let null = builder.ins().iconst(PTR, 0);
+                                let null = builder.ins().iconst(self.ptr, 0);
                                 let zero = builder.ins().iconst(types::I64, 0);
                                 let call = builder.ins().call(make_closure_ref, &[fn_ptr_val, null, zero]);
                                 let result = builder.inst_results(call)[0];
@@ -2423,7 +2454,7 @@ impl BytecodeAot {
                             let arg = builder.use_var(vars[dst + 1 + j]);
                             builder.ins().stack_store(arg, slot, (j as i32) * 8);
                         }
-                        let slot_addr = builder.ins().stack_addr(PTR, slot, 0);
+                        let slot_addr = builder.ins().stack_addr(self.ptr, slot, 0);
                         let count_val = builder.ins().iconst(types::I64, argc as i64);
                         let var_ref = self.module.declare_func_in_func(var_func, builder.func);
                         let call = builder.ins().call(var_ref, &[slot_addr, count_val]);
@@ -2541,7 +2572,7 @@ impl BytecodeAot {
                             let arg = builder.use_var(vars[dst + 1 + j]);
                             builder.ins().stack_store(arg, slot, (j as i32) * 8);
                         }
-                        let slot_addr = builder.ins().stack_addr(PTR, slot, 0);
+                        let slot_addr = builder.ins().stack_addr(self.ptr, slot, 0);
                         let count_val = builder.ins().iconst(types::I64, argc as i64);
                         let pv_ref = self.module.declare_func_in_func(self.rt.print_values, builder.func);
                         let call = builder.ins().call(pv_ref, &[slot_addr, count_val]);
@@ -2579,7 +2610,7 @@ impl BytecodeAot {
                             (argc * 8) as u32,
                             0,
                         ));
-                        let base = builder.ins().stack_addr(PTR, slot, 0);
+                        let base = builder.ins().stack_addr(self.ptr, slot, 0);
                         for j in 0..argc {
                             let val = builder.use_var(vars[dst + 1 + j]);
                             let offset = (j * 8) as i32;
@@ -2591,7 +2622,7 @@ impl BytecodeAot {
                         let result = builder.inst_results(call)[0];
                         builder.def_var(vars[dst], result);
                     } else {
-                        let null = builder.ins().iconst(PTR, 0);
+                        let null = builder.ins().iconst(self.ptr, 0);
                         let zero = builder.ins().iconst(types::I64, 0);
                         let closure_val = builder.use_var(vars[callee_reg]);
                         let call = builder.ins().call(call_closure_ref, &[closure_val, null, zero]);
@@ -2615,7 +2646,7 @@ impl BytecodeAot {
                             (count * 8) as u32,
                             0,
                         ));
-                        let base = builder.ins().stack_addr(PTR, slot, 0);
+                        let base = builder.ins().stack_addr(self.ptr, slot, 0);
                         for j in 0..count {
                             let val = builder.use_var(vars[start + j]);
                             let offset = (j * 8) as i32;
@@ -2626,7 +2657,7 @@ impl BytecodeAot {
                         let result = builder.inst_results(call)[0];
                         builder.def_var(vars[dst], result);
                     } else {
-                        let null = builder.ins().iconst(PTR, 0);
+                        let null = builder.ins().iconst(self.ptr, 0);
                         let zero = builder.ins().iconst(types::I64, 0);
                         let call = builder.ins().call(list_new_ref, &[null, zero]);
                         let result = builder.inst_results(call)[0];
@@ -2647,7 +2678,7 @@ impl BytecodeAot {
                     let (data_id, slen) = self.intern_string(tag_src);
                     let str_ref = self.module.declare_func_in_func(self.rt.str_ctor, builder.func);
                     let gv = self.module.declare_data_in_func(data_id, builder.func);
-                    let ptr_val = builder.ins().global_value(PTR, gv);
+                    let ptr_val = builder.ins().global_value(self.ptr, gv);
                     let len_val = builder.ins().iconst(types::I64, slen as i64);
                     let tag_call = builder.ins().call(str_ref, &[ptr_val, len_val]);
                     let tag_rt = builder.inst_results(tag_call)[0];
@@ -2670,7 +2701,7 @@ impl BytecodeAot {
                     let (data_id, slen) = self.intern_string(tag_src);
                     let str_ref = self.module.declare_func_in_func(self.rt.str_ctor, builder.func);
                     let gv = self.module.declare_data_in_func(data_id, builder.func);
-                    let ptr_val = builder.ins().global_value(PTR, gv);
+                    let ptr_val = builder.ins().global_value(self.ptr, gv);
                     let len_val = builder.ins().iconst(types::I64, slen as i64);
                     let tag_call = builder.ins().call(str_ref, &[ptr_val, len_val]);
                     let tag_rt = builder.inst_results(tag_call)[0];
@@ -2706,7 +2737,7 @@ impl BytecodeAot {
                         })?;
                     let callee_ref =
                         self.module.declare_func_in_func(callee_func_id, builder.func);
-                    let fn_ptr_val = builder.ins().func_addr(PTR, callee_ref);
+                    let fn_ptr_val = builder.ins().func_addr(self.ptr, callee_ref);
 
                     let capture_count = all_functions
                         .get(&closure_func_name)
@@ -2726,7 +2757,7 @@ impl BytecodeAot {
                             let cap_val = builder.use_var(vars[capture_start + j]);
                             builder.ins().stack_store(cap_val, slot, (j as i32) * 8);
                         }
-                        let cap_addr = builder.ins().stack_addr(PTR, slot, 0);
+                        let cap_addr = builder.ins().stack_addr(self.ptr, slot, 0);
                         let count_val =
                             builder.ins().iconst(types::I64, capture_count as i64);
                         let call = builder
@@ -2735,7 +2766,7 @@ impl BytecodeAot {
                         let result = builder.inst_results(call)[0];
                         builder.def_var(vars[dst], result);
                     } else {
-                        let null = builder.ins().iconst(PTR, 0);
+                        let null = builder.ins().iconst(self.ptr, 0);
                         let zero = builder.ins().iconst(types::I64, 0);
                         let call =
                             builder.ins().call(make_closure_ref, &[fn_ptr_val, null, zero]);
@@ -2759,7 +2790,7 @@ impl BytecodeAot {
 
                     let str_ref = self.module.declare_func_in_func(self.rt.str_ctor, builder.func);
                     let gv = self.module.declare_data_in_func(data_id, builder.func);
-                    let ptr_val = builder.ins().global_value(PTR, gv);
+                    let ptr_val = builder.ins().global_value(self.ptr, gv);
                     let len_val = builder.ins().iconst(types::I64, slen as i64);
                     let tag_call = builder.ins().call(str_ref, &[ptr_val, len_val]);
                     let tag_rt = builder.inst_results(tag_call)[0];
@@ -2769,7 +2800,7 @@ impl BytecodeAot {
                     let call = builder.ins().call(mt_ref, &[scrutinee, tag_rt]);
                     let match_result = builder.inst_results(call)[0];
 
-                    let zero = builder.ins().iconst(PTR, 0);
+                    let zero = builder.ins().iconst(self.ptr, 0);
                     let is_null =
                         builder
                             .ins()
@@ -2832,7 +2863,7 @@ impl BytecodeAot {
                     let (ok_data_id, ok_len) = self.intern_string("Ok");
                     let str_ref = self.module.declare_func_in_func(self.rt.str_ctor, builder.func);
                     let gv = self.module.declare_data_in_func(ok_data_id, builder.func);
-                    let ptr_val = builder.ins().global_value(PTR, gv);
+                    let ptr_val = builder.ins().global_value(self.ptr, gv);
                     let len_val = builder.ins().iconst(types::I64, ok_len as i64);
                     let tag_call = builder.ins().call(str_ref, &[ptr_val, len_val]);
                     let tag_rt = builder.inst_results(tag_call)[0];
@@ -2842,7 +2873,7 @@ impl BytecodeAot {
                     let call = builder.ins().call(mt_ref, &[src_val, tag_rt]);
                     let match_result = builder.inst_results(call)[0];
 
-                    let zero = builder.ins().iconst(PTR, 0);
+                    let zero = builder.ins().iconst(self.ptr, 0);
                     let is_null =
                         builder
                             .ins()
@@ -2947,15 +2978,18 @@ impl BytecodeAot {
     // Entry point
     // ──────────────────────────────────────────────────────────────────────
 
-    /// Emit a C `main()` function that calls `__main__()` and returns 0.
+    /// Emit entry point: `main()` for hosted, `_start()` for freestanding.
     pub fn emit_entry_point(&mut self) -> Result<(), String> {
+        let is_freestanding = self.target_triple.operating_system == target_lexicon::OperatingSystem::None_;
+        let entry_name = if is_freestanding { "_start" } else { "main" };
+
         let mut sig = self.module.make_signature();
         sig.returns.push(AbiParam::new(types::I32));
 
         let main_id = self
             .module
-            .declare_function("main", Linkage::Export, &sig)
-            .map_err(|e| format!("declare main: {}", e))?;
+            .declare_function(entry_name, Linkage::Export, &sig)
+            .map_err(|e| format!("declare {}: {}", entry_name, e))?;
 
         let mut ctx = self.module.make_context();
         ctx.func.signature = sig;
