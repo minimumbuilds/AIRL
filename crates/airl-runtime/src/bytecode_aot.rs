@@ -176,6 +176,7 @@ pub struct RuntimeImports {
 
     // Process
     pub shell_exec: FuncId,
+    pub shell_exec_with_stdin: FuncId,
 
     // Misc builtins
     pub char_count: FuncId,
@@ -633,6 +634,7 @@ impl BytecodeAot {
 
         // Process
         let shell_exec = declare_import(m, "airl_shell_exec", s2.clone());
+        let shell_exec_with_stdin = declare_import(m, "airl_shell_exec_with_stdin", sig_3_ptr(m));
 
         // Misc builtins
         let char_count = declare_import(m, "airl_char_count", s1.clone());
@@ -774,7 +776,7 @@ impl BytecodeAot {
             char_code, char_from_code,
             sqrt, sin, cos, tan, log, exp, floor, ceil, round,
             float_to_int, int_to_float, infinity, nan_ctor, is_nan, is_infinite,
-            cpu_count, time_now, getenv, json_parse, json_stringify, shell_exec,
+            cpu_count, time_now, getenv, json_parse, json_stringify, shell_exec, shell_exec_with_stdin,
             char_count, str_variadic, format_variadic,
             assert_fn, panic_fn, exit_fn, sleep_fn, format_time, read_lines,
             concat_lists, range_fn, reverse_list, take_fn, drop_fn, zip_fn,
@@ -924,6 +926,7 @@ impl BytecodeAot {
 
         // Process
         m.insert("shell-exec".into(), rt.shell_exec);
+        m.insert("shell-exec-with-stdin".into(), rt.shell_exec_with_stdin);
 
         // Misc builtins
         m.insert("char-count".into(),    rt.char_count);

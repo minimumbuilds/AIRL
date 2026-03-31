@@ -639,18 +639,60 @@ pub extern "C" fn airl_getenv(name: *mut RtValue) -> *mut RtValue {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn airl_shell_exec(cmd: *mut RtValue, args_list: *mut RtValue) -> *mut RtValue {
-    let command = match unsafe { &(*cmd).data } { RtData::Str(s) => s.clone(), _ => return err_variant("not a string") };
+fn extract_cmd_args(cmd: *mut RtValue, args_list: *mut RtValue) -> Result<(String, Vec<String>), *mut RtValue> {
+    let command = match unsafe { &(*cmd).data } { RtData::Str(s) => s.clone(), _ => return Err(err_variant("shell-exec: command not a string")) };
     let mut cmd_args = Vec::new();
     if let RtData::List(items) = unsafe { &(*args_list).data } {
         for item in items {
             if let RtData::Str(s) = unsafe { &(**item).data } { cmd_args.push(s.clone()); }
         }
     }
+    Ok((command, cmd_args))
+}
+
+fn output_to_map(output: std::process::Output) -> *mut RtValue {
+    let mut m = HashMap::new();
+    m.insert("stdout".to_string(), rt_str(String::from_utf8_lossy(&output.stdout).into_owned()));
+    m.insert("stderr".to_string(), rt_str(String::from_utf8_lossy(&output.stderr).into_owned()));
+    m.insert("exit-code".to_string(), rt_int(output.status.code().unwrap_or(-1) as i64));
+    ok_variant(rt_map(m))
+}
+
+// NOTE: Uses Command::new().args() — safe execFile-style, no shell interpolation
+#[no_mangle]
+pub extern "C" fn airl_shell_exec(cmd: *mut RtValue, args_list: *mut RtValue) -> *mut RtValue {
+    let (command, cmd_args) = match extract_cmd_args(cmd, args_list) { Ok(v) => v, Err(e) => return e };
     match std::process::Command::new(&command).args(&cmd_args).output() {
-        Ok(output) => ok_variant(rt_str(String::from_utf8_lossy(&output.stdout).into_owned())),
+        Ok(output) => output_to_map(output),
         Err(e) => err_variant(&format!("shell-exec: {}", e)),
+    }
+}
+
+// NOTE: Uses Command::new().args().stdin(piped) — safe execFile-style, no shell interpolation
+#[no_mangle]
+pub extern "C" fn airl_shell_exec_with_stdin(cmd: *mut RtValue, args_list: *mut RtValue, stdin_data: *mut RtValue) -> *mut RtValue {
+    let (command, cmd_args) = match extract_cmd_args(cmd, args_list) { Ok(v) => v, Err(e) => return e };
+    let stdin_str = match unsafe { &(*stdin_data).data } {
+        RtData::Str(s) => s.clone(),
+        _ => return err_variant("shell-exec-with-stdin: stdin not a string"),
+    };
+    let mut child = match std::process::Command::new(&command)
+        .args(&cmd_args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => return err_variant(&format!("shell-exec-with-stdin: {}", e)),
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        let _ = stdin.write_all(stdin_str.as_bytes());
+    }
+    match child.wait_with_output() {
+        Ok(output) => output_to_map(output),
+        Err(e) => err_variant(&format!("shell-exec-with-stdin: {}", e)),
     }
 }
 

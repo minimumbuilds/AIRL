@@ -1,0 +1,17 @@
+;; EXPECT: "stdout:hello|exit:0|stderr-captured:true|stdin:HELLO"
+(let (r1 : _ (shell-exec "echo" ["hello"]))
+  (match r1
+    (Ok m)
+      (let (stdout : String (trim (map-get m "stdout")))
+           (code : i64 (map-get m "exit-code"))
+           (r2 : _ (shell-exec "sh" ["-c" "echo err >&2"]))
+        (match r2
+          (Ok m2)
+            (let (has-stderr : Bool (contains (map-get m2 "stderr") "err"))
+                 (r3 : _ (shell-exec-with-stdin "tr" ["a-z" "A-Z"] "hello"))
+              (match r3
+                (Ok m3)
+                  (str "stdout:" stdout "|exit:" code "|stderr-captured:" has-stderr "|stdin:" (trim (map-get m3 "stdout")))
+                (Err e) (str "FAIL:stdin:" e)))
+          (Err e) (str "FAIL:stderr:" e)))
+    (Err e) (str "FAIL:" e)))
