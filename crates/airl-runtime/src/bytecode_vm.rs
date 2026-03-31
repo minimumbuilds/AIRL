@@ -558,6 +558,7 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "json-parse" => airl_rt::misc::airl_json_parse(a0!()),
         "json-stringify" => airl_rt::misc::airl_json_stringify(a0!()),
         "shell-exec" => airl_rt::misc::airl_shell_exec(a0!(), a1!()),
+        "shell-exec-with-stdin" => airl_rt::misc::airl_shell_exec_with_stdin(a0!(), a1!(), a2!()),
         "exit" => airl_rt::misc::airl_exit(a0!()),
         "parse-int-radix" => airl_rt::misc::airl_parse_int_radix(a0!(), a1!()),
         "int-to-string-radix" => airl_rt::misc::airl_int_to_string_radix(a0!(), a1!()),

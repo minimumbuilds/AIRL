@@ -185,6 +185,7 @@ pub struct RuntimeImports {
 
     // Process
     pub shell_exec: FuncId,
+    pub shell_exec_with_stdin: FuncId,
 
     // Radix / system utilities
     pub parse_int_radix: FuncId,
@@ -656,6 +657,7 @@ impl BytecodeAot {
 
         // Process
         let shell_exec = declare_import(m, "airl_shell_exec", s2.clone());
+        let shell_exec_with_stdin = declare_import(m, "airl_shell_exec_with_stdin", sig_3_ptr(m));
         let parse_int_radix = declare_import(m, "airl_parse_int_radix", s2.clone());
         let int_to_string_radix = declare_import(m, "airl_int_to_string_radix", s2.clone());
         let get_cwd = declare_import(m, "airl_get_cwd", sig_0_ptr(m));
@@ -802,7 +804,7 @@ impl BytecodeAot {
             char_code, char_from_code,
             sqrt, sin, cos, tan, log, exp, floor, ceil, round,
             float_to_int, int_to_float, infinity, nan_ctor, is_nan, is_infinite,
-            cpu_count, time_now, getenv, json_parse, json_stringify, shell_exec,
+            cpu_count, time_now, getenv, json_parse, json_stringify, shell_exec, shell_exec_with_stdin,
             parse_int_radix, int_to_string_radix, get_cwd,
             char_count, str_variadic, format_variadic,
             assert_fn, panic_fn, exit_fn, sleep_fn, format_time, read_lines,
@@ -962,6 +964,7 @@ impl BytecodeAot {
 
         // Process
         m.insert("shell-exec".into(), rt.shell_exec);
+        m.insert("shell-exec-with-stdin".into(), rt.shell_exec_with_stdin);
         m.insert("parse-int-radix".into(),    rt.parse_int_radix);
         m.insert("int-to-string-radix".into(), rt.int_to_string_radix);
         m.insert("get-cwd".into(),            rt.get_cwd);
