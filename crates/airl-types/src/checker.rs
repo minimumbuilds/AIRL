@@ -579,6 +579,7 @@ impl TypeChecker {
                 self.check_expr(e)?;
                 Ok(())
             }
+            ast::TopLevel::Define(_) => Ok(()), // No type checking for define
             ast::TopLevel::Task(_) => Ok(()),
             ast::TopLevel::UseDecl(_) => Ok(()),
             ast::TopLevel::Import { .. } => Ok(()),

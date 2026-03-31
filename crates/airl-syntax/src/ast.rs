@@ -8,6 +8,7 @@ pub type Symbol = String;
 pub enum TopLevel {
     Module(ModuleDef),
     Defn(FnDef),
+    Define(SimpleFnDef),
     DefType(TypeDef),
     Task(TaskDef),
     UseDecl(UseDef),
@@ -18,6 +19,16 @@ pub enum TopLevel {
         span: Span,
     },
     Expr(Expr), // bare expression at top level (REPL)
+}
+
+/// Lightweight function definition without contracts or type annotations.
+/// Syntax: (define name (param1 param2 ...) body)
+#[derive(Debug, Clone, PartialEq)]
+pub struct SimpleFnDef {
+    pub name: Symbol,
+    pub params: Vec<Symbol>,
+    pub body: Expr,
+    pub span: Span,
 }
 
 // ── Module ──────────────────────────────────────────────
