@@ -89,7 +89,9 @@ pub extern "C" fn airl_map_get_or(
     }
 }
 
-/// Return a new map with key→val inserted. The original map is unchanged.
+/// Return a new map with key→val inserted. The original map is unchanged
+/// (unless rc == 1, in which case the map is mutated in place as a COW
+/// optimisation — O(1) instead of O(N)).
 /// All existing values are retained in the new map; val is retained.
 #[no_mangle]
 pub extern "C" fn airl_map_set(
@@ -97,22 +99,38 @@ pub extern "C" fn airl_map_set(
     key: *mut RtValue,
     val: *mut RtValue,
 ) -> *mut RtValue {
-    let map_v = unsafe { &*m };
     let key_v = unsafe { &*key };
     let k = match &key_v.data {
         RtData::Str(s) => s.clone(),
         _ => rt_error("airl_map_set: key must be a Str"),
     };
-    match &map_v.data {
+
+    let v = unsafe { &mut *m };
+    // COW fast path: sole owner → mutate in place (O(1) instead of O(N))
+    if v.rc == 1 {
+        match &mut v.data {
+            RtData::Map(map) => {
+                // Release old value if key already exists
+                if let Some(&old_val) = map.get(&k) {
+                    airl_value_release(old_val);
+                }
+                airl_value_retain(val);
+                map.insert(k, val);
+                airl_value_retain(m); // caller expects +1 ref on returned map
+                return m;
+            }
+            _ => rt_error("airl_map_set: first argument must be a Map"),
+        }
+    }
+
+    // rc > 1: clone as before (existing logic, unchanged)
+    match &v.data {
         RtData::Map(map) => {
-            // Clone the map, retaining all existing values.
             let mut new_map: HashMap<String, *mut RtValue> = HashMap::with_capacity(map.len() + 1);
             for (existing_key, &existing_val) in map {
                 airl_value_retain(existing_val);
                 new_map.insert(existing_key.clone(), existing_val);
             }
-            // If key already exists, the old value in new_map will be overwritten.
-            // We retained it above, so release it now to balance.
             if let Some(&old_val) = new_map.get(&k) {
                 airl_value_release(old_val);
             }
@@ -140,21 +158,38 @@ pub extern "C" fn airl_map_has(m: *mut RtValue, key: *mut RtValue) -> *mut RtVal
 }
 
 /// Return a new map with the given key removed. The removed value is released
-/// from the new map (it was never added). Original map is unchanged.
+/// from the new map (it was never added). Original map is unchanged
+/// (unless rc == 1, in which case the map is mutated in place as a COW
+/// optimisation).
 #[no_mangle]
 pub extern "C" fn airl_map_remove(m: *mut RtValue, key: *mut RtValue) -> *mut RtValue {
-    let map_v = unsafe { &*m };
     let key_v = unsafe { &*key };
     let k = match &key_v.data {
         RtData::Str(s) => s.as_str(),
         _ => rt_error("airl_map_remove: key must be a Str"),
     };
-    match &map_v.data {
+
+    let v = unsafe { &mut *m };
+    // COW fast path: sole owner → mutate in place
+    if v.rc == 1 {
+        match &mut v.data {
+            RtData::Map(map) => {
+                if let Some(old_val) = map.remove(k) {
+                    airl_value_release(old_val);
+                }
+                airl_value_retain(m); // caller expects +1 ref
+                return m;
+            }
+            _ => rt_error("airl_map_remove: first argument must be a Map"),
+        }
+    }
+
+    // rc > 1: clone without the removed key (existing logic, unchanged)
+    match &v.data {
         RtData::Map(map) => {
             let mut new_map: HashMap<String, *mut RtValue> = HashMap::with_capacity(map.len());
             for (existing_key, &existing_val) in map {
                 if existing_key.as_str() == k {
-                    // Skip this entry — do not retain it in new_map.
                     continue;
                 }
                 airl_value_retain(existing_val);
