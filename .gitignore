@@ -5,3 +5,6 @@ g3_debug_compile.log
 g3
 builds/
 tests/aot/cache/
+tla/tla2tools.jar
+tla/states/
+tla/*_TTrace_*.tla
