@@ -107,7 +107,7 @@ Step 2 takes ~23 minutes and ~25GB RAM (the bootstrap compiler runs in the bytec
 - **No `airl check`** — G3 compiles only. Use the host binary for type checking and Z3 verification.
 - **No REPL** — G3 produces native binaries. Use `airl repl` from the host binary.
 - **No `--load`** — G3 compiles all source files in one pass. Pass multiple files: `./g3 -- a.airl b.airl -o out`.
-- **x86-64 Linux only** — G3 targets the host platform. macOS/ARM support requires Cranelift target triple changes (planned).
+- **x86-64 and ARM64 only** — G3 targets the host platform (Linux x86-64 or macOS ARM64).
 
 ## Quick Start
 
@@ -193,7 +193,7 @@ The runtime library (`libairl_rt.a`) is embedded in the compiler binary — comp
 
 ### Compilation & Execution
 
-AIRL compiles to **native x86-64 executables** via Cranelift. All code goes through the same compilation pipeline:
+AIRL compiles to **native x86-64 and ARM64 executables** via Cranelift. All code goes through the same compilation pipeline:
 
 1. **Source → AST** — Hand-written recursive descent parser (LL(1))
 2. **Static analysis** — Type checking, linearity checking, Z3 contract verification
