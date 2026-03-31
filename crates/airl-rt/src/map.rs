@@ -157,13 +157,14 @@ pub extern "C" fn airl_map_has(m: *mut RtValue, key: *mut RtValue) -> *mut RtVal
     }
 }
 
-/// Return a new map with the given key removed. The removed value is released
-/// from the new map (it was never added). Original map is unchanged
-/// (unless rc == 1, in which case the map is mutated in place as a COW
-/// optimisation).
+/// Remove a key from the map. When rc == 1 (sole owner), the key is removed
+/// in place and the removed value is released. When rc > 1, returns a new map
+/// without the key (the removed value is not retained in the copy).
 #[no_mangle]
 pub extern "C" fn airl_map_remove(m: *mut RtValue, key: *mut RtValue) -> *mut RtValue {
     let key_v = unsafe { &*key };
+    // Borrow as &str — HashMap::remove accepts &str via Borrow<str>.
+    // (airl_map_set clones to an owned String because HashMap::insert requires it.)
     let k = match &key_v.data {
         RtData::Str(s) => s.as_str(),
         _ => rt_error("airl_map_remove: key must be a Str"),
@@ -545,6 +546,83 @@ mod tests {
             airl_value_release(m);
             airl_value_release(m2);
             airl_value_release(m3);
+        }
+    }
+
+    #[test]
+    fn map_set_cow_returns_same_pointer() {
+        unsafe {
+            let m = airl_map_new(); // rc=1
+            let k = mk_key("a");
+            let v = rt_int(10);
+            let m2 = airl_map_set(m, k, v);
+            // COW: sole owner, should mutate in place
+            assert_eq!(m2, m, "map_set with rc=1 should return the same pointer");
+            airl_value_release(v);
+            airl_value_release(k);
+            airl_value_release(m2);
+            airl_value_release(m);
+        }
+    }
+
+    #[test]
+    fn map_set_clone_when_shared() {
+        unsafe {
+            let m = airl_map_new();
+            airl_value_retain(m); // rc=2
+            let k = mk_key("b");
+            let v = rt_int(20);
+            let m2 = airl_map_set(m, k, v);
+            // Shared: should clone
+            assert_ne!(m2, m, "map_set with rc>1 should return a different pointer");
+            airl_value_release(v);
+            airl_value_release(k);
+            airl_value_release(m2);
+            airl_value_release(m); // release the extra retain
+            airl_value_release(m); // release original
+        }
+    }
+
+    #[test]
+    fn map_remove_cow_returns_same_pointer() {
+        unsafe {
+            let m = airl_map_new(); // rc=1
+            let k = mk_key("a");
+            let v = rt_int(5);
+            let m2 = airl_map_set(m, k, v);
+            // m2 == m (COW path), map_set retained m so rc=2 now.
+            // Release once to get rc back to 1 for the remove COW test.
+            airl_value_release(m2);
+            let k_rm = mk_key("a");
+            let m3 = airl_map_remove(m, k_rm);
+            assert_eq!(m3, m, "map_remove with rc=1 should return the same pointer");
+            airl_value_release(k_rm);
+            airl_value_release(v);
+            airl_value_release(k);
+            airl_value_release(m3);
+            airl_value_release(m);
+        }
+    }
+
+    #[test]
+    fn map_remove_clone_when_shared() {
+        unsafe {
+            let m = airl_map_new();
+            let k = mk_key("c");
+            let v = rt_int(30);
+            let m2 = airl_map_set(m, k, v);
+            // m2 == m (COW path, rc was 1). Now retain to make rc>1.
+            airl_value_retain(m2);
+            let k_rm = mk_key("c");
+            let m3 = airl_map_remove(m2, k_rm);
+            assert_ne!(m3, m2, "map_remove with rc>1 should return a different pointer");
+            airl_value_release(k_rm);
+            airl_value_release(v);
+            airl_value_release(k);
+            airl_value_release(m3);
+            airl_value_release(m2); // release extra retain
+            airl_value_release(m2); // release map_set retain
+            airl_value_release(m);  // release original
         }
     }
 }
