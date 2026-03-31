@@ -8,7 +8,7 @@
 4. No mixed int/float: `(+ 1 1.0)` errors. Use `(+ 1.0 1.0)` or `int-to-float`.
 5. `let` REQUIRES type annotation AND body: `(let (x : i64 5) body)`. No body = parse error.
 6. `let` supports multi-binding: `(let (x : T v1) (y : T v2) body)`. PREFER flat multi-binding over nested single lets.
-7. Every `defn` needs `:sig` + `:body` + at least one of `:requires`/`:ensures`. Min guard: `(valid x)`.
+7. Every `defn` needs `:sig` + `:body` + at least one of `:requires`/`:ensures`. Min guard: `(valid x)`. Use `define` for quick functions without contracts.
 8. `result` only available in `:ensures`/`:invariant`, NOT `:requires`.
 9. `match` arms are FLAT pairs after scrutinee: `(match expr pat1 body1 pat2 body2)`. Must be even count.
 10. Variant constructors UPPERCASE: `(Ok 42)` not `(ok 42)`.
@@ -28,6 +28,7 @@
 ```
 (defn NAME :sig [PARAMS -> RET] :requires [CONDS] :ensures [CONDS] :body EXPR)
   optional: :intent "desc" :invariant [CONDS] :execute-on cpu|gpu :priority normal
+(define NAME (p1 p2 ...) BODY)           ;; lightweight: no contracts, no types, no :pub
 (let (N1 : T1 V1) (N2 : T2 V2) ... BODY) ;; multi-binding (preferred)
 (let (NAME : TYPE VAL) BODY)               ;; single-binding (special case)
 (if COND THEN ELSE)
@@ -173,6 +174,12 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (to-upper s) -> Str
 (to-lower s) -> Str
 (replace s old new) -> Str      ; all occurrences
+(char-alpha? s) -> Bool         ; first char is Unicode alphabetic
+(char-digit? s) -> Bool         ; first char is ASCII digit 0-9
+(char-whitespace? s) -> Bool    ; first char is Unicode whitespace
+(char-upper? s) -> Bool         ; first char is Unicode uppercase
+(char-lower? s) -> Bool         ; first char is Unicode lowercase
+(string-ci=? a b) -> Bool       ; case-insensitive equality (Unicode case fold)
 ```
 
 ### String (stdlib)
@@ -241,6 +248,8 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (string-to-int s) -> Int    (string-to-float s) -> Float   ; panic on invalid input
 (char-code s) -> Int         ; Unicode codepoint of first char
 (char-from-code n) -> Str    ; codepoint to 1-char string
+(parse-int-radix s base) -> Result[Int, Str]  ; parse string in base 2-36
+(int-to-string-radix n base) -> Str           ; format int in base 2-36
 (type-of x) -> Str           ; "Int", "Bool", "Map", "List", etc.
 ```
 
@@ -262,6 +271,9 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (file-exists? p) -> Bool  (is-dir? p) -> Bool  (file-size p) -> Int
 (delete-file p) -> Nil  (delete-dir p) -> Nil  (rename-file old new) -> Nil
 (create-dir p) -> Nil  (read-dir p) -> List   ; sorted entries
+(temp-file prefix) -> Str                      ; create temp file, return path
+(temp-dir prefix) -> Str                       ; create temp dir, return path
+(file-mtime p) -> Int                          ; modification time as epoch millis, -1 on error
 ```
 
 ### Path
@@ -296,12 +308,15 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 
 ### System
 ```
-(shell-exec cmd args-list) -> Result  ; Result with stdout/stderr/exit-code
+(shell-exec cmd args-list) -> Result[Map, Str]  ; Ok map: {"stdout" "stderr" "exit-code"}
+(shell-exec-with-stdin cmd args-list stdin-str) -> Result[Map, Str]  ; pipe stdin to process
 (time-now) -> Int                     ; epoch milliseconds
 (sleep ms) -> Nil
 (format-time ms fmt) -> Str           ; UTC. Supports %Y %m %d %H %M %S
 (getenv name) -> Result[Str, Str]
 (get-args) -> List                    ; command-line args as strings
+(get-cwd) -> Str                      ; current working directory
+(cpu-count) -> Int                    ; logical CPU count
 ```
 
 ### Network/JSON
@@ -327,7 +342,6 @@ Compile with: `g3 -- aireql-util.airl aireql-transport.airl aireql.airl aireql-s
 (thread-spawn closure) -> Int                       ; spawn thread running 0-arg closure, returns handle
 (thread-join handle) -> Result[any, Str]            ; block until done. Ok(value) or Err(msg)
 (thread-set-affinity core-id) -> Result[Nil, Str]   ; pin calling thread to CPU core (Linux only)
-(cpu-count) -> Int                                  ; available parallelism (logical CPU count)
 ```
 
 ### Channel (unbounded, std::sync::mpsc)
@@ -414,6 +428,8 @@ Compile with: `g3 -- aireql-util.airl aireql-transport.airl aireql.airl aireql-s
 (compile-to-executable [paths] output) -> Nil            ; source files → native binary (Rust pipeline)
 (compile-bytecode-to-executable bc-funcs output) -> Str  ; BCFunc list → native binary (G3 pipeline)
 ```
+CLI cross-compilation: `airl compile file.airl --target i686-airlos -o output`
+Targets: `x86-64` (default), `i686`, `i686-airlos` (freestanding), `aarch64`
 
 ## PATTERNS
 

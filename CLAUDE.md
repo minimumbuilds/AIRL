@@ -70,9 +70,9 @@ All signatures in `AIRL-Header.md`. Key categories:
 | Category | Count | Examples |
 |----------|-------|---------|
 | List | 7 | `head`, `tail`, `empty?`, `cons`, `at-or`, `set-at`, `list-contains?` |
-| String | 17 | `str` (variadic concat), `char-at`, `split`, `join`, `contains`, `replace` |
+| String | 23 | `str`, `char-at`, `split`, `join`, `contains`, `replace`, `char-alpha?`, `char-digit?`, `string-ci=?` |
 | Map | 10 | `map-new`, `map-from`, `map-get`, `map-set`, `map-keys`, `map-values` |
-| File I/O | 11 | `read-file`, `write-file`, `file-exists?`, `read-dir` (all sandboxed) |
+| File I/O | 14 | `read-file`, `write-file`, `file-exists?`, `read-dir`, `temp-file`, `temp-dir`, `file-mtime` |
 | Float math | 15 | `sqrt`, `sin`, `cos`, `floor`, `ceil`, `int-to-float` |
 | Bitwise | 5 | `bitwise-and`, `bitwise-or`, `bitwise-xor`, `bitwise-shl`, `bitwise-shr` |
 | TCP | 9 | `tcp-listen`, `tcp-accept`, `tcp-connect`, `tcp-connect-tls`, `tcp-send`, `tcp-recv` |
@@ -81,7 +81,8 @@ All signatures in `AIRL-Header.md`. Key categories:
 | Compression | 8 | `gzip-*`, `snappy-*`, `lz4-*`, `zstd-*` (all Bytes in/out) |
 | Bytes | 11 | `bytes-from-int{16,32,64}`, `bytes-to-*`, `bytes-concat`, `crc32c` |
 | Stdio | 4 | `read-line`, `read-stdin`, `eprint`, `eprintln` |
-| System | 7 | `shell-exec`, `time-now`, `sleep`, `getenv`, `get-args`, `cpu-count` |
+| System | 10 | `shell-exec`, `shell-exec-with-stdin`, `time-now`, `sleep`, `getenv`, `get-args`, `cpu-count`, `get-cwd` |
+| Conversion | 4 | `parse-int-radix`, `int-to-string-radix`, `int-to-string`, `string-to-int` |
 | Stdlib (AIRL) | 68 | `map`, `filter`, `fold`, `sort`, `abs`, `min`, `is-ok?`, `words`, `set-*` |
 | HTTP (AIReqL) | 20+ | `aireql-get`, `aireql-post-with-opts`, `aireql-request`, `aireql-json` (lib: `../AIReqL`) |
 
