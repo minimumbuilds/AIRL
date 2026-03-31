@@ -108,6 +108,12 @@ pub struct RuntimeImports {
     pub to_upper:    FuncId,
     pub to_lower:    FuncId,
     pub replace:     FuncId,
+    pub char_alpha:  FuncId,
+    pub char_digit:  FuncId,
+    pub char_whitespace: FuncId,
+    pub char_upper:  FuncId,
+    pub char_lower:  FuncId,
+    pub string_ci_eq: FuncId,
 
     // Map builtins
     pub map_new:    FuncId,
@@ -133,6 +139,9 @@ pub struct RuntimeImports {
     pub create_dir:  FuncId,
     pub file_size:   FuncId,
     pub is_dir:      FuncId,
+    pub temp_file:   FuncId,
+    pub temp_dir:    FuncId,
+    pub file_mtime:  FuncId,
     pub get_args:    FuncId,
     pub run_bytecode: FuncId,
     pub compile_to_exe: FuncId,
@@ -176,6 +185,11 @@ pub struct RuntimeImports {
 
     // Process
     pub shell_exec: FuncId,
+
+    // Radix / system utilities
+    pub parse_int_radix: FuncId,
+    pub int_to_string_radix: FuncId,
+    pub get_cwd: FuncId,
 
     // Misc builtins
     pub char_count: FuncId,
@@ -566,6 +580,12 @@ impl BytecodeAot {
         let to_upper    = declare_import(m, "airl_to_upper",    s1.clone());
         let to_lower    = declare_import(m, "airl_to_lower",    s1.clone());
         let replace     = declare_import(m, "airl_replace",     sig_3_ptr(m));
+        let char_alpha  = declare_import(m, "airl_char_alpha",  s1.clone());
+        let char_digit  = declare_import(m, "airl_char_digit",  s1.clone());
+        let char_whitespace = declare_import(m, "airl_char_whitespace", s1.clone());
+        let char_upper  = declare_import(m, "airl_char_upper",  s1.clone());
+        let char_lower  = declare_import(m, "airl_char_lower",  s1.clone());
+        let string_ci_eq = declare_import(m, "airl_string_ci_eq", s2.clone());
 
         let map_new    = declare_import(m, "airl_map_new",    sig_0_ptr(m));
         let map_from   = declare_import(m, "airl_map_from",   s1.clone());
@@ -590,6 +610,9 @@ impl BytecodeAot {
         let create_dir  = declare_import(m, "airl_create_dir",  s1.clone());
         let file_size   = declare_import(m, "airl_file_size",   s1.clone());
         let is_dir      = declare_import(m, "airl_is_dir",      s1.clone());
+        let temp_file   = declare_import(m, "airl_temp_file",   s1.clone());
+        let temp_dir    = declare_import(m, "airl_temp_dir",    s1.clone());
+        let file_mtime  = declare_import(m, "airl_file_mtime",  s1.clone());
         let get_args    = declare_import(m, "airl_get_args",    sig_0_ptr(m));
         let run_bytecode = declare_import(m, "airl_run_bytecode", s1.clone());
         let compile_to_exe = declare_import(m, "airl_compile_to_executable", s2.clone());
@@ -633,6 +656,9 @@ impl BytecodeAot {
 
         // Process
         let shell_exec = declare_import(m, "airl_shell_exec", s2.clone());
+        let parse_int_radix = declare_import(m, "airl_parse_int_radix", s2.clone());
+        let int_to_string_radix = declare_import(m, "airl_int_to_string_radix", s2.clone());
+        let get_cwd = declare_import(m, "airl_get_cwd", sig_0_ptr(m));
 
         // Misc builtins
         let char_count = declare_import(m, "airl_char_count", s1.clone());
@@ -764,17 +790,20 @@ impl BytecodeAot {
             print, println, eprint, eprintln, read_line, read_stdin, print_values, type_of, valid,
             char_at, substring, chars, split, join, contains, starts_with,
             ends_with, index_of, trim, to_upper, to_lower, replace,
+            char_alpha, char_digit, char_whitespace, char_upper, char_lower, string_ci_eq,
             map_new, map_from, map_get, map_get_or, map_set, map_has,
             map_remove, map_keys, map_values, map_size,
             read_file, write_file, file_exists,
             append_file, delete_file, delete_dir, rename_file,
             read_dir, create_dir, file_size, is_dir,
+            temp_file, temp_dir, file_mtime,
             get_args, run_bytecode, compile_to_exe, compile_bc_to_exe,
             int_to_string, float_to_string, string_to_int, string_to_float,
             char_code, char_from_code,
             sqrt, sin, cos, tan, log, exp, floor, ceil, round,
             float_to_int, int_to_float, infinity, nan_ctor, is_nan, is_infinite,
             cpu_count, time_now, getenv, json_parse, json_stringify, shell_exec,
+            parse_int_radix, int_to_string_radix, get_cwd,
             char_count, str_variadic, format_variadic,
             assert_fn, panic_fn, exit_fn, sleep_fn, format_time, read_lines,
             concat_lists, range_fn, reverse_list, take_fn, drop_fn, zip_fn,
@@ -857,6 +886,12 @@ impl BytecodeAot {
         m.insert("to-upper".into(),    rt.to_upper);
         m.insert("to-lower".into(),    rt.to_lower);
         m.insert("replace".into(),     rt.replace);
+        m.insert("char-alpha?".into(),    rt.char_alpha);
+        m.insert("char-digit?".into(),    rt.char_digit);
+        m.insert("char-whitespace?".into(), rt.char_whitespace);
+        m.insert("char-upper?".into(),    rt.char_upper);
+        m.insert("char-lower?".into(),    rt.char_lower);
+        m.insert("string-ci=?".into(),    rt.string_ci_eq);
 
         m.insert("map-new".into(),    rt.map_new);
         m.insert("map-from".into(),   rt.map_from);
@@ -881,6 +916,9 @@ impl BytecodeAot {
         m.insert("create-dir".into(),   rt.create_dir);
         m.insert("file-size".into(),    rt.file_size);
         m.insert("is-dir?".into(),      rt.is_dir);
+        m.insert("temp-file".into(),     rt.temp_file);
+        m.insert("temp-dir".into(),      rt.temp_dir);
+        m.insert("file-mtime".into(),    rt.file_mtime);
         m.insert("get-args".into(),     rt.get_args);
         m.insert("run-bytecode".into(), rt.run_bytecode);
         m.insert("compile-to-executable".into(), rt.compile_to_exe);
@@ -924,6 +962,9 @@ impl BytecodeAot {
 
         // Process
         m.insert("shell-exec".into(), rt.shell_exec);
+        m.insert("parse-int-radix".into(),    rt.parse_int_radix);
+        m.insert("int-to-string-radix".into(), rt.int_to_string_radix);
+        m.insert("get-cwd".into(),            rt.get_cwd);
 
         // Misc builtins
         m.insert("char-count".into(),    rt.char_count);

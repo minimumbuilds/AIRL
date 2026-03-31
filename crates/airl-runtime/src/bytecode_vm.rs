@@ -484,6 +484,12 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "char-count" => airl_rt::misc::airl_char_count(a0!()),
         "char-code" => airl_rt::string::airl_char_code(a0!()),
         "char-from-code" => airl_rt::string::airl_char_from_code(a0!()),
+        "char-alpha?" => airl_rt::string::airl_char_alpha(a0!()),
+        "char-digit?" => airl_rt::string::airl_char_digit(a0!()),
+        "char-whitespace?" => airl_rt::string::airl_char_whitespace(a0!()),
+        "char-upper?" => airl_rt::string::airl_char_upper(a0!()),
+        "char-lower?" => airl_rt::string::airl_char_lower(a0!()),
+        "string-ci=?" => airl_rt::string::airl_string_ci_eq(a0!(), a1!()),
 
         // Print (variadic)
         "print" => {
@@ -529,6 +535,9 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "read-dir" => airl_rt::io::airl_read_dir(a0!()),
         "file-size" => airl_rt::io::airl_file_size(a0!()),
         "is-dir?" => airl_rt::io::airl_is_dir(a0!()),
+        "temp-file" => airl_rt::io::airl_temp_file(a0!()),
+        "temp-dir" => airl_rt::io::airl_temp_dir(a0!()),
+        "file-mtime" => airl_rt::io::airl_file_mtime(a0!()),
 
         // Utility
         "type-of" => airl_rt::io::airl_type_of(a0!()),
@@ -550,6 +559,9 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "json-stringify" => airl_rt::misc::airl_json_stringify(a0!()),
         "shell-exec" => airl_rt::misc::airl_shell_exec(a0!(), a1!()),
         "exit" => airl_rt::misc::airl_exit(a0!()),
+        "parse-int-radix" => airl_rt::misc::airl_parse_int_radix(a0!(), a1!()),
+        "int-to-string-radix" => airl_rt::misc::airl_int_to_string_radix(a0!(), a1!()),
+        "get-cwd" => airl_rt::misc::airl_get_cwd(),
 
         // Float math
         "sqrt" => airl_rt::math::airl_sqrt(a0!()),

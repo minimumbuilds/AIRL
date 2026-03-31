@@ -639,6 +639,53 @@ pub extern "C" fn airl_char_from_code(n: *mut RtValue) -> *mut RtValue {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Character classification
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `char-alpha?(s)` — true if first char is Unicode alphabetic.
+#[no_mangle]
+pub extern "C" fn airl_char_alpha(s: *mut RtValue) -> *mut RtValue {
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s, _ => return rt_bool(false) };
+    rt_bool(input.chars().next().map_or(false, |c| c.is_alphabetic()))
+}
+
+/// `char-digit?(s)` — true if first char is ASCII digit 0-9.
+#[no_mangle]
+pub extern "C" fn airl_char_digit(s: *mut RtValue) -> *mut RtValue {
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s, _ => return rt_bool(false) };
+    rt_bool(input.chars().next().map_or(false, |c| c.is_ascii_digit()))
+}
+
+/// `char-whitespace?(s)` — true if first char is Unicode whitespace.
+#[no_mangle]
+pub extern "C" fn airl_char_whitespace(s: *mut RtValue) -> *mut RtValue {
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s, _ => return rt_bool(false) };
+    rt_bool(input.chars().next().map_or(false, |c| c.is_whitespace()))
+}
+
+/// `char-upper?(s)` — true if first char is Unicode uppercase.
+#[no_mangle]
+pub extern "C" fn airl_char_upper(s: *mut RtValue) -> *mut RtValue {
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s, _ => return rt_bool(false) };
+    rt_bool(input.chars().next().map_or(false, |c| c.is_uppercase()))
+}
+
+/// `char-lower?(s)` — true if first char is Unicode lowercase.
+#[no_mangle]
+pub extern "C" fn airl_char_lower(s: *mut RtValue) -> *mut RtValue {
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s, _ => return rt_bool(false) };
+    rt_bool(input.chars().next().map_or(false, |c| c.is_lowercase()))
+}
+
+/// `string-ci=?(a, b)` — Unicode case-folded equality comparison.
+#[no_mangle]
+pub extern "C" fn airl_string_ci_eq(a: *mut RtValue, b: *mut RtValue) -> *mut RtValue {
+    let sa = match unsafe { &(*a).data } { RtData::Str(s) => s, _ => return rt_bool(false) };
+    let sb = match unsafe { &(*b).data } { RtData::Str(s) => s, _ => return rt_bool(false) };
+    rt_bool(sa.to_lowercase() == sb.to_lowercase())
+}
+
 /// `string-to-float(s)` — parse string as f64, return Result.
 #[no_mangle]
 pub extern "C" fn airl_string_to_float(s: *mut RtValue) -> *mut RtValue {

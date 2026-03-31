@@ -1,0 +1,9 @@
+;; EXPECT: "cwd:ok|mtime:ok"
+(let (cwd : String (get-cwd))
+     (cwd-ok : String (if (> (length cwd) 0) "ok" "FAIL"))
+     (tf : String (temp-file "test"))
+     (mtime : i64 (file-mtime tf))
+     (mtime-ok : String (if (> mtime 0) "ok" "FAIL"))
+  (do
+    (delete-file tf)
+    (str "cwd:" cwd-ok "|mtime:" mtime-ok)))

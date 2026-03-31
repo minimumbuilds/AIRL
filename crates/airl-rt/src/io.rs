@@ -1,5 +1,8 @@
-use crate::value::{rt_bool, rt_nil, rt_str, rt_unit, rt_variant, RtData, RtValue};
+use crate::value::{rt_bool, rt_int, rt_nil, rt_str, rt_unit, rt_variant, RtData, RtValue};
 use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[no_mangle]
 pub extern "C" fn airl_print(v: *mut RtValue) -> *mut RtValue {
@@ -331,6 +334,43 @@ pub extern "C" fn airl_valid(v: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*v };
     let is_nil = matches!(&val.data, RtData::Nil);
     rt_bool(!is_nil)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Temp files, file metadata
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `temp-file(prefix)` — create a temp file, return its path.
+#[no_mangle]
+pub extern "C" fn airl_temp_file(prefix: *mut RtValue) -> *mut RtValue {
+    let pfx = match unsafe { &(*prefix).data } { RtData::Str(s) => s.clone(), _ => "airl".into() };
+    let cnt = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("{}-{}-{}", pfx, std::process::id(), cnt));
+    std::fs::write(&path, "").unwrap_or(());
+    rt_str(path.to_string_lossy().into_owned())
+}
+
+/// `temp-dir(prefix)` — create a temp directory, return its path.
+#[no_mangle]
+pub extern "C" fn airl_temp_dir(prefix: *mut RtValue) -> *mut RtValue {
+    let pfx = match unsafe { &(*prefix).data } { RtData::Str(s) => s.clone(), _ => "airl".into() };
+    let cnt = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("{}-{}-{}-dir", pfx, std::process::id(), cnt));
+    std::fs::create_dir_all(&path).unwrap_or(());
+    rt_str(path.to_string_lossy().into_owned())
+}
+
+/// `file-mtime(path)` — return modification time as epoch millis, or -1 on error.
+#[no_mangle]
+pub extern "C" fn airl_file_mtime(path_val: *mut RtValue) -> *mut RtValue {
+    let p = match unsafe { &(*path_val).data } { RtData::Str(s) => s.clone(), _ => return rt_int(-1) };
+    match std::fs::metadata(&p).and_then(|m| m.modified()) {
+        Ok(t) => {
+            let ms = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+            rt_int(ms)
+        }
+        Err(_) => rt_int(-1),
+    }
 }
 
 #[cfg(test)]

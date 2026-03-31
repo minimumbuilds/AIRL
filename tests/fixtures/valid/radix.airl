@@ -1,0 +1,6 @@
+;; EXPECT: "255|1010|ok|ff"
+(let (hex : _ (parse-int-radix "ff" 16))
+     (bin : String (int-to-string-radix 10 2))
+     (roundtrip : _ (parse-int-radix (int-to-string-radix 42 16) 16))
+     (hex-str : String (int-to-string-radix 255 16))
+  (str (match hex (Ok v) v (Err _) -1) "|" bin "|" (match roundtrip (Ok v) (if (= v 42) "ok" "FAIL") (Err _) "FAIL") "|" hex-str))

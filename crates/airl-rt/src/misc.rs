@@ -654,6 +654,48 @@ pub extern "C" fn airl_shell_exec(cmd: *mut RtValue, args_list: *mut RtValue) ->
     }
 }
 
+// ── Radix Parsing ──
+
+#[no_mangle]
+pub extern "C" fn airl_parse_int_radix(s: *mut RtValue, base: *mut RtValue) -> *mut RtValue {
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.clone(), _ => return err_variant("parse-int-radix: not a string") };
+    let radix = match unsafe { &(*base).data } { RtData::Int(n) => *n as u32, _ => return err_variant("parse-int-radix: base not an int") };
+    if !(2..=36).contains(&radix) { return err_variant("parse-int-radix: base must be 2-36"); }
+    match i64::from_str_radix(&input, radix) {
+        Ok(v) => ok_variant(rt_int(v)),
+        Err(e) => err_variant(&format!("parse-int-radix: {}", e)),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn airl_int_to_string_radix(n: *mut RtValue, base: *mut RtValue) -> *mut RtValue {
+    let val = match unsafe { &(*n).data } { RtData::Int(n) => *n, _ => return rt_str("NaN".into()) };
+    let radix = match unsafe { &(*base).data } { RtData::Int(n) => *n as u32, _ => return rt_str("?".into()) };
+    if !(2..=36).contains(&radix) { return rt_str("?base".into()); }
+    if val == 0 { return rt_str("0".into()); }
+    let negative = val < 0;
+    let mut v = if negative { (val as i128).unsigned_abs() } else { val as u128 };
+    let digits = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut buf = Vec::new();
+    while v > 0 {
+        buf.push(digits[(v % radix as u128) as usize]);
+        v /= radix as u128;
+    }
+    if negative { buf.push(b'-'); }
+    buf.reverse();
+    rt_str(String::from_utf8(buf).unwrap())
+}
+
+// ── System Utilities ──
+
+#[no_mangle]
+pub extern "C" fn airl_get_cwd() -> *mut RtValue {
+    match std::env::current_dir() {
+        Ok(p) => rt_str(p.to_string_lossy().into_owned()),
+        Err(e) => rt_str(format!("<cwd-error: {}>", e)),
+    }
+}
+
 // ── JSON ──
 
 #[no_mangle]
