@@ -1,0 +1,17 @@
+;; EXPECT: "ok"
+;; Two threads recv from same channel — both succeed
+(let (ch : List (channel-new))
+     (tx : i64 (at ch 0))
+     (rx : i64 (at ch 1))
+  (let (t1 : i64 (thread-spawn (fn () (match (channel-recv rx) (Ok _) "ok" (Err e) e))))
+       (t2 : i64 (thread-spawn (fn () (match (channel-recv rx) (Ok _) "ok" (Err e) e))))
+    (do
+      (channel-send tx "msg1")
+      (channel-send tx "msg2")
+      (let (r1 : (Result Str Str) (thread-join t1))
+           (r2 : (Result Str Str) (thread-join t2))
+        (match r1
+          (Ok v1) (match r2
+                    (Ok _) v1
+                    (Err e) e)
+          (Err e) e)))))

@@ -1,0 +1,10 @@
+;; EXPECT: "channel-send: channel closed"
+;; Closed channel returns "closed" not "invalid handle"
+(let (ch : List (channel-new))
+     (tx : i64 (at ch 0))
+     (rx : i64 (at ch 1))
+  (do
+    (channel-close tx)
+    (match (channel-send tx "hello")
+      (Ok _) "unexpected ok"
+      (Err e) e)))

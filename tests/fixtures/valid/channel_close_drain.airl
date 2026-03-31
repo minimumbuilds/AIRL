@@ -1,0 +1,12 @@
+;; EXPECT: "true"
+;; Close receiver with buffered messages — should not crash
+(let (ch : List (channel-new))
+     (tx : i64 (at ch 0))
+     (rx : i64 (at ch 1))
+  (do
+    (channel-send tx "msg1")
+    (channel-send tx "msg2")
+    (channel-send tx "msg3")
+    (channel-close rx)
+    (channel-close tx)
+    (to-string true)))

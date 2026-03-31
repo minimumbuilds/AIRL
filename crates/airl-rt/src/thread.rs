@@ -3,15 +3,17 @@ use crate::value::{rt_str as rt_str_alloc, rt_variant, rt_bool as rt_bool_alloc}
 use crate::list::airl_list_new as airl_list_new_raw;
 use crate::closure::airl_call_closure;
 use crate::memory::airl_value_retain;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Wrapper to send *mut RtValue across threads.
 /// Safety: RtValue is ref-counted and we retain before sending, release after receiving.
 struct SendPtr(*mut RtValue);
 unsafe impl Send for SendPtr {}
 unsafe impl Sync for SendPtr {}
+
+type SharedReceiver = Arc<Mutex<std::sync::mpsc::Receiver<SendPtr>>>;
 
 // ── Thread handle storage ──────────────────────────────────────────
 
@@ -36,9 +38,14 @@ fn channel_senders() -> &'static Mutex<HashMap<i64, std::sync::mpsc::Sender<Send
     SENDERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn channel_receivers() -> &'static Mutex<HashMap<i64, std::sync::mpsc::Receiver<SendPtr>>> {
-    static RECEIVERS: OnceLock<Mutex<HashMap<i64, std::sync::mpsc::Receiver<SendPtr>>>> = OnceLock::new();
+fn channel_receivers() -> &'static Mutex<HashMap<i64, SharedReceiver>> {
+    static RECEIVERS: OnceLock<Mutex<HashMap<i64, SharedReceiver>>> = OnceLock::new();
     RECEIVERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn closed_handles() -> &'static Mutex<HashSet<i64>> {
+    static CLOSED: OnceLock<Mutex<HashSet<i64>>> = OnceLock::new();
+    CLOSED.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -137,7 +144,7 @@ pub extern "C" fn airl_channel_new() -> *mut RtValue {
     let tx_id = NEXT_CHANNEL_HANDLE.fetch_add(1, Ordering::SeqCst);
     let rx_id = NEXT_CHANNEL_HANDLE.fetch_add(1, Ordering::SeqCst);
     channel_senders().lock().unwrap().insert(tx_id, tx);
-    channel_receivers().lock().unwrap().insert(rx_id, rx);
+    channel_receivers().lock().unwrap().insert(rx_id, Arc::new(Mutex::new(rx)));
     let items = vec![rt_int(tx_id), rt_int(rx_id)];
     airl_list_new_raw(items.as_ptr(), items.len())
 }
@@ -152,6 +159,11 @@ pub extern "C" fn airl_channel_send(tx_handle: *mut RtValue, value: *mut RtValue
 
     // Retain the value so the receiver owns a reference
     airl_value_retain(value);
+
+    if closed_handles().lock().unwrap().contains(&tx_id) {
+        crate::memory::airl_value_release(value);
+        return rt_err("channel-send: channel closed");
+    }
 
     let senders = channel_senders().lock().unwrap();
     match senders.get(&tx_id) {
@@ -177,15 +189,21 @@ pub extern "C" fn airl_channel_recv(rx_handle: *mut RtValue) -> *mut RtValue {
         None => return rt_err("channel-recv: handle must be Int"),
     };
 
-    let rx = channel_receivers().lock().unwrap().remove(&rx_id);
-    match rx {
-        Some(rx) => {
-            let result = match rx.recv() {
+    if closed_handles().lock().unwrap().contains(&rx_id) {
+        return rt_err("channel-recv: channel closed");
+    }
+
+    let rx_arc = {
+        let map = channel_receivers().lock().unwrap();
+        map.get(&rx_id).cloned()
+    };
+    match rx_arc {
+        Some(rx_arc) => {
+            let rx = rx_arc.lock().unwrap();
+            match rx.recv() {
                 Ok(SendPtr(val)) => rt_ok(val),
                 Err(_) => rt_err("channel closed"),
-            };
-            channel_receivers().lock().unwrap().insert(rx_id, rx);
-            result
+            }
         }
         None => rt_err(&format!("channel-recv: invalid receiver handle {}", rx_id)),
     }
@@ -203,17 +221,23 @@ pub extern "C" fn airl_channel_recv_timeout(rx_handle: *mut RtValue, timeout_ms:
         None => return rt_err("channel-recv-timeout: timeout must be Int"),
     };
 
-    let rx = channel_receivers().lock().unwrap().remove(&rx_id);
-    match rx {
-        Some(rx) => {
+    if closed_handles().lock().unwrap().contains(&rx_id) {
+        return rt_err("channel-recv-timeout: channel closed");
+    }
+
+    let rx_arc = {
+        let map = channel_receivers().lock().unwrap();
+        map.get(&rx_id).cloned()
+    };
+    match rx_arc {
+        Some(rx_arc) => {
+            let rx = rx_arc.lock().unwrap();
             let duration = std::time::Duration::from_millis(ms as u64);
-            let result = match rx.recv_timeout(duration) {
+            match rx.recv_timeout(duration) {
                 Ok(SendPtr(val)) => rt_ok(val),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => rt_err("timeout"),
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => rt_err("channel closed"),
-            };
-            channel_receivers().lock().unwrap().insert(rx_id, rx);
-            result
+            }
         }
         None => rt_err(&format!("channel-recv-timeout: invalid receiver handle {}", rx_id)),
     }
@@ -228,9 +252,17 @@ pub extern "C" fn airl_channel_drain(rx_handle: *mut RtValue) -> *mut RtValue {
         None => return rt_err("channel-drain: handle must be Int"),
     };
 
-    let rx = channel_receivers().lock().unwrap().remove(&rx_id);
-    match rx {
-        Some(rx) => {
+    if closed_handles().lock().unwrap().contains(&rx_id) {
+        return rt_err("channel-drain: channel closed");
+    }
+
+    let rx_arc = {
+        let map = channel_receivers().lock().unwrap();
+        map.get(&rx_id).cloned()
+    };
+    match rx_arc {
+        Some(rx_arc) => {
+            let rx = rx_arc.lock().unwrap();
             let mut items = Vec::new();
             loop {
                 match rx.try_recv() {
@@ -238,7 +270,6 @@ pub extern "C" fn airl_channel_drain(rx_handle: *mut RtValue) -> *mut RtValue {
                     Err(_) => break,
                 }
             }
-            channel_receivers().lock().unwrap().insert(rx_id, rx);
             crate::list::airl_list_new(items.as_ptr(), items.len())
         }
         None => rt_err(&format!("channel-drain: invalid receiver handle {}", rx_id)),
@@ -253,7 +284,21 @@ pub extern "C" fn airl_channel_close(handle: *mut RtValue) -> *mut RtValue {
         None => return rt_bool(false),
     };
     let removed_tx = channel_senders().lock().unwrap().remove(&handle_id).is_some();
-    let removed_rx = channel_receivers().lock().unwrap().remove(&handle_id).is_some();
+    let removed_rx = if let Some(rx_arc) = channel_receivers().lock().unwrap().remove(&handle_id) {
+        let rx = rx_arc.lock().unwrap();
+        loop {
+            match rx.try_recv() {
+                Ok(SendPtr(val)) => crate::memory::airl_value_release(val),
+                Err(_) => break,
+            }
+        }
+        true
+    } else {
+        false
+    };
+    if removed_tx || removed_rx {
+        closed_handles().lock().unwrap().insert(handle_id);
+    }
     rt_bool(removed_tx || removed_rx)
 }
 
@@ -286,5 +331,57 @@ pub extern "C" fn airl_thread_set_affinity(core_id: *mut RtValue) -> *mut RtValu
     #[cfg(not(target_os = "linux"))]
     {
         rt_err(&format!("thread-set-affinity: not supported on this platform (core {})", core))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_recv_on_shared_channel() {
+        let ch = airl_channel_new();
+        let (tx_id, rx_id) = unsafe {
+            if let RtData::List(ref items) = (*ch).data {
+                (extract_int(items[0]).unwrap(), extract_int(items[1]).unwrap())
+            } else {
+                panic!("channel-new did not return a list");
+            }
+        };
+
+        // Wrap raw pointers in usize for Send
+        let rx_raw_1 = rt_int(rx_id) as usize;
+        let rx_raw_2 = rt_int(rx_id) as usize;
+
+        let t1 = std::thread::spawn(move || {
+            let result = airl_channel_recv(rx_raw_1 as *mut RtValue);
+            SendPtr(result)
+        });
+        let t2 = std::thread::spawn(move || {
+            let result = airl_channel_recv(rx_raw_2 as *mut RtValue);
+            SendPtr(result)
+        });
+
+        // Give threads time to block on recv
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        airl_channel_send(rt_int(tx_id), rt_int(42));
+        airl_channel_send(rt_int(tx_id), rt_int(43));
+
+        let SendPtr(r1) = t1.join().expect("thread 1 panicked");
+        let SendPtr(r2) = t2.join().expect("thread 2 panicked");
+
+        unsafe {
+            if let RtData::Variant { ref tag_name, .. } = (*r1).data {
+                assert_eq!(tag_name.as_str(), "Ok", "thread 1 got Err instead of Ok");
+            } else {
+                panic!("thread 1 result is not a variant");
+            }
+            if let RtData::Variant { ref tag_name, .. } = (*r2).data {
+                assert_eq!(tag_name.as_str(), "Ok", "thread 2 got Err instead of Ok");
+            } else {
+                panic!("thread 2 result is not a variant");
+            }
+        }
     }
 }
