@@ -112,7 +112,7 @@ fn cmd_run(args: &[String]) {
             let temp_bin = std::env::temp_dir().join(format!("airl_run_{}", std::process::id()));
             let temp_str = temp_bin.to_string_lossy().to_string();
 
-            let obj_bytes = match compile_to_object_with_imports(&main) {
+            let obj_bytes = match compile_to_object_with_imports(&main, None) {
                 Ok(bytes) => bytes,
                 Err(e) => {
                     eprintln!("Compilation error: {}", e);
@@ -120,7 +120,7 @@ fn cmd_run(args: &[String]) {
                 }
             };
 
-            link_object_to_binary(&obj_bytes, &temp_str, &[main]);
+            link_object_to_binary(&obj_bytes, &temp_str, &[main], None);
 
             let status = std::process::Command::new(&temp_bin)
                 .args(&user_args)
@@ -180,9 +180,10 @@ fn cmd_compile(args: &[String]) {
             std::process::exit(1);
         }
 
-        // Parse args: files and -o flag
+        // Parse args: files, -o flag, --target flag
         let mut files: Vec<String> = Vec::new();
         let mut output = String::from("a.out");
+        let mut target: Option<String> = None;
         let mut i = 0;
         while i < args.len() {
             if args[i] == "-o" {
@@ -191,6 +192,14 @@ fn cmd_compile(args: &[String]) {
                     i += 2;
                 } else {
                     eprintln!("-o requires an argument");
+                    std::process::exit(1);
+                }
+            } else if args[i] == "--target" {
+                if i + 1 < args.len() {
+                    target = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("--target requires an argument (x86-64, i686, i686-airlos, aarch64)");
                     std::process::exit(1);
                 }
             } else {
@@ -209,7 +218,7 @@ fn cmd_compile(args: &[String]) {
             let source_check = std::fs::read_to_string(&files[0]).unwrap_or_default();
             if source_check.contains("(import ") {
                 use airl_driver::pipeline::compile_to_object_with_imports;
-                match compile_to_object_with_imports(&files[0]) {
+                match compile_to_object_with_imports(&files[0], target.as_deref()) {
                     Ok(bytes) => bytes,
                     Err(e) => {
                         eprintln!("Compilation error: {}", e);
@@ -217,7 +226,7 @@ fn cmd_compile(args: &[String]) {
                     }
                 }
             } else {
-                match compile_to_object(&files) {
+                match compile_to_object(&files, target.as_deref()) {
                     Ok(bytes) => bytes,
                     Err(e) => {
                         eprintln!("Compilation error: {}", e);
@@ -226,7 +235,7 @@ fn cmd_compile(args: &[String]) {
                 }
             }
         } else {
-            match compile_to_object(&files) {
+            match compile_to_object(&files, target.as_deref()) {
                 Ok(bytes) => bytes,
                 Err(e) => {
                     eprintln!("Compilation error: {}", e);
@@ -236,18 +245,37 @@ fn cmd_compile(args: &[String]) {
         };
 
         // Link object bytes to final binary
-        link_object_to_binary(&obj_bytes, &output, &files);
+        link_object_to_binary(&obj_bytes, &output, &files, target.as_deref());
     }
 }
 
-/// Write object bytes to disk, link with system cc, produce final binary.
+/// Write object bytes to disk, link with system cc (or cross-linker), produce final binary.
 #[cfg(feature = "aot")]
-fn link_object_to_binary(obj_bytes: &[u8], output: &str, source_files: &[String]) {
+fn link_object_to_binary(obj_bytes: &[u8], output: &str, source_files: &[String], target: Option<&str>) {
     let obj_path = format!("{}.o", output);
     std::fs::write(&obj_path, obj_bytes).unwrap_or_else(|e| {
         eprintln!("Failed to write {}: {}", obj_path, e);
         std::process::exit(1);
     });
+
+    // For freestanding targets, use cross-linker
+    if target == Some("i686-airlos") {
+        let mut cmd = std::process::Command::new("i686-elf-ld");
+        cmd.arg("-T").arg("user.ld");
+        cmd.arg(&obj_path);
+        cmd.arg("-o").arg(output);
+        if let Ok(rt_path) = std::env::var("AIRL_RT_AIRLOS") {
+            cmd.arg(&rt_path);
+        }
+        let status = cmd.status();
+        let _ = std::fs::remove_file(&obj_path);
+        match status {
+            Ok(s) if s.success() => eprintln!("Cross-compiled to {} (i686-airlos)", output),
+            Ok(s) => { eprintln!("Cross-linker failed: {:?}", s.code()); std::process::exit(1); }
+            Err(e) => { eprintln!("Cross-linker (i686-elf-ld) not found: {}", e); std::process::exit(1); }
+        }
+        return;
+    }
 
     // Find airl-rt static library (embedded or on disk)
     let (rt_lib, runtime_lib) = find_airl_libs();
@@ -273,6 +301,10 @@ fn link_object_to_binary(obj_bytes: &[u8], output: &str, source_files: &[String]
         .arg("-o")
         .arg(output)
         .arg(&rt_lib);
+    // For 32-bit hosted targets, add -m32
+    if target == Some("i686") {
+        cmd.arg("-m32");
+    }
     if needs_runtime && !runtime_lib.is_empty() {
         cmd.arg(&runtime_lib);
         cmd.arg(&rt_lib);

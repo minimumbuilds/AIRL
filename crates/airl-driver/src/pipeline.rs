@@ -1120,7 +1120,7 @@ mod tests {
 /// Compile AIRL source files to a native object file.
 /// Returns the object file bytes (ELF on Linux, Mach-O on macOS).
 #[cfg(feature = "aot")]
-pub fn compile_to_object(paths: &[String]) -> Result<Vec<u8>, PipelineError> {
+pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u8>, PipelineError> {
     use airl_runtime::bytecode::BytecodeFunc;
     use airl_runtime::bytecode_aot::BytecodeAot;
     use std::collections::HashMap;
@@ -1159,7 +1159,7 @@ pub fn compile_to_object(paths: &[String]) -> Result<Vec<u8>, PipelineError> {
         .map(|f| (f.name.clone(), f.clone()))
         .collect();
 
-    let mut aot = BytecodeAot::new().map_err(|e| PipelineError::Runtime(
+    let mut aot = BytecodeAot::new_with_target(target).map_err(|e| PipelineError::Runtime(
         airl_runtime::error::RuntimeError::TypeError(e)
     ))?;
 
@@ -1180,7 +1180,7 @@ pub fn compile_to_object(paths: &[String]) -> Result<Vec<u8>, PipelineError> {
 /// Compile AIRL source file with imports to a native object file.
 /// Mirrors `run_file_with_imports` but produces AOT output instead of running in VM.
 #[cfg(feature = "aot")]
-pub fn compile_to_object_with_imports(entry_path: &str) -> Result<Vec<u8>, PipelineError> {
+pub fn compile_to_object_with_imports(entry_path: &str, target: Option<&str>) -> Result<Vec<u8>, PipelineError> {
     use crate::resolver::resolve_imports;
     use airl_runtime::bytecode::BytecodeFunc;
     use airl_runtime::bytecode_aot::BytecodeAot;
@@ -1262,7 +1262,7 @@ pub fn compile_to_object_with_imports(entry_path: &str) -> Result<Vec<u8>, Pipel
         .map(|f| (f.name.clone(), f.clone()))
         .collect();
 
-    let mut aot = BytecodeAot::new().map_err(|e| PipelineError::Runtime(
+    let mut aot = BytecodeAot::new_with_target(target).map_err(|e| PipelineError::Runtime(
         airl_runtime::error::RuntimeError::TypeError(e)
     ))?;
 
