@@ -491,6 +491,9 @@ fn compile_top_level(top: &airl_syntax::ast::TopLevel) -> IRNode {
             let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
             IRNode::Func(f.name.clone(), param_names, Box::new(compile_expr(&f.body)))
         }
+        airl_syntax::ast::TopLevel::Define(d) => {
+            IRNode::Func(d.name.clone(), d.params.clone(), Box::new(compile_expr(&d.body)))
+        }
         airl_syntax::ast::TopLevel::Expr(e) => compile_expr(e),
         _ => IRNode::Nil, // Module, DefType, Task, UseDecl — no runtime effect in compiled mode
     }
@@ -564,6 +567,10 @@ fn compile_tops_with_contracts(
                     ensures: ens_strings,
                     invariants: inv_strings,
                 });
+            }
+            airl_syntax::ast::TopLevel::Define(d) => {
+                ir_nodes.push(IRNode::Func(d.name.clone(), d.params.clone(), Box::new(compile_expr(&d.body))));
+                // No contracts or metadata for define — it's intentionally simple
             }
             airl_syntax::ast::TopLevel::Expr(e) => {
                 ir_nodes.push(compile_expr(e));

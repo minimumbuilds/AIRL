@@ -1,0 +1,26 @@
+;; EXPECT: "120|hello-world|55|ok"
+(define factorial (n)
+  (if (<= n 1)
+    1
+    (* n (factorial (- n 1)))))
+
+(define greet (name)
+  (str "hello-" name))
+
+;; Tail-recursive — tests TCO
+(define sum-to-acc (n acc)
+  (if (<= n 0)
+    acc
+    (sum-to-acc (- n 1) (+ acc n))))
+
+;; Define calling define
+(define check-all ()
+  (if (= (factorial 5) 120)
+    (if (= (greet "world") "hello-world")
+      (if (= (sum-to-acc 10 0) 55)
+        "ok"
+        "FAIL:sum")
+      "FAIL:greet")
+    "FAIL:factorial"))
+
+(str (factorial 5) "|" (greet "world") "|" (sum-to-acc 10 0) "|" (check-all))

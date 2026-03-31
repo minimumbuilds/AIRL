@@ -11,6 +11,7 @@ pub fn parse_top_level(sexpr: &SExpr, diags: &mut Diagnostics) -> Result<TopLeve
             if let Some(head) = items[0].as_symbol() {
                 match head {
                     "defn" => parse_defn(&items[1..], *span, diags).map(TopLevel::Defn),
+                    "define" => parse_define(&items[1..], *span, diags).map(TopLevel::Define),
                     "deftype" => parse_deftype(&items[1..], *span, diags).map(TopLevel::DefType),
                     "module" => parse_module(&items[1..], *span, diags).map(TopLevel::Module),
                     "task" => parse_task(&items[1..], *span, diags).map(TopLevel::Task),
@@ -537,6 +538,36 @@ fn parse_param(sexpr: &SExpr, diags: &mut Diagnostics) -> Result<Param, Diagnost
         }
         _ => Err(Diagnostic::error("expected parameter list", span)),
     }
+}
+
+// ── define parsing (lightweight, no contracts) ─────────
+
+fn parse_define(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<SimpleFnDef, Diagnostic> {
+    // (define name (param1 param2 ...) body)
+    if items.len() < 3 {
+        return Err(Diagnostic::error("define requires name, parameter list, and body", span));
+    }
+    let name = items[0].as_symbol().ok_or_else(|| {
+        Diagnostic::error("define: expected function name", items[0].span())
+    })?.to_string();
+
+    let params = match &items[1] {
+        SExpr::List(param_items, _pspan) => {
+            let mut params = Vec::new();
+            for item in param_items {
+                let pname = item.as_symbol().ok_or_else(|| {
+                    Diagnostic::error("define: parameter must be a symbol", item.span())
+                })?;
+                params.push(pname.to_string());
+            }
+            params
+        }
+        _ => return Err(Diagnostic::error("define: expected parameter list", items[1].span())),
+    };
+
+    let body = parse_expr(&items[2], diags)?;
+
+    Ok(SimpleFnDef { name, params, body, span })
 }
 
 // ── defn parsing ───────────────────────────────────────
