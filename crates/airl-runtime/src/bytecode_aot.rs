@@ -461,7 +461,7 @@ fn aot_symbol_name(name: &str) -> String {
 
 impl BytecodeAot {
     /// Create a new AOT compiler context. If `target` is None, targets the host.
-    /// Accepted target strings: "x86-64", "i686", "i686-airlos", or any valid triple.
+    /// Accepted target strings: "x86-64", "i686", "i686-airlos", "x86_64-airlos", or any valid triple.
     pub fn new_with_target(target: Option<&str>) -> Result<Self, String> {
         let mut settings_builder = cranelift_codegen::settings::builder();
         let _ = settings_builder.set("unwind_info", "false");
@@ -473,6 +473,8 @@ impl BytecodeAot {
             Some("i686") => "i686-unknown-linux-gnu".parse::<target_lexicon::Triple>()
                 .map_err(|e| format!("invalid triple: {}", e))?,
             Some("i686-airlos") => "i686-unknown-none".parse::<target_lexicon::Triple>()
+                .map_err(|e| format!("invalid triple: {}", e))?,
+            Some("x86_64-airlos") => "x86_64-unknown-none".parse::<target_lexicon::Triple>()
                 .map_err(|e| format!("invalid triple: {}", e))?,
             Some("aarch64") => "aarch64-unknown-linux-gnu".parse::<target_lexicon::Triple>()
                 .map_err(|e| format!("invalid triple: {}", e))?,
