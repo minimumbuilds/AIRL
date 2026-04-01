@@ -1,0 +1,73 @@
+;; ── AIRL Standard Library: Test ──────────────────
+
+;; ── assert-eq : equality assertion ──
+(defn assert-eq
+  :sig [(a : Any) (b : Any) (msg : String) -> Unit]
+  :intent "Assert that a equals b, emit JSON result"
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (if (= a b)
+          (println (str "{\"test\": \"" msg "\", \"status\": \"pass\"}"))
+          (do
+            (println (str "{\"test\": \"" msg "\", \"status\": \"fail\", \"expected\": \"" b "\", \"actual\": \"" a "\"}"))
+            (exit 1))))
+
+;; ── assert-ne : inequality assertion ──
+(defn assert-ne
+  :sig [(a : Any) (b : Any) (msg : String) -> Unit]
+  :intent "Assert that a does not equal b, emit JSON result"
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (if (!= a b)
+          (println (str "{\"test\": \"" msg "\", \"status\": \"pass\"}"))
+          (do
+            (println (str "{\"test\": \"" msg "\", \"status\": \"fail\", \"expected\": \"not " b "\", \"actual\": \"" a "\"}"))
+            (exit 1))))
+
+;; ── assert-ok : Result Ok assertion ──
+(defn assert-ok
+  :sig [(r : _) (msg : String) -> Unit]
+  :intent "Assert that a Result is the Ok variant, emit JSON result"
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (match r
+          (Ok _)  (println (str "{\"test\": \"" msg "\", \"status\": \"pass\"}"))
+          (Err e) (do
+                    (println (str "{\"test\": \"" msg "\", \"status\": \"fail\", \"expected\": \"Ok\", \"actual\": \"Err(" e ")\"}"))
+                    (exit 1))))
+
+;; ── assert-err : Result Err assertion ──
+(defn assert-err
+  :sig [(r : _) (msg : String) -> Unit]
+  :intent "Assert that a Result is the Err variant, emit JSON result"
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (match r
+          (Err _) (println (str "{\"test\": \"" msg "\", \"status\": \"pass\"}"))
+          (Ok v)  (do
+                    (println (str "{\"test\": \"" msg "\", \"status\": \"fail\", \"expected\": \"Err\", \"actual\": \"Ok(" v ")\"}"))
+                    (exit 1))))
+
+;; ── assert-contains : string containment assertion ──
+(defn assert-contains
+  :sig [(haystack : String) (needle : String) (msg : String) -> Unit]
+  :intent "Assert that haystack contains needle, emit JSON result"
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (if (contains haystack needle)
+          (println (str "{\"test\": \"" msg "\", \"status\": \"pass\"}"))
+          (do
+            (println (str "{\"test\": \"" msg "\", \"status\": \"fail\", \"expected\": \"string containing " needle "\", \"actual\": \"" haystack "\"}"))
+            (exit 1))))
+
+;; ── assert-true : boolean truth assertion ──
+(defn assert-true
+  :sig [(cond : Bool) (msg : String) -> Unit]
+  :intent "Assert that cond is true, emit JSON result"
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (if cond
+          (println (str "{\"test\": \"" msg "\", \"status\": \"pass\"}"))
+          (do
+            (println (str "{\"test\": \"" msg "\", \"status\": \"fail\", \"expected\": \"true\", \"actual\": \"false\"}"))
+            (exit 1))))
