@@ -199,7 +199,7 @@ fn cmd_compile(args: &[String]) {
                     target = Some(args[i + 1].clone());
                     i += 2;
                 } else {
-                    eprintln!("--target requires an argument (x86-64, i686, i686-airlos, aarch64)");
+                    eprintln!("--target requires an argument (x86-64, i686, i686-airlos, x86_64-airlos, aarch64)");
                     std::process::exit(1);
                 }
             } else {
@@ -273,6 +273,24 @@ fn link_object_to_binary(obj_bytes: &[u8], output: &str, source_files: &[String]
             Ok(s) if s.success() => eprintln!("Cross-compiled to {} (i686-airlos)", output),
             Ok(s) => { eprintln!("Cross-linker failed: {:?}", s.code()); std::process::exit(1); }
             Err(e) => { eprintln!("Cross-linker (i686-elf-ld) not found: {}", e); std::process::exit(1); }
+        }
+        return;
+    }
+
+    if target == Some("x86_64-airlos") {
+        let mut cmd = std::process::Command::new("x86_64-elf-ld");
+        cmd.arg("-T").arg("user64.ld");
+        cmd.arg(&obj_path);
+        cmd.arg("-o").arg(output);
+        if let Ok(rt_path) = std::env::var("AIRL_RT_AIRLOS_X64") {
+            cmd.arg(&rt_path);
+        }
+        let status = cmd.status();
+        let _ = std::fs::remove_file(&obj_path);
+        match status {
+            Ok(s) if s.success() => eprintln!("Cross-compiled to {} (x86_64-airlos)", output),
+            Ok(s) => { eprintln!("Cross-linker failed: {:?}", s.code()); std::process::exit(1); }
+            Err(e) => { eprintln!("Cross-linker (x86_64-elf-ld) not found: {}", e); std::process::exit(1); }
         }
         return;
     }

@@ -428,8 +428,8 @@ Compile with: `g3 -- aireql-util.airl aireql-transport.airl aireql.airl aireql-s
 (compile-to-executable [paths] output) -> Nil            ; source files → native binary (Rust pipeline)
 (compile-bytecode-to-executable bc-funcs output) -> Str  ; BCFunc list → native binary (G3 pipeline)
 ```
-CLI cross-compilation: `airl compile file.airl --target i686-airlos -o output`
-Targets: `x86-64` (default), `i686`, `i686-airlos` (freestanding), `aarch64`
+CLI cross-compilation: `airl compile file.airl --target i686-airlos -o output` (or `--target x86_64-airlos`)
+Targets: `x86-64` (default), `i686`, `i686-airlos` (freestanding), `x86_64-airlos` (freestanding 64-bit), `aarch64`
 
 ## PATTERNS
 
