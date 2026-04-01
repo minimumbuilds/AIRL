@@ -1,0 +1,14 @@
+;; Test stdlib/test.airl assertions — all should pass
+
+(assert-eq 1 1 "integer equality")
+(assert-eq "hello" "hello" "string equality")
+(assert-ne 1 2 "integer inequality")
+(assert-ne "foo" "bar" "string inequality")
+(assert-ok (Ok 42) "ok result")
+(assert-err (Err "bad") "err result")
+(assert-contains "hello world" "world" "string containment")
+(assert-contains "abcdef" "cde" "substring containment")
+(assert-true true "boolean truth")
+(assert-true (= 1 1) "expression truth")
+
+(println "{\"test\": \"all assertions\", \"status\": \"pass\", \"count\": 10}")
