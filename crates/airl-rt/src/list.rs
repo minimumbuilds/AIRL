@@ -1,5 +1,5 @@
 use crate::error::rt_error;
-use crate::memory::airl_value_retain;
+use crate::memory::{airl_value_release, airl_value_retain};
 use crate::value::{rt_bool, rt_bytes, rt_int, rt_list, RtData, RtValue};
 
 #[no_mangle]
@@ -119,7 +119,29 @@ pub extern "C" fn airl_at(list: *mut RtValue, index: *mut RtValue) -> *mut RtVal
 
 #[no_mangle]
 pub extern "C" fn airl_append(list: *mut RtValue, elem: *mut RtValue) -> *mut RtValue {
-    let v = unsafe { &*list };
+    let v = unsafe { &mut *list };
+    // COW fast path: sole owner → mutate in place (O(1) instead of O(N))
+    if v.rc == 1 {
+        match &mut v.data {
+            RtData::List(items) => {
+                airl_value_retain(elem);
+                items.push(elem);
+                airl_value_retain(list); // caller expects +1 ref
+                return list;
+            }
+            RtData::Bytes(bytes) => {
+                let b = match unsafe { &(*elem).data } {
+                    RtData::Int(n) => *n as u8,
+                    _ => rt_error("airl_append: Bytes can only append Int"),
+                };
+                bytes.push(b);
+                airl_value_retain(list); // caller expects +1 ref
+                return list;
+            }
+            _ => rt_error("airl_append: not a List or Bytes"),
+        }
+    }
+    // rc > 1: clone as before
     match &v.data {
         RtData::List(items) => {
             let mut new_items = Vec::with_capacity(items.len() + 1);
@@ -519,4 +541,57 @@ mod tests {
             airl_value_release(result);
         }
     }
+
+    // ── COW (Copy-on-Write) tests ──────────────────────────────────
+
+    #[test]
+    fn append_cow_returns_same_pointer() {
+        unsafe {
+            let a = rt_int(1);
+            let list = rt_list(vec![a]);
+            assert_eq!((*list).rc, 1);
+            let elem = rt_int(2);
+            let result = airl_append(list, elem);
+            assert_eq!(result, list, "COW append should return same pointer when rc == 1");
+            match &(*result).data {
+                RtData::List(items) => {
+                    assert_eq!(items.len(), 2);
+                    assert_eq!((*items[0]).as_int(), 1);
+                    assert_eq!((*items[1]).as_int(), 2);
+                }
+                _ => panic!("expected list"),
+            }
+            airl_value_release(elem);
+            airl_value_release(result);
+        }
+    }
+
+    #[test]
+    fn append_clone_when_shared() {
+        unsafe {
+            let a = rt_int(1);
+            let list = rt_list(vec![a]);
+            airl_value_retain(list); // rc == 2 → shared
+            assert_eq!((*list).rc, 2);
+            let elem = rt_int(2);
+            let result = airl_append(list, elem);
+            assert_ne!(result, list, "append should return new pointer when rc > 1");
+            match &(*result).data {
+                RtData::List(items) => {
+                    assert_eq!(items.len(), 2);
+                }
+                _ => panic!("expected list"),
+            }
+            airl_value_release(elem);
+            airl_value_release(list);
+            airl_value_release(list); // second release for the extra retain
+            airl_value_release(result);
+        }
+    }
+
+    // NOTE: tail COW (in-place Vec::remove(0) when rc == 1) was tested and
+    // found to corrupt g3's AOT compilation — the bytecode VM references lists
+    // after tail without retaining, so in-place mutation breaks "use-after-tail"
+    // patterns. Tail COW requires a VM retain audit before it can be enabled.
+    // See: append COW bisect (2026-04-01).
 }
