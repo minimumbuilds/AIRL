@@ -105,8 +105,9 @@ pub fn rt_to_value_no_release(ptr: *mut RtValue) -> Value {
             RtData::Float(f) => Value::Float(*f),
             RtData::Bool(b)  => Value::Bool(*b),
             RtData::Str(s)   => Value::Str(s.clone()),
-            RtData::List(items) => {
-                let vals: Vec<Value> = items.iter().map(|&item| rt_to_value_no_release(item)).collect();
+            RtData::List { .. } => {
+                let slice = airl_rt::list::list_items(&(*ptr).data);
+                let vals: Vec<Value> = slice.iter().map(|&item| rt_to_value_no_release(item)).collect();
                 Value::List(vals)
             }
             RtData::Map(map) => {

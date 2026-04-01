@@ -112,7 +112,7 @@ pub extern "C" fn airl_join(list: *mut RtValue, sep: *mut RtValue) -> *mut RtVal
     let lv = unsafe { &*list };
     let sv = unsafe { &*sep };
     let items = match &lv.data {
-        RtData::List(items) => items,
+        RtData::List { .. } => crate::list::list_items(&lv.data),
         _ => rt_error("join: first argument must be a List"),
     };
     let sep_val = match &sv.data {
@@ -266,7 +266,7 @@ mod tests {
 
     // Helper: free a list and all its items (for freshly-created lists where items are owned by list)
     unsafe fn free_list_and_items(list: *mut RtValue) {
-        let items = (*list).as_list().clone();
+        let items = (*list).as_list().to_vec();
         drop(Box::from_raw(list));
         for item in items {
             airl_value_release(item);
@@ -337,7 +337,8 @@ mod tests {
             let s = rt_str("hi".to_string());
             let r = airl_chars(s);
             match &(*r).data {
-                RtData::List(items) => {
+                RtData::List { .. } => {
+                    let items = crate::list::list_items(&(*r).data);
                     assert_eq!(items.len(), 2);
                     assert_eq!((*items[0]).as_str(), "h");
                     assert_eq!((*items[1]).as_str(), "i");
@@ -356,7 +357,8 @@ mod tests {
             let delim = rt_str(",".to_string());
             let r = airl_split(s, delim);
             match &(*r).data {
-                RtData::List(items) => {
+                RtData::List { .. } => {
+                    let items = crate::list::list_items(&(*r).data);
                     assert_eq!(items.len(), 3);
                     assert_eq!((*items[0]).as_str(), "a");
                     assert_eq!((*items[1]).as_str(), "b");
@@ -593,7 +595,8 @@ mod tests {
             let s = rt_str("héllo".to_string());
             let r = airl_chars(s);
             match &(*r).data {
-                RtData::List(items) => {
+                RtData::List { .. } => {
+                    let items = crate::list::list_items(&(*r).data);
                     assert_eq!(items.len(), 5);
                     assert_eq!((*items[0]).as_str(), "h");
                     assert_eq!((*items[1]).as_str(), "é");

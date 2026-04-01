@@ -3288,7 +3288,7 @@ pub extern "C" fn airl_compile_to_executable(
 
     let paths: Vec<String> = unsafe {
         match &(*paths_val).data {
-            RtData::List(items) => items.iter().map(|p| {
+            RtData::List { .. } => airl_rt::list::list_items(&(*paths_val).data).iter().map(|p| {
                 match &(**p).data {
                     RtData::Str(s) => s.clone(),
                     _ => String::new(),

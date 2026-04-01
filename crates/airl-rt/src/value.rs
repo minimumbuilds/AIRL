@@ -27,7 +27,7 @@ pub enum RtData {
     Float(f64),                                             // 2 = TAG_FLOAT
     Bool(bool),                                             // 3 = TAG_BOOL
     Str(String),                                            // 4 = TAG_STR
-    List(Vec<*mut RtValue>),                                // 5 = TAG_LIST
+    List { items: Vec<*mut RtValue>, offset: usize, parent: Option<*mut RtValue> }, // 5 = TAG_LIST
     Map(HashMap<String, *mut RtValue>),                     // 6 = TAG_MAP
     Variant { tag_name: String, inner: *mut RtValue },      // 7 = TAG_VARIANT
     Closure { func_ptr: *const u8, captures: Vec<*mut RtValue> }, // 8 = TAG_CLOSURE
@@ -81,7 +81,7 @@ pub fn rt_str(v: String) -> *mut RtValue {
 }
 
 pub fn rt_list(items: Vec<*mut RtValue>) -> *mut RtValue {
-    RtValue::alloc(TAG_LIST, RtData::List(items))
+    RtValue::alloc(TAG_LIST, RtData::List { items, offset: 0, parent: None })
 }
 
 pub fn rt_map(m: HashMap<String, *mut RtValue>) -> *mut RtValue {
@@ -169,9 +169,19 @@ impl RtValue {
         self.as_str().to_string()
     }
 
-    pub fn as_list(&self) -> &Vec<*mut RtValue> {
+    pub fn as_list(&self) -> &[*mut RtValue] {
         match &self.data {
-            RtData::List(items) => items,
+            RtData::List { items, offset, parent } => {
+                if let Some(p) = parent {
+                    let root = unsafe { &**p };
+                    match &root.data {
+                        RtData::List { items: root_items, .. } => &root_items[*offset..],
+                        _ => rt_error("as_list: view parent is not a List"),
+                    }
+                } else {
+                    &items[*offset..]
+                }
+            }
             _ => rt_error("as_list: not a List"),
         }
     }
@@ -206,9 +216,18 @@ impl fmt::Display for RtValue {
             }
             RtData::Bool(v) => write!(f, "{}", v),
             RtData::Str(s) => write!(f, "\"{}\"", s),
-            RtData::List(items) => {
+            RtData::List { items, offset, parent } => {
+                let slice = if let Some(p) = parent {
+                    let root = unsafe { &**p };
+                    match &root.data {
+                        RtData::List { items: root_items, .. } => &root_items[*offset..],
+                        _ => return write!(f, "[<invalid view>]"),
+                    }
+                } else {
+                    &items[*offset..]
+                };
                 write!(f, "[")?;
-                for (i, item) in items.iter().enumerate() {
+                for (i, item) in slice.iter().enumerate() {
                     if i > 0 {
                         write!(f, " ")?;
                     }
@@ -318,7 +337,7 @@ mod tests {
             let list = rt_list(vec![a, b, c]);
             assert_eq!(format!("{}", *list), "[1 2 3]");
             // Free items then list (shallow free for test)
-            let items = (*list).as_list().clone();
+            let items = (*list).as_list().to_vec();
             drop(Box::from_raw(list));
             for item in items {
                 free_value(item);

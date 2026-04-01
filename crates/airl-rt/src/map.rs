@@ -16,7 +16,8 @@ pub extern "C" fn airl_map_new() -> *mut RtValue {
 pub extern "C" fn airl_map_from(pairs: *mut RtValue) -> *mut RtValue {
     let v = unsafe { &*pairs };
     match &v.data {
-        RtData::List(items) => {
+        RtData::List { .. } => {
+            let items = crate::list::list_items(&v.data);
             if items.len() % 2 != 0 {
                 rt_error("airl_map_from: list must have even length (alternating key-value pairs)");
             }
@@ -412,7 +413,8 @@ mod tests {
 
             let keys = airl_map_keys(m3);
             match &(*keys).data {
-                RtData::List(items) => {
+                RtData::List { .. } => {
+                    let items = crate::list::list_items(&(*keys).data);
                     assert_eq!(items.len(), 2);
                     assert_eq!((*items[0]).as_str(), "a");
                     assert_eq!((*items[1]).as_str(), "b");
@@ -444,9 +446,10 @@ mod tests {
 
             let vals = airl_map_values(m3);
             match &(*vals).data {
-                RtData::List(items) => {
+                RtData::List { .. } => {
+                    let items = crate::list::list_items(&(*vals).data);
                     assert_eq!(items.len(), 2);
-                    // sorted by key: "a"→10, "b"→20
+                    // sorted by key: "a"->10, "b"->20
                     assert_eq!((*items[0]).as_int(), 10);
                     assert_eq!((*items[1]).as_int(), 20);
                 }
