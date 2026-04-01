@@ -79,9 +79,9 @@ pub extern "C" fn airl_value_clone(ptr: *mut RtValue) -> *mut RtValue {
             RtData::Bool(v) => rt_bool(*v),
             RtData::Str(s) => rt_str(s.clone()),
             RtData::Bytes(v) => rt_bytes(v.clone()),
-            RtData::List { items, offset, .. } => {
-                // Clone always produces a fresh non-view list from offset
-                let slice = &items[*offset..];
+            RtData::List { .. } => {
+                // Resolve views through the parent pointer before cloning
+                let slice = crate::list::list_items(&(*ptr).data);
                 for &item in slice {
                     airl_value_retain(item);
                 }

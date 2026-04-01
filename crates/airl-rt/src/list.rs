@@ -795,4 +795,66 @@ mod tests {
             assert_eq!(sum, 5050);
         }
     }
+
+    #[test]
+    fn clone_tail_view() {
+        // Clone a tail view and verify the clone contains the correct elements
+        // and is a fresh non-view list (no parent pointer).
+        unsafe {
+            let a = rt_int(1);
+            let b = rt_int(2);
+            let c = rt_int(3);
+            let list = rt_list(vec![a, b, c]);
+            let view = airl_tail(list);
+
+            // view should show [2, 3]
+            let view_slice = list_items(&(*view).data);
+            assert_eq!(view_slice.len(), 2);
+
+            // Clone the view
+            let cloned = crate::memory::airl_value_clone(view);
+            assert!(!cloned.is_null());
+
+            // Cloned list should contain [2, 3]
+            let cloned_slice = list_items(&(*cloned).data);
+            assert_eq!(cloned_slice.len(), 2);
+            assert_eq!((*cloned_slice[0]).as_int(), 2);
+            assert_eq!((*cloned_slice[1]).as_int(), 3);
+
+            // Cloned list should be a fresh non-view (no parent, offset 0)
+            match &(*cloned).data {
+                RtData::List { parent, offset, items } => {
+                    assert!(parent.is_none(), "clone should produce a non-view list");
+                    assert_eq!(*offset, 0, "clone should have offset 0");
+                    assert_eq!(items.len(), 2, "clone should own its items directly");
+                }
+                _ => panic!("cloned value is not a List"),
+            }
+
+            airl_value_release(cloned);
+            airl_value_release(view);
+            airl_value_release(list);
+        }
+    }
+
+    #[test]
+    fn discriminant_unchanged() {
+        // Verify that the discriminant of a manually constructed RtData::List
+        // matches the one produced by rt_list, ensuring the AOT tag is stable.
+        let manual = RtData::List {
+            items: vec![],
+            offset: 0,
+            parent: None,
+        };
+        unsafe {
+            let runtime = rt_list(vec![]);
+            let runtime_disc = std::mem::discriminant(&(*runtime).data);
+            let manual_disc = std::mem::discriminant(&manual);
+            assert_eq!(
+                runtime_disc, manual_disc,
+                "RtData::List discriminant must be stable for AOT tag consistency"
+            );
+            airl_value_release(runtime);
+        }
+    }
 }
