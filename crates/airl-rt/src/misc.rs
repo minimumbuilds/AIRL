@@ -195,11 +195,11 @@ pub extern "C" fn airl_concat_lists(a: *mut RtValue, b: *mut RtValue) -> *mut Rt
     let a_val = unsafe { &*a };
     let b_val = unsafe { &*b };
     let mut items = Vec::new();
-    if let RtData::List(a_items) = &a_val.data {
-        for item in a_items { items.push(crate::memory::airl_value_clone(*item)); }
+    if let RtData::List { .. } = &a_val.data {
+        for &item in crate::list::list_items(&a_val.data) { items.push(crate::memory::airl_value_clone(item)); }
     }
-    if let RtData::List(b_items) = &b_val.data {
-        for item in b_items { items.push(crate::memory::airl_value_clone(*item)); }
+    if let RtData::List { .. } = &b_val.data {
+        for &item in crate::list::list_items(&b_val.data) { items.push(crate::memory::airl_value_clone(item)); }
     }
     rt_list(items)
 }
@@ -216,8 +216,9 @@ pub extern "C" fn airl_range(start: *mut RtValue, end: *mut RtValue) -> *mut RtV
 #[no_mangle]
 pub extern "C" fn airl_reverse_list(list: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*list };
-    if let RtData::List(items) = &val.data {
-        let reversed: Vec<*mut RtValue> = items.iter().rev().map(|i| crate::memory::airl_value_clone(*i)).collect();
+    if let RtData::List { .. } = &val.data {
+        let slice = crate::list::list_items(&val.data);
+        let reversed: Vec<*mut RtValue> = slice.iter().rev().map(|i| crate::memory::airl_value_clone(*i)).collect();
         rt_list(reversed)
     } else {
         rt_list(vec![])
@@ -228,9 +229,10 @@ pub extern "C" fn airl_reverse_list(list: *mut RtValue) -> *mut RtValue {
 pub extern "C" fn airl_take(n_val: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
     let n = match unsafe { &(*n_val).data } { RtData::Int(n) => *n as usize, _ => return rt_list(vec![]) };
     let val = unsafe { &*list };
-    if let RtData::List(items) = &val.data {
-        let take_n = n.min(items.len());
-        let taken: Vec<*mut RtValue> = items[..take_n].iter().map(|i| crate::memory::airl_value_clone(*i)).collect();
+    if let RtData::List { .. } = &val.data {
+        let slice = crate::list::list_items(&val.data);
+        let take_n = n.min(slice.len());
+        let taken: Vec<*mut RtValue> = slice[..take_n].iter().map(|i| crate::memory::airl_value_clone(*i)).collect();
         rt_list(taken)
     } else {
         rt_list(vec![])
@@ -241,9 +243,10 @@ pub extern "C" fn airl_take(n_val: *mut RtValue, list: *mut RtValue) -> *mut RtV
 pub extern "C" fn airl_drop(n_val: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
     let n = match unsafe { &(*n_val).data } { RtData::Int(n) => *n as usize, _ => return rt_list(vec![]) };
     let val = unsafe { &*list };
-    if let RtData::List(items) = &val.data {
-        if n >= items.len() { return rt_list(vec![]); }
-        let dropped: Vec<*mut RtValue> = items[n..].iter().map(|i| crate::memory::airl_value_clone(*i)).collect();
+    if let RtData::List { .. } = &val.data {
+        let slice = crate::list::list_items(&val.data);
+        if n >= slice.len() { return rt_list(vec![]); }
+        let dropped: Vec<*mut RtValue> = slice[n..].iter().map(|i| crate::memory::airl_value_clone(*i)).collect();
         rt_list(dropped)
     } else {
         rt_list(vec![])
@@ -254,12 +257,14 @@ pub extern "C" fn airl_drop(n_val: *mut RtValue, list: *mut RtValue) -> *mut RtV
 pub extern "C" fn airl_zip(a: *mut RtValue, b: *mut RtValue) -> *mut RtValue {
     let a_val = unsafe { &*a };
     let b_val = unsafe { &*b };
-    if let (RtData::List(a_items), RtData::List(b_items)) = (&a_val.data, &b_val.data) {
-        let len = a_items.len().min(b_items.len());
+    if let (RtData::List { .. }, RtData::List { .. }) = (&a_val.data, &b_val.data) {
+        let a_slice = crate::list::list_items(&a_val.data);
+        let b_slice = crate::list::list_items(&b_val.data);
+        let len = a_slice.len().min(b_slice.len());
         let items: Vec<*mut RtValue> = (0..len).map(|i| {
             rt_list(vec![
-                crate::memory::airl_value_clone(a_items[i]),
-                crate::memory::airl_value_clone(b_items[i]),
+                crate::memory::airl_value_clone(a_slice[i]),
+                crate::memory::airl_value_clone(b_slice[i]),
             ])
         }).collect();
         rt_list(items)
@@ -271,14 +276,15 @@ pub extern "C" fn airl_zip(a: *mut RtValue, b: *mut RtValue) -> *mut RtValue {
 #[no_mangle]
 pub extern "C" fn airl_flatten(list: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*list };
-    if let RtData::List(items) = &val.data {
+    if let RtData::List { .. } = &val.data {
+        let slice = crate::list::list_items(&val.data);
         let mut result = Vec::new();
-        for item in items {
-            let sub = unsafe { &**item };
-            if let RtData::List(sub_items) = &sub.data {
-                for si in sub_items { result.push(crate::memory::airl_value_clone(*si)); }
+        for &item in slice {
+            let sub = unsafe { &*item };
+            if let RtData::List { .. } = &sub.data {
+                for &si in crate::list::list_items(&sub.data) { result.push(crate::memory::airl_value_clone(si)); }
             } else {
-                result.push(crate::memory::airl_value_clone(*item));
+                result.push(crate::memory::airl_value_clone(item));
             }
         }
         rt_list(result)
@@ -290,8 +296,9 @@ pub extern "C" fn airl_flatten(list: *mut RtValue) -> *mut RtValue {
 #[no_mangle]
 pub extern "C" fn airl_enumerate(list: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*list };
-    if let RtData::List(items) = &val.data {
-        let result: Vec<*mut RtValue> = items.iter().enumerate().map(|(i, item)| {
+    if let RtData::List { .. } = &val.data {
+        let slice = crate::list::list_items(&val.data);
+        let result: Vec<*mut RtValue> = slice.iter().enumerate().map(|(i, item)| {
             rt_list(vec![rt_int(i as i64), crate::memory::airl_value_clone(*item)])
         }).collect();
         rt_list(result)
@@ -305,10 +312,11 @@ pub extern "C" fn airl_enumerate(list: *mut RtValue) -> *mut RtValue {
 #[no_mangle]
 pub extern "C" fn airl_path_join(parts: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*parts };
-    if let RtData::List(items) = &val.data {
+    if let RtData::List { .. } = &val.data {
+        let slice = crate::list::list_items(&val.data);
         let mut path = std::path::PathBuf::new();
-        for item in items {
-            let s = unsafe { &**item };
+        for &item in slice {
+            let s = unsafe { &*item };
             if let RtData::Str(p) = &s.data { path.push(p); }
         }
         rt_str(path.to_string_lossy().into_owned())
@@ -642,9 +650,9 @@ pub extern "C" fn airl_getenv(name: *mut RtValue) -> *mut RtValue {
 fn extract_cmd_args(cmd: *mut RtValue, args_list: *mut RtValue) -> Result<(String, Vec<String>), *mut RtValue> {
     let command = match unsafe { &(*cmd).data } { RtData::Str(s) => s.clone(), _ => return Err(err_variant("shell-exec: command not a string")) };
     let mut cmd_args = Vec::new();
-    if let RtData::List(items) = unsafe { &(*args_list).data } {
-        for item in items {
-            if let RtData::Str(s) = unsafe { &(**item).data } { cmd_args.push(s.clone()); }
+    if let RtData::List { .. } = unsafe { &(*args_list).data } {
+        for &item in crate::list::list_items(unsafe { &(*args_list).data }) {
+            if let RtData::Str(s) = unsafe { &(*item).data } { cmd_args.push(s.clone()); }
         }
     }
     Ok((command, cmd_args))
@@ -866,8 +874,9 @@ pub extern "C" fn airl_json_stringify(val: *mut RtValue) -> *mut RtValue {
             RtData::Float(f) => f.to_string(),
             RtData::Bool(b) => (if *b { "true" } else { "false" }).to_string(),
             RtData::Nil | RtData::Unit => "null".to_string(),
-            RtData::List(items) => {
-                let parts: Vec<String> = items.iter().map(|&p| {
+            RtData::List { .. } => {
+                let slice = crate::list::list_items(&v.data);
+                let parts: Vec<String> = slice.iter().map(|&p| {
                     let inner = unsafe { &*p };
                     to_json(inner)
                 }).collect();
@@ -1012,7 +1021,7 @@ pub extern "C" fn airl_tcp_send(handle: *mut RtValue, data: *mut RtValue) -> *mu
     let h = match unsafe { &(*handle).data } { RtData::Int(n) => *n, _ => return err_variant("handle must be int") };
     let bytes: Vec<u8> = match unsafe { &(*data).data } {
         RtData::Bytes(v) => v.clone(),
-        RtData::List(items) => items.iter().map(|i| match unsafe { &(**i).data } { RtData::Int(n) => *n as u8, _ => 0 }).collect(),
+        RtData::List { .. } => crate::list::list_items(unsafe { &(*data).data }).iter().map(|i| match unsafe { &(**i).data } { RtData::Int(n) => *n as u8, _ => 0 }).collect(),
         _ => return err_variant("data must be bytes or list"),
     };
     // Remove handle from map during I/O to avoid holding the mutex across blocking write.
@@ -1198,15 +1207,18 @@ pub extern "C" fn airl_bytes_from_int64(n: *mut RtValue) -> *mut RtValue {
 fn extract_bytes(val: *mut RtValue) -> Vec<u8> {
     match unsafe { &(*val).data } {
         RtData::Bytes(v) => v.clone(),
-        RtData::List(items) => items.iter().map(|i| match unsafe { &(**i).data } { RtData::Int(n) => *n as u8, _ => 0 }).collect(),
+        RtData::List { .. } => crate::list::list_items(unsafe { &(*val).data }).iter().map(|i| match unsafe { &(**i).data } { RtData::Int(n) => *n as u8, _ => 0 }).collect(),
         _ => vec![],
     }
 }
 
-fn byte_at(val: *mut RtValue, offset: usize) -> u8 {
+fn byte_at(val: *mut RtValue, off: usize) -> u8 {
     match unsafe { &(*val).data } {
-        RtData::Bytes(v) => if offset < v.len() { v[offset] } else { 0 },
-        RtData::List(items) => if offset < items.len() { match unsafe { &(*items[offset]).data } { RtData::Int(n) => *n as u8, _ => 0 } } else { 0 },
+        RtData::Bytes(v) => if off < v.len() { v[off] } else { 0 },
+        RtData::List { .. } => {
+            let slice = crate::list::list_items(unsafe { &(*val).data });
+            if off < slice.len() { match unsafe { &(*slice[off]).data } { RtData::Int(n) => *n as u8, _ => 0 } } else { 0 }
+        }
         _ => 0,
     }
 }
@@ -1260,7 +1272,7 @@ pub extern "C" fn airl_bytes_concat(a: *mut RtValue, b: *mut RtValue) -> *mut Rt
 #[no_mangle]
 pub extern "C" fn airl_bytes_concat_all(parts: *mut RtValue) -> *mut RtValue {
     let part_lists = match unsafe { &(*parts).data } {
-        RtData::List(items) => items,
+        RtData::List { .. } => crate::list::list_items(unsafe { &(*parts).data }),
         _ => return rt_bytes(vec![]),
     };
     // Measure total size, allocate once

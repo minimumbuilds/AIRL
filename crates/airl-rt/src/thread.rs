@@ -342,7 +342,7 @@ mod tests {
     fn concurrent_recv_on_shared_channel() {
         let ch = airl_channel_new();
         let (tx_id, rx_id) = unsafe {
-            if let RtData::List(ref items) = (*ch).data {
+            if let RtData::List { ref items, .. } = (*ch).data {
                 (extract_int(items[0]).unwrap(), extract_int(items[1]).unwrap())
             } else {
                 panic!("channel-new did not return a list");

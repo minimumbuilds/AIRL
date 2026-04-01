@@ -12,7 +12,9 @@ pub fn rt_values_equal(a: *mut RtValue, b: *mut RtValue) -> bool {
         (RtData::Float(x), RtData::Float(y)) => x.to_bits() == y.to_bits(),
         (RtData::Bool(x), RtData::Bool(y)) => x == y,
         (RtData::Str(x), RtData::Str(y)) => x == y,
-        (RtData::List(xs), RtData::List(ys)) => {
+        (RtData::List { .. }, RtData::List { .. }) => {
+            let xs = crate::list::list_items(&va.data);
+            let ys = crate::list::list_items(&vb.data);
             if xs.len() != ys.len() {
                 return false;
             }

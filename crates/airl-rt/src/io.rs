@@ -320,7 +320,7 @@ pub extern "C" fn airl_type_of(v: *mut RtValue) -> *mut RtValue {
         RtData::Float(_) => "float",
         RtData::Bool(_) => "bool",
         RtData::Str(_) => "string",
-        RtData::List(_) => "list",
+        RtData::List { .. } => "list",
         RtData::Map(_) => "map",
         RtData::Variant { .. } => "variant",
         RtData::Closure { .. } => "closure",

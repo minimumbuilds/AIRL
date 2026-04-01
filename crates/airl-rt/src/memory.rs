@@ -35,9 +35,15 @@ pub extern "C" fn airl_value_release(ptr: *mut RtValue) {
 unsafe fn free_value(ptr: *mut RtValue) {
     // Recursively release nested pointers before dropping
     match &(*ptr).data {
-        RtData::List(items) => {
-            for &item in items {
-                airl_value_release(item);
+        RtData::List { items, offset, parent } => {
+            if let Some(p) = parent {
+                // This is a tail view -- release the parent, don't free items
+                airl_value_release(*p);
+            } else {
+                // We own the items -- release elements from offset
+                for &item in &items[*offset..] {
+                    airl_value_release(item);
+                }
             }
         }
         RtData::Map(m) => {
@@ -73,12 +79,13 @@ pub extern "C" fn airl_value_clone(ptr: *mut RtValue) -> *mut RtValue {
             RtData::Bool(v) => rt_bool(*v),
             RtData::Str(s) => rt_str(s.clone()),
             RtData::Bytes(v) => rt_bytes(v.clone()),
-            RtData::List(items) => {
-                // Retain each item and share
-                for &item in items {
+            RtData::List { .. } => {
+                // Resolve views through the parent pointer before cloning
+                let slice = crate::list::list_items(&(*ptr).data);
+                for &item in slice {
                     airl_value_retain(item);
                 }
-                crate::value::rt_list(items.clone())
+                crate::value::rt_list(slice.to_vec())
             }
             RtData::Map(m) => {
                 // Retain each value and share

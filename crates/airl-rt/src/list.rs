@@ -1,64 +1,89 @@
 use crate::error::rt_error;
 use crate::memory::airl_value_retain;
-use crate::value::{rt_bool, rt_bytes, rt_int, rt_list, RtData, RtValue};
+use crate::value::{rt_bool, rt_bytes, rt_int, rt_list, RtData, RtValue, TAG_LIST};
+
+/// Return a slice of the list's elements, resolving views through the parent pointer.
+pub fn list_items(data: &RtData) -> &[*mut RtValue] {
+    match data {
+        RtData::List { items, offset, parent } => {
+            if let Some(p) = parent {
+                let root = unsafe { &**p };
+                match &root.data {
+                    RtData::List { items: root_items, .. } => &root_items[*offset..],
+                    _ => rt_error("list view: parent is not a List"),
+                }
+            } else {
+                &items[*offset..]
+            }
+        }
+        _ => rt_error("not a List"),
+    }
+}
+
+/// Return the logical length of the list (respecting offset and views).
+pub fn list_len(data: &RtData) -> usize {
+    list_items(data).len()
+}
 
 #[no_mangle]
 pub extern "C" fn airl_head(list: *mut RtValue) -> *mut RtValue {
     let v = unsafe { &*list };
-    match &v.data {
-        RtData::List(items) => {
-            if items.is_empty() {
-                rt_error("airl_head: empty list");
-            }
-            let item = items[0];
-            airl_value_retain(item);
-            item
-        }
-        _ => rt_error("airl_head: not a List"),
+    let slice = list_items(&v.data);
+    if slice.is_empty() {
+        rt_error("airl_head: empty list");
     }
+    let item = slice[0];
+    airl_value_retain(item);
+    item
 }
 
 #[no_mangle]
 pub extern "C" fn airl_tail(list: *mut RtValue) -> *mut RtValue {
     let v = unsafe { &*list };
-    match &v.data {
-        RtData::List(items) => {
-            if items.is_empty() {
-                rt_error("airl_tail: empty list");
-            }
-            let tail: Vec<*mut RtValue> = items[1..].to_vec();
-            for &item in &tail {
-                airl_value_retain(item);
-            }
-            rt_list(tail)
-        }
-        _ => rt_error("airl_tail: not a List"),
+    let slice = list_items(&v.data);
+    if slice.is_empty() {
+        rt_error("airl_tail: empty list");
     }
+
+    // Find the root owner
+    let root = match &v.data {
+        RtData::List { parent: Some(p), .. } => *p,
+        _ => list,
+    };
+    // Get current offset
+    let current_offset = match &v.data {
+        RtData::List { offset, .. } => *offset,
+        _ => 0,
+    };
+
+    airl_value_retain(root);
+    // Create view: empty items, offset+1, parent=root
+    RtValue::alloc(TAG_LIST, RtData::List {
+        items: Vec::new(),
+        offset: current_offset + 1,
+        parent: Some(root),
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn airl_cons(elem: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
     let v = unsafe { &*list };
-    match &v.data {
-        RtData::List(items) => {
-            airl_value_retain(elem);
-            let mut new_items = Vec::with_capacity(items.len() + 1);
-            new_items.push(elem);
-            for &item in items {
-                airl_value_retain(item);
-                new_items.push(item);
-            }
-            rt_list(new_items)
-        }
-        _ => rt_error("airl_cons: not a List"),
+    let slice = list_items(&v.data);
+    airl_value_retain(elem);
+    let mut new_items = Vec::with_capacity(slice.len() + 1);
+    new_items.push(elem);
+    for &item in slice {
+        airl_value_retain(item);
+        new_items.push(item);
     }
+    rt_list(new_items)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_empty(list: *mut RtValue) -> *mut RtValue {
     let v = unsafe { &*list };
     match &v.data {
-        RtData::List(items) => rt_bool(items.is_empty()),
+        RtData::List { .. } => rt_bool(list_items(&v.data).is_empty()),
         RtData::Bytes(v) => rt_bool(v.is_empty()),
         _ => rt_error("airl_empty: not a List or Bytes"),
     }
@@ -82,7 +107,7 @@ pub extern "C" fn airl_list_new(items: *const *mut RtValue, count: usize) -> *mu
 pub extern "C" fn airl_length(v: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*v };
     match &val.data {
-        RtData::List(items) => rt_int(items.len() as i64),
+        RtData::List { .. } => rt_int(list_len(&val.data) as i64),
         RtData::Str(s) => rt_int(s.chars().count() as i64),
         RtData::Map(m) => rt_int(m.len() as i64),
         RtData::Bytes(v) => rt_int(v.len() as i64),
@@ -99,11 +124,12 @@ pub extern "C" fn airl_at(list: *mut RtValue, index: *mut RtValue) -> *mut RtVal
         _ => rt_error("airl_at: index must be an Int"),
     };
     match &v.data {
-        RtData::List(items) => {
-            if i < 0 || i as usize >= items.len() {
+        RtData::List { .. } => {
+            let slice = list_items(&v.data);
+            if i < 0 || i as usize >= slice.len() {
                 rt_error("airl_at: index out of bounds");
             }
-            let item = items[i as usize];
+            let item = slice[i as usize];
             airl_value_retain(item);
             item
         }
@@ -119,11 +145,34 @@ pub extern "C" fn airl_at(list: *mut RtValue, index: *mut RtValue) -> *mut RtVal
 
 #[no_mangle]
 pub extern "C" fn airl_append(list: *mut RtValue, elem: *mut RtValue) -> *mut RtValue {
-    let v = unsafe { &*list };
+    let v = unsafe { &mut *list };
+    // COW fast path: sole owner, not a view, at start of array
+    if v.rc == 1 {
+        match &mut v.data {
+            RtData::List { items, offset, parent } if parent.is_none() && *offset == 0 => {
+                airl_value_retain(elem);
+                items.push(elem);
+                airl_value_retain(list); // caller expects +1 ref
+                return list;
+            }
+            RtData::Bytes(bytes) => {
+                let b = match unsafe { &(*elem).data } {
+                    RtData::Int(n) => *n as u8,
+                    _ => rt_error("airl_append: Bytes can only append Int"),
+                };
+                bytes.push(b);
+                airl_value_retain(list); // caller expects +1 ref
+                return list;
+            }
+            _ => {} // fall through to clone path
+        }
+    }
+    // Clone path
     match &v.data {
-        RtData::List(items) => {
-            let mut new_items = Vec::with_capacity(items.len() + 1);
-            for &item in items {
+        RtData::List { .. } => {
+            let slice = list_items(&v.data);
+            let mut new_items = Vec::with_capacity(slice.len() + 1);
+            for &item in slice {
                 airl_value_retain(item);
                 new_items.push(item);
             }
@@ -144,7 +193,7 @@ pub extern "C" fn airl_append(list: *mut RtValue, elem: *mut RtValue) -> *mut Rt
     }
 }
 
-/// `at-or(list, idx, default)` — safe indexing, returns default on out-of-bounds.
+/// `at-or(list, idx, default)` -- safe indexing, returns default on out-of-bounds.
 #[no_mangle]
 pub extern "C" fn airl_at_or(list: *mut RtValue, idx: *mut RtValue, default: *mut RtValue) -> *mut RtValue {
     let v = unsafe { &*list };
@@ -154,20 +203,21 @@ pub extern "C" fn airl_at_or(list: *mut RtValue, idx: *mut RtValue, default: *mu
         _ => rt_error("at-or: index must be Int"),
     };
     match &v.data {
-        RtData::List(items) => {
-            if i >= items.len() {
+        RtData::List { .. } => {
+            let slice = list_items(&v.data);
+            if i >= slice.len() {
                 airl_value_retain(default);
                 default
             } else {
-                airl_value_retain(items[i]);
-                items[i]
+                airl_value_retain(slice[i]);
+                slice[i]
             }
         }
         _ => rt_error("at-or: first argument must be List"),
     }
 }
 
-/// `set-at(list, idx, val)` — return new list with element at idx replaced.
+/// `set-at(list, idx, val)` -- return new list with element at idx replaced.
 #[no_mangle]
 pub extern "C" fn airl_set_at(list: *mut RtValue, idx: *mut RtValue, val: *mut RtValue) -> *mut RtValue {
     let v = unsafe { &*list };
@@ -177,12 +227,13 @@ pub extern "C" fn airl_set_at(list: *mut RtValue, idx: *mut RtValue, val: *mut R
         _ => rt_error("set-at: index must be Int"),
     };
     match &v.data {
-        RtData::List(items) => {
-            if i >= items.len() {
-                rt_error(&format!("set-at: index {} out of bounds (len {})", i, items.len()));
+        RtData::List { .. } => {
+            let slice = list_items(&v.data);
+            if i >= slice.len() {
+                rt_error(&format!("set-at: index {} out of bounds (len {})", i, slice.len()));
             }
-            let mut new_items = Vec::with_capacity(items.len());
-            for (j, &item) in items.iter().enumerate() {
+            let mut new_items = Vec::with_capacity(slice.len());
+            for (j, &item) in slice.iter().enumerate() {
                 if j == i {
                     airl_value_retain(val);
                     new_items.push(val);
@@ -197,13 +248,14 @@ pub extern "C" fn airl_set_at(list: *mut RtValue, idx: *mut RtValue, val: *mut R
     }
 }
 
-/// `list-contains?(list, val)` — check if element is in list.
+/// `list-contains?(list, val)` -- check if element is in list.
 #[no_mangle]
 pub extern "C" fn airl_list_contains(list: *mut RtValue, val: *mut RtValue) -> *mut RtValue {
     let v = unsafe { &*list };
     match &v.data {
-        RtData::List(items) => {
-            for &item in items {
+        RtData::List { .. } => {
+            let slice = list_items(&v.data);
+            for &item in slice {
                 // Use the runtime equality check
                 let eq_result = crate::comparison::airl_eq(item, val);
                 let is_true = unsafe {
@@ -223,7 +275,7 @@ pub extern "C" fn airl_list_contains(list: *mut RtValue, val: *mut RtValue) -> *
     }
 }
 
-// ── Higher-order list operations (for AOT-compiled code) ─────────
+// -- Higher-order list operations (for AOT-compiled code) -----
 
 use crate::closure::airl_call_closure;
 use crate::value::rt_nil;
@@ -233,7 +285,7 @@ use crate::value::rt_nil;
 pub extern "C" fn airl_map(closure: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
     let items = unsafe {
         match &(*list).data {
-            RtData::List(items) => items.clone(),
+            RtData::List { .. } => list_items(&(*list).data).to_vec(),
             _ => rt_error("airl_map: second arg must be a List"),
         }
     };
@@ -252,7 +304,7 @@ pub extern "C" fn airl_map(closure: *mut RtValue, list: *mut RtValue) -> *mut Rt
 pub extern "C" fn airl_filter(closure: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
     let items = unsafe {
         match &(*list).data {
-            RtData::List(items) => items.clone(),
+            RtData::List { .. } => list_items(&(*list).data).to_vec(),
             _ => rt_error("airl_filter: second arg must be a List"),
         }
     };
@@ -277,7 +329,7 @@ pub extern "C" fn airl_fold(
 ) -> *mut RtValue {
     let items = unsafe {
         match &(*list).data {
-            RtData::List(items) => items.clone(),
+            RtData::List { .. } => list_items(&(*list).data).to_vec(),
             _ => rt_error("airl_fold: third arg must be a List"),
         }
     };
@@ -296,7 +348,7 @@ pub extern "C" fn airl_fold(
 pub extern "C" fn airl_sort(closure: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
     let items = unsafe {
         match &(*list).data {
-            RtData::List(items) => items.clone(),
+            RtData::List { .. } => list_items(&(*list).data).to_vec(),
             _ => rt_error("airl_sort: second arg must be a List"),
         }
     };
@@ -330,7 +382,7 @@ pub extern "C" fn airl_sort(closure: *mut RtValue, list: *mut RtValue) -> *mut R
 pub extern "C" fn airl_any(closure: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
     let items = unsafe {
         match &(*list).data {
-            RtData::List(items) => items.clone(),
+            RtData::List { .. } => list_items(&(*list).data).to_vec(),
             _ => rt_error("airl_any: second arg must be a List"),
         }
     };
@@ -350,7 +402,7 @@ pub extern "C" fn airl_any(closure: *mut RtValue, list: *mut RtValue) -> *mut Rt
 pub extern "C" fn airl_all(closure: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
     let items = unsafe {
         match &(*list).data {
-            RtData::List(items) => items.clone(),
+            RtData::List { .. } => list_items(&(*list).data).to_vec(),
             _ => rt_error("airl_all: second arg must be a List"),
         }
     };
@@ -370,7 +422,7 @@ pub extern "C" fn airl_all(closure: *mut RtValue, list: *mut RtValue) -> *mut Rt
 pub extern "C" fn airl_find(closure: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
     let items = unsafe {
         match &(*list).data {
-            RtData::List(items) => items.clone(),
+            RtData::List { .. } => list_items(&(*list).data).to_vec(),
             _ => rt_error("airl_find: second arg must be a List"),
         }
     };
@@ -398,7 +450,6 @@ mod tests {
             let a = rt_int(1);
             let b = rt_int(2);
             let c = rt_int(3);
-            // retain to keep them alive after list creation (list holds one ref)
             let list = rt_list(vec![a, b, c]);
 
             let h = airl_head(list);
@@ -406,14 +457,10 @@ mod tests {
             airl_value_release(h);
 
             let t = airl_tail(list);
-            match &(*t).data {
-                RtData::List(items) => {
-                    assert_eq!(items.len(), 2);
-                    assert_eq!((*items[0]).as_int(), 2);
-                    assert_eq!((*items[1]).as_int(), 3);
-                }
-                _ => panic!("expected list"),
-            }
+            let slice = list_items(&(*t).data);
+            assert_eq!(slice.len(), 2);
+            assert_eq!((*slice[0]).as_int(), 2);
+            assert_eq!((*slice[1]).as_int(), 3);
             airl_value_release(t);
             airl_value_release(list);
         }
@@ -427,15 +474,11 @@ mod tests {
             let list = rt_list(vec![a, b]);
             let elem = rt_int(1);
             let result = airl_cons(elem, list);
-            match &(*result).data {
-                RtData::List(items) => {
-                    assert_eq!(items.len(), 3);
-                    assert_eq!((*items[0]).as_int(), 1);
-                    assert_eq!((*items[1]).as_int(), 2);
-                    assert_eq!((*items[2]).as_int(), 3);
-                }
-                _ => panic!("expected list"),
-            }
+            let slice = list_items(&(*result).data);
+            assert_eq!(slice.len(), 3);
+            assert_eq!((*slice[0]).as_int(), 1);
+            assert_eq!((*slice[1]).as_int(), 2);
+            assert_eq!((*slice[2]).as_int(), 3);
             airl_value_release(elem);
             airl_value_release(list);
             airl_value_release(result);
@@ -507,16 +550,311 @@ mod tests {
             let list = rt_list(vec![a, b]);
             let elem = rt_int(3);
             let result = airl_append(list, elem);
-            match &(*result).data {
-                RtData::List(items) => {
-                    assert_eq!(items.len(), 3);
-                    assert_eq!((*items[2]).as_int(), 3);
-                }
-                _ => panic!("expected list"),
-            }
+            let slice = list_items(&(*result).data);
+            assert_eq!(slice.len(), 3);
+            assert_eq!((*slice[2]).as_int(), 3);
             airl_value_release(elem);
             airl_value_release(list);
             airl_value_release(result);
+        }
+    }
+
+    // -- COW (Copy-on-Write) tests --
+
+    #[test]
+    fn append_cow_returns_same_pointer() {
+        unsafe {
+            let a = rt_int(1);
+            let list = rt_list(vec![a]);
+            assert_eq!((*list).rc, 1);
+            let elem = rt_int(2);
+            let result = airl_append(list, elem);
+            assert_eq!(result, list, "COW append should return same pointer when rc == 1");
+            let slice = list_items(&(*result).data);
+            assert_eq!(slice.len(), 2);
+            assert_eq!((*slice[0]).as_int(), 1);
+            assert_eq!((*slice[1]).as_int(), 2);
+            airl_value_release(elem);
+            airl_value_release(result);
+        }
+    }
+
+    #[test]
+    fn append_clone_when_shared() {
+        unsafe {
+            let a = rt_int(1);
+            let list = rt_list(vec![a]);
+            airl_value_retain(list); // rc == 2 -> shared
+            assert_eq!((*list).rc, 2);
+            let elem = rt_int(2);
+            let result = airl_append(list, elem);
+            assert_ne!(result, list, "append should return new pointer when rc > 1");
+            let slice = list_items(&(*result).data);
+            assert_eq!(slice.len(), 2);
+            airl_value_release(elem);
+            airl_value_release(list);
+            airl_value_release(list); // second release for the extra retain
+            airl_value_release(result);
+        }
+    }
+
+    // -- COW tail view tests --
+
+    #[test]
+    fn tail_view_returns_correct_elements() {
+        unsafe {
+            let a = rt_int(1);
+            let b = rt_int(2);
+            let c = rt_int(3);
+            let list = rt_list(vec![a, b, c]);
+            let t = airl_tail(list);
+            let slice = list_items(&(*t).data);
+            assert_eq!(slice.len(), 2);
+            assert_eq!((*slice[0]).as_int(), 2);
+            assert_eq!((*slice[1]).as_int(), 3);
+            airl_value_release(t);
+            airl_value_release(list);
+        }
+    }
+
+    #[test]
+    fn tail_of_tail_view() {
+        unsafe {
+            let a = rt_int(1);
+            let b = rt_int(2);
+            let c = rt_int(3);
+            let list = rt_list(vec![a, b, c]);
+            let t1 = airl_tail(list);
+            let t2 = airl_tail(t1);
+            let slice = list_items(&(*t2).data);
+            assert_eq!(slice.len(), 1);
+            assert_eq!((*slice[0]).as_int(), 3);
+            airl_value_release(t2);
+            airl_value_release(t1);
+            airl_value_release(list);
+        }
+    }
+
+    #[test]
+    fn tail_view_keeps_root_alive() {
+        unsafe {
+            let a = rt_int(1);
+            let b = rt_int(2);
+            let c = rt_int(3);
+            let list = rt_list(vec![a, b, c]);
+            let t = airl_tail(list);
+            // Release original list -- view retains root, so it should still work
+            airl_value_release(list);
+            let slice = list_items(&(*t).data);
+            assert_eq!(slice.len(), 2);
+            assert_eq!((*slice[0]).as_int(), 2);
+            assert_eq!((*slice[1]).as_int(), 3);
+            airl_value_release(t);
+        }
+    }
+
+    #[test]
+    fn append_inplace_sole_owner() {
+        unsafe {
+            let a = rt_int(1);
+            let list = rt_list(vec![a]);
+            assert_eq!((*list).rc, 1);
+            let elem = rt_int(2);
+            let result = airl_append(list, elem);
+            assert_eq!(result, list, "rc==1, no parent, offset==0 should be in-place");
+            airl_value_release(elem);
+            airl_value_release(result);
+        }
+    }
+
+    #[test]
+    fn append_clones_when_shared() {
+        unsafe {
+            let a = rt_int(1);
+            let list = rt_list(vec![a]);
+            airl_value_retain(list); // rc=2
+            let elem = rt_int(2);
+            let result = airl_append(list, elem);
+            assert_ne!(result, list, "rc>1 should clone");
+            airl_value_release(elem);
+            airl_value_release(list);
+            airl_value_release(list);
+            airl_value_release(result);
+        }
+    }
+
+    #[test]
+    fn append_clones_when_view() {
+        unsafe {
+            let a = rt_int(1);
+            let b = rt_int(2);
+            let c = rt_int(3);
+            let list = rt_list(vec![a, b, c]);
+            let view = airl_tail(list);
+            // view has rc==1 but parent is Some -- must clone
+            assert_eq!((*view).rc, 1);
+            let elem = rt_int(4);
+            let result = airl_append(view, elem);
+            assert_ne!(result, view, "view (parent is Some) should clone");
+            let slice = list_items(&(*result).data);
+            assert_eq!(slice.len(), 3);
+            assert_eq!((*slice[0]).as_int(), 2);
+            assert_eq!((*slice[1]).as_int(), 3);
+            assert_eq!((*slice[2]).as_int(), 4);
+            airl_value_release(elem);
+            airl_value_release(result);
+            airl_value_release(view);
+            airl_value_release(list);
+        }
+    }
+
+    #[test]
+    fn cons_on_tail_view() {
+        unsafe {
+            let a = rt_int(1);
+            let b = rt_int(2);
+            let c = rt_int(3);
+            let list = rt_list(vec![a, b, c]);
+            let view = airl_tail(list);
+            let elem = rt_int(0);
+            let result = airl_cons(elem, view);
+            let slice = list_items(&(*result).data);
+            assert_eq!(slice.len(), 3);
+            assert_eq!((*slice[0]).as_int(), 0);
+            assert_eq!((*slice[1]).as_int(), 2);
+            assert_eq!((*slice[2]).as_int(), 3);
+            airl_value_release(elem);
+            airl_value_release(result);
+            airl_value_release(view);
+            airl_value_release(list);
+        }
+    }
+
+    #[test]
+    fn length_on_tail_view() {
+        unsafe {
+            let a = rt_int(1);
+            let b = rt_int(2);
+            let c = rt_int(3);
+            let list = rt_list(vec![a, b, c]);
+            let view = airl_tail(list);
+            let len = airl_length(view);
+            assert_eq!((*len).as_int(), 2);
+            airl_value_release(len);
+            airl_value_release(view);
+            airl_value_release(list);
+        }
+    }
+
+    #[test]
+    fn empty_on_tail_view() {
+        unsafe {
+            // Non-empty view
+            let a = rt_int(1);
+            let b = rt_int(2);
+            let list = rt_list(vec![a, b]);
+            let view = airl_tail(list);
+            let r = airl_empty(view);
+            assert!(!(*r).as_bool());
+            airl_value_release(r);
+            airl_value_release(view);
+            airl_value_release(list);
+
+            // Tail of single-element list -> empty view
+            let x = rt_int(42);
+            let list2 = rt_list(vec![x]);
+            let view2 = airl_tail(list2);
+            let r2 = airl_empty(view2);
+            assert!((*r2).as_bool());
+            airl_value_release(r2);
+            airl_value_release(view2);
+            airl_value_release(list2);
+        }
+    }
+
+    #[test]
+    fn fold_pattern_with_tail() {
+        // Build [1..100], sum using head/tail pattern, verify == 5050
+        unsafe {
+            let items: Vec<*mut RtValue> = (1..=100).map(|i| rt_int(i)).collect();
+            let mut list = rt_list(items);
+            let mut sum: i64 = 0;
+            loop {
+                let slice = list_items(&(*list).data);
+                if slice.is_empty() {
+                    break;
+                }
+                let h = airl_head(list);
+                sum += (*h).as_int();
+                airl_value_release(h);
+                let t = airl_tail(list);
+                airl_value_release(list);
+                list = t;
+            }
+            airl_value_release(list);
+            assert_eq!(sum, 5050);
+        }
+    }
+
+    #[test]
+    fn clone_tail_view() {
+        // Clone a tail view and verify the clone contains the correct elements
+        // and is a fresh non-view list (no parent pointer).
+        unsafe {
+            let a = rt_int(1);
+            let b = rt_int(2);
+            let c = rt_int(3);
+            let list = rt_list(vec![a, b, c]);
+            let view = airl_tail(list);
+
+            // view should show [2, 3]
+            let view_slice = list_items(&(*view).data);
+            assert_eq!(view_slice.len(), 2);
+
+            // Clone the view
+            let cloned = crate::memory::airl_value_clone(view);
+            assert!(!cloned.is_null());
+
+            // Cloned list should contain [2, 3]
+            let cloned_slice = list_items(&(*cloned).data);
+            assert_eq!(cloned_slice.len(), 2);
+            assert_eq!((*cloned_slice[0]).as_int(), 2);
+            assert_eq!((*cloned_slice[1]).as_int(), 3);
+
+            // Cloned list should be a fresh non-view (no parent, offset 0)
+            match &(*cloned).data {
+                RtData::List { parent, offset, items } => {
+                    assert!(parent.is_none(), "clone should produce a non-view list");
+                    assert_eq!(*offset, 0, "clone should have offset 0");
+                    assert_eq!(items.len(), 2, "clone should own its items directly");
+                }
+                _ => panic!("cloned value is not a List"),
+            }
+
+            airl_value_release(cloned);
+            airl_value_release(view);
+            airl_value_release(list);
+        }
+    }
+
+    #[test]
+    fn discriminant_unchanged() {
+        // Verify that the discriminant of a manually constructed RtData::List
+        // matches the one produced by rt_list, ensuring the AOT tag is stable.
+        let manual = RtData::List {
+            items: vec![],
+            offset: 0,
+            parent: None,
+        };
+        unsafe {
+            let runtime = rt_list(vec![]);
+            let runtime_disc = std::mem::discriminant(&(*runtime).data);
+            let manual_disc = std::mem::discriminant(&manual);
+            assert_eq!(
+                runtime_disc, manual_disc,
+                "RtData::List discriminant must be stable for AOT tag consistency"
+            );
+            airl_value_release(runtime);
         }
     }
 }
