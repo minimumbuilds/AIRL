@@ -641,6 +641,7 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
             args.get(4).copied().unwrap_or(std::ptr::null_mut())),
         "tcp-listen" => airl_rt::misc::airl_tcp_listen(a0!(), a1!()),
         "tcp-accept" => airl_rt::misc::airl_tcp_accept(a0!()),
+        "tcp-accept-tls" => airl_rt::misc::airl_tcp_accept_tls(a0!(), a1!(), a2!()),
         "thread-set-affinity" => airl_rt::thread::airl_thread_set_affinity(a0!()),
 
         // Compression

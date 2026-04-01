@@ -906,26 +906,27 @@ use std::io::{Read, Write};
 enum RtTcpHandle {
     Plain(TcpStream),
     Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+    TlsServer(Box<rustls::StreamOwned<rustls::ServerConnection, TcpStream>>),
 }
 
 impl Read for RtTcpHandle {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self { RtTcpHandle::Plain(s) => s.read(buf), RtTcpHandle::Tls(s) => s.read(buf) }
+        match self { RtTcpHandle::Plain(s) => s.read(buf), RtTcpHandle::Tls(s) => s.read(buf), RtTcpHandle::TlsServer(s) => s.read(buf) }
     }
 }
 
 impl Write for RtTcpHandle {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        match self { RtTcpHandle::Plain(s) => s.write(buf), RtTcpHandle::Tls(s) => s.write(buf) }
+        match self { RtTcpHandle::Plain(s) => s.write(buf), RtTcpHandle::Tls(s) => s.write(buf), RtTcpHandle::TlsServer(s) => s.write(buf) }
     }
     fn flush(&mut self) -> std::io::Result<()> {
-        match self { RtTcpHandle::Plain(s) => s.flush(), RtTcpHandle::Tls(s) => s.flush() }
+        match self { RtTcpHandle::Plain(s) => s.flush(), RtTcpHandle::Tls(s) => s.flush(), RtTcpHandle::TlsServer(s) => s.flush() }
     }
 }
 
 impl RtTcpHandle {
     fn set_timeout(&self, timeout: Option<std::time::Duration>) -> std::io::Result<()> {
-        let stream = match self { RtTcpHandle::Plain(s) => s, RtTcpHandle::Tls(s) => s.get_ref() };
+        let stream = match self { RtTcpHandle::Plain(s) => s, RtTcpHandle::Tls(s) => s.get_ref(), RtTcpHandle::TlsServer(s) => s.get_ref() };
         stream.set_read_timeout(timeout)?;
         stream.set_write_timeout(timeout)?;
         Ok(())
@@ -1118,6 +1119,62 @@ pub extern "C" fn airl_tcp_connect_tls(host: *mut RtValue, port: *mut RtValue, c
     ok_variant(rt_int(handle))
 }
 
+/// Upgrade an already-accepted plain TCP handle to server-side TLS.
+/// Signature: (conn-handle : i64, cert-path : String, key-path : String) -> Result[i64, String]
+#[no_mangle]
+pub extern "C" fn airl_tcp_accept_tls(
+    conn_handle: *mut RtValue,
+    cert_path: *mut RtValue,
+    key_path: *mut RtValue,
+) -> *mut RtValue {
+    let ch = match unsafe { &(*conn_handle).data } { RtData::Int(n) => *n, _ => return err_variant("tcp-accept-tls: handle must be Int") };
+    let cert_file = match unsafe { &(*cert_path).data } { RtData::Str(s) => s.clone(), _ => return err_variant("tcp-accept-tls: cert-path must be String") };
+    let key_file = match unsafe { &(*key_path).data } { RtData::Str(s) => s.clone(), _ => return err_variant("tcp-accept-tls: key-path must be String") };
+
+    let cert_data = match std::fs::read(&cert_file) { Ok(d) => d, Err(e) => return err_variant(&format!("tcp-accept-tls: read cert: {}", e)) };
+    let key_data = match std::fs::read(&key_file) { Ok(d) => d, Err(e) => return err_variant(&format!("tcp-accept-tls: read key: {}", e)) };
+
+    let certs: Vec<_> = match rustls_pemfile::certs(&mut &cert_data[..]).collect::<Result<Vec<_>, _>>() {
+        Ok(c) => c,
+        Err(e) => return err_variant(&format!("tcp-accept-tls: parse cert: {}", e)),
+    };
+    let pkey = match rustls_pemfile::private_key(&mut &key_data[..]) {
+        Ok(Some(k)) => k,
+        _ => return err_variant("tcp-accept-tls: no private key found"),
+    };
+
+    let config = match rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, pkey)
+    {
+        Ok(c) => c,
+        Err(e) => return err_variant(&format!("tcp-accept-tls: server config: {}", e)),
+    };
+
+    let removed = tcp_handles().lock().unwrap().remove(&ch);
+    let plain_stream = match removed {
+        Some(RtTcpHandle::Plain(s)) => s,
+        Some(other) => {
+            // Re-insert the existing handle so it isn't lost
+            tcp_handles().lock().unwrap().insert(ch, other);
+            return err_variant("tcp-accept-tls: handle is already TLS");
+        }
+        None => return err_variant(&format!("tcp-accept-tls: invalid handle {}", ch)),
+    };
+
+    let server_conn = match rustls::ServerConnection::new(std::sync::Arc::new(config)) {
+        Ok(c) => c,
+        Err(e) => {
+            tcp_handles().lock().unwrap().insert(ch, RtTcpHandle::Plain(plain_stream));
+            return err_variant(&format!("tcp-accept-tls: server connection: {}", e));
+        }
+    };
+
+    let tls_stream = rustls::StreamOwned::new(server_conn, plain_stream);
+    tcp_handles().lock().unwrap().insert(ch, RtTcpHandle::TlsServer(Box::new(tls_stream)));
+    ok_variant(rt_int(ch))
+}
+
 // ── Byte encoding ──
 
 #[no_mangle]
@@ -1302,3 +1359,106 @@ pub extern "C" fn airl_zstd_decompress(data: *mut RtValue) -> *mut RtValue {
 }
 
 // airl_run_bytecode and airl_compile_to_executable are defined elsewhere in airl-runtime
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tcp_accept_tls_invalid_handle() {
+        let handle = rt_int(-999);
+        let cert = rt_str("nonexistent.pem".to_string());
+        let key = rt_str("nonexistent.key".to_string());
+        let result = airl_tcp_accept_tls(handle, cert, key);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Variant { tag_name, .. } => assert_eq!(tag_name, "Err", "Expected Err variant for invalid handle"),
+            _ => panic!("Expected Variant result"),
+        }
+    }
+
+    #[test]
+    fn test_tcp_accept_tls_bad_cert_path() {
+        // Insert a real Plain handle so we get past handle lookup to the cert-read path
+        let h = NEXT_TCP_HANDLE.fetch_add(1, Ordering::SeqCst);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _client = TcpStream::connect(addr).unwrap();
+        let (server_stream, _) = listener.accept().unwrap();
+        tcp_handles().lock().unwrap().insert(h, RtTcpHandle::Plain(server_stream));
+
+        let handle = rt_int(h);
+        let cert = rt_str("nonexistent.pem".to_string());
+        let key = rt_str("nonexistent.key".to_string());
+        let result = airl_tcp_accept_tls(handle, cert, key);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Variant { tag_name, inner } => {
+                assert_eq!(tag_name, "Err");
+                let msg = unsafe { &(**inner).data };
+                match msg {
+                    RtData::Str(s) => assert!(s.contains("read cert"), "Error should mention cert read failure, got: {}", s),
+                    _ => panic!("Expected string error message"),
+                }
+            }
+            _ => panic!("Expected Variant result"),
+        }
+        // Handle should be restored after cert-read failure (it fails before removing handle)
+        // Actually, cert read happens before handle removal, so handle is still in the map
+        assert!(tcp_handles().lock().unwrap().remove(&h).is_some(), "Handle should still exist after cert-read failure");
+    }
+
+    // Self-signed test cert generated with: openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 36500 -subj '/CN=localhost'
+    const TEST_CERT_PEM: &str = "-----BEGIN CERTIFICATE-----\nMIIBfjCCASWgAwIBAgIUVUs3Wd34fOdaD+6BF19k2DREyCswCgYIKoZIzj0EAwIw\nFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MDMzMTIzNDUzOFoYDzIxMjYwMzA3\nMjM0NTM4WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAARq4GkaYS1M0NabCS8Zt02WyfgAOucJGySwVn7j1I6Np4DT0/KJDNSf\nUCmU9iMGZBLDbMlqhSs3DbVjO7uJoXH2o1MwUTAdBgNVHQ4EFgQUkuMOkLwIH6Vq\nX1UvvuVqt6CoC0gwHwYDVR0jBBgwFoAUkuMOkLwIH6VqX1UvvuVqt6CoC0gwDwYD\nVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNHADBEAiAnIvjPxc1TeaFtDz0ylnIF\nK9SkuMKbd1TymhYpz5K7oAIgYcH/9ur6MYhEq6dgQxa00PiGLhsXdnlC7Ls9RDgf\nWtk=\n-----END CERTIFICATE-----\n";
+    const TEST_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgSFCSJXetH85rkIkY\nq5q6SeKcRLOKX1Rz3KCP+b/EET+hRANCAARq4GkaYS1M0NabCS8Zt02WyfgAOucJ\nGySwVn7j1I6Np4DT0/KJDNSfUCmU9iMGZBLDbMlqhSs3DbVjO7uJoXH2\n-----END PRIVATE KEY-----\n";
+
+    #[test]
+    fn test_tcp_accept_tls_already_tls() {
+        // Write test cert/key to temp files
+        let dir = std::env::temp_dir().join(format!("airl_tls_test_{}", NEXT_TCP_HANDLE.load(Ordering::SeqCst)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cert_path = dir.join("cert.pem");
+        let key_path = dir.join("key.pem");
+        std::fs::write(&cert_path, TEST_CERT_PEM).unwrap();
+        std::fs::write(&key_path, TEST_KEY_PEM).unwrap();
+
+        // Create a Tls (client) handle — this should be rejected by tcp-accept-tls
+        let h = NEXT_TCP_HANDLE.fetch_add(1, Ordering::SeqCst);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _client = TcpStream::connect(addr).unwrap();
+        let (server_stream, _) = listener.accept().unwrap();
+
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let config = rustls::ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+        let server_name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+        let conn = rustls::ClientConnection::new(std::sync::Arc::new(config), server_name).unwrap();
+        let tls_stream = rustls::StreamOwned::new(conn, server_stream);
+        tcp_handles().lock().unwrap().insert(h, RtTcpHandle::Tls(Box::new(tls_stream)));
+
+        let handle = rt_int(h);
+        let cert_arg = rt_str(cert_path.to_str().unwrap().to_string());
+        let key_arg = rt_str(key_path.to_str().unwrap().to_string());
+        let result = airl_tcp_accept_tls(handle, cert_arg, key_arg);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Variant { tag_name, inner } => {
+                assert_eq!(tag_name, "Err");
+                let msg = unsafe { &(**inner).data };
+                match msg {
+                    RtData::Str(s) => assert!(s.contains("already TLS"), "Error should mention already TLS, got: {}", s),
+                    _ => panic!("Expected string error message"),
+                }
+            }
+            _ => panic!("Expected Variant result"),
+        }
+        // Handle should be preserved after "already TLS" error
+        assert!(tcp_handles().lock().unwrap().get(&h).is_some(), "Handle should be preserved after already-TLS error");
+        // Clean up
+        tcp_handles().lock().unwrap().remove(&h);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

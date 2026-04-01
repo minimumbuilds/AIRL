@@ -120,7 +120,7 @@ impl TypeChecker {
             "bytes-from-string", "bytes-to-string", "bytes-concat", "bytes-concat-all", "bytes-slice", "crc32c",
             // TCP sockets
             "tcp-connect", "tcp-close", "tcp-send", "tcp-recv", "tcp-recv-exact", "tcp-set-timeout",
-            "tcp-listen", "tcp-accept",
+            "tcp-listen", "tcp-accept", "tcp-accept-tls",
             // Threading and channels
             "thread-spawn", "thread-join", "thread-set-affinity",
             "channel-new", "channel-send", "channel-recv", "channel-recv-timeout", "channel-drain", "channel-close",

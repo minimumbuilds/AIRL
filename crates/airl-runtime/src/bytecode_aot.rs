@@ -284,6 +284,7 @@ pub struct RuntimeImports {
     pub tcp_connect_tls: FuncId,
     pub tcp_listen: FuncId,
     pub tcp_accept: FuncId,
+    pub tcp_accept_tls: FuncId,
 
     // Threads and channels
     pub thread_spawn: FuncId,
@@ -789,6 +790,7 @@ impl BytecodeAot {
         let tcp_connect_tls = declare_import(m, "airl_tcp_connect_tls", sig5);
         let tcp_listen = declare_import(m, "airl_tcp_listen", s2.clone());
         let tcp_accept = declare_import(m, "airl_tcp_accept", s1.clone());
+        let tcp_accept_tls = declare_import(m, "airl_tcp_accept_tls", sig_3_ptr(m, ptr));
 
         // Threads and channels
         let thread_spawn = declare_import(m, "airl_thread_spawn", s1.clone());
@@ -855,7 +857,7 @@ impl BytecodeAot {
             bytes_from_string, bytes_to_string, bytes_concat, bytes_concat_all, bytes_slice, crc32c,
             gzip_compress, gzip_decompress, snappy_compress, snappy_decompress,
             lz4_compress, lz4_decompress, zstd_compress, zstd_decompress,
-            tcp_connect, tcp_close, tcp_send, tcp_recv, tcp_recv_exact, tcp_set_timeout, tcp_connect_tls, tcp_listen, tcp_accept,
+            tcp_connect, tcp_close, tcp_send, tcp_recv, tcp_recv_exact, tcp_set_timeout, tcp_connect_tls, tcp_listen, tcp_accept, tcp_accept_tls,
             thread_spawn, thread_join, thread_set_affinity, channel_new, channel_send, channel_recv, channel_recv_timeout, channel_drain, channel_close,
             contract_fail,
         }
@@ -1084,6 +1086,7 @@ impl BytecodeAot {
         m.insert("tcp-connect-tls".into(), rt.tcp_connect_tls);
         m.insert("tcp-listen".into(),      rt.tcp_listen);
         m.insert("tcp-accept".into(),      rt.tcp_accept);
+        m.insert("tcp-accept-tls".into(), rt.tcp_accept_tls);
 
         // Threads and channels
         m.insert("thread-spawn".into(),         rt.thread_spawn);

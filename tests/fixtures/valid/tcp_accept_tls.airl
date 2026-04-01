@@ -1,0 +1,8 @@
+;; Test tcp-accept-tls dispatches correctly through VM/AOT
+;; Calls tcp-accept-tls with an invalid handle to verify the builtin is registered
+(let (result : _ (tcp-accept-tls -1 "cert.pem" "key.pem"))
+  (match result
+    (Err e) (do
+      (println (str "tcp-accept-tls correctly returned error: " e))
+      "ok")
+    (Ok _) "FAIL: should have returned error for invalid handle"))
