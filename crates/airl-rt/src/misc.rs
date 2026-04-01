@@ -1320,15 +1320,17 @@ pub extern "C" fn airl_bytes_concat_all(parts: *mut RtValue) -> *mut RtValue {
         RtData::List { .. } => crate::list::list_items(unsafe { &(*parts).data }),
         _ => return rt_bytes(vec![]),
     };
-    // First pass: measure total size (borrow only, no clones for Bytes values)
+    // Single extraction pass: borrow or extract each part once, measure total
     let mut total = 0usize;
-    for &p in part_lists {
-        total += unsafe { borrow_or_extract(p) }.len();
-    }
-    // Second pass: copy into pre-allocated result
+    let borrowed: Vec<std::borrow::Cow<[u8]>> = part_lists.iter().map(|&p| {
+        let cow = unsafe { borrow_or_extract(p) };
+        total += cow.len();
+        cow
+    }).collect();
+    // Copy pass: write into pre-allocated result from the already-extracted cows
     let mut result = Vec::with_capacity(total);
-    for &p in part_lists {
-        result.extend_from_slice(&unsafe { borrow_or_extract(p) });
+    for cow in &borrowed {
+        result.extend_from_slice(cow);
     }
     rt_bytes(result)
 }
