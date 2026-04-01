@@ -491,7 +491,7 @@ pub extern "C" fn airl_hmac_sha512(key: *mut RtValue, msg: *mut RtValue) -> *mut
 
 #[no_mangle]
 pub extern "C" fn airl_sha256_bytes(data: *mut RtValue) -> *mut RtValue {
-    let bytes = extract_bytes(data);
+    let bytes = unsafe { borrow_or_extract(data) };
     use sha2::Digest;
     let hash = sha2::Sha256::digest(&bytes);
     rt_bytes(hash.to_vec())
@@ -499,7 +499,7 @@ pub extern "C" fn airl_sha256_bytes(data: *mut RtValue) -> *mut RtValue {
 
 #[no_mangle]
 pub extern "C" fn airl_sha512_bytes(data: *mut RtValue) -> *mut RtValue {
-    let bytes = extract_bytes(data);
+    let bytes = unsafe { borrow_or_extract(data) };
     use sha2::Digest;
     let hash = sha2::Sha512::digest(&bytes);
     rt_bytes(hash.to_vec())
@@ -508,8 +508,8 @@ pub extern "C" fn airl_sha512_bytes(data: *mut RtValue) -> *mut RtValue {
 #[no_mangle]
 pub extern "C" fn airl_hmac_sha256_bytes(key: *mut RtValue, data: *mut RtValue) -> *mut RtValue {
     use hmac::{Hmac, Mac};
-    let k = extract_bytes(key);
-    let d = extract_bytes(data);
+    let k = unsafe { borrow_or_extract(key) };
+    let d = unsafe { borrow_or_extract(data) };
     let mut mac = Hmac::<sha2::Sha256>::new_from_slice(&k).unwrap();
     mac.update(&d);
     rt_bytes(mac.finalize().into_bytes().to_vec())
@@ -518,8 +518,8 @@ pub extern "C" fn airl_hmac_sha256_bytes(key: *mut RtValue, data: *mut RtValue) 
 #[no_mangle]
 pub extern "C" fn airl_hmac_sha512_bytes(key: *mut RtValue, data: *mut RtValue) -> *mut RtValue {
     use hmac::{Hmac, Mac};
-    let k = extract_bytes(key);
-    let d = extract_bytes(data);
+    let k = unsafe { borrow_or_extract(key) };
+    let d = unsafe { borrow_or_extract(data) };
     let mut mac = Hmac::<sha2::Sha512>::new_from_slice(&k).unwrap();
     mac.update(&d);
     rt_bytes(mac.finalize().into_bytes().to_vec())
@@ -528,7 +528,7 @@ pub extern "C" fn airl_hmac_sha512_bytes(key: *mut RtValue, data: *mut RtValue) 
 #[no_mangle]
 pub extern "C" fn airl_pbkdf2_sha256(password: *mut RtValue, salt: *mut RtValue, iterations: *mut RtValue, key_len: *mut RtValue) -> *mut RtValue {
     let pw = match unsafe { &(*password).data } { RtData::Str(s) => s.clone(), _ => return rt_bytes(vec![]) };
-    let salt_bytes = extract_bytes(salt);
+    let salt_bytes = unsafe { borrow_or_extract(salt) };
     let iters = match unsafe { &(*iterations).data } { RtData::Int(n) => *n as u32, _ => 4096 };
     let klen = match unsafe { &(*key_len).data } { RtData::Int(n) => *n as usize, _ => 32 };
     let mut derived = vec![0u8; klen];
@@ -539,7 +539,7 @@ pub extern "C" fn airl_pbkdf2_sha256(password: *mut RtValue, salt: *mut RtValue,
 #[no_mangle]
 pub extern "C" fn airl_pbkdf2_sha512(password: *mut RtValue, salt: *mut RtValue, iterations: *mut RtValue, key_len: *mut RtValue) -> *mut RtValue {
     let pw = match unsafe { &(*password).data } { RtData::Str(s) => s.clone(), _ => return rt_bytes(vec![]) };
-    let salt_bytes = extract_bytes(salt);
+    let salt_bytes = unsafe { borrow_or_extract(salt) };
     let iters = match unsafe { &(*iterations).data } { RtData::Int(n) => *n as u32, _ => 4096 };
     let klen = match unsafe { &(*key_len).data } { RtData::Int(n) => *n as usize, _ => 64 };
     let mut derived = vec![0u8; klen];
@@ -550,8 +550,8 @@ pub extern "C" fn airl_pbkdf2_sha512(password: *mut RtValue, salt: *mut RtValue,
 #[no_mangle]
 pub extern "C" fn airl_base64_decode_bytes(data: *mut RtValue) -> *mut RtValue {
     use base64::Engine;
-    let bytes = extract_bytes(data);
-    match base64::engine::general_purpose::STANDARD.decode(&bytes) {
+    let bytes = unsafe { borrow_or_extract(data) };
+    match base64::engine::general_purpose::STANDARD.decode(&*bytes) {
         Ok(decoded) => rt_bytes(decoded),
         Err(_) => rt_bytes(vec![]),
     }
@@ -560,8 +560,8 @@ pub extern "C" fn airl_base64_decode_bytes(data: *mut RtValue) -> *mut RtValue {
 #[no_mangle]
 pub extern "C" fn airl_base64_encode_bytes(data: *mut RtValue) -> *mut RtValue {
     use base64::Engine;
-    let bytes = extract_bytes(data);
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let bytes = unsafe { borrow_or_extract(data) };
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&*bytes);
     rt_bytes(encoded.into_bytes())
 }
 
@@ -1223,6 +1223,36 @@ fn extract_bytes(val: *mut RtValue) -> Vec<u8> {
     }
 }
 
+/// Borrow the raw bytes from a Bytes value without cloning.
+/// Returns empty slice for non-Bytes types (callers that need List[Int]
+/// compat should use borrow_or_extract instead).
+///
+/// # Safety
+/// The caller must ensure `val` is a valid, non-null pointer to an RtValue
+/// that remains alive and unmutated for the lifetime `'a`.
+#[allow(dead_code)]  // kept for callers that only handle Bytes (not List[Int])
+unsafe fn borrow_bytes<'a>(val: *mut RtValue) -> &'a [u8] {
+    match &(*val).data {
+        RtData::Bytes(v) => v.as_slice(),
+        _ => &[],
+    }
+}
+
+/// Zero-copy borrow for Bytes, with fallback to owned extraction for List[Int].
+/// Uses Cow to avoid allocation in the common Bytes case while preserving
+/// backward compatibility with List[Int] representations.
+///
+/// # Safety
+/// The caller must ensure `val` is a valid, non-null pointer to an RtValue
+/// that remains alive and unmutated for the lifetime `'a`.
+unsafe fn borrow_or_extract<'a>(val: *mut RtValue) -> std::borrow::Cow<'a, [u8]> {
+    match &(*val).data {
+        RtData::Bytes(v) => std::borrow::Cow::Borrowed(v.as_slice()),
+        RtData::List { .. } => std::borrow::Cow::Owned(extract_bytes(val)),
+        _ => std::borrow::Cow::Borrowed(&[]),
+    }
+}
+
 fn byte_at(val: *mut RtValue, off: usize) -> u8 {
     match unsafe { &(*val).data } {
         RtData::Bytes(v) => if off < v.len() { v[off] } else { 0 },
@@ -1266,15 +1296,19 @@ pub extern "C" fn airl_bytes_from_string(s: *mut RtValue) -> *mut RtValue {
 pub extern "C" fn airl_bytes_to_string(buf: *mut RtValue, offset: *mut RtValue, len: *mut RtValue) -> *mut RtValue {
     let off = match unsafe { &(*offset).data } { RtData::Int(n) => *n as usize, _ => 0 };
     let slen = match unsafe { &(*len).data } { RtData::Int(n) => *n as usize, _ => 0 };
-    let bytes = extract_bytes(buf);
+    let bytes = unsafe { borrow_or_extract(buf) };
     if off + slen > bytes.len() { return rt_str(String::new()); }
     rt_str(String::from_utf8_lossy(&bytes[off..off+slen]).into_owned())
 }
 
 #[no_mangle]
 pub extern "C" fn airl_bytes_concat(a: *mut RtValue, b: *mut RtValue) -> *mut RtValue {
-    let mut ab = extract_bytes(a); ab.extend_from_slice(&extract_bytes(b));
-    rt_bytes(ab)
+    let a_ref = unsafe { borrow_or_extract(a) };
+    let b_ref = unsafe { borrow_or_extract(b) };
+    let mut result = Vec::with_capacity(a_ref.len() + b_ref.len());
+    result.extend_from_slice(&a_ref);
+    result.extend_from_slice(&b_ref);
+    rt_bytes(result)
 }
 
 /// Concatenate a list of byte lists in one O(n) pass.
@@ -1286,17 +1320,17 @@ pub extern "C" fn airl_bytes_concat_all(parts: *mut RtValue) -> *mut RtValue {
         RtData::List { .. } => crate::list::list_items(unsafe { &(*parts).data }),
         _ => return rt_bytes(vec![]),
     };
-    // Measure total size, allocate once
+    // Single extraction pass: borrow or extract each part once, measure total
     let mut total = 0usize;
-    let extracted: Vec<Vec<u8>> = part_lists.iter().map(|p| {
-        let bytes = extract_bytes(*p);
-        total += bytes.len();
-        bytes
+    let borrowed: Vec<std::borrow::Cow<[u8]>> = part_lists.iter().map(|&p| {
+        let cow = unsafe { borrow_or_extract(p) };
+        total += cow.len();
+        cow
     }).collect();
-    // Build result in one pass
+    // Copy pass: write into pre-allocated result from the already-extracted cows
     let mut result = Vec::with_capacity(total);
-    for bytes in &extracted {
-        result.extend_from_slice(bytes);
+    for cow in &borrowed {
+        result.extend_from_slice(cow);
     }
     rt_bytes(result)
 }
@@ -1305,14 +1339,14 @@ pub extern "C" fn airl_bytes_concat_all(parts: *mut RtValue) -> *mut RtValue {
 pub extern "C" fn airl_bytes_slice(buf: *mut RtValue, offset: *mut RtValue, len: *mut RtValue) -> *mut RtValue {
     let off = match unsafe { &(*offset).data } { RtData::Int(n) => *n as usize, _ => 0 };
     let slen = match unsafe { &(*len).data } { RtData::Int(n) => *n as usize, _ => 0 };
-    let bytes = extract_bytes(buf);
+    let bytes = unsafe { borrow_or_extract(buf) };
     if off + slen > bytes.len() { return rt_bytes(vec![]); }
     rt_bytes(bytes[off..off+slen].to_vec())
 }
 
 #[no_mangle]
 pub extern "C" fn airl_crc32c(buf: *mut RtValue) -> *mut RtValue {
-    let bytes = extract_bytes(buf);
+    let bytes = unsafe { borrow_or_extract(buf) };
     rt_int(crc32c::crc32c(&bytes) as i64)
 }
 
@@ -1320,7 +1354,7 @@ pub extern "C" fn airl_crc32c(buf: *mut RtValue) -> *mut RtValue {
 
 #[no_mangle]
 pub extern "C" fn airl_gzip_compress(data: *mut RtValue) -> *mut RtValue {
-    let bytes = extract_bytes(data);
+    let bytes = unsafe { borrow_or_extract(data) };
     use flate2::write::GzEncoder;
     use flate2::Compression;
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
@@ -1331,9 +1365,9 @@ pub extern "C" fn airl_gzip_compress(data: *mut RtValue) -> *mut RtValue {
 
 #[no_mangle]
 pub extern "C" fn airl_gzip_decompress(data: *mut RtValue) -> *mut RtValue {
-    let bytes = extract_bytes(data);
+    let bytes = unsafe { borrow_or_extract(data) };
     use flate2::read::GzDecoder;
-    let mut decoder = GzDecoder::new(&bytes[..]);
+    let mut decoder = GzDecoder::new(&*bytes);
     let mut decompressed = Vec::new();
     std::io::Read::read_to_end(&mut decoder, &mut decompressed).unwrap();
     rt_bytes(decompressed)
@@ -1341,43 +1375,43 @@ pub extern "C" fn airl_gzip_decompress(data: *mut RtValue) -> *mut RtValue {
 
 #[no_mangle]
 pub extern "C" fn airl_snappy_compress(data: *mut RtValue) -> *mut RtValue {
-    let bytes = extract_bytes(data);
+    let bytes = unsafe { borrow_or_extract(data) };
     let compressed = snap::raw::Encoder::new().compress_vec(&bytes).unwrap();
     rt_bytes(compressed)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_snappy_decompress(data: *mut RtValue) -> *mut RtValue {
-    let bytes = extract_bytes(data);
+    let bytes = unsafe { borrow_or_extract(data) };
     let decompressed = snap::raw::Decoder::new().decompress_vec(&bytes).unwrap();
     rt_bytes(decompressed)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_lz4_compress(data: *mut RtValue) -> *mut RtValue {
-    let bytes = extract_bytes(data);
+    let bytes = unsafe { borrow_or_extract(data) };
     let compressed = lz4_flex::compress_prepend_size(&bytes);
     rt_bytes(compressed)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_lz4_decompress(data: *mut RtValue) -> *mut RtValue {
-    let bytes = extract_bytes(data);
+    let bytes = unsafe { borrow_or_extract(data) };
     let decompressed = lz4_flex::decompress_size_prepended(&bytes).unwrap();
     rt_bytes(decompressed)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_zstd_compress(data: *mut RtValue) -> *mut RtValue {
-    let bytes = extract_bytes(data);
-    let compressed = zstd::encode_all(&bytes[..], 3).unwrap();
+    let bytes = unsafe { borrow_or_extract(data) };
+    let compressed = zstd::encode_all(&*bytes, 3).unwrap();
     rt_bytes(compressed)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_zstd_decompress(data: *mut RtValue) -> *mut RtValue {
-    let bytes = extract_bytes(data);
-    let decompressed = zstd::decode_all(&bytes[..]).unwrap();
+    let bytes = unsafe { borrow_or_extract(data) };
+    let decompressed = zstd::decode_all(&*bytes).unwrap();
     rt_bytes(decompressed)
 }
 
@@ -1483,5 +1517,366 @@ mod tests {
         // Clean up
         tcp_handles().lock().unwrap().remove(&h);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Zero-copy borrow_bytes / borrow_or_extract tests ──────────────────
+
+    #[test]
+    fn test_borrow_bytes_from_bytes_value() {
+        let data = vec![1u8, 2, 3, 4, 5];
+        let val = rt_bytes(data.clone());
+        let borrowed = unsafe { borrow_bytes(val) };
+        assert_eq!(borrowed, &[1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_borrow_bytes_from_non_bytes_returns_empty() {
+        let val = rt_int(42);
+        let borrowed = unsafe { borrow_bytes(val) };
+        assert_eq!(borrowed, &[] as &[u8]);
+
+        let val2 = rt_str("hello".to_string());
+        let borrowed2 = unsafe { borrow_bytes(val2) };
+        assert_eq!(borrowed2, &[] as &[u8]);
+
+        let val3 = rt_nil();
+        let borrowed3 = unsafe { borrow_bytes(val3) };
+        assert_eq!(borrowed3, &[] as &[u8]);
+    }
+
+    #[test]
+    fn test_borrow_bytes_empty_bytes() {
+        let val = rt_bytes(vec![]);
+        let borrowed = unsafe { borrow_bytes(val) };
+        assert_eq!(borrowed, &[] as &[u8]);
+        assert_eq!(borrowed.len(), 0);
+    }
+
+    #[test]
+    fn test_borrow_or_extract_bytes_value_is_borrowed() {
+        let data = vec![10u8, 20, 30];
+        let val = rt_bytes(data.clone());
+        let cow = unsafe { borrow_or_extract(val) };
+        assert!(matches!(cow, std::borrow::Cow::Borrowed(_)), "Bytes should produce Borrowed variant");
+        assert_eq!(&*cow, &[10, 20, 30]);
+    }
+
+    #[test]
+    fn test_borrow_or_extract_list_of_ints_is_owned() {
+        let items = vec![rt_int(65), rt_int(66), rt_int(67)];
+        let val = rt_list(items);
+        let cow = unsafe { borrow_or_extract(val) };
+        assert!(matches!(cow, std::borrow::Cow::Owned(_)), "List[Int] should produce Owned variant");
+        assert_eq!(&*cow, &[65u8, 66, 67]);
+    }
+
+    #[test]
+    fn test_borrow_or_extract_non_bytes_non_list() {
+        let val = rt_int(99);
+        let cow = unsafe { borrow_or_extract(val) };
+        assert!(matches!(cow, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(&*cow, &[] as &[u8]);
+    }
+
+    #[test]
+    fn test_crc32c_zero_copy() {
+        let data = rt_bytes(b"hello world".to_vec());
+        let result = airl_crc32c(data);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Int(n) => {
+                let expected = crc32c::crc32c(b"hello world") as i64;
+                assert_eq!(*n, expected);
+            }
+            _ => panic!("Expected Int result from crc32c"),
+        }
+    }
+
+    #[test]
+    fn test_crc32c_empty_bytes() {
+        let data = rt_bytes(vec![]);
+        let result = airl_crc32c(data);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Int(n) => assert_eq!(*n, crc32c::crc32c(&[]) as i64),
+            _ => panic!("Expected Int result"),
+        }
+    }
+
+    #[test]
+    fn test_crc32c_non_bytes_returns_zero_crc() {
+        let data = rt_int(42);
+        let result = airl_crc32c(data);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Int(n) => assert_eq!(*n, crc32c::crc32c(&[]) as i64),
+            _ => panic!("Expected Int result"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_concat_zero_copy() {
+        let a = rt_bytes(vec![1, 2, 3]);
+        let b = rt_bytes(vec![4, 5, 6]);
+        let result = airl_bytes_concat(a, b);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Bytes(v) => assert_eq!(v, &vec![1, 2, 3, 4, 5, 6]),
+            _ => panic!("Expected Bytes result"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_concat_empty_sides() {
+        let a = rt_bytes(vec![]);
+        let b = rt_bytes(vec![1, 2]);
+        let result = airl_bytes_concat(a, b);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Bytes(v) => assert_eq!(v, &vec![1, 2]),
+            _ => panic!("Expected Bytes result"),
+        }
+
+        let a2 = rt_bytes(vec![3, 4]);
+        let b2 = rt_bytes(vec![]);
+        let result2 = airl_bytes_concat(a2, b2);
+        let rv2 = unsafe { &*result2 };
+        match &rv2.data {
+            RtData::Bytes(v) => assert_eq!(v, &vec![3, 4]),
+            _ => panic!("Expected Bytes result"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_concat_all_zero_copy() {
+        let parts = rt_list(vec![
+            rt_bytes(vec![1, 2]),
+            rt_bytes(vec![3, 4]),
+            rt_bytes(vec![5, 6]),
+        ]);
+        let result = airl_bytes_concat_all(parts);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Bytes(v) => assert_eq!(v, &vec![1, 2, 3, 4, 5, 6]),
+            _ => panic!("Expected Bytes result"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_concat_all_empty_list() {
+        let parts = rt_list(vec![]);
+        let result = airl_bytes_concat_all(parts);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Bytes(v) => assert!(v.is_empty()),
+            _ => panic!("Expected Bytes result"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_concat_all_non_list() {
+        let val = rt_int(42);
+        let result = airl_bytes_concat_all(val);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Bytes(v) => assert!(v.is_empty()),
+            _ => panic!("Expected Bytes result"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_slice_zero_copy() {
+        let data = rt_bytes(vec![10, 20, 30, 40, 50]);
+        let offset = rt_int(1);
+        let len = rt_int(3);
+        let result = airl_bytes_slice(data, offset, len);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Bytes(v) => assert_eq!(v, &vec![20, 30, 40]),
+            _ => panic!("Expected Bytes result"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_slice_out_of_bounds() {
+        let data = rt_bytes(vec![1, 2, 3]);
+        let offset = rt_int(2);
+        let len = rt_int(5);
+        let result = airl_bytes_slice(data, offset, len);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Bytes(v) => assert!(v.is_empty()),
+            _ => panic!("Expected Bytes result"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_to_string_zero_copy() {
+        let data = rt_bytes(b"hello".to_vec());
+        let offset = rt_int(0);
+        let len = rt_int(5);
+        let result = airl_bytes_to_string(data, offset, len);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Str(s) => assert_eq!(s, "hello"),
+            _ => panic!("Expected Str result"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_to_string_out_of_bounds() {
+        let data = rt_bytes(b"hi".to_vec());
+        let offset = rt_int(0);
+        let len = rt_int(10);
+        let result = airl_bytes_to_string(data, offset, len);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Str(s) => assert_eq!(s, ""),
+            _ => panic!("Expected Str result"),
+        }
+    }
+
+    #[test]
+    fn test_sha256_bytes_zero_copy() {
+        use sha2::Digest;
+        let input = b"test data";
+        let expected = sha2::Sha256::digest(input).to_vec();
+        let data = rt_bytes(input.to_vec());
+        let result = airl_sha256_bytes(data);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Bytes(v) => assert_eq!(v, &expected),
+            _ => panic!("Expected Bytes result"),
+        }
+    }
+
+    #[test]
+    fn test_base64_roundtrip_zero_copy() {
+        let original = vec![0u8, 1, 2, 255, 254, 253];
+        let data = rt_bytes(original.clone());
+        let encoded = airl_base64_encode_bytes(data);
+        let decoded = airl_base64_decode_bytes(encoded);
+        let rv = unsafe { &*decoded };
+        match &rv.data {
+            RtData::Bytes(v) => assert_eq!(v, &original),
+            _ => panic!("Expected Bytes result"),
+        }
+    }
+
+    #[test]
+    fn test_compression_roundtrip_gzip() {
+        let original = b"hello world hello world hello world".to_vec();
+        let data = rt_bytes(original.clone());
+        let compressed = airl_gzip_compress(data);
+        let decompressed = airl_gzip_decompress(compressed);
+        let rv = unsafe { &*decompressed };
+        match &rv.data {
+            RtData::Bytes(v) => assert_eq!(v, &original),
+            _ => panic!("Expected Bytes result"),
+        }
+    }
+
+    #[test]
+    fn test_compression_roundtrip_snappy() {
+        let original = b"snappy test data snappy test data".to_vec();
+        let data = rt_bytes(original.clone());
+        let compressed = airl_snappy_compress(data);
+        let decompressed = airl_snappy_decompress(compressed);
+        let rv = unsafe { &*decompressed };
+        match &rv.data {
+            RtData::Bytes(v) => assert_eq!(v, &original),
+            _ => panic!("Expected Bytes result"),
+        }
+    }
+
+    #[test]
+    fn test_compression_roundtrip_lz4() {
+        let original = b"lz4 test data lz4 test data".to_vec();
+        let data = rt_bytes(original.clone());
+        let compressed = airl_lz4_compress(data);
+        let decompressed = airl_lz4_decompress(compressed);
+        let rv = unsafe { &*decompressed };
+        match &rv.data {
+            RtData::Bytes(v) => assert_eq!(v, &original),
+            _ => panic!("Expected Bytes result"),
+        }
+    }
+
+    #[test]
+    fn test_compression_roundtrip_zstd() {
+        let original = b"zstd test data zstd test data".to_vec();
+        let data = rt_bytes(original.clone());
+        let compressed = airl_zstd_compress(data);
+        let decompressed = airl_zstd_decompress(compressed);
+        let rv = unsafe { &*decompressed };
+        match &rv.data {
+            RtData::Bytes(v) => assert_eq!(v, &original),
+            _ => panic!("Expected Bytes result"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_concat_with_list_int_backward_compat() {
+        // Verify List[Int] still works via borrow_or_extract fallback
+        let list_a = rt_list(vec![rt_int(1), rt_int(2)]);
+        let bytes_b = rt_bytes(vec![3, 4]);
+        let result = airl_bytes_concat(list_a, bytes_b);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Bytes(v) => assert_eq!(v, &vec![1, 2, 3, 4]),
+            _ => panic!("Expected Bytes result"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_concat_all_mixed_list_and_bytes() {
+        // Mix of Bytes and List[Int] parts
+        let parts = rt_list(vec![
+            rt_bytes(vec![1, 2]),
+            rt_list(vec![rt_int(3), rt_int(4)]),
+            rt_bytes(vec![5, 6]),
+        ]);
+        let result = airl_bytes_concat_all(parts);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Bytes(v) => assert_eq!(v, &vec![1, 2, 3, 4, 5, 6]),
+            _ => panic!("Expected Bytes result"),
+        }
+    }
+
+    #[test]
+    fn test_borrow_bytes_large_buffer() {
+        // Verify zero-copy works with large buffers (the whole point of this optimization)
+        let large = vec![42u8; 1_000_000];
+        let val = rt_bytes(large.clone());
+        let borrowed = unsafe { borrow_bytes(val) };
+        assert_eq!(borrowed.len(), 1_000_000);
+        assert_eq!(borrowed[0], 42);
+        assert_eq!(borrowed[999_999], 42);
+        // Verify it's actually the same memory (pointer comparison)
+        let inner = match unsafe { &(*val).data } {
+            RtData::Bytes(v) => v.as_ptr(),
+            _ => panic!("Expected Bytes"),
+        };
+        assert_eq!(borrowed.as_ptr(), inner, "borrow_bytes should return a reference to the same memory, not a copy");
+    }
+
+    #[test]
+    fn test_hmac_sha256_bytes_zero_copy() {
+        use hmac::{Hmac, Mac};
+        let key_data = b"secret_key".to_vec();
+        let msg_data = b"message".to_vec();
+        let mut mac = Hmac::<sha2::Sha256>::new_from_slice(&key_data).unwrap();
+        mac.update(&msg_data);
+        let expected = mac.finalize().into_bytes().to_vec();
+
+        let key = rt_bytes(key_data);
+        let msg = rt_bytes(msg_data);
+        let result = airl_hmac_sha256_bytes(key, msg);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Bytes(v) => assert_eq!(v, &expected),
+            _ => panic!("Expected Bytes result"),
+        }
     }
 }
