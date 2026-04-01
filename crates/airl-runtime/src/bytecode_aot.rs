@@ -251,6 +251,8 @@ pub struct RuntimeImports {
     pub bitwise_shl: FuncId,
 
     // Byte encoding
+    pub bytes_new: FuncId,
+    pub bytes_from_int8: FuncId,
     pub bytes_from_int16: FuncId,
     pub bytes_from_int32: FuncId,
     pub bytes_from_int64: FuncId,
@@ -754,6 +756,8 @@ impl BytecodeAot {
         let bitwise_shl = declare_import(m, "airl_bitwise_shl", s2.clone());
 
         // Byte encoding
+        let bytes_new = declare_import(m, "airl_bytes_new_empty", sig_0_ptr(m, ptr));
+        let bytes_from_int8 = declare_import(m, "airl_bytes_from_int8", s1.clone());
         let bytes_from_int16 = declare_import(m, "airl_bytes_from_int16", s1.clone());
         let bytes_from_int32 = declare_import(m, "airl_bytes_from_int32", s1.clone());
         let bytes_from_int64 = declare_import(m, "airl_bytes_from_int64", s1.clone());
@@ -852,7 +856,7 @@ impl BytecodeAot {
             pbkdf2_sha256, pbkdf2_sha512,
             base64_decode_bytes, base64_encode_bytes,
             bitwise_xor, bitwise_and, bitwise_or, bitwise_shr, bitwise_shl,
-            bytes_from_int16, bytes_from_int32, bytes_from_int64,
+            bytes_new, bytes_from_int8, bytes_from_int16, bytes_from_int32, bytes_from_int64,
             bytes_to_int16, bytes_to_int32, bytes_to_int64,
             bytes_from_string, bytes_to_string, bytes_concat, bytes_concat_all, bytes_slice, crc32c,
             gzip_compress, gzip_decompress, snappy_compress, snappy_decompress,
@@ -1053,6 +1057,8 @@ impl BytecodeAot {
         m.insert("format".into(),         rt.format_variadic);
 
         // Byte encoding
+        m.insert("bytes-new".into(),         rt.bytes_new);
+        m.insert("bytes-from-int8".into(),   rt.bytes_from_int8);
         m.insert("bytes-from-int16".into(),  rt.bytes_from_int16);
         m.insert("bytes-from-int32".into(),  rt.bytes_from_int32);
         m.insert("bytes-from-int64".into(),  rt.bytes_from_int64);

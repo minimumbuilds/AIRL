@@ -1187,6 +1187,17 @@ pub extern "C" fn airl_tcp_accept_tls(
 // ── Byte encoding ──
 
 #[no_mangle]
+pub extern "C" fn airl_bytes_new_empty() -> *mut RtValue {
+    rt_bytes(Vec::new())
+}
+
+#[no_mangle]
+pub extern "C" fn airl_bytes_from_int8(n: *mut RtValue) -> *mut RtValue {
+    let val = match unsafe { &(*n).data } { RtData::Int(n) => *n as u8, _ => 0 };
+    rt_bytes(vec![val])
+}
+
+#[no_mangle]
 pub extern "C" fn airl_bytes_from_int16(n: *mut RtValue) -> *mut RtValue {
     let val = match unsafe { &(*n).data } { RtData::Int(n) => *n as i16, _ => 0 };
     rt_bytes(val.to_be_bytes().to_vec())

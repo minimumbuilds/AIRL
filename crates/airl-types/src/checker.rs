@@ -115,7 +115,7 @@ impl TypeChecker {
             "shell-exec", "cpu-count", "time-now", "sleep", "format-time", "getenv",
             "run-bytecode", "compile-to-executable", "compile-bytecode-to-executable",
             // Byte encoding
-            "bytes-from-int16", "bytes-from-int32", "bytes-from-int64",
+            "bytes-new", "bytes-from-int8", "bytes-from-int16", "bytes-from-int32", "bytes-from-int64",
             "bytes-to-int16", "bytes-to-int32", "bytes-to-int64",
             "bytes-from-string", "bytes-to-string", "bytes-concat", "bytes-concat-all", "bytes-slice", "crc32c",
             // TCP sockets
