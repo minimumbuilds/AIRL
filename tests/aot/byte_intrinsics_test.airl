@@ -1,0 +1,7 @@
+(let (buf : Bytes (bytes-alloc 4))
+  (let (buf : Bytes (bytes-set! buf 0 65))
+    (let (buf : Bytes (bytes-set! buf 1 66))
+      (do (assert (= (bytes-get buf 0) 65) "bytes-get 0 should be 65")
+          (assert (= (bytes-get buf 1) 66) "bytes-get 1 should be 66")
+          (assert (= (bytes-length buf) 4) "bytes-length should be 4")
+          (print (str "bytes-alloc: PASS\n"))))))

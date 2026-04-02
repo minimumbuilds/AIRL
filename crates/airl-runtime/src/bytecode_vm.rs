@@ -665,6 +665,12 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "bitwise-shr" => airl_rt::misc::airl_bitwise_shr(a0!(), a1!()),
         "bitwise-shl" => airl_rt::misc::airl_bitwise_shl(a0!(), a1!()),
 
+        // Byte-array intrinsics
+        "bytes-alloc" => airl_rt::misc::airl_bytes_alloc(a0!()),
+        "bytes-get" => airl_rt::misc::airl_bytes_get(a0!(), a1!()),
+        "bytes-set!" => airl_rt::misc::airl_bytes_set(a0!(), a1!(), a2!()),
+        "bytes-length" => airl_rt::list::airl_length(a0!()),
+
         // Byte encoding
         "bytes-new" => airl_rt::misc::airl_bytes_new_empty(),
         "bytes-from-int8" => airl_rt::misc::airl_bytes_from_int8(a0!()),

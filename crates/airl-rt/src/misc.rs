@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::OnceLock;
+use crate::error::rt_error;
+use crate::memory::airl_value_retain;
 use crate::value::{rt_bool, rt_bytes, rt_float, rt_int, rt_list, rt_map, rt_nil, rt_str, rt_variant, RtData, RtValue};
 
 fn ok_variant(inner: *mut RtValue) -> *mut RtValue {
@@ -1311,6 +1313,73 @@ pub extern "C" fn airl_tcp_accept_tls(
 #[no_mangle]
 pub extern "C" fn airl_bytes_new_empty() -> *mut RtValue {
     rt_bytes(Vec::new())
+}
+
+/// Allocate a zero-filled byte array of the given size.
+#[no_mangle]
+pub extern "C" fn airl_bytes_alloc(n: *mut RtValue) -> *mut RtValue {
+    let size = match unsafe { &(*n).data } {
+        RtData::Int(n) => {
+            if *n < 0 { rt_error("bytes-alloc: size must be non-negative"); }
+            *n as usize
+        }
+        _ => rt_error("bytes-alloc: argument must be an Int"),
+    };
+    rt_bytes(vec![0u8; size])
+}
+
+/// Get a single byte at the given index (bounds-checked).
+/// Returns the byte value as an Int.
+#[no_mangle]
+pub extern "C" fn airl_bytes_get(buf: *mut RtValue, index: *mut RtValue) -> *mut RtValue {
+    let bytes = match unsafe { &(*buf).data } {
+        RtData::Bytes(v) => v,
+        _ => rt_error("bytes-get: first argument must be Bytes"),
+    };
+    let i = match unsafe { &(*index).data } {
+        RtData::Int(n) => *n,
+        _ => rt_error("bytes-get: index must be an Int"),
+    };
+    if i < 0 || i as usize >= bytes.len() {
+        rt_error("bytes-get: index out of bounds");
+    }
+    rt_int(bytes[i as usize] as i64)
+}
+
+/// Set a single byte at the given index (bounds-checked, COW semantics).
+/// Returns a new Bytes value (or mutates in-place if sole owner).
+#[no_mangle]
+pub extern "C" fn airl_bytes_set(buf: *mut RtValue, index: *mut RtValue, val: *mut RtValue) -> *mut RtValue {
+    let i = match unsafe { &(*index).data } {
+        RtData::Int(n) => *n,
+        _ => rt_error("bytes-set!: index must be an Int"),
+    };
+    let byte_val = match unsafe { &(*val).data } {
+        RtData::Int(n) => *n as u8,
+        _ => rt_error("bytes-set!: value must be an Int"),
+    };
+    let v = unsafe { &mut *buf };
+    // COW: if sole owner, mutate in-place
+    if v.rc.load(std::sync::atomic::Ordering::Acquire) == 1 {
+        if let RtData::Bytes(ref mut bytes) = v.data {
+            if i < 0 || i as usize >= bytes.len() {
+                rt_error("bytes-set!: index out of bounds");
+            }
+            bytes[i as usize] = byte_val;
+            airl_value_retain(buf);
+            return buf;
+        }
+    }
+    // Otherwise, clone and mutate
+    let mut bytes = match &v.data {
+        RtData::Bytes(b) => b.clone(),
+        _ => rt_error("bytes-set!: first argument must be Bytes"),
+    };
+    if i < 0 || i as usize >= bytes.len() {
+        rt_error("bytes-set!: index out of bounds");
+    }
+    bytes[i as usize] = byte_val;
+    rt_bytes(bytes)
 }
 
 #[no_mangle]

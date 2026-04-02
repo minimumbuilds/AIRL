@@ -252,6 +252,10 @@ pub struct RuntimeImports {
     pub bitwise_shl: FuncId,
 
     // Byte encoding
+    pub bytes_alloc: FuncId,
+    pub bytes_get: FuncId,
+    pub bytes_set: FuncId,
+    pub bytes_length: FuncId,
     pub bytes_new: FuncId,
     pub bytes_from_int8: FuncId,
     pub bytes_from_int16: FuncId,
@@ -768,6 +772,12 @@ impl BytecodeAot {
         let bitwise_shr = declare_import(m, "airl_bitwise_shr", s2.clone());
         let bitwise_shl = declare_import(m, "airl_bitwise_shl", s2.clone());
 
+        // Byte-array intrinsics
+        let bytes_alloc = declare_import(m, "airl_bytes_alloc", s1.clone());
+        let bytes_get = declare_import(m, "airl_bytes_get", s2.clone());
+        let bytes_set = declare_import(m, "airl_bytes_set", sig_3_ptr(m, ptr));
+        let bytes_length = length; // reuses airl_length which already handles Bytes
+
         // Byte encoding
         let bytes_new = declare_import(m, "airl_bytes_new_empty", sig_0_ptr(m, ptr));
         let bytes_from_int8 = declare_import(m, "airl_bytes_from_int8", s1.clone());
@@ -869,6 +879,7 @@ impl BytecodeAot {
             pbkdf2_sha256, pbkdf2_sha512,
             base64_decode_bytes, base64_encode_bytes,
             bitwise_xor, bitwise_and, bitwise_or, bitwise_shr, bitwise_shl,
+            bytes_alloc, bytes_get, bytes_set, bytes_length,
             bytes_new, bytes_from_int8, bytes_from_int16, bytes_from_int32, bytes_from_int64,
             bytes_to_int16, bytes_to_int32, bytes_to_int64,
             bytes_from_string, bytes_to_string, bytes_concat, bytes_concat_all, bytes_slice, crc32c,
@@ -1069,6 +1080,12 @@ impl BytecodeAot {
         // They use (ptr*, i64) -> ptr signature (same as print_values)
         m.insert("str".into(),            rt.str_variadic);
         m.insert("format".into(),         rt.format_variadic);
+
+        // Byte-array intrinsics
+        m.insert("bytes-alloc".into(),       rt.bytes_alloc);
+        m.insert("bytes-get".into(),         rt.bytes_get);
+        m.insert("bytes-set!".into(),        rt.bytes_set);
+        m.insert("bytes-length".into(),      rt.bytes_length);
 
         // Byte encoding
         m.insert("bytes-new".into(),         rt.bytes_new);
