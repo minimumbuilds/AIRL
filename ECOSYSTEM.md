@@ -122,16 +122,64 @@ Generates Graphviz DOT call graphs and type dependency diagrams from AIRL source
 | **Status** | Functional. Produces DOT/SVG output for AIRL codebases. |
 | **Output** | Graphviz DOT (convertible to SVG/PNG/PDF) |
 
+### airlhttp -- HTTP/1.1 Server Library
+
+HTTP/1.1 server library with routing, middleware pipeline, and TLS support. Built on the Airline async framework. Includes a CLI harness for standalone serving.
+
+| | |
+|---|---|
+| **Location** | `../airlhttp` |
+| **Size** | 1,330 LOC (9 modules) |
+| **Commits** | 2 |
+| **Status** | Functional. Phase 1 complete (server, router, middleware, TLS). |
+
 ### AirTraffic -- MCP Server Framework
 
-Model Context Protocol (MCP) server framework for AIRL. Enables building MCP-compatible tool servers that compile to native binaries. Role-based tool filtering, JSON-RPC 2.0, JSON Schema validation. Includes a workflow server for multi-agent coordination.
+Model Context Protocol (MCP) server framework for AIRL. Enables building MCP-compatible tool and prompt servers that compile to native binaries. Role-based tool filtering, prompt registration, JSON-RPC 2.0, JSON Schema validation. Includes a workflow server for multi-agent coordination.
 
 | | |
 |---|---|
 | **Location** | `../AirTraffic` |
 | **Size** | 936 LOC (4 modules + workflow server) |
+| **Commits** | 3 |
+| **Status** | Functional. Tool and prompt support merged to main. |
+
+### mynameisAIRL -- MCP Prompt Server
+
+MCP prompt server that serves AIRL-LLM-Guide.md to LLMs as a `teach_airl` prompt. Built on the AirTraffic framework. Supports CLI, environment variable, and Docker volume-mount guide path resolution. Stdio transport.
+
+| | |
+|---|---|
+| **Location** | `servers/mynameisairl` (inside AIRL repo) |
+| **Size** | 57 LOC |
 | **Commits** | 1 |
-| **Status** | Functional (in worktree, pending merge to main). |
+| **Status** | Functional. Native and Docker builds. |
+
+---
+
+## Tooling
+
+### airlDelivery (aird) -- Package Manager
+
+Package manager and ecosystem tooling for AIRL. Subcommands: build, test, docs (ECOSYSTEM.md generator, README validator). Built with CairLI for CLI parsing. Named binary: `aird`.
+
+| | |
+|---|---|
+| **Location** | `../airlDelivery` |
+| **Size** | 2,724 LOC |
+| **Commits** | 8 |
+| **Status** | Functional. Build, test, and docs subcommands implemented. |
+
+### airtest -- Test Runner
+
+Test discovery, compilation, execution, and JSON reporting for AIRL projects. Discovers `*_test.airl` files, compiles each with g3, runs them, and aggregates results into structured JSON output.
+
+| | |
+|---|---|
+| **Location** | `../airtest` |
+| **Size** | ~200 LOC |
+| **Commits** | 2 |
+| **Status** | Functional. Discovery, compilation, execution, JSON output. |
 
 ---
 
@@ -178,6 +226,17 @@ Benchmarks AIRL_castle's Kafka producer against Confluent's librdkafka (Python w
 | **Commits** | 55+ |
 | **Status** | Functional prototype. Security hardening complete (Spec 00 fixed). 19 design specs. CI via GitHub Actions. |
 
+### airshell -- Interactive Shell
+
+Interactive shell targeting AIRLOS. REPL with command parsing, built-in commands, and history. Cross-compiles to AIRLOS via `make airlos`. Also runs natively on Linux.
+
+| | |
+|---|---|
+| **Location** | `../airshell` |
+| **Size** | 1,926 LOC |
+| **Commits** | 4 |
+| **Status** | Functional. Linux and AIRLOS targets. |
+
 ---
 
 ## Ecosystem Stats
@@ -188,15 +247,20 @@ Benchmarks AIRL_castle's Kafka producer against Confluent's librdkafka (Python w
 | AIRL_castle | AIRL | 7,100 | 50 | Functional |
 | AIRLOS | C + asm | 6,100 | 55+ | Prototype |
 | AirLift | AIRL | 2,563 | 6 | Functional |
+| airlDelivery | AIRL | 2,724 | 8 | Functional |
 | airtools | AIRL | 2,005 | 1 | Functional |
+| airshell | AIRL | 1,926 | 4 | Functional |
+| airlhttp | AIRL | 1,330 | 2 | Functional |
+| AirTraffic | AIRL | 936 | 3 | Functional |
 | AIRL_bench | AIRL | 847 | 21 | Functional |
-| AirTraffic | AIRL | 936 | 1 | Functional |
-| airline | AIRL | 733 | 20 | Functional |
 | AIRLchart | AIRL | 770 | — | Functional |
+| kafka_sdk_bench | AIRL + Python | 750 | — | Functional |
+| airline | AIRL | 733 | 20 | Functional |
 | CairLI | AIRL | 707 | 3 | Stable (v0.2.0) |
 | AIReqL | AIRL | 678 | 17 | Functional |
-| kafka_sdk_bench | AIRL + Python | 750 | — | Functional |
-| **Total** | | **~81,948** | **618+** | |
+| airtest | AIRL | 200 | 2 | Functional |
+| mynameisAIRL | AIRL | 57 | 1 | Functional |
+| **Total** | | **~88,185** | **636+** | |
 
 ## Building
 
