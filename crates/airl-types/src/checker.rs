@@ -74,11 +74,13 @@ impl TypeChecker {
             "tensor.transpose", "tensor.softmax", "tensor.sum", "tensor.max",
             "tensor.slice",
             "spawn-agent", "send",
-            "char-at", "substring", "split", "join", "contains",
-            "starts-with", "ends-with", "trim", "to-upper", "to-lower",
-            "replace", "index-of", "chars",
-            "map-new", "map-from", "map-get", "map-get-or", "map-set",
-            "map-has", "map-remove", "map-keys", "map-values", "map-size",
+            "char-at", "substring", "split", "join",
+            "replace", "chars",
+            // contains, starts-with, ends-with, trim, to-upper, to-lower,
+            // index-of, char-alpha?, char-digit?, char-whitespace? — now in stdlib string.airl
+            "map-new", "map-get", "map-set",
+            "map-has", "map-remove", "map-keys",
+            // map-from, map-get-or, map-values, map-size — now in stdlib map.airl
             // Agent builtins
             "await", "parallel", "broadcast", "retry", "escalate", "any-agent",
             "send-async",
@@ -111,7 +113,7 @@ impl TypeChecker {
             "floor", "ceil", "round", "float-to-int", "int-to-float",
             "infinity", "nan", "is-nan?", "is-infinite?",
             "panic", "assert",
-            "json-parse", "json-stringify",
+            // json-parse, json-stringify — now in stdlib json.airl
             "shell-exec", "cpu-count", "time-now", "sleep", "format-time", "getenv",
             "run-bytecode", "compile-to-executable", "compile-bytecode-to-executable",
             "compile-bytecode-to-executable-with-target",

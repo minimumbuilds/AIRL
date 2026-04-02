@@ -1,7 +1,7 @@
 ;; ── AIRL Standard Library: PBKDF2-HMAC-SHA-256 ──────────────────
 ;; RFC 2898 PBKDF2 using HMAC-SHA-256.
 ;; Depends on sha256.airl and hmac.airl.
-;; Names use b- prefix to avoid builtin collision.
+;; Rust builtins deregistered — these are the canonical implementations.
 
 ;; ── XOR two equal-length Bytes ──
 
@@ -29,7 +29,7 @@
   :requires [(>= iter 0)]
   :ensures [(valid result)]
   :body (if (= iter 0) acc
-          (let (u-next : Bytes (b-hmac-sha256-bytes key u-prev))
+          (let (u-next : Bytes (hmac-sha256-bytes key u-prev))
                (new-acc : Bytes (pbkdf2-xor-bytes acc u-next))
             (pbkdf2-f-loop key u-next new-acc (- iter 1)))))
 
@@ -40,7 +40,7 @@
   :ensures [(valid result)]
   :body (let (int-bytes : List (be32-to-list block-idx))
              (salt-i : Bytes (bytes-concat-all (cons salt int-bytes)))
-             (u1 : Bytes (b-hmac-sha256-bytes key salt-i))
+             (u1 : Bytes (hmac-sha256-bytes key salt-i))
           (pbkdf2-f-loop key u1 u1 (- iterations 1))))
 
 ;; ── PBKDF2 block generation ──
@@ -56,7 +56,7 @@
 
 ;; ── Public API ──
 
-(defn b-pbkdf2-sha256-bytes
+(defn pbkdf2-sha256-bytes
   :sig [(password : Bytes) (salt : Bytes) (iterations : i64) (dk-len : i64) -> Bytes]
   :intent "PBKDF2-HMAC-SHA-256: derive dk-len bytes from password and salt"
   :requires [(>= iterations 1) (>= dk-len 1)]
@@ -65,12 +65,12 @@
              (all-blocks : Bytes (bytes-concat-all (pbkdf2-blocks password salt iterations 1 blocks-needed)))
           (bytes-slice all-blocks 0 dk-len)))
 
-(defn b-pbkdf2-sha256
+(defn pbkdf2-sha256
   :sig [(password : String) (salt : String) (iterations : i64) (dk-len : i64) -> String]
   :intent "PBKDF2-HMAC-SHA-256 hex output"
   :requires [(>= iterations 1) (>= dk-len 1)]
   :ensures [(valid result)]
-  :body (let (dk : Bytes (b-pbkdf2-sha256-bytes (bytes-from-string password)
+  :body (let (dk : Bytes (pbkdf2-sha256-bytes (bytes-from-string password)
                                                  (bytes-from-string salt)
                                                  iterations dk-len))
              (hex-parts : List (bytes-to-hex-loop dk 0 dk-len))

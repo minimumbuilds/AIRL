@@ -2,26 +2,26 @@
 ;; Test vectors from RFC 4648
 
 ;; ── Encode tests ──
-(assert-eq (b-base64-encode "") "" "encode empty string")
-(assert-eq (b-base64-encode "f") "Zg==" "encode f")
-(assert-eq (b-base64-encode "fo") "Zm8=" "encode fo")
-(assert-eq (b-base64-encode "foo") "Zm9v" "encode foo")
-(assert-eq (b-base64-encode "foob") "Zm9vYg==" "encode foob")
-(assert-eq (b-base64-encode "fooba") "Zm9vYmE=" "encode fooba")
-(assert-eq (b-base64-encode "foobar") "Zm9vYmFy" "encode foobar")
+(assert-eq (base64-encode "") "" "encode empty string")
+(assert-eq (base64-encode "f") "Zg==" "encode f")
+(assert-eq (base64-encode "fo") "Zm8=" "encode fo")
+(assert-eq (base64-encode "foo") "Zm9v" "encode foo")
+(assert-eq (base64-encode "foob") "Zm9vYg==" "encode foob")
+(assert-eq (base64-encode "fooba") "Zm9vYmE=" "encode fooba")
+(assert-eq (base64-encode "foobar") "Zm9vYmFy" "encode foobar")
 
 ;; ── Decode tests ──
-(assert-eq (b-base64-decode "") "" "decode empty string")
-(assert-eq (b-base64-decode "Zg==") "f" "decode f")
-(assert-eq (b-base64-decode "Zm8=") "fo" "decode fo")
-(assert-eq (b-base64-decode "Zm9v") "foo" "decode foo")
-(assert-eq (b-base64-decode "Zm9vYg==") "foob" "decode foob")
-(assert-eq (b-base64-decode "Zm9vYmE=") "fooba" "decode fooba")
-(assert-eq (b-base64-decode "Zm9vYmFy") "foobar" "decode foobar")
+(assert-eq (base64-decode "") "" "decode empty string")
+(assert-eq (base64-decode "Zg==") "f" "decode f")
+(assert-eq (base64-decode "Zm8=") "fo" "decode fo")
+(assert-eq (base64-decode "Zm9v") "foo" "decode foo")
+(assert-eq (base64-decode "Zm9vYg==") "foob" "decode foob")
+(assert-eq (base64-decode "Zm9vYmE=") "fooba" "decode fooba")
+(assert-eq (base64-decode "Zm9vYmFy") "foobar" "decode foobar")
 
 ;; ── Round-trip tests ──
-(assert-eq (b-base64-decode (b-base64-encode "Hello, World!")) "Hello, World!" "round-trip Hello, World!")
-(assert-eq (b-base64-decode (b-base64-encode "AIRL")) "AIRL" "round-trip AIRL")
-(assert-eq (b-base64-decode (b-base64-encode "Base64 encoding test")) "Base64 encoding test" "round-trip longer string")
+(assert-eq (base64-decode (base64-encode "Hello, World!")) "Hello, World!" "round-trip Hello, World!")
+(assert-eq (base64-decode (base64-encode "AIRL")) "AIRL" "round-trip AIRL")
+(assert-eq (base64-decode (base64-encode "Base64 encoding test")) "Base64 encoding test" "round-trip longer string")
 
 (println "All base64 tests passed!")

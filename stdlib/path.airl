@@ -2,12 +2,7 @@
 ;;
 ;; Pure AIRL path manipulation functions using only string builtins.
 ;; No extern-c needed.
-;;
-;; NOTE: These use "str-path-*" names because "path-join", "path-parent",
-;; etc. are already registered as C builtins in the hardcoded builtin map.
-;; User-defined functions with the same name as a builtin are shadowed —
-;; the builtin always wins. When we deregister the C path builtins,
-;; these can be renamed to the canonical names.
+;; Rust builtins deregistered — these are the canonical implementations.
 
 ;; ── last-index-of: find last occurrence of needle in haystack ──
 ;; Returns -1 if not found.
@@ -21,8 +16,8 @@
         -1
         (- (- (length haystack) (length (at parts (- (length parts) 1)))) (length needle)))))
 
-;; ── str-path-join: concatenate two path segments with / ──
-(defn str-path-join
+;; ── path-join: concatenate two path segments with / ──
+(defn path-join
   :sig [(a : String) (b : String) -> String]
   :requires [(valid a) (valid b)]
   :ensures [(valid result)]
@@ -35,9 +30,9 @@
           (+ a b)
           (+ (+ a "/") b)))))
 
-;; ── str-path-parent: everything before the last / ──
+;; ── path-parent: everything before the last / ──
 ;; Returns "" for paths with no parent (e.g., "file.txt").
-(defn str-path-parent
+(defn path-parent
   :sig [(path : String) -> String]
   :requires [(valid path)]
   :ensures [(valid result)]
@@ -49,9 +44,9 @@
           "/"
           (substring path 0 idx)))))
 
-;; ── str-path-filename: everything after the last / ──
+;; ── path-filename: everything after the last / ──
 ;; Returns the whole string if no / present.
-(defn str-path-filename
+(defn path-filename
   :sig [(path : String) -> String]
   :requires [(valid path)]
   :ensures [(valid result)]
@@ -61,14 +56,14 @@
         path
         (substring path (+ idx 1) (length path)))))
 
-;; ── str-path-extension: everything after the last . in the filename ──
+;; ── path-extension: everything after the last . in the filename ──
 ;; Returns "" if no extension.
-(defn str-path-extension
+(defn path-extension
   :sig [(path : String) -> String]
   :requires [(valid path)]
   :ensures [(valid result)]
   :body
-    (let (fname : String (str-path-filename path))
+    (let (fname : String (path-filename path))
       (let (idx : Int (last-index-of fname "."))
         (if (= idx -1)
           ""
@@ -76,8 +71,8 @@
             ""
             (substring fname (+ idx 1) (length fname)))))))
 
-;; ── str-is-absolute: starts with / ──
-(defn str-is-absolute
+;; ── is-absolute: starts with / ──
+(defn is-absolute
   :sig [(path : String) -> Bool]
   :requires [(valid path)]
   :ensures [(valid result)]

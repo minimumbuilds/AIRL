@@ -1,6 +1,6 @@
-;; Test: Pure AIRL path functions (Spec 06, Phase 3)
+;; Test: Pure AIRL path functions (Spec 06/07)
 ;;
-;; Uses "str-path-*" names to avoid collision with C builtins.
+;; Rust builtins deregistered — using canonical names.
 
 ;; ── Helper: last-index-of ──
 (defn last-index-of
@@ -13,8 +13,8 @@
         -1
         (- (- (length haystack) (length (at parts (- (length parts) 1)))) (length needle)))))
 
-;; ── str-path-join ──
-(defn str-path-join
+;; ── path-join ──
+(defn path-join
   :sig [(a : String) (b : String) -> String]
   :requires [(valid a) (valid b)]
   :ensures [(valid result)]
@@ -27,8 +27,8 @@
           (+ a b)
           (+ (+ a "/") b)))))
 
-;; ── str-path-parent ──
-(defn str-path-parent
+;; ── path-parent ──
+(defn path-parent
   :sig [(path : String) -> String]
   :requires [(valid path)]
   :ensures [(valid result)]
@@ -40,8 +40,8 @@
           "/"
           (substring path 0 idx)))))
 
-;; ── str-path-filename ──
-(defn str-path-filename
+;; ── path-filename ──
+(defn path-filename
   :sig [(path : String) -> String]
   :requires [(valid path)]
   :ensures [(valid result)]
@@ -51,13 +51,13 @@
         path
         (substring path (+ idx 1) (length path)))))
 
-;; ── str-path-extension ──
-(defn str-path-extension
+;; ── path-extension ──
+(defn path-extension
   :sig [(path : String) -> String]
   :requires [(valid path)]
   :ensures [(valid result)]
   :body
-    (let (fname : String (str-path-filename path))
+    (let (fname : String (path-filename path))
       (let (idx : Int (last-index-of fname "."))
         (if (= idx -1)
           ""
@@ -65,8 +65,8 @@
             ""
             (substring fname (+ idx 1) (length fname)))))))
 
-;; ── str-is-absolute ──
-(defn str-is-absolute
+;; ── is-absolute ──
+(defn is-absolute
   :sig [(path : String) -> Bool]
   :requires [(valid path)]
   :ensures [(valid result)]
@@ -77,82 +77,82 @@
 ;; Tests
 ;; ═══════════════════════════════════════════════
 
-;; ── str-path-join tests ──
-(if (= (str-path-join "foo" "bar") "foo/bar")
-  (println "PASS: str-path-join basic")
-  (println "FAIL: str-path-join basic"))
+;; ── path-join tests ──
+(if (= (path-join "foo" "bar") "foo/bar")
+  (println "PASS: path-join basic")
+  (println "FAIL: path-join basic"))
 
-(if (= (str-path-join "foo/" "bar") "foo/bar")
-  (println "PASS: str-path-join trailing slash")
-  (println "FAIL: str-path-join trailing slash"))
+(if (= (path-join "foo/" "bar") "foo/bar")
+  (println "PASS: path-join trailing slash")
+  (println "FAIL: path-join trailing slash"))
 
-(if (= (str-path-join "" "bar") "bar")
-  (println "PASS: str-path-join empty first")
-  (println "FAIL: str-path-join empty first"))
+(if (= (path-join "" "bar") "bar")
+  (println "PASS: path-join empty first")
+  (println "FAIL: path-join empty first"))
 
-(if (= (str-path-join "foo" "") "foo")
-  (println "PASS: str-path-join empty second")
-  (println "FAIL: str-path-join empty second"))
+(if (= (path-join "foo" "") "foo")
+  (println "PASS: path-join empty second")
+  (println "FAIL: path-join empty second"))
 
-;; ── str-path-parent tests ──
-(if (= (str-path-parent "/home/user/file.txt") "/home/user")
-  (println "PASS: str-path-parent absolute")
-  (println "FAIL: str-path-parent absolute"))
+;; ── path-parent tests ──
+(if (= (path-parent "/home/user/file.txt") "/home/user")
+  (println "PASS: path-parent absolute")
+  (println "FAIL: path-parent absolute"))
 
-(if (= (str-path-parent "foo/bar.txt") "foo")
-  (println "PASS: str-path-parent relative")
-  (println "FAIL: str-path-parent relative"))
+(if (= (path-parent "foo/bar.txt") "foo")
+  (println "PASS: path-parent relative")
+  (println "FAIL: path-parent relative"))
 
-(if (= (str-path-parent "file.txt") "")
-  (println "PASS: str-path-parent no parent")
-  (println "FAIL: str-path-parent no parent"))
+(if (= (path-parent "file.txt") "")
+  (println "PASS: path-parent no parent")
+  (println "FAIL: path-parent no parent"))
 
-(if (= (str-path-parent "/file.txt") "/")
-  (println "PASS: str-path-parent root")
-  (println "FAIL: str-path-parent root"))
+(if (= (path-parent "/file.txt") "/")
+  (println "PASS: path-parent root")
+  (println "FAIL: path-parent root"))
 
-;; ── str-path-filename tests ──
-(if (= (str-path-filename "/home/user/file.txt") "file.txt")
-  (println "PASS: str-path-filename absolute")
-  (println "FAIL: str-path-filename absolute"))
+;; ── path-filename tests ──
+(if (= (path-filename "/home/user/file.txt") "file.txt")
+  (println "PASS: path-filename absolute")
+  (println "FAIL: path-filename absolute"))
 
-(if (= (str-path-filename "file.txt") "file.txt")
-  (println "PASS: str-path-filename no dir")
-  (println "FAIL: str-path-filename no dir"))
+(if (= (path-filename "file.txt") "file.txt")
+  (println "PASS: path-filename no dir")
+  (println "FAIL: path-filename no dir"))
 
-(if (= (str-path-filename "foo/bar/baz.rs") "baz.rs")
-  (println "PASS: str-path-filename nested")
-  (println "FAIL: str-path-filename nested"))
+(if (= (path-filename "foo/bar/baz.rs") "baz.rs")
+  (println "PASS: path-filename nested")
+  (println "FAIL: path-filename nested"))
 
-;; ── str-path-extension tests ──
-(if (= (str-path-extension "/home/user/file.txt") "txt")
-  (println "PASS: str-path-extension basic")
-  (println "FAIL: str-path-extension basic"))
+;; ── path-extension tests ──
+(if (= (path-extension "/home/user/file.txt") "txt")
+  (println "PASS: path-extension basic")
+  (println "FAIL: path-extension basic"))
 
-(if (= (str-path-extension "archive.tar.gz") "gz")
-  (println "PASS: str-path-extension double ext")
-  (println "FAIL: str-path-extension double ext"))
+(if (= (path-extension "archive.tar.gz") "gz")
+  (println "PASS: path-extension double ext")
+  (println "FAIL: path-extension double ext"))
 
-(if (= (str-path-extension "Makefile") "")
-  (println "PASS: str-path-extension no ext")
-  (println "FAIL: str-path-extension no ext"))
+(if (= (path-extension "Makefile") "")
+  (println "PASS: path-extension no ext")
+  (println "FAIL: path-extension no ext"))
 
-(if (= (str-path-extension ".gitignore") "")
-  (println "PASS: str-path-extension dotfile")
-  (println "FAIL: str-path-extension dotfile"))
+(if (= (path-extension ".gitignore") "")
+  (println "PASS: path-extension dotfile")
+  (println "FAIL: path-extension dotfile"))
 
-;; ── str-is-absolute tests ──
-(if (str-is-absolute "/usr/bin")
-  (println "PASS: str-is-absolute true")
-  (println "FAIL: str-is-absolute true"))
+;; ── is-absolute tests ──
+(if (is-absolute "/usr/bin")
+  (println "PASS: is-absolute true")
+  (println "FAIL: is-absolute true"))
 
-(if (not (str-is-absolute "relative/path"))
-  (println "PASS: str-is-absolute false")
-  (println "FAIL: str-is-absolute false"))
+(if (not (is-absolute "relative/path"))
+  (println "PASS: is-absolute false")
+  (println "FAIL: is-absolute false"))
 
-(if (not (str-is-absolute ""))
-  (println "PASS: str-is-absolute empty")
-  (println "FAIL: str-is-absolute empty"))
+(if (not (is-absolute ""))
+  (println "PASS: is-absolute empty")
+  (println "FAIL: is-absolute empty"))
 
 ;; ── last-index-of edge cases ──
 (if (= (last-index-of "abcabc" "c") 5)

@@ -515,21 +515,15 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "substring" => airl_rt::string::airl_substring(a0!(), a1!(), a2!()),
         "split" => airl_rt::string::airl_split(a0!(), a1!()),
         "join" => airl_rt::string::airl_join(a0!(), a1!()),
-        "contains" => airl_rt::string::airl_contains(a0!(), a1!()),
-        "starts-with" => airl_rt::string::airl_starts_with(a0!(), a1!()),
-        "ends-with" => airl_rt::string::airl_ends_with(a0!(), a1!()),
-        "trim" => airl_rt::string::airl_trim(a0!()),
-        "to-upper" => airl_rt::string::airl_to_upper(a0!()),
-        "to-lower" => airl_rt::string::airl_to_lower(a0!()),
         "replace" => airl_rt::string::airl_replace(a0!(), a1!(), a2!()),
-        "index-of" => airl_rt::string::airl_index_of(a0!(), a1!()),
+        // contains, starts-with, ends-with, index-of, trim, to-upper, to-lower
+        // deregistered — AIRL stdlib equivalents in string.airl take over
         "chars" => airl_rt::string::airl_chars(a0!()),
         "char-count" => airl_rt::misc::airl_char_count(a0!()),
         "char-code" => airl_rt::string::airl_char_code(a0!()),
         "char-from-code" => airl_rt::string::airl_char_from_code(a0!()),
-        "char-alpha?" => airl_rt::string::airl_char_alpha(a0!()),
-        "char-digit?" => airl_rt::string::airl_char_digit(a0!()),
-        "char-whitespace?" => airl_rt::string::airl_char_whitespace(a0!()),
+        // char-alpha?, char-digit?, char-whitespace?
+        // deregistered — AIRL stdlib equivalents in string.airl take over
         "char-upper?" => airl_rt::string::airl_char_upper(a0!()),
         "char-lower?" => airl_rt::string::airl_char_lower(a0!()),
         "string-ci=?" => airl_rt::string::airl_string_ci_eq(a0!(), a1!()),
@@ -554,15 +548,13 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
 
         // Map
         "map-new" => airl_rt::map::airl_map_new(),
-        "map-from" => airl_rt::map::airl_map_from(a0!()),
         "map-get" => airl_rt::map::airl_map_get(a0!(), a1!()),
-        "map-get-or" => airl_rt::map::airl_map_get_or(a0!(), a1!(), a2!()),
         "map-set" => airl_rt::map::airl_map_set(a0!(), a1!(), a2!()),
         "map-has" => airl_rt::map::airl_map_has(a0!(), a1!()),
         "map-remove" => airl_rt::map::airl_map_remove(a0!(), a1!()),
         "map-keys" => airl_rt::map::airl_map_keys(a0!()),
-        "map-values" => airl_rt::map::airl_map_values(a0!()),
-        "map-size" => airl_rt::map::airl_map_size(a0!()),
+        // map-from, map-get-or, map-values, map-size
+        // deregistered — AIRL stdlib equivalents in map.airl take over
 
         // File I/O
         "read-file" => airl_rt::io::airl_read_file(a0!()),
@@ -598,8 +590,8 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "sleep" => airl_rt::misc::airl_sleep(a0!()),
         "format-time" => airl_rt::misc::airl_format_time(a0!(), a1!()),
         "getenv" => airl_rt::misc::airl_getenv(a0!()),
-        "json-parse" => airl_rt::misc::airl_json_parse(a0!()),
-        "json-stringify" => airl_rt::misc::airl_json_stringify(a0!()),
+        // json-parse, json-stringify
+        // deregistered — AIRL stdlib equivalents in json.airl take over
         "shell-exec" => airl_rt::misc::airl_shell_exec(a0!(), a1!()),
         "shell-exec-with-stdin" => airl_rt::misc::airl_shell_exec_with_stdin(a0!(), a1!(), a2!()),
         "exit" => airl_rt::misc::airl_exit(a0!()),
@@ -624,12 +616,8 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "is-nan?" => airl_rt::math::airl_is_nan(a0!()),
         "is-infinite?" => airl_rt::math::airl_is_infinite(a0!()),
 
-        // Path
-        "path-join" => airl_rt::misc::airl_path_join(a0!()),
-        "path-parent" => airl_rt::misc::airl_path_parent(a0!()),
-        "path-filename" => airl_rt::misc::airl_path_filename(a0!()),
-        "path-extension" => airl_rt::misc::airl_path_extension(a0!()),
-        "is-absolute?" => airl_rt::misc::airl_is_absolute(a0!()),
+        // path-join, path-parent, path-filename, path-extension, is-absolute?
+        // deregistered — AIRL stdlib equivalents in path.airl take over
 
         // Regex
         "regex-match" => airl_rt::misc::airl_regex_match(a0!(), a1!()),
@@ -638,21 +626,18 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "regex-split" => airl_rt::misc::airl_regex_split(a0!(), a1!()),
 
         // Crypto
-        "sha256" => airl_rt::misc::airl_sha256(a0!()),
-        "hmac-sha256" => airl_rt::misc::airl_hmac_sha256(a0!(), a1!()),
-        "base64-encode" => airl_rt::misc::airl_base64_encode(a0!()),
-        "base64-decode" => airl_rt::misc::airl_base64_decode(a0!()),
+        // sha256, hmac-sha256 deregistered — AIRL stdlib equivalents take over
+        // base64-encode, base64-decode, base64-encode-bytes, base64-decode-bytes
+        // deregistered — AIRL stdlib equivalents in base64.airl take over
         "random-bytes" => airl_rt::misc::airl_random_bytes(a0!()),
         "sha512" => airl_rt::misc::airl_sha512(a0!()),
         "hmac-sha512" => airl_rt::misc::airl_hmac_sha512(a0!(), a1!()),
-        "sha256-bytes" => airl_rt::misc::airl_sha256_bytes(a0!()),
+        // sha256-bytes, hmac-sha256-bytes, pbkdf2-sha256
+        // deregistered — AIRL stdlib equivalents take over
         "sha512-bytes" => airl_rt::misc::airl_sha512_bytes(a0!()),
-        "hmac-sha256-bytes" => airl_rt::misc::airl_hmac_sha256_bytes(a0!(), a1!()),
         "hmac-sha512-bytes" => airl_rt::misc::airl_hmac_sha512_bytes(a0!(), a1!()),
-        "pbkdf2-sha256" => airl_rt::misc::airl_pbkdf2_sha256(a0!(), a1!(), a2!(), a3!()),
         "pbkdf2-sha512" => airl_rt::misc::airl_pbkdf2_sha512(a0!(), a1!(), a2!(), a3!()),
-        "base64-decode-bytes" => airl_rt::misc::airl_base64_decode_bytes(a0!()),
-        "base64-encode-bytes" => airl_rt::misc::airl_base64_encode_bytes(a0!()),
+        // base64-decode-bytes, base64-encode-bytes removed above
         "bitwise-xor" => airl_rt::misc::airl_bitwise_xor(a0!(), a1!()),
         "bitwise-and" => airl_rt::misc::airl_bitwise_and(a0!(), a1!()),
         "bitwise-or" => airl_rt::misc::airl_bitwise_or(a0!(), a1!()),

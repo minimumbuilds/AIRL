@@ -1,5 +1,52 @@
 ;; ── AIRL Standard Library: Map ──────────────────
 
+;; ══════════════════════════════════════════════════════════════════
+;; Core map ops (formerly Rust builtins, now pure AIRL)
+;; Uses only: map-new, map-get, map-set, map-has, map-remove, map-keys
+;; ══════════════════════════════════════════════════════════════════
+
+;; ── map-values : get all values in the map ──
+(defn map-values
+  :sig [(m : _) -> List]
+  :intent "Get all values from a map as a list"
+  :requires [(valid m)]
+  :ensures [(= (length result) (length (map-keys m)))]
+  :body (map (fn [k] (map-get m k)) (map-keys m)))
+
+;; ── map-size : number of entries in the map ──
+(defn map-size
+  :sig [(m : _) -> i64]
+  :intent "Get the number of entries in a map"
+  :requires [(valid m)]
+  :ensures [(>= result 0)]
+  :body (length (map-keys m)))
+
+;; ── map-get-or : get value for key with default ──
+(defn map-get-or
+  :sig [(m : _) (key : String) (default : _) -> _]
+  :intent "Get value for key, or return default if key absent"
+  :requires [(valid m)]
+  :ensures [(valid result)]
+  :body (if (map-has m key) (map-get m key) default))
+
+;; ── map-from : create map from flat [k v k v ...] list ──
+(defn map-from-pairs-loop
+  :sig [(lst : List) (i : i64) (len : i64) (acc : _) -> _]
+  :intent "Build map from alternating key-value pairs"
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body (if (>= i len)
+          acc
+          (map-from-pairs-loop lst (+ i 2) len
+            (map-set acc (at lst i) (at lst (+ i 1))))))
+
+(defn map-from
+  :sig [(lst : List) -> _]
+  :intent "Create a map from a flat list of alternating keys and values"
+  :requires [(valid lst)]
+  :ensures [(valid result)]
+  :body (map-from-pairs-loop lst 0 (length lst) (map-new)))
+
 ;; ── map-entries : get list of [key value] pairs ──
 (defn map-entries
   :sig [(m : _) -> List]

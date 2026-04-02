@@ -73,8 +73,8 @@
                    (bytes-from-int8 61)
                    (bytes-from-int8 61)]))))))
 
-;; ── b-base64-encode : encode a string to base64 ──
-(defn b-base64-encode
+;; ── base64-encode : encode a string to base64 ──
+(defn base64-encode
   :sig [(s : String) -> String]
   :intent "Encode a string to Base64 (RFC 4648)"
   :requires [(valid s)]
@@ -136,8 +136,8 @@
                  (decoded : List (b64-decode-quad v0 v1 v2 v3 this-pad))
               (concat decoded (b64-decode-loop src (+ i 4) len pad))))))
 
-;; ── b-base64-decode : decode a base64 string ──
-(defn b-base64-decode
+;; ── base64-decode : decode a base64 string ──
+(defn base64-decode
   :sig [(s : String) -> String]
   :intent "Decode a Base64 string (RFC 4648)"
   :requires [(valid s)]

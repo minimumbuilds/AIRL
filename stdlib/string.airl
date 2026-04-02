@@ -90,9 +90,7 @@
 ;; Byte-based string operations (pure AIRL, no Rust builtins)
 ;; Uses: bytes-from-string, bytes-to-string, bytes-from-int8,
 ;;       bytes-concat-all, bytes-slice, at, length
-;; Names use b- prefix to avoid collision with current Rust builtins.
-;; Once builtins are removed from the compiler registry, these can
-;; be renamed to the canonical names (starts-with, ends-with, etc.).
+;; Rust builtins deregistered — these are the canonical implementations.
 ;; ══════════════════════════════════════════════════════════════════
 
 ;; ── helper: compare bytes at offset ──
@@ -107,8 +105,8 @@
             (bytes-match-at haystack needle offset nlen (+ i 1))
             false)))
 
-;; ── b-starts-with : check if string starts with prefix ──
-(defn b-starts-with
+;; ── starts-with : check if string starts with prefix ──
+(defn starts-with
   :sig [(s : String) (prefix : String) -> bool]
   :intent "Check if s starts with prefix using byte comparison"
   :requires [(valid s) (valid prefix)]
@@ -121,8 +119,8 @@
             false
             (bytes-match-at sb pb 0 plen 0))))
 
-;; ── b-ends-with : check if string ends with suffix ──
-(defn b-ends-with
+;; ── ends-with : check if string ends with suffix ──
+(defn ends-with
   :sig [(s : String) (suffix : String) -> bool]
   :intent "Check if s ends with suffix using byte comparison"
   :requires [(valid s) (valid suffix)]
@@ -147,8 +145,8 @@
             pos
             (bytes-scan haystack needle hlen nlen (+ pos 1) limit))))
 
-;; ── b-index-of : find first occurrence of substring ──
-(defn b-index-of
+;; ── index-of : find first occurrence of substring ──
+(defn index-of
   :sig [(s : String) (sub : String) -> i64]
   :intent "Find byte index of first occurrence of sub in s, or -1"
   :requires [(valid s) (valid sub)]
@@ -163,13 +161,13 @@
               -1
               (bytes-scan sb nb slen nlen 0 (- slen nlen))))))
 
-;; ── b-contains : check if string contains substring ──
-(defn b-contains
+;; ── contains : check if string contains substring ──
+(defn contains
   :sig [(s : String) (sub : String) -> bool]
   :intent "Check if s contains sub using byte scanning"
   :requires [(valid s) (valid sub)]
   :ensures [(valid result)]
-  :body (not (= (b-index-of s sub) -1)))
+  :body (not (= (index-of s sub) -1)))
 
 ;; ── helper: byte-level case transforms ──
 (defn to-lower-byte
@@ -212,8 +210,8 @@
           (cons (bytes-from-int8 (to-upper-byte (at src i)))
                 (upper-bytes-loop src (+ i 1) len))))
 
-;; ── b-to-lower : convert ASCII uppercase to lowercase ──
-(defn b-to-lower
+;; ── to-lower : convert ASCII uppercase to lowercase ──
+(defn to-lower
   :sig [(s : String) -> String]
   :intent "Convert ASCII uppercase characters to lowercase"
   :requires [(valid s)]
@@ -224,8 +222,8 @@
              (result : Bytes (bytes-concat-all parts))
           (bytes-to-string result 0 len)))
 
-;; ── b-to-upper : convert ASCII lowercase to uppercase ──
-(defn b-to-upper
+;; ── to-upper : convert ASCII lowercase to uppercase ──
+(defn to-upper
   :sig [(s : String) -> String]
   :intent "Convert ASCII lowercase characters to uppercase"
   :requires [(valid s)]
@@ -266,8 +264,8 @@
             (trim-right-pos buf (- i 1))
             i)))
 
-;; ── b-trim : trim leading and trailing whitespace ──
-(defn b-trim
+;; ── trim : trim leading and trailing whitespace ──
+(defn trim
   :sig [(s : String) -> String]
   :intent "Trim leading and trailing ASCII whitespace"
   :requires [(valid s)]

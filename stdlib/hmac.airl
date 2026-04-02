@@ -1,7 +1,7 @@
 ;; ── AIRL Standard Library: HMAC-SHA-256 ──────────────────
 ;; RFC 2104 HMAC using SHA-256.
-;; Depends on sha256.airl (b-sha256-bytes, bytes-to-hex-loop, make-zero-bytes).
-;; Names use b- prefix to avoid builtin collision.
+;; Depends on sha256.airl (sha256-bytes, bytes-to-hex-loop, make-zero-bytes).
+;; Rust builtins deregistered — these are the canonical implementations.
 
 ;; ── Key preparation ──
 
@@ -11,7 +11,7 @@
   :requires [(valid key)]
   :ensures [(= (length result) 64)]
   :body (let (klen : i64 (length key))
-             (k : Bytes (if (> klen 64) (b-sha256-bytes key) key))
+             (k : Bytes (if (> klen 64) (sha256-bytes key) key))
              (pad-needed : i64 (- 64 (length k)))
           (if (= pad-needed 0)
             k
@@ -37,7 +37,7 @@
 
 ;; ── HMAC-SHA-256 public API ──
 
-(defn b-hmac-sha256-bytes
+(defn hmac-sha256-bytes
   :sig [(key : Bytes) (msg : Bytes) -> Bytes]
   :intent "HMAC-SHA-256: returns 32-byte digest"
   :requires [(valid key) (valid msg)]
@@ -46,16 +46,16 @@
              (i-key-pad : Bytes (hmac-xor-key k 54))
              (o-key-pad : Bytes (hmac-xor-key k 92))
              (inner-msg : Bytes (bytes-concat-all [i-key-pad msg]))
-             (inner-hash : Bytes (b-sha256-bytes inner-msg))
+             (inner-hash : Bytes (sha256-bytes inner-msg))
              (outer-msg : Bytes (bytes-concat-all [o-key-pad inner-hash]))
-          (b-sha256-bytes outer-msg)))
+          (sha256-bytes outer-msg)))
 
-(defn b-hmac-sha256
+(defn hmac-sha256
   :sig [(key : String) (msg : String) -> String]
   :intent "HMAC-SHA-256 hex digest from String key and message"
   :requires [(valid key) (valid msg)]
   :ensures [(valid result)]
-  :body (let (digest : Bytes (b-hmac-sha256-bytes (bytes-from-string key) (bytes-from-string msg)))
+  :body (let (digest : Bytes (hmac-sha256-bytes (bytes-from-string key) (bytes-from-string msg)))
              (hex-parts : List (bytes-to-hex-loop digest 0 32))
              (hex-buf : Bytes (bytes-concat-all hex-parts))
           (bytes-to-string hex-buf 0 64)))

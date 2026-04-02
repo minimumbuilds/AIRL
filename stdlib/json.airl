@@ -1,7 +1,7 @@
 ;; ── AIRL Standard Library: JSON ──────────────────
 ;; JSON serializer/deserializer in pure AIRL.
 ;; Uses type-of for dispatch, byte primitives for parsing.
-;; Names use b- prefix to avoid builtin collision.
+;; Rust builtins deregistered — these are the canonical implementations.
 
 ;; ══════════════════════════════════════════════════
 ;; JSON Stringify
@@ -49,7 +49,7 @@
   :ensures [(valid result)]
   :body (if (= i len)
           ""
-          (let (elem : String (b-json-stringify (at lst i)))
+          (let (elem : String (json-stringify (at lst i)))
                (rest : String (json-stringify-list-loop lst (+ i 1) len))
             (if (= i (- len 1))
               elem
@@ -65,15 +65,15 @@
           ""
           (let (pair : List (at entries i))
                (key : String (str "\"" (json-escape (str (head pair))) "\""))
-               (val : String (b-json-stringify (at pair 1)))
+               (val : String (json-stringify (at pair 1)))
                (entry : String (str key ":" val))
                (rest : String (json-stringify-map-loop entries (+ i 1) len))
             (if (= i (- len 1))
               entry
               (str entry "," rest)))))
 
-;; ── b-json-stringify : convert any AIRL value to JSON string ──
-(defn b-json-stringify
+;; ── json-stringify : convert any AIRL value to JSON string ──
+(defn json-stringify
   :sig [(val : Any) -> String]
   :intent "Serialize an AIRL value to a JSON string"
   :requires [(valid val)]
@@ -267,8 +267,8 @@
                       ;; Must be a number
                       (json-parse-number src p len)))))))))
 
-;; ── b-json-parse : parse a JSON string into an AIRL value ──
-(defn b-json-parse
+;; ── json-parse : parse a JSON string into an AIRL value ──
+(defn json-parse
   :sig [(s : String) -> Any]
   :intent "Parse a JSON string into an AIRL value"
   :requires [(valid s)]

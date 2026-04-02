@@ -2,7 +2,7 @@
 ;; FIPS 180-4 SHA-256 in pure AIRL.
 ;; Uses: bitwise-and/or/xor/shl/shr, bytes-from-string,
 ;;   bytes-to-string, bytes-from-int8, bytes-concat-all, at, length
-;; Names use b- prefix to avoid builtin collision.
+;; Rust builtins deregistered — these are the canonical implementations.
 
 ;; ── 32-bit unsigned arithmetic helpers ──
 
@@ -289,7 +289,7 @@
 
 ;; ── Public API ──
 
-(defn b-sha256-bytes
+(defn sha256-bytes
   :sig [(msg : Bytes) -> Bytes]
   :intent "Compute SHA-256 digest of Bytes, returning 32-byte Bytes"
   :requires [(valid msg)]
@@ -317,12 +317,12 @@
              (hash : List (sha256-process-blocks h0 k padded 0 plen))
           (sha256-hash-to-bytes hash)))
 
-(defn b-sha256
+(defn sha256
   :sig [(s : String) -> String]
   :intent "Compute SHA-256 hex digest of a String"
   :requires [(valid s)]
   :ensures [(valid result)]
-  :body (let (digest : Bytes (b-sha256-bytes (bytes-from-string s)))
+  :body (let (digest : Bytes (sha256-bytes (bytes-from-string s)))
              (hex-parts : List (bytes-to-hex-loop digest 0 32))
              (hex-buf : Bytes (bytes-concat-all hex-parts))
           (bytes-to-string hex-buf 0 64)))

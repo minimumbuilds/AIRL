@@ -100,32 +100,18 @@ pub struct RuntimeImports {
     pub chars:       FuncId,
     pub split:       FuncId,
     pub join:        FuncId,
-    pub contains:    FuncId,
-    pub starts_with: FuncId,
-    pub ends_with:   FuncId,
-    pub index_of:    FuncId,
-    pub trim:        FuncId,
-    pub to_upper:    FuncId,
-    pub to_lower:    FuncId,
     pub replace:     FuncId,
-    pub char_alpha:  FuncId,
-    pub char_digit:  FuncId,
-    pub char_whitespace: FuncId,
     pub char_upper:  FuncId,
     pub char_lower:  FuncId,
     pub string_ci_eq: FuncId,
 
     // Map builtins
     pub map_new:    FuncId,
-    pub map_from:   FuncId,
     pub map_get:    FuncId,
-    pub map_get_or: FuncId,
     pub map_set:    FuncId,
     pub map_has:    FuncId,
     pub map_remove: FuncId,
     pub map_keys:   FuncId,
-    pub map_values: FuncId,
-    pub map_size:   FuncId,
 
     // File I/O
     pub read_file:   FuncId,
@@ -180,10 +166,6 @@ pub struct RuntimeImports {
     // Environment
     pub getenv: FuncId,
 
-    // JSON
-    pub json_parse: FuncId,
-    pub json_stringify: FuncId,
-
     // Process
     pub shell_exec: FuncId,
     pub shell_exec_with_stdin: FuncId,
@@ -211,32 +193,18 @@ pub struct RuntimeImports {
     pub any_ho: FuncId,
     pub all_ho: FuncId,
     pub find_ho: FuncId,
-    pub path_join: FuncId,
-    pub path_parent: FuncId,
-    pub path_filename: FuncId,
-    pub path_extension: FuncId,
-    pub is_absolute: FuncId,
     pub regex_match: FuncId,
     pub regex_find_all: FuncId,
     pub regex_replace: FuncId,
     pub regex_split: FuncId,
-    pub sha256: FuncId,
-    pub hmac_sha256: FuncId,
-    pub base64_encode: FuncId,
-    pub base64_decode: FuncId,
     pub random_bytes: FuncId,
 
     // Crypto (byte-oriented)
     pub sha512: FuncId,
     pub hmac_sha512: FuncId,
-    pub sha256_bytes: FuncId,
     pub sha512_bytes: FuncId,
-    pub hmac_sha256_bytes: FuncId,
     pub hmac_sha512_bytes: FuncId,
-    pub pbkdf2_sha256: FuncId,
     pub pbkdf2_sha512: FuncId,
-    pub base64_decode_bytes: FuncId,
-    pub base64_encode_bytes: FuncId,
     pub bitwise_xor: FuncId,
     pub bitwise_and: FuncId,
     pub bitwise_or: FuncId,
@@ -633,31 +601,17 @@ impl BytecodeAot {
         let chars       = declare_import(m, "airl_chars",       s1.clone());
         let split       = declare_import(m, "airl_split",       s2.clone());
         let join        = declare_import(m, "airl_join",        s2.clone());
-        let contains    = declare_import(m, "airl_contains",    s2.clone());
-        let starts_with = declare_import(m, "airl_starts_with", s2.clone());
-        let ends_with   = declare_import(m, "airl_ends_with",   s2.clone());
-        let index_of    = declare_import(m, "airl_index_of",    s2.clone());
-        let trim        = declare_import(m, "airl_trim",        s1.clone());
-        let to_upper    = declare_import(m, "airl_to_upper",    s1.clone());
-        let to_lower    = declare_import(m, "airl_to_lower",    s1.clone());
         let replace     = declare_import(m, "airl_replace",     sig_3_ptr(m, ptr));
-        let char_alpha  = declare_import(m, "airl_char_alpha",  s1.clone());
-        let char_digit  = declare_import(m, "airl_char_digit",  s1.clone());
-        let char_whitespace = declare_import(m, "airl_char_whitespace", s1.clone());
         let char_upper  = declare_import(m, "airl_char_upper",  s1.clone());
         let char_lower  = declare_import(m, "airl_char_lower",  s1.clone());
         let string_ci_eq = declare_import(m, "airl_string_ci_eq", s2.clone());
 
         let map_new    = declare_import(m, "airl_map_new",    sig_0_ptr(m, ptr));
-        let map_from   = declare_import(m, "airl_map_from",   s1.clone());
         let map_get    = declare_import(m, "airl_map_get",    s2.clone());
-        let map_get_or = declare_import(m, "airl_map_get_or", sig_3_ptr(m, ptr));
         let map_set    = declare_import(m, "airl_map_set",    sig_3_ptr(m, ptr));
         let map_has    = declare_import(m, "airl_map_has",    s2.clone());
         let map_remove = declare_import(m, "airl_map_remove", s2.clone());
         let map_keys   = declare_import(m, "airl_map_keys",   s1.clone());
-        let map_values = declare_import(m, "airl_map_values", s1.clone());
-        let map_size   = declare_import(m, "airl_map_size",   s1.clone());
 
         // File I/O
         let read_file   = declare_import(m, "airl_read_file",   s1.clone());
@@ -712,10 +666,6 @@ impl BytecodeAot {
         // Environment
         let getenv = declare_import(m, "airl_getenv", s1.clone());
 
-        // JSON
-        let json_parse = declare_import(m, "airl_json_parse", s1.clone());
-        let json_stringify = declare_import(m, "airl_json_stringify", s1.clone());
-
         // Process
         let shell_exec = declare_import(m, "airl_shell_exec", s2.clone());
         let shell_exec_with_stdin = declare_import(m, "airl_shell_exec_with_stdin", sig_3_ptr(m, ptr));
@@ -742,32 +692,18 @@ impl BytecodeAot {
         let any_ho = declare_import(m, "airl_any", s2.clone());
         let all_ho = declare_import(m, "airl_all", s2.clone());
         let find_ho = declare_import(m, "airl_find", s2.clone());
-        let path_join = declare_import(m, "airl_path_join", s1.clone());
-        let path_parent = declare_import(m, "airl_path_parent", s1.clone());
-        let path_filename = declare_import(m, "airl_path_filename", s1.clone());
-        let path_extension = declare_import(m, "airl_path_extension", s1.clone());
-        let is_absolute = declare_import(m, "airl_is_absolute", s1.clone());
         let regex_match = declare_import(m, "airl_regex_match", s2.clone());
         let regex_find_all = declare_import(m, "airl_regex_find_all", s2.clone());
         let regex_replace = declare_import(m, "airl_regex_replace", sig_3_ptr(m, ptr));
         let regex_split = declare_import(m, "airl_regex_split", s2.clone());
-        let sha256 = declare_import(m, "airl_sha256", s1.clone());
-        let hmac_sha256 = declare_import(m, "airl_hmac_sha256", s2.clone());
-        let base64_encode = declare_import(m, "airl_base64_encode", s1.clone());
-        let base64_decode = declare_import(m, "airl_base64_decode", s1.clone());
         let random_bytes = declare_import(m, "airl_random_bytes", s1.clone());
 
         // Crypto (byte-oriented)
         let sha512 = declare_import(m, "airl_sha512", s1.clone());
         let hmac_sha512 = declare_import(m, "airl_hmac_sha512", s2.clone());
-        let sha256_bytes = declare_import(m, "airl_sha256_bytes", s1.clone());
         let sha512_bytes = declare_import(m, "airl_sha512_bytes", s1.clone());
-        let hmac_sha256_bytes = declare_import(m, "airl_hmac_sha256_bytes", s2.clone());
         let hmac_sha512_bytes = declare_import(m, "airl_hmac_sha512_bytes", s2.clone());
-        let pbkdf2_sha256 = declare_import(m, "airl_pbkdf2_sha256", sig_4_ptr(m, ptr));
         let pbkdf2_sha512 = declare_import(m, "airl_pbkdf2_sha512", sig_4_ptr(m, ptr));
-        let base64_decode_bytes = declare_import(m, "airl_base64_decode_bytes", s1.clone());
-        let base64_encode_bytes = declare_import(m, "airl_base64_encode_bytes", s1.clone());
         let bitwise_xor = declare_import(m, "airl_bitwise_xor", s2.clone());
         let bitwise_and = declare_import(m, "airl_bitwise_and", s2.clone());
         let bitwise_or = declare_import(m, "airl_bitwise_or", s2.clone());
@@ -852,11 +788,10 @@ impl BytecodeAot {
             make_variant, match_tag,
             make_closure, call_closure,
             print, println, eprint, eprintln, read_line, read_stdin, print_values, type_of, valid,
-            char_at, substring, chars, split, join, contains, starts_with,
-            ends_with, index_of, trim, to_upper, to_lower, replace,
-            char_alpha, char_digit, char_whitespace, char_upper, char_lower, string_ci_eq,
-            map_new, map_from, map_get, map_get_or, map_set, map_has,
-            map_remove, map_keys, map_values, map_size,
+            char_at, substring, chars, split, join, replace,
+            char_upper, char_lower, string_ci_eq,
+            map_new, map_get, map_set, map_has,
+            map_remove, map_keys,
             read_file, write_file, file_exists,
             append_file, delete_file, delete_dir, rename_file,
             read_dir, create_dir, file_size, is_dir,
@@ -866,18 +801,16 @@ impl BytecodeAot {
             char_code, char_from_code,
             sqrt, sin, cos, tan, log, exp, floor, ceil, round,
             float_to_int, int_to_float, infinity, nan_ctor, is_nan, is_infinite,
-            cpu_count, time_now, getenv, json_parse, json_stringify, shell_exec, shell_exec_with_stdin,
+            cpu_count, time_now, getenv, shell_exec, shell_exec_with_stdin,
             parse_int_radix, int_to_string_radix, get_cwd,
             char_count, str_variadic, format_variadic,
             assert_fn, panic_fn, exit_fn, sleep_fn, format_time, read_lines,
             map_ho, filter_ho, fold_ho, sort_ho, any_ho, all_ho, find_ho,
-            path_join, path_parent, path_filename, path_extension, is_absolute,
             regex_match, regex_find_all, regex_replace, regex_split,
-            sha256, hmac_sha256, base64_encode, base64_decode, random_bytes,
-            sha512, hmac_sha512, sha256_bytes, sha512_bytes,
-            hmac_sha256_bytes, hmac_sha512_bytes,
-            pbkdf2_sha256, pbkdf2_sha512,
-            base64_decode_bytes, base64_encode_bytes,
+            random_bytes,
+            sha512, hmac_sha512, sha512_bytes,
+            hmac_sha512_bytes,
+            pbkdf2_sha512,
             bitwise_xor, bitwise_and, bitwise_or, bitwise_shr, bitwise_shl,
             bytes_alloc, bytes_get, bytes_set, bytes_length,
             bytes_new, bytes_from_int8, bytes_from_int16, bytes_from_int32, bytes_from_int64,
@@ -941,31 +874,22 @@ impl BytecodeAot {
         m.insert("chars".into(),       rt.chars);
         m.insert("split".into(),       rt.split);
         m.insert("join".into(),        rt.join);
-        m.insert("contains".into(),    rt.contains);
-        m.insert("starts-with".into(), rt.starts_with);
-        m.insert("ends-with".into(),   rt.ends_with);
-        m.insert("index-of".into(),    rt.index_of);
-        m.insert("trim".into(),        rt.trim);
-        m.insert("to-upper".into(),    rt.to_upper);
-        m.insert("to-lower".into(),    rt.to_lower);
         m.insert("replace".into(),     rt.replace);
-        m.insert("char-alpha?".into(),    rt.char_alpha);
-        m.insert("char-digit?".into(),    rt.char_digit);
-        m.insert("char-whitespace?".into(), rt.char_whitespace);
+        // contains, starts-with, ends-with, index-of, trim, to-upper, to-lower,
+        // char-alpha?, char-digit?, char-whitespace?
+        // deregistered — AIRL stdlib equivalents in string.airl take over
         m.insert("char-upper?".into(),    rt.char_upper);
         m.insert("char-lower?".into(),    rt.char_lower);
         m.insert("string-ci=?".into(),    rt.string_ci_eq);
 
         m.insert("map-new".into(),    rt.map_new);
-        m.insert("map-from".into(),   rt.map_from);
         m.insert("map-get".into(),    rt.map_get);
-        m.insert("map-get-or".into(), rt.map_get_or);
         m.insert("map-set".into(),    rt.map_set);
         m.insert("map-has".into(),    rt.map_has);
         m.insert("map-remove".into(), rt.map_remove);
         m.insert("map-keys".into(),   rt.map_keys);
-        m.insert("map-values".into(), rt.map_values);
-        m.insert("map-size".into(),   rt.map_size);
+        // map-from, map-get-or, map-values, map-size
+        // deregistered — AIRL stdlib equivalents in map.airl take over
 
         // File I/O
         m.insert("read-file".into(),    rt.read_file);
@@ -1020,9 +944,8 @@ impl BytecodeAot {
         // Environment
         m.insert("getenv".into(), rt.getenv);
 
-        // JSON
-        m.insert("json-parse".into(),     rt.json_parse);
-        m.insert("json-stringify".into(), rt.json_stringify);
+        // json-parse, json-stringify
+        // deregistered — AIRL stdlib equivalents in json.airl take over
 
         // Process
         m.insert("shell-exec".into(), rt.shell_exec);
@@ -1041,30 +964,21 @@ impl BytecodeAot {
         m.insert("read-lines".into(),    rt.read_lines);
         // concat, range, reverse, take, drop, zip, flatten, enumerate
         // deregistered — AIRL stdlib equivalents in prelude.airl take over
-        m.insert("path-join".into(),     rt.path_join);
-        m.insert("path-parent".into(),   rt.path_parent);
-        m.insert("path-filename".into(), rt.path_filename);
-        m.insert("path-extension".into(),rt.path_extension);
-        m.insert("is-absolute?".into(),  rt.is_absolute);
+        // path-join, path-parent, path-filename, path-extension, is-absolute?
+        // deregistered — AIRL stdlib equivalents in path.airl take over
         m.insert("regex-match".into(),   rt.regex_match);
         m.insert("regex-find-all".into(),rt.regex_find_all);
         m.insert("regex-replace".into(), rt.regex_replace);
         m.insert("regex-split".into(),   rt.regex_split);
-        m.insert("sha256".into(),        rt.sha256);
-        m.insert("hmac-sha256".into(),   rt.hmac_sha256);
-        m.insert("base64-encode".into(), rt.base64_encode);
-        m.insert("base64-decode".into(), rt.base64_decode);
+        // sha256, hmac-sha256, sha256-bytes, hmac-sha256-bytes, pbkdf2-sha256,
+        // base64-encode, base64-decode, base64-encode-bytes, base64-decode-bytes
+        // deregistered — AIRL stdlib equivalents take over
         m.insert("random-bytes".into(),  rt.random_bytes);
         m.insert("sha512".into(),              rt.sha512);
         m.insert("hmac-sha512".into(),         rt.hmac_sha512);
-        m.insert("sha256-bytes".into(),        rt.sha256_bytes);
         m.insert("sha512-bytes".into(),        rt.sha512_bytes);
-        m.insert("hmac-sha256-bytes".into(),   rt.hmac_sha256_bytes);
         m.insert("hmac-sha512-bytes".into(),   rt.hmac_sha512_bytes);
-        m.insert("pbkdf2-sha256".into(),       rt.pbkdf2_sha256);
         m.insert("pbkdf2-sha512".into(),       rt.pbkdf2_sha512);
-        m.insert("base64-decode-bytes".into(), rt.base64_decode_bytes);
-        m.insert("base64-encode-bytes".into(), rt.base64_encode_bytes);
         m.insert("bitwise-xor".into(),         rt.bitwise_xor);
         m.insert("bitwise-and".into(),         rt.bitwise_and);
         m.insert("bitwise-or".into(),          rt.bitwise_or);
@@ -3424,10 +3338,9 @@ mod tests {
             "head", "tail", "cons", "empty?", "length", "at", "append",
             "print", "type-of", "valid",
             "char-at", "substring", "chars", "split", "join",
-            "contains", "starts-with", "ends-with", "index-of",
-            "trim", "to-upper", "to-lower", "replace",
-            "map-new", "map-from", "map-get", "map-get-or", "map-set",
-            "map-has", "map-remove", "map-keys", "map-values", "map-size",
+            "replace",
+            "map-new", "map-get", "map-set",
+            "map-has", "map-remove", "map-keys",
         ] {
             assert!(aot.builtin_map.contains_key(key), "missing builtin: {}", key);
         }
