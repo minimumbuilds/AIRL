@@ -42,11 +42,79 @@ pub struct RtValue {
     pub data: RtData,
 }
 
-// Safety: RtValue is manually ref-counted. Thread-safety is managed by
-// retaining before send and releasing after receive. Required for
-// thread-spawn and channel builtins.
+// SAFETY: RtValue uses manual reference counting (the `rc` field) for
+// lifetime management. Cross-thread transfers are safe under this protocol:
+//
+//   Pre-condition:  Caller MUST call `airl_value_retain` before sending
+//                   an `*mut RtValue` across a thread boundary (channel-send,
+//                   thread-spawn captured values, etc.).
+//   Post-condition: Receiver MUST call `airl_value_release` when it no
+//                   longer needs the value.
+//   Invariant:      No two threads may hold a *mutable* reference to the
+//                   same `RtValue` simultaneously. Shared read-only access
+//                   is permitted when refcount >= 2.
+//
+// Violation of any of the above causes use-after-free or data races.
+// Prefer `SendableRtValue` (below) for cross-thread transfers — it
+// enforces retain-on-construct / release-on-drop at the type level.
 unsafe impl Send for RtValue {}
 unsafe impl Sync for RtValue {}
+
+/// A wrapper that enforces the retain/release protocol for cross-thread
+/// transfers of `*mut RtValue`. Retains on construction, releases on drop.
+///
+/// Use `SendableRtValue::new(ptr)` to safely wrap a value for sending.
+/// The receiver calls `into_raw()` to take ownership of the retained
+/// pointer (and becomes responsible for releasing it).
+pub struct SendableRtValue(*mut RtValue);
+
+impl SendableRtValue {
+    /// Retains the value and wraps it for safe cross-thread transfer.
+    ///
+    /// # Safety
+    ///
+    /// `v` must be a valid, non-null `*mut RtValue` with rc >= 1.
+    pub fn new(v: *mut RtValue) -> Self {
+        assert!(!v.is_null(), "SendableRtValue::new called with null pointer");
+        crate::memory::airl_value_retain(v);
+        Self(v)
+    }
+
+    /// Wraps a pointer that has *already* been retained by the caller.
+    /// Does NOT call retain again. The wrapper will release on drop.
+    ///
+    /// # Safety
+    ///
+    /// `v` must be a valid, non-null `*mut RtValue` whose refcount already
+    /// accounts for this wrapper's ownership.
+    pub unsafe fn from_retained(v: *mut RtValue) -> Self {
+        assert!(!v.is_null(), "SendableRtValue::from_retained called with null pointer");
+        Self(v)
+    }
+
+    /// Returns the underlying pointer without consuming or releasing.
+    pub fn as_ptr(&self) -> *mut RtValue {
+        self.0
+    }
+
+    /// Consumes the wrapper and returns the raw pointer.
+    /// The caller becomes responsible for calling `airl_value_release`.
+    pub fn into_raw(self) -> *mut RtValue {
+        let ptr = self.0;
+        std::mem::forget(self); // prevent Drop from releasing
+        ptr
+    }
+}
+
+impl Drop for SendableRtValue {
+    fn drop(&mut self) {
+        crate::memory::airl_value_release(self.0);
+    }
+}
+
+// SAFETY: SendableRtValue enforces the retain/release protocol at the
+// type level — the value is retained on construction and released on drop.
+unsafe impl Send for SendableRtValue {}
 
 impl RtValue {
     pub fn alloc(tag: u8, data: RtData) -> *mut RtValue {
@@ -135,7 +203,69 @@ pub extern "C" fn airl_bytes_new(ptr: *const u8, len: usize) -> *mut RtValue {
     rt_bytes(slice.to_vec())
 }
 
-// Rust-side accessors
+// ── Safe Option-returning accessors ────────────────────────────────
+//
+// These return `None` on type mismatch instead of panicking, making them
+// suitable for use after a single `unsafe { &*ptr }` dereference.  The
+// bytecode VM uses these to minimise the number of distinct unsafe blocks.
+impl RtValue {
+    /// Returns `Some(n)` if this value is `Int(n)`, else `None`.
+    pub fn try_as_int(&self) -> Option<i64> {
+        match &self.data {
+            RtData::Int(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// Returns `Some(f)` if this value is `Float(f)`, else `None`.
+    pub fn try_as_float(&self) -> Option<f64> {
+        match &self.data {
+            RtData::Float(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// Returns `Some(b)` if this value is `Bool(b)`, else `None`.
+    pub fn try_as_bool(&self) -> Option<bool> {
+        match &self.data {
+            RtData::Bool(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// Returns `Some(s)` if this value is `Str(s)`, else `None`.
+    pub fn try_as_str(&self) -> Option<&str> {
+        match &self.data {
+            RtData::Str(s) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Returns `true` if this value is `Nil`.
+    pub fn is_nil(&self) -> bool {
+        matches!(&self.data, RtData::Nil)
+    }
+
+    /// Returns `true` if this value is `Unit`.
+    pub fn is_unit(&self) -> bool {
+        matches!(&self.data, RtData::Unit)
+    }
+
+    /// If this is a `Variant`, returns `(tag_name, inner)`.
+    pub fn try_as_variant(&self) -> Option<(&str, *mut RtValue)> {
+        match &self.data {
+            RtData::Variant { tag_name, inner } => Some((tag_name.as_str(), *inner)),
+            _ => None,
+        }
+    }
+
+    /// Returns the `RtData` enum reference for direct pattern matching.
+    pub fn data(&self) -> &RtData {
+        &self.data
+    }
+}
+
+// ── Panicking accessors (used by extern "C" builtins) ─────────────
 impl RtValue {
     pub fn as_int(&self) -> i64 {
         match &self.data {
@@ -380,5 +510,209 @@ mod tests {
             assert_eq!(format!("{}", *v), "<Bytes len=0>");
             free_value(v);
         }
+    }
+
+    // ── Option-returning accessor tests ───────────────────────────
+
+    #[test]
+    fn test_try_as_int_happy() {
+        unsafe {
+            let v = rt_int(99);
+            assert_eq!((*v).try_as_int(), Some(99));
+            free_value(v);
+        }
+    }
+
+    #[test]
+    fn test_try_as_int_wrong_type() {
+        unsafe {
+            let v = rt_str("nope".into());
+            assert_eq!((*v).try_as_int(), None);
+            free_value(v);
+        }
+    }
+
+    #[test]
+    fn test_try_as_float_happy() {
+        unsafe {
+            let v = rt_float(2.718);
+            assert_eq!((*v).try_as_float(), Some(2.718));
+            free_value(v);
+        }
+    }
+
+    #[test]
+    fn test_try_as_float_wrong_type() {
+        unsafe {
+            let v = rt_int(1);
+            assert_eq!((*v).try_as_float(), None);
+            free_value(v);
+        }
+    }
+
+    #[test]
+    fn test_try_as_bool_happy() {
+        unsafe {
+            let t = rt_bool(true);
+            let f = rt_bool(false);
+            assert_eq!((*t).try_as_bool(), Some(true));
+            assert_eq!((*f).try_as_bool(), Some(false));
+            free_value(t);
+            free_value(f);
+        }
+    }
+
+    #[test]
+    fn test_try_as_bool_wrong_type() {
+        unsafe {
+            let v = rt_nil();
+            assert_eq!((*v).try_as_bool(), None);
+            free_value(v);
+        }
+    }
+
+    #[test]
+    fn test_try_as_str_happy() {
+        unsafe {
+            let v = rt_str("hello".into());
+            assert_eq!((*v).try_as_str(), Some("hello"));
+            free_value(v);
+        }
+    }
+
+    #[test]
+    fn test_try_as_str_wrong_type() {
+        unsafe {
+            let v = rt_int(42);
+            assert_eq!((*v).try_as_str(), None);
+            free_value(v);
+        }
+    }
+
+    #[test]
+    fn test_is_nil() {
+        unsafe {
+            let n = rt_nil();
+            let i = rt_int(0);
+            assert!((*n).is_nil());
+            assert!(!(*i).is_nil());
+            free_value(n);
+            free_value(i);
+        }
+    }
+
+    #[test]
+    fn test_is_unit() {
+        unsafe {
+            let u = rt_unit();
+            let i = rt_int(0);
+            assert!((*u).is_unit());
+            assert!(!(*i).is_unit());
+            free_value(u);
+            free_value(i);
+        }
+    }
+
+    #[test]
+    fn test_try_as_variant_happy() {
+        unsafe {
+            let inner = rt_int(42);
+            let v = rt_variant("Ok".into(), inner);
+            let (tag, inner_ptr) = (*v).try_as_variant().unwrap();
+            assert_eq!(tag, "Ok");
+            assert_eq!((*inner_ptr).as_int(), 42);
+            drop(Box::from_raw(v));
+            free_value(inner);
+        }
+    }
+
+    #[test]
+    fn test_try_as_variant_wrong_type() {
+        unsafe {
+            let v = rt_int(1);
+            assert!((*v).try_as_variant().is_none());
+            free_value(v);
+        }
+    }
+
+    #[test]
+    fn test_data_accessor() {
+        unsafe {
+            let v = rt_int(7);
+            assert!(matches!((*v).data(), &RtData::Int(7)));
+            free_value(v);
+        }
+    }
+
+    // ── SendableRtValue tests ─────────────────────────────────────
+
+    #[test]
+    fn test_sendable_retains_on_new() {
+        unsafe {
+            let v = rt_int(10);
+            assert_eq!((*v).rc, 1);
+            let sv = SendableRtValue::new(v);
+            assert_eq!((*v).rc, 2);
+            drop(sv); // should release
+            assert_eq!((*v).rc, 1);
+            crate::memory::airl_value_release(v);
+        }
+    }
+
+    #[test]
+    fn test_sendable_into_raw_no_double_release() {
+        unsafe {
+            let v = rt_int(20);
+            assert_eq!((*v).rc, 1);
+            let sv = SendableRtValue::new(v);
+            assert_eq!((*v).rc, 2);
+            let raw = sv.into_raw();
+            // into_raw consumed the wrapper without releasing
+            assert_eq!((*v).rc, 2);
+            assert_eq!(raw, v);
+            // Manually release the extra ref
+            crate::memory::airl_value_release(v);
+            assert_eq!((*v).rc, 1);
+            crate::memory::airl_value_release(v);
+        }
+    }
+
+    #[test]
+    fn test_sendable_from_retained() {
+        unsafe {
+            let v = rt_int(30);
+            crate::memory::airl_value_retain(v); // manually retain
+            assert_eq!((*v).rc, 2);
+            let sv = SendableRtValue::from_retained(v);
+            // from_retained does NOT retain again
+            assert_eq!((*v).rc, 2);
+            drop(sv); // releases once
+            assert_eq!((*v).rc, 1);
+            crate::memory::airl_value_release(v);
+        }
+    }
+
+    #[test]
+    fn test_sendable_as_ptr() {
+        unsafe {
+            let v = rt_int(40);
+            let sv = SendableRtValue::new(v);
+            assert_eq!(sv.as_ptr(), v);
+            drop(sv);
+            crate::memory::airl_value_release(v);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "SendableRtValue::new called with null")]
+    fn test_sendable_null_panics() {
+        let _sv = SendableRtValue::new(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn test_sendable_is_send() {
+        // Compile-time check that SendableRtValue implements Send.
+        fn assert_send<T: Send>() {}
+        assert_send::<SendableRtValue>();
     }
 }

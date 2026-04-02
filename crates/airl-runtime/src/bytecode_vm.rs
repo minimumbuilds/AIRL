@@ -155,18 +155,32 @@ pub fn rt_to_value(ptr: *mut RtValue) -> Value {
 /// Extract bool exactly (must be Bool(true)).
 fn rt_is_bool_true(ptr: *mut RtValue) -> bool {
     if ptr.is_null() { return false; }
-    unsafe { matches!(&(*ptr).data, RtData::Bool(true)) }
+    let v = unsafe { rt_ref(ptr) };
+    v.try_as_bool() == Some(true)
 }
 
 fn rt_is_bool_false(ptr: *mut RtValue) -> bool {
     if ptr.is_null() { return false; }
-    unsafe { matches!(&(*ptr).data, RtData::Bool(false)) }
+    let v = unsafe { rt_ref(ptr) };
+    v.try_as_bool() == Some(false)
 }
 
 /// Display an RtValue for error messages (non-owning read).
 fn rt_display(ptr: *mut RtValue) -> String {
     if ptr.is_null() { return "nil".to_string(); }
-    unsafe { format!("{}", &*ptr) }
+    let v = unsafe { rt_ref(ptr) };
+    format!("{}", v)
+}
+
+/// Dereference a non-null `*mut RtValue` to a shared reference.
+/// Centralises the single unsafe dereference for the bytecode VM.
+///
+/// # Safety
+///
+/// `ptr` must be a valid, non-null, properly retained `*mut RtValue`.
+#[inline(always)]
+unsafe fn rt_ref(ptr: *mut RtValue) -> &'static RtValue {
+    &*ptr
 }
 
 // ── Register helpers ──────────────────────────────────────────────
@@ -236,8 +250,9 @@ fn channel_receivers() -> &'static std::sync::Mutex<HashMap<i64, std::sync::mpsc
 
 fn dispatch_thread_join(args: &[*mut RtValue]) -> *mut RtValue {
     let handle_id = match args.first() {
-        Some(&ptr) if !ptr.is_null() => unsafe {
-            match &(*ptr).data { RtData::Int(n) => *n, _ => return rt_variant("Err".into(), rt_str("thread-join: handle must be Int".into())) }
+        Some(&ptr) if !ptr.is_null() => match unsafe { rt_ref(ptr) }.try_as_int() {
+            Some(n) => n,
+            None => return rt_variant("Err".into(), rt_str("thread-join: handle must be Int".into())),
         },
         _ => return rt_variant("Err".into(), rt_str("thread-join: requires 1 argument".into())),
     };
@@ -266,8 +281,9 @@ fn dispatch_channel_new(_args: &[*mut RtValue]) -> *mut RtValue {
 
 fn dispatch_channel_send(args: &[*mut RtValue]) -> *mut RtValue {
     let tx_id = match args.first() {
-        Some(&ptr) if !ptr.is_null() => unsafe {
-            match &(*ptr).data { RtData::Int(n) => *n, _ => return rt_variant("Err".into(), rt_str("channel-send: handle must be Int".into())) }
+        Some(&ptr) if !ptr.is_null() => match unsafe { rt_ref(ptr) }.try_as_int() {
+            Some(n) => n,
+            None => return rt_variant("Err".into(), rt_str("channel-send: handle must be Int".into())),
         },
         _ => return rt_variant("Err".into(), rt_str("channel-send: requires 2 arguments".into())),
     };
@@ -284,8 +300,9 @@ fn dispatch_channel_send(args: &[*mut RtValue]) -> *mut RtValue {
 
 fn dispatch_channel_recv(args: &[*mut RtValue]) -> *mut RtValue {
     let rx_id = match args.first() {
-        Some(&ptr) if !ptr.is_null() => unsafe {
-            match &(*ptr).data { RtData::Int(n) => *n, _ => return rt_variant("Err".into(), rt_str("channel-recv: handle must be Int".into())) }
+        Some(&ptr) if !ptr.is_null() => match unsafe { rt_ref(ptr) }.try_as_int() {
+            Some(n) => n,
+            None => return rt_variant("Err".into(), rt_str("channel-recv: handle must be Int".into())),
         },
         _ => return rt_variant("Err".into(), rt_str("channel-recv: requires 1 argument".into())),
     };
@@ -305,14 +322,16 @@ fn dispatch_channel_recv(args: &[*mut RtValue]) -> *mut RtValue {
 
 fn dispatch_channel_recv_timeout(args: &[*mut RtValue]) -> *mut RtValue {
     let rx_id = match args.first() {
-        Some(&ptr) if !ptr.is_null() => unsafe {
-            match &(*ptr).data { RtData::Int(n) => *n, _ => return rt_variant("Err".into(), rt_str("channel-recv-timeout: handle must be Int".into())) }
+        Some(&ptr) if !ptr.is_null() => match unsafe { rt_ref(ptr) }.try_as_int() {
+            Some(n) => n,
+            None => return rt_variant("Err".into(), rt_str("channel-recv-timeout: handle must be Int".into())),
         },
         _ => return rt_variant("Err".into(), rt_str("channel-recv-timeout: requires 2 arguments".into())),
     };
     let timeout_ms = match args.get(1) {
-        Some(&ptr) if !ptr.is_null() => unsafe {
-            match &(*ptr).data { RtData::Int(n) => *n, _ => return rt_variant("Err".into(), rt_str("channel-recv-timeout: timeout must be Int".into())) }
+        Some(&ptr) if !ptr.is_null() => match unsafe { rt_ref(ptr) }.try_as_int() {
+            Some(n) => n,
+            None => return rt_variant("Err".into(), rt_str("channel-recv-timeout: timeout must be Int".into())),
         },
         _ => return rt_variant("Err".into(), rt_str("channel-recv-timeout: requires 2 arguments".into())),
     };
@@ -334,8 +353,9 @@ fn dispatch_channel_recv_timeout(args: &[*mut RtValue]) -> *mut RtValue {
 
 fn dispatch_channel_close(args: &[*mut RtValue]) -> *mut RtValue {
     let handle_id = match args.first() {
-        Some(&ptr) if !ptr.is_null() => unsafe {
-            match &(*ptr).data { RtData::Int(n) => *n, _ => return rt_bool(false) }
+        Some(&ptr) if !ptr.is_null() => match unsafe { rt_ref(ptr) }.try_as_int() {
+            Some(n) => n,
+            None => return rt_bool(false),
         },
         _ => return rt_bool(false),
     };
@@ -726,11 +746,9 @@ impl BytecodeVm {
     /// Dispatch fn-metadata using RtValue args, returning *mut RtValue.
     fn dispatch_fn_metadata_rt(&self, args: &[*mut RtValue]) -> Result<*mut RtValue, RuntimeError> {
         let fname = match args.first() {
-            Some(&ptr) if !ptr.is_null() => unsafe {
-                match &(*ptr).data {
-                    RtData::Str(s) => s.clone(),
-                    _ => return Err(RuntimeError::Custom("fn-metadata: requires string arg".into())),
-                }
+            Some(&ptr) if !ptr.is_null() => match unsafe { rt_ref(ptr) }.try_as_str() {
+                Some(s) => s.to_string(),
+                None => return Err(RuntimeError::Custom("fn-metadata: requires string arg".into())),
             },
             _ => return Err(RuntimeError::Custom("fn-metadata: requires 1 argument".into())),
         };
@@ -907,12 +925,13 @@ impl BytecodeVm {
                         let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                    let (va, vb) = unsafe { (rt_ref(a), rt_ref(b)) };
+                    let result = match (va.data(), vb.data()) {
                         (RtData::Int(x), RtData::Int(y)) => rt_int(x.wrapping_add(*y)),
                         (RtData::Float(x), RtData::Float(y)) => rt_float(x + y),
                         (RtData::Str(x), RtData::Str(y)) => rt_str(format!("{}{}", x, y)),
                         _ => return Err(RuntimeError::TypeError("add: incompatible types".into())),
-                    }};
+                    };
                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Sub => {
@@ -920,11 +939,12 @@ impl BytecodeVm {
                         let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                    let (va, vb) = unsafe { (rt_ref(a), rt_ref(b)) };
+                    let result = match (va.data(), vb.data()) {
                         (RtData::Int(x), RtData::Int(y)) => rt_int(x.wrapping_sub(*y)),
                         (RtData::Float(x), RtData::Float(y)) => rt_float(x - y),
                         _ => return Err(RuntimeError::TypeError("sub: incompatible types".into())),
-                    }};
+                    };
                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Mul => {
@@ -932,11 +952,12 @@ impl BytecodeVm {
                         let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                    let (va, vb) = unsafe { (rt_ref(a), rt_ref(b)) };
+                    let result = match (va.data(), vb.data()) {
                         (RtData::Int(x), RtData::Int(y)) => rt_int(x.wrapping_mul(*y)),
                         (RtData::Float(x), RtData::Float(y)) => rt_float(x * y),
                         _ => return Err(RuntimeError::TypeError("mul: incompatible types".into())),
-                    }};
+                    };
                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Div => {
@@ -944,12 +965,13 @@ impl BytecodeVm {
                         let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                    let (va, vb) = unsafe { (rt_ref(a), rt_ref(b)) };
+                    let result = match (va.data(), vb.data()) {
                         (RtData::Int(_), RtData::Int(0)) => return Err(RuntimeError::DivisionByZero),
                         (RtData::Int(x), RtData::Int(y)) => rt_int(x / y),
                         (RtData::Float(x), RtData::Float(y)) => rt_float(x / y),
                         _ => return Err(RuntimeError::TypeError("div: incompatible types".into())),
-                    }};
+                    };
                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Mod => {
@@ -957,19 +979,21 @@ impl BytecodeVm {
                         let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                    let (va, vb) = unsafe { (rt_ref(a), rt_ref(b)) };
+                    let result = match (va.data(), vb.data()) {
                         (RtData::Int(x), RtData::Int(y)) => rt_int(x % y),
                         _ => return Err(RuntimeError::TypeError("mod: incompatible types".into())),
-                    }};
+                    };
                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Neg => {
                     let a = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
-                    let result = unsafe { match &(*a).data {
+                    let va = unsafe { rt_ref(a) };
+                    let result = match va.data() {
                         RtData::Int(x) => rt_int(-x),
                         RtData::Float(x) => rt_float(-x),
                         _ => return Err(RuntimeError::TypeError("neg: expected number".into())),
-                    }};
+                    };
                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
 
@@ -995,12 +1019,13 @@ impl BytecodeVm {
                         let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                    let (va, vb) = unsafe { (rt_ref(a), rt_ref(b)) };
+                    let result = match (va.data(), vb.data()) {
                         (RtData::Int(x), RtData::Int(y)) => rt_bool(x < y),
                         (RtData::Float(x), RtData::Float(y)) => rt_bool(x < y),
                         (RtData::Str(x), RtData::Str(y)) => rt_bool(x < y),
                         _ => rt_bool(false),
-                    }};
+                    };
                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Le => {
@@ -1008,12 +1033,13 @@ impl BytecodeVm {
                         let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                    let (va, vb) = unsafe { (rt_ref(a), rt_ref(b)) };
+                    let result = match (va.data(), vb.data()) {
                         (RtData::Int(x), RtData::Int(y)) => rt_bool(x <= y),
                         (RtData::Float(x), RtData::Float(y)) => rt_bool(x <= y),
                         (RtData::Str(x), RtData::Str(y)) => rt_bool(x <= y),
                         _ => rt_bool(false),
-                    }};
+                    };
                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Gt => {
@@ -1021,12 +1047,13 @@ impl BytecodeVm {
                         let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                    let (va, vb) = unsafe { (rt_ref(a), rt_ref(b)) };
+                    let result = match (va.data(), vb.data()) {
                         (RtData::Int(x), RtData::Int(y)) => rt_bool(x > y),
                         (RtData::Float(x), RtData::Float(y)) => rt_bool(x > y),
                         (RtData::Str(x), RtData::Str(y)) => rt_bool(x > y),
                         _ => rt_bool(false),
-                    }};
+                    };
                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Ge => {
@@ -1034,20 +1061,22 @@ impl BytecodeVm {
                         let r = &self.call_stack.last().expect("internal: call stack empty").registers;
                         (reg_get(r, instr.a as usize), reg_get(r, instr.b as usize))
                     };
-                    let result = unsafe { match (&(*a).data, &(*b).data) {
+                    let (va, vb) = unsafe { (rt_ref(a), rt_ref(b)) };
+                    let result = match (va.data(), vb.data()) {
                         (RtData::Int(x), RtData::Int(y)) => rt_bool(x >= y),
                         (RtData::Float(x), RtData::Float(y)) => rt_bool(x >= y),
                         (RtData::Str(x), RtData::Str(y)) => rt_bool(x >= y),
                         _ => rt_bool(false),
-                    }};
+                    };
                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
                 Op::Not => {
                     let a = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
-                    let result = unsafe { match &(*a).data {
-                        RtData::Bool(b) => rt_bool(!b),
-                        _ => return Err(RuntimeError::TypeError("not: expected bool".into())),
-                    }};
+                    let va = unsafe { rt_ref(a) };
+                    let result = match va.try_as_bool() {
+                        Some(b) => rt_bool(!b),
+                        None => return Err(RuntimeError::TypeError("not: expected bool".into())),
+                    };
                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                 }
 
@@ -1111,17 +1140,16 @@ impl BytecodeVm {
                         _ => return Err(RuntimeError::TypeError("match tag must be string".into())),
                     };
                     let scr = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
-                    unsafe {
-                        match &(*scr).data {
-                            RtData::Variant { tag_name, inner } if *tag_name == tag => {
-                                airl_value_retain(*inner);
-                                let frame = self.call_stack.last_mut().expect("internal: call stack empty");
-                                reg_set(&mut frame.registers, instr.dst as usize, *inner);
-                                frame.match_flag = true;
-                            }
-                            _ => {
-                                self.call_stack.last_mut().expect("internal: call stack empty").match_flag = false;
-                            }
+                    let v_scr = unsafe { rt_ref(scr) };
+                    match v_scr.try_as_variant() {
+                        Some((tag_name, inner)) if tag_name == tag => {
+                            airl_value_retain(inner);
+                            let frame = self.call_stack.last_mut().expect("internal: call stack empty");
+                            reg_set(&mut frame.registers, instr.dst as usize, inner);
+                            frame.match_flag = true;
+                        }
+                        _ => {
+                            self.call_stack.last_mut().expect("internal: call stack empty").match_flag = false;
                         }
                     }
                 }
@@ -1143,16 +1171,18 @@ impl BytecodeVm {
                 // ── TryUnwrap ──
                 Op::TryUnwrap => {
                     let val = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
-                    unsafe { match &(*val).data {
-                        RtData::Variant { tag_name, inner } if tag_name == "Ok" => {
-                            airl_value_retain(*inner);
-                            reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, *inner);
+                    let v = unsafe { rt_ref(val) };
+                    match v.try_as_variant() {
+                        Some(("Ok", inner)) => {
+                            airl_value_retain(inner);
+                            reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, inner);
                         }
-                        RtData::Variant { tag_name, inner } if tag_name == "Err" => {
-                            return Err(RuntimeError::Custom(format!("{}", &**inner)));
+                        Some(("Err", inner)) => {
+                            let inner_v = unsafe { rt_ref(inner) };
+                            return Err(RuntimeError::Custom(format!("{}", inner_v)));
                         }
                         _ => return Err(RuntimeError::TryOnNonResult(rt_display(val))),
-                    }}
+                    }
                 }
 
                 // ── Contract assertions ──
