@@ -1,8 +1,80 @@
 use crate::value::{rt_bool, rt_int, rt_nil, rt_str, rt_unit, rt_variant, RtData, RtValue};
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SEC-5: File sandbox — restrict file I/O to a root directory when configured
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Cached sandbox root from AIRL_SANDBOX_ROOT env var.
+/// None = no sandbox (all paths allowed). Some(path) = enforce sandbox.
+fn sandbox_root() -> &'static Option<PathBuf> {
+    static ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        match std::env::var("AIRL_SANDBOX_ROOT") {
+            Ok(val) if !val.is_empty() => {
+                match std::fs::canonicalize(&val) {
+                    Ok(canon) => Some(canon),
+                    Err(_) => {
+                        eprintln!("warning: AIRL_SANDBOX_ROOT '{}' cannot be canonicalized, sandbox disabled", val);
+                        None
+                    }
+                }
+            }
+            _ => None,
+        }
+    })
+}
+
+/// Validate that `path` is under the sandbox root (if configured).
+/// Returns the canonicalized PathBuf on success, or an error message on violation.
+/// When AIRL_SANDBOX_ROOT is not set, returns Ok(PathBuf::from(path)) for backward compat.
+fn sandbox_check(path: &str) -> Result<PathBuf, String> {
+    match sandbox_root() {
+        None => Ok(PathBuf::from(path)),
+        Some(root) => {
+            // For paths that don't exist yet (write-file, temp-file, etc.),
+            // canonicalize the parent directory and append the filename.
+            let p = PathBuf::from(path);
+            let canonical = if p.exists() {
+                std::fs::canonicalize(&p).map_err(|e| format!("sandbox: cannot canonicalize '{}': {}", path, e))?
+            } else {
+                // Canonicalize the longest existing prefix
+                let mut base = p.clone();
+                let mut tail_parts = Vec::new();
+                loop {
+                    if base.exists() {
+                        let mut canon = std::fs::canonicalize(&base)
+                            .map_err(|e| format!("sandbox: cannot canonicalize '{}': {}", base.display(), e))?;
+                        for part in tail_parts.into_iter().rev() {
+                            canon.push(part);
+                        }
+                        break canon;
+                    }
+                    match base.file_name() {
+                        Some(name) => {
+                            tail_parts.push(name.to_os_string());
+                            base.pop();
+                        }
+                        None => {
+                            // No existing prefix at all — use the path as-is for the check
+                            break p;
+                        }
+                    }
+                }
+            };
+            if canonical.starts_with(root) {
+                Ok(canonical)
+            } else {
+                Err(format!("sandbox violation: '{}' is outside AIRL_SANDBOX_ROOT '{}'", path, root.display()))
+            }
+        }
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn airl_print(v: *mut RtValue) -> *mut RtValue {
@@ -111,7 +183,11 @@ pub extern "C" fn airl_read_file(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("read-file: expected string path"),
         }
     };
-    match std::fs::read_to_string(&path_str) {
+    let checked = match sandbox_check(&path_str) {
+        Ok(p) => p,
+        Err(msg) => crate::error::rt_error(&format!("read-file: {}", msg)),
+    };
+    match std::fs::read_to_string(&checked) {
         Ok(contents) => rt_str(contents),
         Err(e) => crate::error::rt_error(&format!("read-file: {}: {}", path_str, e)),
     }
@@ -132,14 +208,18 @@ pub extern "C" fn airl_write_file(path: *mut RtValue, content: *mut RtValue) -> 
             _ => crate::error::rt_error("write-file: expected string content"),
         }
     };
-    if let Some(parent) = std::path::Path::new(&path_str).parent() {
+    let checked = match sandbox_check(&path_str) {
+        Ok(p) => p,
+        Err(msg) => crate::error::rt_error(&format!("write-file: {}", msg)),
+    };
+    if let Some(parent) = checked.parent() {
         if !parent.as_os_str().is_empty() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 crate::error::rt_error(&format!("write-file: create dirs: {}: {}", path_str, e));
             }
         }
     }
-    match std::fs::write(&path_str, &content_str) {
+    match std::fs::write(&checked, &content_str) {
         Ok(()) => rt_bool(true),
         Err(e) => crate::error::rt_error(&format!("write-file: {}: {}", path_str, e)),
     }
@@ -160,10 +240,14 @@ pub extern "C" fn airl_append_file(path: *mut RtValue, content: *mut RtValue) ->
             _ => crate::error::rt_error("append-file: expected string content"),
         }
     };
+    let checked = match sandbox_check(&path_str) {
+        Ok(p) => p,
+        Err(msg) => crate::error::rt_error(&format!("append-file: {}", msg)),
+    };
     match std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&path_str)
+        .open(&checked)
     {
         Ok(mut f) => match f.write_all(content_str.as_bytes()) {
             Ok(()) => rt_bool(true),
@@ -182,7 +266,11 @@ pub extern "C" fn airl_delete_file(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("delete-file: expected string path"),
         }
     };
-    match std::fs::remove_file(&path_str) {
+    let checked = match sandbox_check(&path_str) {
+        Ok(p) => p,
+        Err(msg) => crate::error::rt_error(&format!("delete-file: {}", msg)),
+    };
+    match std::fs::remove_file(&checked) {
         Ok(()) => rt_bool(true),
         Err(e) => crate::error::rt_error(&format!("delete-file: {}: {}", path_str, e)),
     }
@@ -197,7 +285,11 @@ pub extern "C" fn airl_delete_dir(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("delete-dir: expected string path"),
         }
     };
-    match std::fs::remove_dir_all(&path_str) {
+    let checked = match sandbox_check(&path_str) {
+        Ok(p) => p,
+        Err(msg) => crate::error::rt_error(&format!("delete-dir: {}", msg)),
+    };
+    match std::fs::remove_dir_all(&checked) {
         Ok(()) => rt_bool(true),
         Err(e) => crate::error::rt_error(&format!("delete-dir: {}: {}", path_str, e)),
     }
@@ -212,7 +304,11 @@ pub extern "C" fn airl_read_dir(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("read-dir: expected string path"),
         }
     };
-    match std::fs::read_dir(&path_str) {
+    let checked = match sandbox_check(&path_str) {
+        Ok(p) => p,
+        Err(msg) => crate::error::rt_error(&format!("read-dir: {}", msg)),
+    };
+    match std::fs::read_dir(&checked) {
         Ok(entries) => {
             let mut names: Vec<String> = entries
                 .filter_map(|e| e.ok())
@@ -235,7 +331,11 @@ pub extern "C" fn airl_create_dir(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("create-dir: expected string path"),
         }
     };
-    match std::fs::create_dir_all(&path_str) {
+    let checked = match sandbox_check(&path_str) {
+        Ok(p) => p,
+        Err(msg) => crate::error::rt_error(&format!("create-dir: {}", msg)),
+    };
+    match std::fs::create_dir_all(&checked) {
         Ok(()) => rt_bool(true),
         Err(e) => crate::error::rt_error(&format!("create-dir: {}: {}", path_str, e)),
     }
@@ -250,7 +350,11 @@ pub extern "C" fn airl_file_size(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("file-size: expected string path"),
         }
     };
-    match std::fs::metadata(&path_str) {
+    let checked = match sandbox_check(&path_str) {
+        Ok(p) => p,
+        Err(msg) => crate::error::rt_error(&format!("file-size: {}", msg)),
+    };
+    match std::fs::metadata(&checked) {
         Ok(meta) => crate::value::rt_int(meta.len() as i64),
         Err(e) => crate::error::rt_error(&format!("file-size: {}: {}", path_str, e)),
     }
@@ -265,7 +369,11 @@ pub extern "C" fn airl_is_dir(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("is-dir: expected string path"),
         }
     };
-    rt_bool(std::path::Path::new(&path_str).is_dir())
+    let checked = match sandbox_check(&path_str) {
+        Ok(p) => p,
+        Err(msg) => crate::error::rt_error(&format!("is-dir: {}", msg)),
+    };
+    rt_bool(checked.is_dir())
 }
 
 /// Check if a path exists.
@@ -277,7 +385,11 @@ pub extern "C" fn airl_file_exists(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("file-exists?: expected string path"),
         }
     };
-    rt_bool(std::path::Path::new(&path_str).exists())
+    let checked = match sandbox_check(&path_str) {
+        Ok(p) => p,
+        Err(_) => return rt_bool(false), // Outside sandbox = does not exist from AIRL's perspective
+    };
+    rt_bool(checked.exists())
 }
 
 /// Rename a file or directory.
@@ -295,7 +407,15 @@ pub extern "C" fn airl_rename_file(old: *mut RtValue, new: *mut RtValue) -> *mut
             _ => crate::error::rt_error("rename-file: expected string path (new)"),
         }
     };
-    match std::fs::rename(&old_str, &new_str) {
+    let checked_old = match sandbox_check(&old_str) {
+        Ok(p) => p,
+        Err(msg) => crate::error::rt_error(&format!("rename-file: {}", msg)),
+    };
+    let checked_new = match sandbox_check(&new_str) {
+        Ok(p) => p,
+        Err(msg) => crate::error::rt_error(&format!("rename-file: {}", msg)),
+    };
+    match std::fs::rename(&checked_old, &checked_new) {
         Ok(()) => rt_bool(true),
         Err(e) => crate::error::rt_error(&format!("rename-file: {} -> {}: {}", old_str, new_str, e)),
     }
@@ -341,21 +461,34 @@ pub extern "C" fn airl_valid(v: *mut RtValue) -> *mut RtValue {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// `temp-file(prefix)` — create a temp file, return its path.
+/// When AIRL_SANDBOX_ROOT is set, temp files are created under the sandbox root.
 #[no_mangle]
 pub extern "C" fn airl_temp_file(prefix: *mut RtValue) -> *mut RtValue {
     let pfx = match unsafe { &(*prefix).data } { RtData::Str(s) => s.clone(), _ => "airl".into() };
     let cnt = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("{}-{}-{}", pfx, std::process::id(), cnt));
+    let base = match sandbox_root() {
+        Some(root) => root.join("tmp"),
+        None => std::env::temp_dir(),
+    };
+    let path = base.join(format!("{}-{}-{}", pfx, std::process::id(), cnt));
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap_or(());
+    }
     std::fs::write(&path, "").unwrap_or(());
     rt_str(path.to_string_lossy().into_owned())
 }
 
 /// `temp-dir(prefix)` — create a temp directory, return its path.
+/// When AIRL_SANDBOX_ROOT is set, temp dirs are created under the sandbox root.
 #[no_mangle]
 pub extern "C" fn airl_temp_dir(prefix: *mut RtValue) -> *mut RtValue {
     let pfx = match unsafe { &(*prefix).data } { RtData::Str(s) => s.clone(), _ => "airl".into() };
     let cnt = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("{}-{}-{}-dir", pfx, std::process::id(), cnt));
+    let base = match sandbox_root() {
+        Some(root) => root.join("tmp"),
+        None => std::env::temp_dir(),
+    };
+    let path = base.join(format!("{}-{}-{}-dir", pfx, std::process::id(), cnt));
     std::fs::create_dir_all(&path).unwrap_or(());
     rt_str(path.to_string_lossy().into_owned())
 }
@@ -364,7 +497,11 @@ pub extern "C" fn airl_temp_dir(prefix: *mut RtValue) -> *mut RtValue {
 #[no_mangle]
 pub extern "C" fn airl_file_mtime(path_val: *mut RtValue) -> *mut RtValue {
     let p = match unsafe { &(*path_val).data } { RtData::Str(s) => s.clone(), _ => return rt_int(-1) };
-    match std::fs::metadata(&p).and_then(|m| m.modified()) {
+    let checked = match sandbox_check(&p) {
+        Ok(p) => p,
+        Err(_) => return rt_int(-1),
+    };
+    match std::fs::metadata(&checked).and_then(|m| m.modified()) {
         Ok(t) => {
             let ms = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
             rt_int(ms)
@@ -378,6 +515,23 @@ mod tests {
     use super::*;
     use crate::memory::airl_value_release;
     use crate::value::{rt_int, rt_nil, rt_str};
+
+    // ── SEC-5: sandbox_check unit tests ──
+
+    #[test]
+    fn sandbox_check_no_sandbox_allows_any_path() {
+        // When AIRL_SANDBOX_ROOT is not set (the default for tests),
+        // sandbox_check returns Ok with the original path.
+        let result = sandbox_check("/etc/passwd");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), std::path::PathBuf::from("/etc/passwd"));
+    }
+
+    #[test]
+    fn sandbox_check_nonexistent_path_without_sandbox() {
+        let result = sandbox_check("/nonexistent/path/file.txt");
+        assert!(result.is_ok());
+    }
 
     #[test]
     fn type_of_int() {

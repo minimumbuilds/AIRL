@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::sync::OnceLock;
 use crate::value::{rt_bool, rt_bytes, rt_float, rt_int, rt_list, rt_map, rt_nil, rt_str, rt_variant, RtData, RtValue};
 
 fn ok_variant(inner: *mut RtValue) -> *mut RtValue {
@@ -9,6 +10,88 @@ fn ok_variant(inner: *mut RtValue) -> *mut RtValue {
 fn err_variant(msg: &str) -> *mut RtValue {
     rt_variant("Err".into(), rt_str(msg.into()))
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SEC-6: Process execution restriction via AIRL_ALLOW_EXEC env var
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Cached policy from AIRL_ALLOW_EXEC env var.
+/// Disabled = not allowed. AllowAll = "*" means all commands allowed.
+/// AllowList = only comma-separated binary names are allowed.
+enum ExecPolicy {
+    Disabled,
+    AllowAll,
+    AllowList(Vec<String>),
+}
+
+fn exec_policy() -> &'static ExecPolicy {
+    static POLICY: OnceLock<ExecPolicy> = OnceLock::new();
+    POLICY.get_or_init(|| {
+        match std::env::var("AIRL_ALLOW_EXEC") {
+            Ok(val) if !val.is_empty() => {
+                if val.trim() == "*" {
+                    ExecPolicy::AllowAll
+                } else {
+                    let names: Vec<String> = val.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    ExecPolicy::AllowList(names)
+                }
+            }
+            _ => ExecPolicy::Disabled,
+        }
+    })
+}
+
+/// Check if running `command` is allowed under the current policy.
+fn check_exec(command: &str) -> Result<(), *mut RtValue> {
+    match exec_policy() {
+        ExecPolicy::Disabled => {
+            Err(err_variant("shell-exec: disabled (set AIRL_ALLOW_EXEC to enable)"))
+        }
+        ExecPolicy::AllowAll => Ok(()),
+        ExecPolicy::AllowList(allowed) => {
+            // Extract binary name (last path component)
+            let bin_name = std::path::Path::new(command)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(command);
+            if allowed.iter().any(|a| a == bin_name) {
+                Ok(())
+            } else {
+                Err(err_variant(&format!(
+                    "shell-exec: '{}' not in AIRL_ALLOW_EXEC allowlist", bin_name
+                )))
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SEC-7: Env var allowlist via AIRL_ALLOW_ENV env var
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn env_allowlist() -> &'static Option<Vec<String>> {
+    static ALLOWLIST: OnceLock<Option<Vec<String>>> = OnceLock::new();
+    ALLOWLIST.get_or_init(|| {
+        match std::env::var("AIRL_ALLOW_ENV") {
+            Ok(val) if !val.is_empty() => {
+                Some(val.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect())
+            }
+            _ => None,
+        }
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SEC-9: TCP recv size limit (256 MB)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TCP_RECV_MAX_BYTES: usize = 256 * 1024 * 1024;
 
 // ── char-count ──
 
@@ -642,6 +725,12 @@ pub extern "C" fn airl_time_now() -> *mut RtValue {
 #[no_mangle]
 pub extern "C" fn airl_getenv(name: *mut RtValue) -> *mut RtValue {
     let key = match unsafe { &(*name).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("not a string") };
+    // SEC-7: When AIRL_ALLOW_ENV is set, only allowlisted env vars are readable
+    if let Some(allowlist) = env_allowlist() {
+        if !allowlist.iter().any(|a| a == key) {
+            return err_variant(&format!("env var not found: {}", key));
+        }
+    }
     match std::env::var(key) {
         Ok(val) => ok_variant(rt_str(val)),
         Err(_) => err_variant(&format!("env var not found: {}", key)),
@@ -668,9 +757,11 @@ fn output_to_map(output: std::process::Output) -> *mut RtValue {
 }
 
 // NOTE: Uses Command::new().args() — safe execFile-style, no shell interpolation
+// SEC-6: Gated by AIRL_ALLOW_EXEC env var
 #[no_mangle]
 pub extern "C" fn airl_shell_exec(cmd: *mut RtValue, args_list: *mut RtValue) -> *mut RtValue {
     let (command, cmd_args) = match extract_cmd_args(cmd, args_list) { Ok(v) => v, Err(e) => return e };
+    if let Err(e) = check_exec(&command) { return e; }
     match std::process::Command::new(&command).args(&cmd_args).output() {
         Ok(output) => output_to_map(output),
         Err(e) => err_variant(&format!("shell-exec: {}", e)),
@@ -678,9 +769,11 @@ pub extern "C" fn airl_shell_exec(cmd: *mut RtValue, args_list: *mut RtValue) ->
 }
 
 // NOTE: Uses Command::new().args().stdin(piped) — safe execFile-style, no shell interpolation
+// SEC-6: Gated by AIRL_ALLOW_EXEC env var
 #[no_mangle]
 pub extern "C" fn airl_shell_exec_with_stdin(cmd: *mut RtValue, args_list: *mut RtValue, stdin_data: *mut RtValue) -> *mut RtValue {
     let (command, cmd_args) = match extract_cmd_args(cmd, args_list) { Ok(v) => v, Err(e) => return e };
+    if let Err(e) = check_exec(&command) { return e; }
     let stdin_str = match unsafe { &(*stdin_data).data } {
         RtData::Str(s) => s.clone(),
         _ => return err_variant("shell-exec-with-stdin: stdin not a string"),
@@ -987,6 +1080,10 @@ pub extern "C" fn airl_tcp_accept(listener_handle: *mut RtValue) -> *mut RtValue
         Some(listener) => {
             let result = match listener.accept() {
                 Ok((stream, _addr)) => {
+                    // SEC-17: Set default 30s read/write timeouts on accepted connections.
+                    // These can be overridden by the AIRL program via tcp-set-timeout.
+                    stream.set_read_timeout(Some(std::time::Duration::from_secs(30))).ok();
+                    stream.set_write_timeout(Some(std::time::Duration::from_secs(30))).ok();
                     let conn_handle = NEXT_TCP_HANDLE.fetch_add(1, Ordering::SeqCst);
                     tcp_handles().lock().unwrap().insert(conn_handle, RtTcpHandle::Plain(stream));
                     ok_variant(rt_int(conn_handle))
@@ -1006,7 +1103,15 @@ pub extern "C" fn airl_tcp_connect(host: *mut RtValue, port: *mut RtValue) -> *m
     let h = match unsafe { &(*host).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("host must be string") };
     let p = match unsafe { &(*port).data } { RtData::Int(n) => *n as u16, _ => return err_variant("port must be int") };
     match TcpStream::connect(format!("{}:{}", h, p)) {
-        Ok(stream) => { let handle = NEXT_TCP_HANDLE.fetch_add(1, Ordering::SeqCst); tcp_handles().lock().unwrap().insert(handle, RtTcpHandle::Plain(stream)); ok_variant(rt_int(handle)) }
+        Ok(stream) => {
+            // SEC-17: Set default 30s read/write timeouts to prevent indefinite hangs.
+            // These can be overridden by the AIRL program via tcp-set-timeout.
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(30))).ok();
+            stream.set_write_timeout(Some(std::time::Duration::from_secs(30))).ok();
+            let handle = NEXT_TCP_HANDLE.fetch_add(1, Ordering::SeqCst);
+            tcp_handles().lock().unwrap().insert(handle, RtTcpHandle::Plain(stream));
+            ok_variant(rt_int(handle))
+        }
         Err(e) => err_variant(&format!("tcp-connect: {}", e)),
     }
 }
@@ -1045,6 +1150,10 @@ pub extern "C" fn airl_tcp_send(handle: *mut RtValue, data: *mut RtValue) -> *mu
 pub extern "C" fn airl_tcp_recv(handle: *mut RtValue, max_bytes: *mut RtValue) -> *mut RtValue {
     let h = match unsafe { &(*handle).data } { RtData::Int(n) => *n, _ => return err_variant("handle must be int") };
     let max = match unsafe { &(*max_bytes).data } { RtData::Int(n) => *n as usize, _ => return err_variant("max must be int") };
+    // SEC-9: Cap recv buffer at 256 MB to prevent OOM from untrusted input
+    if max > TCP_RECV_MAX_BYTES {
+        return err_variant("tcp-recv: requested size exceeds 256MB limit");
+    }
     let stream = tcp_handles().lock().unwrap().remove(&h);
     match stream {
         Some(mut s) => {
@@ -1064,6 +1173,10 @@ pub extern "C" fn airl_tcp_recv(handle: *mut RtValue, max_bytes: *mut RtValue) -
 pub extern "C" fn airl_tcp_recv_exact(handle: *mut RtValue, count: *mut RtValue) -> *mut RtValue {
     let h = match unsafe { &(*handle).data } { RtData::Int(n) => *n, _ => return err_variant("handle must be int") };
     let n = match unsafe { &(*count).data } { RtData::Int(n) => *n as usize, _ => return err_variant("count must be int") };
+    // SEC-9: Cap recv buffer at 256 MB to prevent OOM from untrusted input
+    if n > TCP_RECV_MAX_BYTES {
+        return err_variant("tcp-recv: requested size exceeds 256MB limit");
+    }
     let stream = tcp_handles().lock().unwrap().remove(&h);
     match stream {
         Some(mut s) => {
@@ -1101,6 +1214,10 @@ pub extern "C" fn airl_tcp_connect_tls(host: *mut RtValue, port: *mut RtValue, c
 
     let mut root_store = rustls::RootCertStore::empty();
     if ca.is_empty() {
+        // SEC-16: Warn when no CA path is specified so operators notice the fallback.
+        // Security implication: any certificate signed by a publicly-trusted CA will be
+        // accepted. If the caller intended CA pinning, passing "" bypasses that intent.
+        eprintln!("warning: tcp-connect-tls: no CA path specified, using system root certificates");
         root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     } else {
         let ca_data = match std::fs::read(&ca) { Ok(d) => d, Err(e) => return err_variant(&format!("tcp-connect-tls: read CA: {}", e)) };
@@ -1120,6 +1237,10 @@ pub extern "C" fn airl_tcp_connect_tls(host: *mut RtValue, port: *mut RtValue, c
     };
 
     let tcp = match TcpStream::connect(format!("{}:{}", h, p)) { Ok(s) => s, Err(e) => return err_variant(&format!("tcp-connect-tls: {}", e)) };
+    // SEC-17: Set default 30s read/write timeouts on the underlying TCP stream.
+    // These can be overridden by the AIRL program via tcp-set-timeout.
+    tcp.set_read_timeout(Some(std::time::Duration::from_secs(30))).ok();
+    tcp.set_write_timeout(Some(std::time::Duration::from_secs(30))).ok();
     let server_name = match rustls::pki_types::ServerName::try_from(h.to_string()) { Ok(n) => n, Err(e) => return err_variant(&format!("invalid hostname: {}", e)) };
     let conn = match rustls::ClientConnection::new(std::sync::Arc::new(config), server_name) { Ok(c) => c, Err(e) => return err_variant(&format!("tls init: {}", e)) };
     let tls_stream = rustls::StreamOwned::new(conn, tcp);
@@ -1878,6 +1999,100 @@ mod tests {
         match &rv.data {
             RtData::Bytes(v) => assert_eq!(v, &expected),
             _ => panic!("Expected Bytes result"),
+        }
+    }
+
+    // ── SEC-9: TCP recv size cap tests ──
+
+    #[test]
+    fn test_tcp_recv_rejects_oversized_request() {
+        let handle = rt_int(99999); // nonexistent handle, but size check happens first
+        let too_big = rt_int((TCP_RECV_MAX_BYTES as i64) + 1);
+        let result = airl_tcp_recv(handle, too_big);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Variant { tag_name, inner } => {
+                assert_eq!(tag_name, "Err");
+                let msg = unsafe { &(**inner).data };
+                match msg {
+                    RtData::Str(s) => assert!(s.contains("256MB"), "Error should mention 256MB limit, got: {}", s),
+                    _ => panic!("Expected string error message"),
+                }
+            }
+            _ => panic!("Expected Variant result"),
+        }
+    }
+
+    #[test]
+    fn test_tcp_recv_exact_rejects_oversized_request() {
+        let handle = rt_int(99999);
+        let too_big = rt_int((TCP_RECV_MAX_BYTES as i64) + 1);
+        let result = airl_tcp_recv_exact(handle, too_big);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Variant { tag_name, inner } => {
+                assert_eq!(tag_name, "Err");
+                let msg = unsafe { &(**inner).data };
+                match msg {
+                    RtData::Str(s) => assert!(s.contains("256MB"), "Error should mention 256MB limit, got: {}", s),
+                    _ => panic!("Expected string error message"),
+                }
+            }
+            _ => panic!("Expected Variant result"),
+        }
+    }
+
+    #[test]
+    fn test_tcp_recv_allows_valid_size() {
+        // A valid size should pass the size check and fail on invalid handle instead
+        let handle = rt_int(99999);
+        let valid_size = rt_int(1024);
+        let result = airl_tcp_recv(handle, valid_size);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Variant { tag_name, inner } => {
+                assert_eq!(tag_name, "Err");
+                let msg = unsafe { &(**inner).data };
+                match msg {
+                    RtData::Str(s) => assert!(s.contains("invalid handle"), "Should fail on handle, not size, got: {}", s),
+                    _ => panic!("Expected string error message"),
+                }
+            }
+            _ => panic!("Expected Variant result"),
+        }
+    }
+
+    // ── SEC-17: Default TCP timeouts test ──
+
+    #[test]
+    fn test_tcp_connect_sets_default_timeouts() {
+        // Start a local listener, connect, and verify timeouts are set
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let host = rt_str(addr.ip().to_string());
+        let port = rt_int(addr.port() as i64);
+        let result = airl_tcp_connect(host, port);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Variant { tag_name, inner } => {
+                assert_eq!(tag_name, "Ok");
+                let h = match unsafe { &(**inner).data } { RtData::Int(n) => *n, _ => panic!("Expected int handle") };
+                let handles = tcp_handles().lock().unwrap();
+                let tcp_handle = handles.get(&h).expect("handle should exist");
+                match tcp_handle {
+                    RtTcpHandle::Plain(s) => {
+                        let read_timeout = s.read_timeout().unwrap();
+                        let write_timeout = s.write_timeout().unwrap();
+                        assert_eq!(read_timeout, Some(std::time::Duration::from_secs(30)));
+                        assert_eq!(write_timeout, Some(std::time::Duration::from_secs(30)));
+                    }
+                    _ => panic!("Expected Plain handle"),
+                }
+                drop(handles);
+                tcp_handles().lock().unwrap().remove(&h);
+            }
+            _ => panic!("Expected Ok variant"),
         }
     }
 }
