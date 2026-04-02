@@ -24,13 +24,14 @@ pub extern "C" fn airl_char_count(s: *mut RtValue) -> *mut RtValue {
 
 #[no_mangle]
 pub extern "C" fn airl_str_variadic(args: *const *mut RtValue, count: i64) -> *mut RtValue {
+    use std::fmt::Write;
     let count = count as usize;
     let mut result = String::new();
     for i in 0..count {
         let v = unsafe { &**args.add(i) };
         match &v.data {
             RtData::Str(s) => result.push_str(s),
-            _ => result.push_str(&format!("{}", v)),
+            _ => { let _ = write!(result, "{}", v); }
         }
     }
     rt_str(result)
@@ -40,6 +41,7 @@ pub extern "C" fn airl_str_variadic(args: *const *mut RtValue, count: i64) -> *m
 
 #[no_mangle]
 pub extern "C" fn airl_format_variadic(args: *const *mut RtValue, count: i64) -> *mut RtValue {
+    use std::fmt::Write;
     let count = count as usize;
     if count == 0 { return rt_str(String::new()); }
     let tmpl_val = unsafe { &**args.add(0) };
@@ -57,7 +59,7 @@ pub extern "C" fn airl_format_variadic(args: *const *mut RtValue, count: i64) ->
             arg_idx += 1;
             match &v.data {
                 RtData::Str(s) => result.push_str(s),
-                _ => result.push_str(&format!("{}", v)),
+                _ => { let _ = write!(result, "{}", v); }
             }
         } else {
             result.push(c);
@@ -140,7 +142,7 @@ pub extern "C" fn airl_format_time(ms_val: *mut RtValue, fmt_val: *mut RtValue) 
         _ => return rt_str(String::new()),
     };
     let fmt = match unsafe { &(*fmt_val).data } {
-        RtData::Str(s) => s.clone(),
+        RtData::Str(s) => s.as_str(),
         _ => return rt_str(String::new()),
     };
     let secs = ms / 1000;
@@ -176,10 +178,10 @@ pub extern "C" fn airl_format_time(ms_val: *mut RtValue, fmt_val: *mut RtValue) 
 #[no_mangle]
 pub extern "C" fn airl_read_lines(path: *mut RtValue) -> *mut RtValue {
     let p = match unsafe { &(*path).data } {
-        RtData::Str(s) => s.clone(),
+        RtData::Str(s) => s.as_str(),
         _ => return rt_list(vec![]),
     };
-    match std::fs::read_to_string(&p) {
+    match std::fs::read_to_string(p) {
         Ok(content) => {
             let items: Vec<*mut RtValue> = content.lines().map(|l| rt_str(l.to_string())).collect();
             rt_list(items)
@@ -372,10 +374,10 @@ pub extern "C" fn airl_is_absolute(path: *mut RtValue) -> *mut RtValue {
 
 #[no_mangle]
 pub extern "C" fn airl_regex_match(pat: *mut RtValue, s: *mut RtValue) -> *mut RtValue {
-    let pattern = match unsafe { &(*pat).data } { RtData::Str(s) => s.clone(), _ => return rt_nil() };
-    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.clone(), _ => return rt_nil() };
-    match regex::Regex::new(&pattern) {
-        Ok(re) => match re.find(&input) {
+    let pattern = match unsafe { &(*pat).data } { RtData::Str(s) => s.as_str(), _ => return rt_nil() };
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.as_str(), _ => return rt_nil() };
+    match regex::Regex::new(pattern) {
+        Ok(re) => match re.find(input) {
             Some(m) => rt_str(m.as_str().to_string()),
             None => rt_nil(),
         },
@@ -385,11 +387,11 @@ pub extern "C" fn airl_regex_match(pat: *mut RtValue, s: *mut RtValue) -> *mut R
 
 #[no_mangle]
 pub extern "C" fn airl_regex_find_all(pat: *mut RtValue, s: *mut RtValue) -> *mut RtValue {
-    let pattern = match unsafe { &(*pat).data } { RtData::Str(s) => s.clone(), _ => return rt_list(vec![]) };
-    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.clone(), _ => return rt_list(vec![]) };
-    match regex::Regex::new(&pattern) {
+    let pattern = match unsafe { &(*pat).data } { RtData::Str(s) => s.as_str(), _ => return rt_list(vec![]) };
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.as_str(), _ => return rt_list(vec![]) };
+    match regex::Regex::new(pattern) {
         Ok(re) => {
-            let items: Vec<*mut RtValue> = re.find_iter(&input).map(|m| rt_str(m.as_str().to_string())).collect();
+            let items: Vec<*mut RtValue> = re.find_iter(input).map(|m| rt_str(m.as_str().to_string())).collect();
             rt_list(items)
         }
         Err(_) => rt_list(vec![]),
@@ -398,25 +400,25 @@ pub extern "C" fn airl_regex_find_all(pat: *mut RtValue, s: *mut RtValue) -> *mu
 
 #[no_mangle]
 pub extern "C" fn airl_regex_replace(pat: *mut RtValue, s: *mut RtValue, replacement: *mut RtValue) -> *mut RtValue {
-    let pattern = match unsafe { &(*pat).data } { RtData::Str(s) => s.clone(), _ => return crate::memory::airl_value_clone(s) };
-    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.clone(), _ => return crate::memory::airl_value_clone(s) };
-    let repl = match unsafe { &(*replacement).data } { RtData::Str(s) => s.clone(), _ => return crate::memory::airl_value_clone(s) };
-    match regex::Regex::new(&pattern) {
-        Ok(re) => rt_str(re.replace_all(&input, repl.as_str()).into_owned()),
-        Err(_) => rt_str(input),
+    let pattern = match unsafe { &(*pat).data } { RtData::Str(s) => s.as_str(), _ => return crate::memory::airl_value_clone(s) };
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.as_str(), _ => return crate::memory::airl_value_clone(s) };
+    let repl = match unsafe { &(*replacement).data } { RtData::Str(s) => s.as_str(), _ => return crate::memory::airl_value_clone(s) };
+    match regex::Regex::new(pattern) {
+        Ok(re) => rt_str(re.replace_all(input, repl).into_owned()),
+        Err(_) => rt_str(input.to_string()),
     }
 }
 
 #[no_mangle]
 pub extern "C" fn airl_regex_split(pat: *mut RtValue, s: *mut RtValue) -> *mut RtValue {
-    let pattern = match unsafe { &(*pat).data } { RtData::Str(s) => s.clone(), _ => return rt_list(vec![]) };
-    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.clone(), _ => return rt_list(vec![]) };
-    match regex::Regex::new(&pattern) {
+    let pattern = match unsafe { &(*pat).data } { RtData::Str(s) => s.as_str(), _ => return rt_list(vec![]) };
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.as_str(), _ => return rt_list(vec![]) };
+    match regex::Regex::new(pattern) {
         Ok(re) => {
-            let items: Vec<*mut RtValue> = re.split(&input).map(|s| rt_str(s.to_string())).collect();
+            let items: Vec<*mut RtValue> = re.split(input).map(|s| rt_str(s.to_string())).collect();
             rt_list(items)
         }
-        Err(_) => rt_list(vec![rt_str(input)]),
+        Err(_) => rt_list(vec![rt_str(input.to_string())]),
     }
 }
 
@@ -444,14 +446,14 @@ pub extern "C" fn airl_hmac_sha256(key: *mut RtValue, msg: *mut RtValue) -> *mut
 #[no_mangle]
 pub extern "C" fn airl_base64_encode(s: *mut RtValue) -> *mut RtValue {
     use base64::Engine;
-    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.clone(), _ => String::new() };
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.as_str(), _ => "" };
     rt_str(base64::engine::general_purpose::STANDARD.encode(input.as_bytes()))
 }
 
 #[no_mangle]
 pub extern "C" fn airl_base64_decode(s: *mut RtValue) -> *mut RtValue {
     use base64::Engine;
-    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.clone(), _ => String::new() };
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.as_str(), _ => "" };
     match base64::engine::general_purpose::STANDARD.decode(input.as_bytes()) {
         Ok(bytes) => rt_str(String::from_utf8_lossy(&bytes).into_owned()),
         Err(_) => rt_str(String::new()),
@@ -527,7 +529,7 @@ pub extern "C" fn airl_hmac_sha512_bytes(key: *mut RtValue, data: *mut RtValue) 
 
 #[no_mangle]
 pub extern "C" fn airl_pbkdf2_sha256(password: *mut RtValue, salt: *mut RtValue, iterations: *mut RtValue, key_len: *mut RtValue) -> *mut RtValue {
-    let pw = match unsafe { &(*password).data } { RtData::Str(s) => s.clone(), _ => return rt_bytes(vec![]) };
+    let pw = match unsafe { &(*password).data } { RtData::Str(s) => s.as_str(), _ => return rt_bytes(vec![]) };
     let salt_bytes = unsafe { borrow_or_extract(salt) };
     let iters = match unsafe { &(*iterations).data } { RtData::Int(n) => *n as u32, _ => 4096 };
     let klen = match unsafe { &(*key_len).data } { RtData::Int(n) => *n as usize, _ => 32 };
@@ -538,7 +540,7 @@ pub extern "C" fn airl_pbkdf2_sha256(password: *mut RtValue, salt: *mut RtValue,
 
 #[no_mangle]
 pub extern "C" fn airl_pbkdf2_sha512(password: *mut RtValue, salt: *mut RtValue, iterations: *mut RtValue, key_len: *mut RtValue) -> *mut RtValue {
-    let pw = match unsafe { &(*password).data } { RtData::Str(s) => s.clone(), _ => return rt_bytes(vec![]) };
+    let pw = match unsafe { &(*password).data } { RtData::Str(s) => s.as_str(), _ => return rt_bytes(vec![]) };
     let salt_bytes = unsafe { borrow_or_extract(salt) };
     let iters = match unsafe { &(*iterations).data } { RtData::Int(n) => *n as u32, _ => 4096 };
     let klen = match unsafe { &(*key_len).data } { RtData::Int(n) => *n as usize, _ => 64 };
@@ -617,7 +619,7 @@ pub extern "C" fn airl_float_to_string(n: *mut RtValue) -> *mut RtValue {
 
 #[no_mangle]
 pub extern "C" fn airl_string_to_int(s: *mut RtValue) -> *mut RtValue {
-    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.clone(), _ => return err_variant("not a string") };
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("not a string") };
     match input.parse::<i64>() {
         Ok(v) => ok_variant(rt_int(v)),
         Err(e) => err_variant(&format!("invalid int: {}", e)),
@@ -640,8 +642,8 @@ pub extern "C" fn airl_time_now() -> *mut RtValue {
 
 #[no_mangle]
 pub extern "C" fn airl_getenv(name: *mut RtValue) -> *mut RtValue {
-    let key = match unsafe { &(*name).data } { RtData::Str(s) => s.clone(), _ => return err_variant("not a string") };
-    match std::env::var(&key) {
+    let key = match unsafe { &(*name).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("not a string") };
+    match std::env::var(key) {
         Ok(val) => ok_variant(rt_str(val)),
         Err(_) => err_variant(&format!("env var not found: {}", key)),
     }
@@ -708,10 +710,10 @@ pub extern "C" fn airl_shell_exec_with_stdin(cmd: *mut RtValue, args_list: *mut 
 
 #[no_mangle]
 pub extern "C" fn airl_parse_int_radix(s: *mut RtValue, base: *mut RtValue) -> *mut RtValue {
-    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.clone(), _ => return err_variant("parse-int-radix: not a string") };
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("parse-int-radix: not a string") };
     let radix = match unsafe { &(*base).data } { RtData::Int(n) => *n as u32, _ => return err_variant("parse-int-radix: base not an int") };
     if !(2..=36).contains(&radix) { return err_variant("parse-int-radix: base must be 2-36"); }
-    match i64::from_str_radix(&input, radix) {
+    match i64::from_str_radix(input, radix) {
         Ok(v) => ok_variant(rt_int(v)),
         Err(e) => err_variant(&format!("parse-int-radix: {}", e)),
     }
@@ -750,7 +752,7 @@ pub extern "C" fn airl_get_cwd() -> *mut RtValue {
 
 #[no_mangle]
 pub extern "C" fn airl_json_parse(text: *mut RtValue) -> *mut RtValue {
-    let input = match unsafe { &(*text).data } { RtData::Str(s) => s.clone(), _ => return err_variant("json-parse: not a string") };
+    let input = match unsafe { &(*text).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("json-parse: not a string") };
     match parse_json_value(input.trim()) {
         Some((val, _)) => ok_variant(val),
         None => err_variant(&format!("json-parse: invalid JSON: {}", input)),
@@ -1002,7 +1004,7 @@ pub extern "C" fn airl_tcp_accept(listener_handle: *mut RtValue) -> *mut RtValue
 
 #[no_mangle]
 pub extern "C" fn airl_tcp_connect(host: *mut RtValue, port: *mut RtValue) -> *mut RtValue {
-    let h = match unsafe { &(*host).data } { RtData::Str(s) => s.clone(), _ => return err_variant("host must be string") };
+    let h = match unsafe { &(*host).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("host must be string") };
     let p = match unsafe { &(*port).data } { RtData::Int(n) => *n as u16, _ => return err_variant("port must be int") };
     match TcpStream::connect(format!("{}:{}", h, p)) {
         Ok(stream) => { let handle = NEXT_TCP_HANDLE.fetch_add(1, Ordering::SeqCst); tcp_handles().lock().unwrap().insert(handle, RtTcpHandle::Plain(stream)); ok_variant(rt_int(handle)) }
@@ -1092,11 +1094,11 @@ pub extern "C" fn airl_tcp_set_timeout(handle: *mut RtValue, ms: *mut RtValue) -
 
 #[no_mangle]
 pub extern "C" fn airl_tcp_connect_tls(host: *mut RtValue, port: *mut RtValue, ca_path: *mut RtValue, cert_path: *mut RtValue, key_path: *mut RtValue) -> *mut RtValue {
-    let h = match unsafe { &(*host).data } { RtData::Str(s) => s.clone(), _ => return err_variant("host must be string") };
+    let h = match unsafe { &(*host).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("host must be string") };
     let p = match unsafe { &(*port).data } { RtData::Int(n) => *n as u16, _ => return err_variant("port must be int") };
-    let ca = match unsafe { &(*ca_path).data } { RtData::Str(s) => s.clone(), _ => return err_variant("ca-path must be string") };
-    let cert = match unsafe { &(*cert_path).data } { RtData::Str(s) => s.clone(), _ => return err_variant("cert-path must be string") };
-    let key = match unsafe { &(*key_path).data } { RtData::Str(s) => s.clone(), _ => return err_variant("key-path must be string") };
+    let ca = match unsafe { &(*ca_path).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("ca-path must be string") };
+    let cert = match unsafe { &(*cert_path).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("cert-path must be string") };
+    let key = match unsafe { &(*key_path).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("key-path must be string") };
 
     let mut root_store = rustls::RootCertStore::empty();
     if ca.is_empty() {
@@ -1119,7 +1121,7 @@ pub extern "C" fn airl_tcp_connect_tls(host: *mut RtValue, port: *mut RtValue, c
     };
 
     let tcp = match TcpStream::connect(format!("{}:{}", h, p)) { Ok(s) => s, Err(e) => return err_variant(&format!("tcp-connect-tls: {}", e)) };
-    let server_name = match rustls::pki_types::ServerName::try_from(h.clone()) { Ok(n) => n, Err(e) => return err_variant(&format!("invalid hostname: {}", e)) };
+    let server_name = match rustls::pki_types::ServerName::try_from(h.to_string()) { Ok(n) => n, Err(e) => return err_variant(&format!("invalid hostname: {}", e)) };
     let conn = match rustls::ClientConnection::new(std::sync::Arc::new(config), server_name) { Ok(c) => c, Err(e) => return err_variant(&format!("tls init: {}", e)) };
     let tls_stream = rustls::StreamOwned::new(conn, tcp);
 
@@ -1137,8 +1139,8 @@ pub extern "C" fn airl_tcp_accept_tls(
     key_path: *mut RtValue,
 ) -> *mut RtValue {
     let ch = match unsafe { &(*conn_handle).data } { RtData::Int(n) => *n, _ => return err_variant("tcp-accept-tls: handle must be Int") };
-    let cert_file = match unsafe { &(*cert_path).data } { RtData::Str(s) => s.clone(), _ => return err_variant("tcp-accept-tls: cert-path must be String") };
-    let key_file = match unsafe { &(*key_path).data } { RtData::Str(s) => s.clone(), _ => return err_variant("tcp-accept-tls: key-path must be String") };
+    let cert_file = match unsafe { &(*cert_path).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("tcp-accept-tls: cert-path must be String") };
+    let key_file = match unsafe { &(*key_path).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("tcp-accept-tls: key-path must be String") };
 
     let cert_data = match std::fs::read(&cert_file) { Ok(d) => d, Err(e) => return err_variant(&format!("tcp-accept-tls: read cert: {}", e)) };
     let key_data = match std::fs::read(&key_file) { Ok(d) => d, Err(e) => return err_variant(&format!("tcp-accept-tls: read key: {}", e)) };
@@ -1288,8 +1290,8 @@ pub extern "C" fn airl_bytes_to_int64(buf: *mut RtValue, offset: *mut RtValue) -
 
 #[no_mangle]
 pub extern "C" fn airl_bytes_from_string(s: *mut RtValue) -> *mut RtValue {
-    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.clone(), _ => String::new() };
-    rt_bytes(input.into_bytes())
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.as_str(), _ => "" };
+    rt_bytes(input.as_bytes().to_vec())
 }
 
 #[no_mangle]

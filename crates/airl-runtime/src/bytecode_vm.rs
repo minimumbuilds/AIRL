@@ -910,7 +910,12 @@ impl BytecodeVm {
                     let result = unsafe { match (&(*a).data, &(*b).data) {
                         (RtData::Int(x), RtData::Int(y)) => rt_int(x.wrapping_add(*y)),
                         (RtData::Float(x), RtData::Float(y)) => rt_float(x + y),
-                        (RtData::Str(x), RtData::Str(y)) => rt_str(format!("{}{}", x, y)),
+                        (RtData::Str(x), RtData::Str(y)) => {
+                            let mut s = String::with_capacity(x.len() + y.len());
+                            s.push_str(x);
+                            s.push_str(y);
+                            rt_str(s)
+                        }
                         _ => return Err(RuntimeError::TypeError("add: incompatible types".into())),
                     }};
                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
@@ -1394,7 +1399,12 @@ impl BytecodeVm {
                     regs[instr.dst as usize] = match (&regs[instr.a as usize], &regs[instr.b as usize]) {
                         (Value::Int(x), Value::Int(y)) => Value::Int(x + y),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
-                        (Value::Str(x), Value::Str(y)) => Value::Str(format!("{}{}", x, y)),
+                        (Value::Str(x), Value::Str(y)) => {
+                            let mut s = String::with_capacity(x.len() + y.len());
+                            s.push_str(x);
+                            s.push_str(y);
+                            Value::Str(s)
+                        }
                         _ => return Err(RuntimeError::TypeError("add: incompatible types".into())),
                     };
                 }

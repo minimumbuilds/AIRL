@@ -101,8 +101,8 @@ pub extern "C" fn airl_map_set(
     val: *mut RtValue,
 ) -> *mut RtValue {
     let key_v = unsafe { &*key };
-    let k = match &key_v.data {
-        RtData::Str(s) => s.clone(),
+    let k_str = match &key_v.data {
+        RtData::Str(s) => s.as_str(),
         _ => rt_error("airl_map_set: key must be a Str"),
     };
 
@@ -112,11 +112,11 @@ pub extern "C" fn airl_map_set(
         match &mut v.data {
             RtData::Map(map) => {
                 // Release old value if key already exists
-                if let Some(&old_val) = map.get(&k) {
+                if let Some(&old_val) = map.get(k_str) {
                     airl_value_release(old_val);
                 }
                 airl_value_retain(val);
-                map.insert(k, val);
+                map.insert(k_str.to_string(), val);
                 airl_value_retain(m); // caller expects +1 ref on returned map
                 return m;
             }
@@ -132,11 +132,11 @@ pub extern "C" fn airl_map_set(
                 airl_value_retain(existing_val);
                 new_map.insert(existing_key.clone(), existing_val);
             }
-            if let Some(&old_val) = new_map.get(&k) {
+            if let Some(&old_val) = new_map.get(k_str) {
                 airl_value_release(old_val);
             }
             airl_value_retain(val);
-            new_map.insert(k, val);
+            new_map.insert(k_str.to_string(), val);
             rt_map(new_map)
         }
         _ => rt_error("airl_map_set: first argument must be a Map"),
@@ -203,33 +203,29 @@ pub extern "C" fn airl_map_remove(m: *mut RtValue, key: *mut RtValue) -> *mut Rt
     }
 }
 
-/// Return a sorted list of key strings.
+/// Return a list of key strings (unordered — AIRL maps are semantically unordered).
 #[no_mangle]
 pub extern "C" fn airl_map_keys(m: *mut RtValue) -> *mut RtValue {
     let map_v = unsafe { &*m };
     match &map_v.data {
         RtData::Map(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            let items: Vec<*mut RtValue> = keys.iter().map(|k| rt_str((*k).clone())).collect();
+            let items: Vec<*mut RtValue> = map.keys().map(|k| rt_str(k.clone())).collect();
             rt_list(items)
         }
         _ => rt_error("airl_map_keys: argument must be a Map"),
     }
 }
 
-/// Return a list of values ordered by sorted key. Each value is retained.
+/// Return a list of values (unordered — AIRL maps are semantically unordered).
+/// Each value is retained.
 #[no_mangle]
 pub extern "C" fn airl_map_values(m: *mut RtValue) -> *mut RtValue {
     let map_v = unsafe { &*m };
     match &map_v.data {
         RtData::Map(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            let items: Vec<*mut RtValue> = keys
-                .iter()
-                .map(|k| {
-                    let val = map[*k];
+            let items: Vec<*mut RtValue> = map
+                .values()
+                .map(|&val| {
                     airl_value_retain(val);
                     val
                 })
@@ -401,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn map_keys_sorted() {
+    fn map_keys_contains_all() {
         unsafe {
             let m = airl_map_new();
             let kb = mk_key("b");
@@ -416,8 +412,10 @@ mod tests {
                 RtData::List { .. } => {
                     let items = crate::list::list_items(&(*keys).data);
                     assert_eq!(items.len(), 2);
-                    assert_eq!((*items[0]).as_str(), "a");
-                    assert_eq!((*items[1]).as_str(), "b");
+                    // Order is unspecified; collect and sort for assertion
+                    let mut key_strs: Vec<&str> = items.iter().map(|&p| (*p).as_str()).collect();
+                    key_strs.sort();
+                    assert_eq!(key_strs, vec!["a", "b"]);
                 }
                 _ => panic!("expected list"),
             }
@@ -434,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn map_values_sorted_by_key() {
+    fn map_values_contains_all() {
         unsafe {
             let m = airl_map_new();
             let kb = mk_key("b");
@@ -449,9 +447,10 @@ mod tests {
                 RtData::List { .. } => {
                     let items = crate::list::list_items(&(*vals).data);
                     assert_eq!(items.len(), 2);
-                    // sorted by key: "a"->10, "b"->20
-                    assert_eq!((*items[0]).as_int(), 10);
-                    assert_eq!((*items[1]).as_int(), 20);
+                    // Order is unspecified; collect and sort for assertion
+                    let mut val_ints: Vec<i64> = items.iter().map(|&p| (*p).as_int()).collect();
+                    val_ints.sort();
+                    assert_eq!(val_ints, vec![10, 20]);
                 }
                 _ => panic!("expected list"),
             }
