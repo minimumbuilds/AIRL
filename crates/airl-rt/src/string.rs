@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use crate::error::rt_error;
 use crate::value::{rt_bool, rt_int, rt_list, rt_str, RtData, RtValue};
 
@@ -119,15 +120,18 @@ pub extern "C" fn airl_join(list: *mut RtValue, sep: *mut RtValue) -> *mut RtVal
         RtData::Str(s) => s,
         _ => rt_error("join: second argument must be a Str"),
     };
-    let mut parts: Vec<String> = Vec::with_capacity(items.len());
-    for &item in items {
+    let mut result = String::new();
+    for (idx, &item) in items.iter().enumerate() {
+        if idx > 0 {
+            result.push_str(sep_val.as_str());
+        }
         let val = unsafe { &*item };
         match &val.data {
-            RtData::Str(s) => parts.push(s.clone()),
-            _ => parts.push(format!("{}", val)),
+            RtData::Str(s) => result.push_str(s),
+            _ => { let _ = write!(result, "{}", val); }
         }
     }
-    rt_str(parts.join(sep_val.as_str()))
+    rt_str(result)
 }
 
 /// `contains(s, sub)` — true if s contains sub.
@@ -694,7 +698,7 @@ pub extern "C" fn airl_string_ci_eq(a: *mut RtValue, b: *mut RtValue) -> *mut Rt
 pub extern "C" fn airl_string_to_float(s: *mut RtValue) -> *mut RtValue {
     let sv = unsafe { &*s };
     let str_val = match &sv.data {
-        RtData::Str(s) => s.clone(),
+        RtData::Str(s) => s.as_str(),
         _ => rt_error("string-to-float: expected string"),
     };
     match str_val.parse::<f64>() {
