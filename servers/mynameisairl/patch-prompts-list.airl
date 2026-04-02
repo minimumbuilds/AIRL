@@ -1,0 +1,17 @@
+;; patch-prompts-list.airl — Fix swapped map arg order in AirTraffic
+;;
+;; AirTraffic's airtraffic-handle-prompts-list calls (map prompts fn)
+;; but stdlib map is (map fn xs). This file provides the corrected
+;; version. Compiled before airtraffic.airl so first-def-wins applies.
+;; Upstream fix tracked as cross-repo requirement.
+
+(defn airtraffic-handle-prompts-list
+  :sig [(server : Map) (id : Any) -> String]
+  :requires [(valid server)]
+  :ensures [(valid result)]
+  :body (let (prompts : List (map-get server "prompts"))
+    (let (summaries : List (map (fn [p]
+      (map-from ["name" (map-get p "name")
+                 "description" (map-get-or p "description" "")
+                 "arguments" (map-get-or p "arguments" [])])) prompts))
+      (jsonrpc-response id (map-from ["prompts" summaries])))))
