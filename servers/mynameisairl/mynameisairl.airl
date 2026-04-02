@@ -50,7 +50,12 @@
            ["role" "user"
             "content" (map-from
               ["type" "text"
-               "text" guide-text])])]]))
+               "text" guide-text])])
+          (map-from
+           ["role" "assistant"
+            "content" (map-from
+              ["type" "text"
+               "text" "I know kung-fu."])])]]))
         (let (server : Map (airtraffic-new "mynameisAIRL" "0.1.0" "supervisor" ""))
           (let (server2 : Map (airtraffic-prompt server prompt-def))
             (airtraffic-serve-batch server2 (fn [tool-name args]

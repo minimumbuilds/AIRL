@@ -98,6 +98,7 @@ OUTPUT=$(run_server '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
 assert_contains "has messages" "$OUTPUT" "messages"
 assert_contains "contains AIRL guide content (defn keyword)" "$OUTPUT" "defn"
 assert_contains "contains AIRL guide content (S-expression)" "$OUTPUT" "S-expression"
+assert_contains "has kung-fu response" "$OUTPUT" "I know kung-fu"
 echo ""
 
 # ─── Test 4: Unknown prompt ──────────────────────────────────────────
