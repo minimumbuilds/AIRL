@@ -1,6 +1,6 @@
 # Building AIRL with the Rust Toolchain (Legacy)
 
-This document covers building AIRL from source using the Rust/Cargo toolchain. This produces the `airl` host binary which includes the JIT, AOT compiler, bytecode VM, and all builtins.
+This document covers building AIRL from source using the Rust/Cargo toolchain. This produces the `airl` host binary which includes the AOT compiler and all builtins.
 
 **Most users should use the pre-built `airl` binary or the self-hosted G3 compiler instead.** This guide is for:
 - First-time bootstrap (building `airl` from source)
@@ -19,13 +19,10 @@ First build takes ~5-15 minutes due to Z3 compiling from C++ source.
 ## Build Commands
 
 ```bash
-# Full build with JIT + AOT (recommended)
-cargo build --release --features jit,aot
+# Full AOT build (recommended)
+cargo build --release --features aot
 
-# JIT only (no AOT compile command)
-cargo build --release --features jit
-
-# Bytecode-only (no Cranelift, no native compilation)
+# Bytecode-only (no Cranelift, no native compilation — development/testing only)
 cargo build --release
 ```
 
@@ -38,10 +35,9 @@ cp target/release/airl-driver /usr/local/bin/airl
 ## CLI Usage
 
 ```bash
-airl run <file>              # Run with JIT compilation
+airl run <file>              # AOT compile to temp binary, execute, clean up
 airl compile <file> -o <out> # AOT compile to native binary
 airl check <file>            # Type-check and verify contracts
-airl repl                    # Interactive REPL
 airl agent <file>            # Run as agent worker
 airl fmt <file>              # Pretty-print source
 ```
@@ -57,19 +53,18 @@ cargo test -p airl-syntax -p airl-types -p airl-contracts \
 bash tests/aot/run_aot_tests.sh
 
 # Bootstrap compiler tests
-cargo run --release --features jit -- run --load bootstrap/lexer.airl bootstrap/lexer_test.airl
-cargo run --release --features jit -- run --load bootstrap/lexer.airl --load bootstrap/parser.airl bootstrap/parser_test.airl
+cargo run --release --features aot -- run --load bootstrap/lexer.airl bootstrap/lexer_test.airl
+cargo run --release --features aot -- run --load bootstrap/lexer.airl --load bootstrap/parser.airl bootstrap/parser_test.airl
 ```
 
 ## Feature Flags
 
 | Flag | Effect |
 |------|--------|
-| `jit` | Cranelift JIT — compiles all functions to native x86-64 at load time |
 | `aot` | Cranelift AOT — enables `airl compile` for standalone native executables |
 | `mlir` | MLIR/GPU compilation (requires LLVM 19+, see Dockerfile) |
 
-Building without any features produces a bytecode-only binary. All language features work, but compute-heavy functions run in the bytecode VM instead of native code.
+Building without any features produces a bytecode-only binary (development/testing only).
 
 ## Crate Structure
 
@@ -79,11 +74,11 @@ Building without any features produces a bytecode-only binary. All language feat
 | `airl-types` | Type checker, linearity | airl-syntax |
 | `airl-contracts` | Contract types | airl-syntax, airl-types |
 | `airl-rt` | Runtime library (libairl_rt.a) | None (standalone) |
-| `airl-runtime` | Bytecode VM, JIT, AOT | airl-syntax, airl-types, airl-contracts, cranelift |
-| `airl-codegen` | Cranelift tensor JIT | airl-syntax, airl-types, cranelift |
+| `airl-runtime` | AOT compiler | airl-syntax, airl-types, airl-contracts, cranelift |
+| `airl-codegen` | Cranelift codegen | airl-syntax, airl-types, cranelift |
 | `airl-solver` | Z3 verification | airl-syntax, z3 |
 | `airl-agent` | Agent transport/protocol | airl-syntax, airl-runtime |
-| `airl-driver` | CLI, pipeline, REPL | all crates |
+| `airl-driver` | CLI, pipeline | all crates |
 
 ## Embedded Runtime
 
@@ -94,5 +89,4 @@ The runtime library (`libairl_rt.a`) is gzip-compressed at build time and embedd
 ```bash
 AIRL_AOT_DEBUG=1 airl compile program.airl -o out  # Cranelift IR dump
 AIRL_BC_DUMP=1 airl compile program.airl -o out     # Bytecode instruction dump
-AIRL_JIT_DEBUG=1 airl run program.airl               # JIT compilation trace
 ```

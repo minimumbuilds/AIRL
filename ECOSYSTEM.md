@@ -17,12 +17,12 @@ The compiler and runtime. 10-crate Rust workspace + self-hosted bootstrap compil
 | `airl-syntax` | Lexer, parser, AST, diagnostics |
 | `airl-types` | Type checker, linearity, exhaustiveness |
 | `airl-contracts` | Contract violation types |
-| `airl-runtime` | Bytecode VM, JIT (Cranelift), AOT compiler |
+| `airl-runtime` | AOT compiler (Cranelift) |
 | `airl-rt` | Runtime library -- extern "C" builtins (160+) |
 | `airl-codegen` | Cranelift code generation |
 | `airl-solver` | Z3 SMT contract verification |
 | `airl-agent` | Multi-agent transport (TCP, Unix, stdio) |
-| `airl-driver` | CLI: `airl run`, `airl compile`, `airl check`, `airl repl`, `airl fmt` |
+| `airl-driver` | CLI: `airl run`, `airl compile`, `airl check`, `airl fmt` |
 | `airl-mlir` | Optional GPU/MLIR support |
 
 **Bootstrap:** 30 AIRL files (~27K lines) implementing lexer, parser, bytecode compiler, and G3 driver.
@@ -35,7 +35,6 @@ The compiler and runtime. 10-crate Rust workspace + self-hosted bootstrap compil
 - `airl run` -- AOT compile to temp binary, execute, clean up
 - `airl compile` -- produce standalone native binary
 - `airl check` -- type check and contract verification only
-- `airl repl` -- interactive bytecode interpretation
 
 ---
 

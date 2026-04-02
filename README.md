@@ -105,7 +105,7 @@ Step 2 takes ~23 minutes and ~25GB RAM (the bootstrap compiler runs in the bytec
 ### G3 Limitations
 
 - **No `airl check`** — G3 compiles only. Use the host binary for type checking and Z3 verification.
-- **No REPL** — G3 produces native binaries. Use `airl repl` from the host binary.
+- **No REPL** — G3 produces native binaries only.
 - **No `--load`** — G3 compiles all source files in one pass. Pass multiple files: `./g3 -- a.airl b.airl -o out`.
 - **x86-64 and ARM64 only** — G3 targets the host platform (Linux x86-64 or macOS ARM64).
 
@@ -129,9 +129,6 @@ cargo run --release --features aot -- compile examples/02-functions-and-contract
 
 # Type-check and verify contracts with Z3
 cargo run --release --features aot -- check examples/03-verified-arithmetic/verified_arithmetic.airl
-
-# Interactive REPL
-cargo run --release --features aot -- repl
 
 # Check version
 cargo run --release --features aot -- --version
@@ -247,11 +244,11 @@ AIRL Source
 | `airl-types` | Type checker, linearity, exhaustiveness |
 | `airl-contracts` | Contract violation types |
 | `airl-rt` | Runtime library (`libairl_rt.a`) — all builtins as `extern "C"` |
-| `airl-runtime` | Bytecode VM, AOT compiler |
+| `airl-runtime` | AOT compiler (Cranelift) |
 | `airl-codegen` | Cranelift tensor codegen |
 | `airl-solver` | Z3 SMT formal verification |
 | `airl-agent` | Transport, protocol, agent runtime |
-| `airl-driver` | CLI, pipeline, REPL, formatter |
+| `airl-driver` | CLI, pipeline, formatter |
 
 ## Contract System
 

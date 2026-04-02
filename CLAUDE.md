@@ -20,7 +20,6 @@ cargo test -p airl-syntax -p airl-types -p airl-contracts -p airl-runtime -p air
 cargo run --features aot -- run <file.airl>        # Run (AOT compile → execute)
 cargo run --features aot -- compile <file.airl> -o <binary>  # AOT compile
 cargo run --features aot -- check <file.airl>          # Type-check only
-cargo run --features aot -- repl                       # REPL
 bash scripts/build-g3.sh                               # Rebuild G3 (~23 min)
 bash tests/aot/run_aot_tests.sh                        # G3 AOT test suite (68 tests)
 ```

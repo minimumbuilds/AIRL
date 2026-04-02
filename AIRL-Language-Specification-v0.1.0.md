@@ -441,7 +441,7 @@ AIRL programs execute in one of two modes, determined by the top-level form:
 | Compiled | `(module ...)` or `(defn ...)` | Full compilation: parse → typecheck → verify contracts → lower to MLIR → LLVM IR → native binary | Performance-critical compute: tensor ops, GPU kernels, data pipelines |
 | Interpreted | `(task ...)` or `(send ...)` | Parsed and executed by the agent runtime. Task routing, message passing, and coordination happen without compilation. | Agent orchestration, message routing, workflow coordination |
 
-The runtime automatically selects the appropriate mode. A task expression that contains a compute-heavy `:body` block may trigger JIT compilation of that block while interpreting the surrounding coordination logic.
+All code is AOT-compiled to native binaries via the Cranelift backend. The `airl compile` command produces standalone executables; `airl run` compiles to a temp binary, executes it, and cleans up.
 
 ### 6.2 Compilation Pipeline
 
@@ -970,7 +970,7 @@ Build a tree-walking interpreter in Rust that validates the language design:
 - Linear ownership verification (borrow checker)
 - Runtime contract assertion engine
 - Agent communication runtime (task dispatch, message routing)
-- REPL for testing and language iteration
+- AOT compiler producing native binaries
 
 **Target:** Wire into an existing multi-agent system (e.g., Claude + Qwen3 via LiteLLM) as the inter-agent message format. Validate that agents can generate, parse, and execute AIRL task expressions.
 
