@@ -1,0 +1,52 @@
+;; Test: I/O extern-c wrappers (Spec 06 proof of concept)
+
+;; ── extern-c declarations (same as stdlib/io.airl) ──
+(extern-c "airl_print"       [(v : String) -> Unit])
+(extern-c "airl_println"     [(v : String) -> Unit])
+(extern-c "airl_read_file"   [(path : String) -> String])
+(extern-c "airl_write_file"  [(path : String) (content : String) -> Bool])
+(extern-c "airl_file_exists" [(path : String) -> Bool])
+
+;; ── AIRL wrappers with contracts ──
+(defn safe-read-file
+  :sig [(path : String) -> String]
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body (airl_read_file path))
+
+(defn safe-write-file
+  :sig [(path : String) (content : String) -> Bool]
+  :requires [(valid path) (valid content)]
+  :ensures [(valid result)]
+  :body (airl_write_file path content))
+
+(defn safe-file-exists?
+  :sig [(path : String) -> Bool]
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body (airl_file_exists path))
+
+;; ── Test 1: Write a file via extern-c ──
+(let (ok : Bool (safe-write-file "/tmp/airl-io-test.txt" "hello from extern-c"))
+  (if ok
+    (println "PASS: safe-write-file succeeded")
+    (println "FAIL: safe-write-file returned false")))
+
+;; ── Test 2: Check file exists via extern-c ──
+(if (safe-file-exists? "/tmp/airl-io-test.txt")
+  (println "PASS: safe-file-exists? returned true")
+  (println "FAIL: safe-file-exists? returned false"))
+
+;; ── Test 3: Read file via extern-c ──
+(let (content : String (safe-read-file "/tmp/airl-io-test.txt"))
+  (if (= content "hello from extern-c")
+    (println "PASS: safe-read-file returned correct content")
+    (println "FAIL: safe-read-file returned wrong content")))
+
+;; ── Test 4: Call extern-c print directly ──
+(airl_print "PASS: airl_print works directly\n")
+
+;; ── Test 5: Verify builtin println still works alongside extern-c ──
+(println "PASS: builtin println coexists with extern-c")
+
+(println "io extern-c tests complete")

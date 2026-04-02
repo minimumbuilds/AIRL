@@ -1,0 +1,33 @@
+;; ── AIRL Standard Library: I/O (extern-c wrappers) ──────────────
+;;
+;; These wrappers call C runtime functions via extern-c declarations.
+;; They add AIRL-level contracts (requires/ensures) around the raw C calls.
+;; This is the proof-of-concept for migrating builtins to AIRL wrappers.
+
+;; ── extern-c declarations ──
+(extern-c "airl_print"       [(v : String) -> Unit])
+(extern-c "airl_println"     [(v : String) -> Unit])
+(extern-c "airl_read_file"   [(path : String) -> String])
+(extern-c "airl_write_file"  [(path : String) (content : String) -> Bool])
+(extern-c "airl_file_exists" [(path : String) -> Bool])
+
+;; ── safe-read-file: read with contract ──
+(defn safe-read-file
+  :sig [(path : String) -> String]
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body (airl_read_file path))
+
+;; ── safe-write-file: write with contract ──
+(defn safe-write-file
+  :sig [(path : String) (content : String) -> Bool]
+  :requires [(valid path) (valid content)]
+  :ensures [(valid result)]
+  :body (airl_write_file path content))
+
+;; ── safe-file-exists?: existence check with contract ──
+(defn safe-file-exists?
+  :sig [(path : String) -> Bool]
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body (airl_file_exists path))
