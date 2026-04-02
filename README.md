@@ -40,7 +40,7 @@ The G3 compiler pipeline:
 
 All compilation logic is AIRL code. Cranelift (native code generation) and `libairl_rt.a` (runtime) are exposed as builtins embedded in the host binary — same as Go's assembler is part of the Go toolchain, not written in Go.
 
-**Verified:** The G3 binary compiles itself and all 58 AOT tests pass through the self-compiled binary. The bytecode compiler produces identical output whether run interpreted or compiled (fixpoint verified).
+**Verified:** The G3 binary compiles itself and all 58 AOT tests pass through the self-compiled binary. The bytecode compiler produces identical output through both the host binary and self-hosted compiler (fixpoint verified).
 
 ### Building G3
 
