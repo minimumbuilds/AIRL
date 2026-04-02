@@ -111,12 +111,14 @@ pub extern "C" fn airl_map_set(
     if v.rc == 1 {
         match &mut v.data {
             RtData::Map(map) => {
-                // Release old value if key already exists
-                if let Some(&old_val) = map.get(k_str) {
-                    airl_value_release(old_val);
-                }
+                // Avoid key allocation when key already exists — update value in place
                 airl_value_retain(val);
-                map.insert(k_str.to_string(), val);
+                if let Some(slot) = map.get_mut(k_str) {
+                    airl_value_release(*slot);
+                    *slot = val;
+                } else {
+                    map.insert(k_str.to_string(), val);
+                }
                 airl_value_retain(m); // caller expects +1 ref on returned map
                 return m;
             }

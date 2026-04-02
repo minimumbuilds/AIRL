@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write;
 use crate::value::{rt_bool, rt_bytes, rt_float, rt_int, rt_list, rt_map, rt_nil, rt_str, rt_variant, RtData, RtValue};
 
 fn ok_variant(inner: *mut RtValue) -> *mut RtValue {
@@ -24,7 +25,6 @@ pub extern "C" fn airl_char_count(s: *mut RtValue) -> *mut RtValue {
 
 #[no_mangle]
 pub extern "C" fn airl_str_variadic(args: *const *mut RtValue, count: i64) -> *mut RtValue {
-    use std::fmt::Write;
     let count = count as usize;
     let mut result = String::new();
     for i in 0..count {
@@ -41,7 +41,6 @@ pub extern "C" fn airl_str_variadic(args: *const *mut RtValue, count: i64) -> *m
 
 #[no_mangle]
 pub extern "C" fn airl_format_variadic(args: *const *mut RtValue, count: i64) -> *mut RtValue {
-    use std::fmt::Write;
     let count = count as usize;
     if count == 0 { return rt_str(String::new()); }
     let tmpl_val = unsafe { &**args.add(0) };
@@ -912,7 +911,7 @@ pub extern "C" fn airl_json_stringify(val: *mut RtValue) -> *mut RtValue {
 
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::io::{Read, Write};
+use std::io::{Read, Write as IoWrite};
 
 enum RtTcpHandle {
     Plain(TcpStream),
@@ -926,7 +925,7 @@ impl Read for RtTcpHandle {
     }
 }
 
-impl Write for RtTcpHandle {
+impl IoWrite for RtTcpHandle {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self { RtTcpHandle::Plain(s) => s.write(buf), RtTcpHandle::Tls(s) => s.write(buf), RtTcpHandle::TlsServer(s) => s.write(buf) }
     }
@@ -1290,8 +1289,8 @@ pub extern "C" fn airl_bytes_to_int64(buf: *mut RtValue, offset: *mut RtValue) -
 
 #[no_mangle]
 pub extern "C" fn airl_bytes_from_string(s: *mut RtValue) -> *mut RtValue {
-    let input = match unsafe { &(*s).data } { RtData::Str(s) => s.as_str(), _ => "" };
-    rt_bytes(input.as_bytes().to_vec())
+    let input = match unsafe { &(*s).data } { RtData::Str(s) => s, _ => return rt_bytes(Vec::new()) };
+    rt_bytes(input.clone().into_bytes())
 }
 
 #[no_mangle]
