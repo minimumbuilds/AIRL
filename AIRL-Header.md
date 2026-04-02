@@ -242,6 +242,16 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (set-subset? a b) -> Bool  (set-equal? a b) -> Bool
 ```
 
+### Testing (stdlib, auto-loaded)
+```
+(assert-eq actual expected) -> Nil    ; panic if actual != expected
+(assert-ne actual expected) -> Nil    ; panic if actual == expected
+(assert-ok r) -> Nil                  ; panic if r is not (Ok ...)
+(assert-err r) -> Nil                 ; panic if r is not (Err ...)
+(assert-contains haystack needle) -> Nil  ; panic if needle not in haystack
+(assert-true val) -> Nil              ; panic if val is not true
+```
+
 ### Type conversion
 ```
 (int-to-string n) -> Str    (float-to-string f) -> Str
@@ -257,12 +267,17 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 ```
 (print ...) -> Nil              ; variadic, space-separated
 (println ...) -> Nil            ; variadic + newline
+(eprint ...) -> Nil             ; variadic, to stderr
+(eprintln ...) -> Nil           ; variadic + newline, to stderr
+(read-line) -> Str              ; read single line from stdin
+(read-stdin) -> Str             ; read all of stdin
 (format s ...) -> Str           ; {} placeholders
 (valid x) -> Bool               ; always true (contract guard)
 (char-count s) -> Int           ; Unicode char count (not byte length)
 (exit code) -> !
 (panic msg) -> !                ; halt with error message
 (assert cond msg) -> Bool       ; panic if false
+(fn-metadata f) -> Map          ; function metadata (name, sig, contracts)
 ```
 
 ### File I/O (all paths sandboxed: no absolute paths, no `..`)
@@ -356,6 +371,8 @@ Compile with: `g3 -- aireql-util.airl aireql-transport.airl aireql.airl aireql-s
 
 ### Bytes (big-endian, IntList = byte sequences)
 ```
+(bytes-new) -> IntList                ; empty byte list
+(bytes-from-int8 n) -> IntList        ; i8 to 1 byte
 (bytes-from-int16 n) -> IntList       ; i16 to 2 bytes BE
 (bytes-from-int32 n) -> IntList       ; i32 to 4 bytes BE
 (bytes-from-int64 n) -> IntList       ; i64 to 8 bytes BE
@@ -386,6 +403,8 @@ Compile with: `g3 -- aireql-util.airl aireql-transport.airl aireql.airl aireql-s
 ```
 (tcp-listen port backlog) -> Result[Int, Str]      ; bind + listen, returns server handle
 (tcp-accept handle) -> Result[Int, Str]            ; blocking accept, returns connection handle
+(tcp-accept-tls handle ca-path cert-path key-path) -> Result[Int, Str]
+  ; server-side TLS accept. ca-path: CA cert PEM, cert-path/key-path: server cert/key PEM
 (tcp-connect host port) -> Result[Int, Str]        ; connect, returns handle
 (tcp-connect-tls host port ca-path cert-path key-path) -> Result[Int, Str]
   ; TLS connection. ca-path: CA cert PEM ("" = system roots via webpki-roots)
@@ -427,6 +446,7 @@ Compile with: `g3 -- aireql-util.airl aireql-transport.airl aireql.airl aireql-s
 (run-bytecode bc-funcs) -> any                           ; execute BCFunc list in bytecode VM
 (compile-to-executable [paths] output) -> Nil            ; source files → native binary (Rust pipeline)
 (compile-bytecode-to-executable bc-funcs output) -> Str  ; BCFunc list → native binary (G3 pipeline)
+(compile-bytecode-to-executable-with-target bc-funcs output target) -> Str  ; with target triple
 ```
 CLI cross-compilation: `airl compile file.airl --target i686-airlos -o output` (or `--target x86_64-airlos`)
 Targets: `x86-64` (default), `i686`, `i686-airlos` (freestanding), `x86_64-airlos` (freestanding 64-bit), `aarch64`

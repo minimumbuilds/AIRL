@@ -358,6 +358,26 @@ All take 2 arguments, return `Bool`. Work on Int, UInt, Float, and String.
 (or (= x 1) (or (= x 2) (or (= x 3) (or (= x 4) (= x 5)))))
 ```
 
+### Bitwise Operations
+
+All take 2 integer arguments, return Int.
+
+| Operator | Description |
+|----------|-------------|
+| `bitwise-and` | Bitwise AND |
+| `bitwise-or` | Bitwise OR |
+| `bitwise-xor` | Bitwise XOR |
+| `bitwise-shl` | Left shift |
+| `bitwise-shr` | Logical right shift (unsigned, no sign-extend) |
+
+```lisp
+(bitwise-and 0xFF 0x0F)    ;; → 15
+(bitwise-or 0x0F 0xF0)     ;; → 255
+(bitwise-xor 0xFF 0x0F)    ;; → 240
+(bitwise-shl 1 8)           ;; → 256
+(bitwise-shr 256 4)         ;; → 16
+```
+
 ### Collections
 
 | Function | Signature | Description |
@@ -399,14 +419,19 @@ Use `char-code` / `char-from-code` for character↔integer conversion. Use `take
 | Function | Arity | Description |
 |----------|-------|-------------|
 | `str` | variadic | Concatenate all arguments into one String. Strings are included as-is (no quotes); all other types are auto-coerced via Display. `(str "count: " 42 " done")` → `"count: 42 done"` |
-| `print` | variadic | Print all arguments to stdout, returns Unit |
-| `println` | variadic | Print all arguments to stdout followed by a newline, returns Unit |
+| `print` | variadic | Print all arguments to stdout, returns Nil |
+| `println` | variadic | Print all arguments to stdout followed by a newline, returns Nil |
+| `eprint` | variadic | Print all arguments to stderr, returns Nil |
+| `eprintln` | variadic | Print all arguments to stderr followed by a newline, returns Nil |
+| `read-line` | 0 | Read a single line from stdin, returns Str |
+| `read-stdin` | 0 | Read all of stdin, returns Str |
 | `type-of` | 1 | Returns type name as String (e.g., `"Int"`, `"Bool"`) |
 | `shape` | 1 | Returns tensor shape as List of Int |
 | `valid` | 1 | Always returns `true`. Used as a minimal contract guard |
 | `format` | variadic | Format string with `{}` placeholders: `(format "Hello, {}!" "world")` → `"Hello, world!"` |
 | `exit` | 1 | Exit the program with the given integer exit code |
 | `char-count` | 1 | Returns Unicode character count of a string (not byte length) |
+| `fn-metadata` | 1 | Returns function metadata as a Map (name, sig, contracts) |
 
 ### Type Conversion
 
@@ -418,6 +443,8 @@ Use `char-code` / `char-from-code` for character↔integer conversion. Use `take
 | `string-to-float` | `(string-to-float s)` → Float | Parse string as float (panics on invalid input) |
 | `char-code` | `(char-code s)` → Int | First character's Unicode code point |
 | `char-from-code` | `(char-from-code n)` → Str | Unicode code point to single-character string |
+| `parse-int-radix` | `(parse-int-radix s base)` → Result[Int, Str] | Parse string as integer in base 2-36 |
+| `int-to-string-radix` | `(int-to-string-radix n base)` → Str | Format integer as string in base 2-36 |
 
 ### Error Handling
 
@@ -448,12 +475,15 @@ All float math builtins operate on `f64` values. Integer arguments are promoted 
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `shell-exec` | `(shell-exec cmd)` → Str | Execute a shell command, return stdout |
+| `shell-exec` | `(shell-exec cmd args-list)` → Result[Map, Str] | Execute command with args list. Ok map has keys `"stdout"`, `"stderr"`, `"exit-code"` |
+| `shell-exec-with-stdin` | `(shell-exec-with-stdin cmd args-list stdin-str)` → Result[Map, Str] | Execute command, piping stdin-str to the process |
 | `time-now` | `(time-now)` → Int | Current time as epoch milliseconds |
 | `sleep` | `(sleep ms)` → Nil | Pause execution for `ms` milliseconds |
-| `format-time` | `(format-time epoch-ms fmt)` → Str | Format epoch millis with strftime pattern |
-| `getenv` | `(getenv name)` → Str/Nil | Read environment variable |
+| `format-time` | `(format-time epoch-ms fmt)` → Str | Format epoch millis with strftime pattern. Supports `%Y %m %d %H %M %S` |
+| `getenv` | `(getenv name)` → Result[Str, Str] | Read environment variable |
 | `get-args` | `(get-args)` → List | Command-line arguments as list of strings |
+| `get-cwd` | `(get-cwd)` → Str | Current working directory |
+| `cpu-count` | `(cpu-count)` → Int | Logical CPU count (available parallelism) |
 
 ### Network/JSON
 
@@ -479,6 +509,9 @@ All float math builtins operate on `f64` values. Integer arguments are promoted 
 | `read-dir` | `(read-dir path)` → List | List directory entries |
 | `file-size` | `(file-size path)` → Int | File size in bytes |
 | `is-dir?` | `(is-dir? path)` → Bool | Check if path is a directory |
+| `temp-file` | `(temp-file prefix)` → Str | Create a temp file, return its path |
+| `temp-dir` | `(temp-dir prefix)` → Str | Create a temp directory, return its path |
+| `file-mtime` | `(file-mtime path)` → Int | File modification time as epoch millis (-1 on error) |
 
 ### Path (v0.3.0)
 
@@ -504,9 +537,19 @@ All float math builtins operate on `f64` values. Integer arguments are promoted 
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `sha256` | `(sha256 str)` → Str | SHA-256 hash (hex string) |
+| `sha512` | `(sha512 str)` → Str | SHA-512 hash (hex string) |
+| `sha256-bytes` | `(sha256-bytes buf)` → IntList | SHA-256 hash of IntList (raw 32 bytes) |
+| `sha512-bytes` | `(sha512-bytes buf)` → IntList | SHA-512 hash of IntList (raw 64 bytes) |
 | `hmac-sha256` | `(hmac-sha256 key message)` → Str | HMAC-SHA256 (hex string) |
-| `base64-encode` | `(base64-encode str)` → Str | Base64 encode |
-| `base64-decode` | `(base64-decode str)` → Str | Base64 decode |
+| `hmac-sha512` | `(hmac-sha512 key message)` → Str | HMAC-SHA512 (hex string) |
+| `hmac-sha256-bytes` | `(hmac-sha256-bytes key data)` → IntList | HMAC-SHA256 of IntList inputs (raw) |
+| `hmac-sha512-bytes` | `(hmac-sha512-bytes key data)` → IntList | HMAC-SHA512 of IntList inputs (raw) |
+| `pbkdf2-sha256` | `(pbkdf2-sha256 password salt iterations key-length)` → IntList | PBKDF2-SHA256 key derivation |
+| `pbkdf2-sha512` | `(pbkdf2-sha512 password salt iterations key-length)` → IntList | PBKDF2-SHA512 key derivation |
+| `base64-encode` | `(base64-encode str)` → Str | Base64 encode string |
+| `base64-decode` | `(base64-decode str)` → Str | Base64 decode string |
+| `base64-encode-bytes` | `(base64-encode-bytes buf)` → Str | Base64 encode IntList to string |
+| `base64-decode-bytes` | `(base64-decode-bytes str)` → IntList | Base64 decode string to IntList |
 | `random-bytes` | `(random-bytes n)` → List | List of n random byte values (0-255) |
 
 ### Byte Encoding (v0.4.0)
@@ -515,6 +558,8 @@ Binary data is represented as `IntList` (list of integers 0-255). All integer en
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
+| `bytes-new` | `(bytes-new)` → IntList | Create an empty byte list |
+| `bytes-from-int8` | `(bytes-from-int8 n)` → IntList | Encode i8 as 1 byte |
 | `bytes-from-int16` | `(bytes-from-int16 n)` → IntList | Encode i16 as 2 bytes (big-endian) |
 | `bytes-from-int32` | `(bytes-from-int32 n)` → IntList | Encode i32 as 4 bytes (big-endian) |
 | `bytes-from-int64` | `(bytes-from-int64 n)` → IntList | Encode i64 as 8 bytes (big-endian) |
@@ -528,6 +573,29 @@ Binary data is represented as `IntList` (list of integers 0-255). All integer en
 | `bytes-slice` | `(bytes-slice buf offset len)` → IntList | Extract slice with bounds check |
 | `crc32c` | `(crc32c buf)` → Int | CRC32C (Castagnoli) checksum |
 
+### Compression (v0.4.0)
+
+All compression functions take an IntList (byte list) and return an IntList.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `gzip-compress` | `(gzip-compress buf)` → IntList | Gzip compression |
+| `gzip-decompress` | `(gzip-decompress buf)` → IntList | Gzip decompression |
+| `snappy-compress` | `(snappy-compress buf)` → IntList | Snappy compression |
+| `snappy-decompress` | `(snappy-decompress buf)` → IntList | Snappy decompression |
+| `lz4-compress` | `(lz4-compress buf)` → IntList | LZ4 compression |
+| `lz4-decompress` | `(lz4-decompress buf)` → IntList | LZ4 decompression |
+| `zstd-compress` | `(zstd-compress buf)` → IntList | Zstandard compression |
+| `zstd-decompress` | `(zstd-decompress buf)` → IntList | Zstandard decompression |
+
+```lisp
+;; Compress and decompress a string via gzip
+(let (data : _ (bytes-from-string "hello world"))
+  (let (compressed : _ (gzip-compress data))
+    (let (restored : _ (gzip-decompress compressed))
+      (bytes-to-string restored 0 (length restored)))))  ;; → "hello world"
+```
+
 ### TCP Sockets (v0.4.0)
 
 Handle-based TCP networking. Connections are managed via integer handles. All operations return `Result`.
@@ -537,6 +605,8 @@ Handle-based TCP networking. Connections are managed via integer handles. All op
 | `tcp-listen` | `(tcp-listen port backlog)` → Result[Int, Str] | Bind + listen, returns server handle |
 | `tcp-accept` | `(tcp-accept handle)` → Result[Int, Str] | Blocking accept, returns connection handle |
 | `tcp-connect` | `(tcp-connect host port)` → Result[Int, Str] | Connect to host:port, returns handle |
+| `tcp-connect-tls` | `(tcp-connect-tls host port ca-path cert-path key-path)` → Result[Int, Str] | TLS connection. `ca-path`: CA cert PEM (`""` = system roots). `cert-path`/`key-path`: client cert/key PEM (`""` = no client auth) |
+| `tcp-accept-tls` | `(tcp-accept-tls handle ca-path cert-path key-path)` → Result[Int, Str] | Server-side TLS accept. `ca-path`: CA cert, `cert-path`/`key-path`: server cert/key PEM |
 | `tcp-close` | `(tcp-close handle)` → Result[Nil, Str] | Close a connection or listener |
 | `tcp-send` | `(tcp-send handle data)` → Result[Int, Str] | Send byte list, returns bytes sent |
 | `tcp-recv` | `(tcp-recv handle max-bytes)` → Result[IntList, Str] | Receive up to max-bytes |
@@ -932,14 +1002,50 @@ Both levels enforce the same principle: **no shared mutable state**. Threads use
 
 ## 10b. Testing
 
-AIRL currently has no test runner, no `deftest` form, and no test discovery.
+AIRL has no built-in test runner or `deftest` form. Tests are run via external tooling (Rust integration tests invoke `airl run <file>` and check exit codes).
 
-**Current capabilities:**
+**Assertion builtins:**
 - `(assert condition)` — panics if `condition` is `false`
 - Contract system (`:requires`, `:ensures`, `:invariant`) — runtime checks or Z3-proven
-- Tests are run via external tooling: Rust integration tests invoke `airl run <file>` and check exit codes
 
-**Planned:** `(deftest name body)` form and `airl test <file>` CLI command.
+**Test assertions (stdlib, auto-loaded from test.airl):**
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `assert-eq` | `(assert-eq actual expected)` → Nil | Panic if actual != expected |
+| `assert-ne` | `(assert-ne actual expected)` → Nil | Panic if actual == expected |
+| `assert-ok` | `(assert-ok r)` → Nil | Panic if r is not `(Ok ...)` |
+| `assert-err` | `(assert-err r)` → Nil | Panic if r is not `(Err ...)` |
+| `assert-contains` | `(assert-contains haystack needle)` → Nil | Panic if needle not in haystack |
+| `assert-true` | `(assert-true val)` → Nil | Panic if val is not `true` |
+
+```lisp
+(assert-eq (+ 2 3) 5)
+(assert-ok (Ok 42))
+(assert-err (Err "fail"))
+(assert-contains "hello world" "world")
+```
+
+---
+
+## 10c. Compilation
+
+AIRL programs can be compiled to native executables.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `run-bytecode` | `(run-bytecode bc-funcs)` → any | Execute BCFunc list in bytecode VM |
+| `compile-to-executable` | `(compile-to-executable [paths] output)` → Nil | Source files → native binary (Rust pipeline) |
+| `compile-bytecode-to-executable` | `(compile-bytecode-to-executable bc-funcs output)` → Str | BCFunc list → native binary (G3 pipeline) |
+| `compile-bytecode-to-executable-with-target` | `(compile-bytecode-to-executable-with-target bc-funcs output target)` → Str | Same as above, with target triple |
+
+**CLI cross-compilation:**
+
+```bash
+airl compile file.airl --target i686-airlos -o output
+```
+
+Available targets: `x86-64` (default), `i686`, `i686-airlos` (freestanding 32-bit), `x86_64-airlos` (freestanding 64-bit), `aarch64`.
 
 ---
 
@@ -1019,6 +1125,9 @@ AIRL includes a standard library of 15 collection functions, written in pure AIR
 | `find` | `(find pred xs)` | any/nil | First element satisfying pred, or nil |
 | `sort` | `(sort cmp xs)` | List | Merge sort with comparison function |
 | `merge` | `(merge cmp xs ys)` | List | Merge two sorted lists |
+| `unique` | `(unique xs)` | List | Deduplicate, preserves first occurrence |
+| `enumerate` | `(enumerate xs)` | List | Pair elements with indices: `[[0 a] [1 b] ...]` |
+| `group-by` | `(group-by f xs)` | Map | Group elements by key function: `{(f x): [matching elems]}` |
 
 **Note:** All stdlib functions are recursive. For very large lists (>10,000 elements), you may hit the recursion depth limit (50,000). The `zip` function stops at the shorter list.
 
