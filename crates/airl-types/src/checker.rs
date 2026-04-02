@@ -114,6 +114,7 @@ impl TypeChecker {
             "json-parse", "json-stringify",
             "shell-exec", "cpu-count", "time-now", "sleep", "format-time", "getenv",
             "run-bytecode", "compile-to-executable", "compile-bytecode-to-executable",
+            "compile-bytecode-to-executable-with-target",
             // Byte encoding
             "bytes-new", "bytes-from-int8", "bytes-from-int16", "bytes-from-int32", "bytes-from-int64",
             "bytes-to-int16", "bytes-to-int32", "bytes-to-int64",

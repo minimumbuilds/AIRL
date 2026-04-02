@@ -7,7 +7,7 @@
 ;;   airl run --load bootstrap/lexer.airl \
 ;;            --load bootstrap/parser.airl \
 ;;            --load bootstrap/bc_compiler.airl \
-;;            bootstrap/g3_compiler.airl -- <input.airl> [-o <output>]
+;;            bootstrap/g3_compiler.airl -- <input.airl> [-o <output>] [--target <triple>]
 ;;
 ;; Stdlib is loaded from stdlib/ relative to CWD, or AIRL_STDLIB env var.
 ;; Requires: --features jit,aot on the host airl binary.
@@ -102,22 +102,27 @@
 
 (defn g3-parse-args
   :sig [(args : List) -> _]
-  :intent "Parse CLI args into [input-files output-path]"
+  :intent "Parse CLI args into [input-files output-path target-triple]"
   :requires [(valid args)]
   :ensures [(valid result)]
   :body
     (let (result : _ (fold (fn [acc arg]
             (let (files : _ (at acc 0))
                  (output : _ (at acc 1))
-                 (expect-o : _ (at acc 2))
-              (match expect-o
-                1 [files arg 0]
-                _ (match arg
-                    "-o" [files output 1]
-                    _ [(append files arg) output 0]))))
-          [[] "a.out" 0]
+                 (target : _ (at acc 2))
+                 (state : _ (at acc 3))
+              (if (= state 1)
+                [files arg target 0]
+                (if (= state 2)
+                  [files output arg 0]
+                  (if (= arg "-o")
+                    [files output target 1]
+                    (if (= arg "--target")
+                      [files output target 2]
+                      [(append files arg) output target 0]))))))
+          [[] "a.out" "" 0]
           args))
-      [(at result 0) (at result 1)]))
+      [(at result 0) (at result 1) (at result 2)]))
 
 ;; ── Flag handling ────────────────────────────────────────
 
@@ -142,15 +147,16 @@
     (do (print "G3 AIRL Compiler v0.9.0\n")
         (print "\n")
         (print "Usage:\n")
-        (print "  g3 -- <input.airl ...> [-o output]\n")
+        (print "  g3 -- <input.airl ...> [-o output] [--target <triple>]\n")
         (print "  g3 --version\n")
         (print "  g3 --help\n")
         (print "\n")
         (print "Options:\n")
-        (print "  --          Separator before source files (required)\n")
-        (print "  -o <file>   Output binary path (default: a.out)\n")
-        (print "  --version   Show version\n")
-        (print "  --help      Show this help\n")
+        (print "  --              Separator before source files (required)\n")
+        (print "  -o <file>       Output binary path (default: a.out)\n")
+        (print "  --target <tri>  Cross-compile target (e.g. x86_64-airlos, i686-airlos)\n")
+        (print "  --version       Show version\n")
+        (print "  --help          Show this help\n")
         (print "\n")
         (print "Stdlib: set AIRL_STDLIB env var or place stdlib/ in CWD\n")))
 
@@ -178,6 +184,7 @@
       (let (parsed : _ (g3-parse-args user-args))
         (let (input-files : List (at parsed 0))
           (let (output-path : String (at parsed 1))
+            (let (target-str : String (at parsed 2))
             (do
               ;; Step 1: Compile stdlib
               (match (g3-compile-stdlib)
@@ -219,8 +226,9 @@
                           (let (all-funcs : List (concat stdlib-funcs user-funcs))
                             (do
                               (print "[g3] " (length all-funcs) " total -> " output-path "\n")
-                              (let (compile-result : _ (compile-bytecode-to-executable all-funcs output-path))
+                              (let (compile-result : _ (if (= target-str "")
+                                  (compile-bytecode-to-executable all-funcs output-path)
+                                  (compile-bytecode-to-executable-with-target all-funcs output-path target-str)))
                                 (match compile-result
                                   (Err e) (do (print "[g3] COMPILE ERROR: " e "\n") (exit 1))
-                                  _ (print "[g3] done\n"))))))))))))))))))))
-
+                                  _ (print "[g3] done\n")))))))))))))))))))))

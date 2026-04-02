@@ -146,6 +146,7 @@ pub struct RuntimeImports {
     pub run_bytecode: FuncId,
     pub compile_to_exe: FuncId,
     pub compile_bc_to_exe: FuncId,
+    pub compile_bc_to_exe_with_target: FuncId,
 
     // Type conversions
     pub int_to_string: FuncId,
@@ -463,19 +464,28 @@ impl BytecodeAot {
     /// Create a new AOT compiler context. If `target` is None, targets the host.
     /// Accepted target strings: "x86-64", "i686", "i686-airlos", "x86_64-airlos", or any valid triple.
     pub fn new_with_target(target: Option<&str>) -> Result<Self, String> {
+        let is_freestanding = matches!(target, Some("i686-airlos") | Some("x86_64-airlos"));
         let mut settings_builder = cranelift_codegen::settings::builder();
         let _ = settings_builder.set("unwind_info", "false");
-        let _ = settings_builder.set("is_pic", "true");
+        let _ = settings_builder.set("is_pic", if is_freestanding { "false" } else { "true" });
         let _ = settings_builder.set("enable_probestack", "false");
 
         let triple = match target {
             Some("x86-64") | None => target_lexicon::Triple::host(),
             Some("i686") => "i686-unknown-linux-gnu".parse::<target_lexicon::Triple>()
                 .map_err(|e| format!("invalid triple: {}", e))?,
-            Some("i686-airlos") => "i686-unknown-none".parse::<target_lexicon::Triple>()
-                .map_err(|e| format!("invalid triple: {}", e))?,
-            Some("x86_64-airlos") => "x86_64-unknown-none".parse::<target_lexicon::Triple>()
-                .map_err(|e| format!("invalid triple: {}", e))?,
+            Some("i686-airlos") => {
+                let mut t = "i686-unknown-none".parse::<target_lexicon::Triple>()
+                    .map_err(|e| format!("invalid triple: {}", e))?;
+                t.binary_format = target_lexicon::BinaryFormat::Elf;
+                t
+            }
+            Some("x86_64-airlos") => {
+                let mut t = "x86_64-unknown-none".parse::<target_lexicon::Triple>()
+                    .map_err(|e| format!("invalid triple: {}", e))?;
+                t.binary_format = target_lexicon::BinaryFormat::Elf;
+                t
+            }
             Some("aarch64") => "aarch64-unknown-linux-gnu".parse::<target_lexicon::Triple>()
                 .map_err(|e| format!("invalid triple: {}", e))?,
             Some(t) => t.parse::<target_lexicon::Triple>()
@@ -654,6 +664,7 @@ impl BytecodeAot {
         let run_bytecode = declare_import(m, "airl_run_bytecode", s1.clone());
         let compile_to_exe = declare_import(m, "airl_compile_to_executable", s2.clone());
         let compile_bc_to_exe = declare_import(m, "airl_compile_bytecode_to_executable", s2.clone());
+        let compile_bc_to_exe_with_target = declare_import(m, "airl_compile_bytecode_to_executable_with_target", sig_3_ptr(m, ptr));
 
         // Type conversions
         let int_to_string = declare_import(m, "airl_int_to_string", s1.clone());
@@ -838,7 +849,7 @@ impl BytecodeAot {
             append_file, delete_file, delete_dir, rename_file,
             read_dir, create_dir, file_size, is_dir,
             temp_file, temp_dir, file_mtime,
-            get_args, run_bytecode, compile_to_exe, compile_bc_to_exe,
+            get_args, run_bytecode, compile_to_exe, compile_bc_to_exe, compile_bc_to_exe_with_target,
             int_to_string, float_to_string, string_to_int, string_to_float,
             char_code, char_from_code,
             sqrt, sin, cos, tan, log, exp, floor, ceil, round,
@@ -964,6 +975,7 @@ impl BytecodeAot {
         m.insert("run-bytecode".into(), rt.run_bytecode);
         m.insert("compile-to-executable".into(), rt.compile_to_exe);
         m.insert("compile-bytecode-to-executable".into(), rt.compile_bc_to_exe);
+        m.insert("compile-bytecode-to-executable-with-target".into(), rt.compile_bc_to_exe_with_target);
 
         // Type conversions
         m.insert("int-to-string".into(),   rt.int_to_string);

@@ -399,6 +399,34 @@ fn dispatch_compile_bytecode_to_executable(args: &[*mut RtValue]) -> *mut RtValu
     }
 }
 
+fn dispatch_compile_bytecode_to_executable_with_target(args: &[*mut RtValue]) -> *mut RtValue {
+    let value_args: Vec<Value> = args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+    let func_list = match value_args.first() {
+        Some(Value::List(items)) => items.clone(),
+        _ => return rt_variant("Err".into(), rt_str("compile-bytecode-to-executable-with-target: first arg must be list of BCFunc".into())),
+    };
+    let output_path = match value_args.get(1) {
+        Some(Value::Str(s)) => s.clone(),
+        _ => return rt_variant("Err".into(), rt_str("compile-bytecode-to-executable-with-target: second arg must be output path string".into())),
+    };
+    let target_str = match value_args.get(2) {
+        Some(Value::Str(s)) if !s.is_empty() => Some(s.clone()),
+        _ => None,
+    };
+    #[cfg(feature = "aot")]
+    {
+        match crate::bytecode_marshal::compile_bytecode_to_executable_with_target(&func_list, &output_path, target_str.as_deref()) {
+            Ok(()) => rt_variant("Ok".into(), rt_str(format!("Compiled to {} (target: {})", output_path, target_str.as_deref().unwrap_or("host")))),
+            Err(e) => rt_variant("Err".into(), rt_str(format!("{}", e))),
+        }
+    }
+    #[cfg(not(feature = "aot"))]
+    {
+        let _ = (func_list, output_path, target_str);
+        rt_variant("Err".into(), rt_str("compile-bytecode-to-executable-with-target: AOT feature not enabled".into()))
+    }
+}
+
 fn dispatch_run_bytecode(args: &[*mut RtValue]) -> *mut RtValue {
     let value_args: Vec<Value> = args.iter().map(|&p| rt_to_value_no_release(p)).collect();
     let func_list = match value_args.first() {
@@ -669,6 +697,7 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         // Compiler/bytecode
         "compile-to-executable" => dispatch_compile_to_executable(args),
         "compile-bytecode-to-executable" => dispatch_compile_bytecode_to_executable(args),
+        "compile-bytecode-to-executable-with-target" => dispatch_compile_bytecode_to_executable_with_target(args),
         "run-bytecode" => dispatch_run_bytecode(args),
 
         // Not found

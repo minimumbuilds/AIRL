@@ -206,8 +206,7 @@ pub extern "C" fn airl_run_bytecode(prog: *mut airl_rt::value::RtValue) -> *mut 
 
 /// C-ABI entry point for `compile-bytecode-to-executable`.
 /// Takes a list of BCFunc values and an output path string.
-/// Compiles bytecode to a native binary via Cranelift AOT.
-/// This allows AOT-compiled G3 compiler binaries to produce native executables.
+/// Delegates to the 3-arg `compile_bytecode_to_executable_with_target` with `target = None`.
 #[cfg(feature = "aot")]
 #[no_mangle]
 pub extern "C" fn airl_compile_bytecode_to_executable(
@@ -232,7 +231,7 @@ pub extern "C" fn airl_compile_bytecode_to_executable(
         }
     };
 
-    match compile_bytecode_to_executable(&funcs, &output_path) {
+    match compile_bytecode_to_executable_with_target(&funcs, &output_path, None) {
         Ok(()) => {
             use airl_rt::value::{rt_variant, rt_str};
             rt_variant("Ok".into(), rt_str(format!("Compiled to {}", output_path)))
@@ -246,12 +245,67 @@ pub extern "C" fn airl_compile_bytecode_to_executable(
 
 /// Compile a list of BCFunc values to a native executable via Cranelift AOT.
 /// Takes the same BCFunc format as `run-bytecode` but produces a binary instead of executing.
+/// Delegates to `compile_bytecode_to_executable_with_target` with `target = None` (host).
 #[cfg(feature = "aot")]
 pub fn compile_bytecode_to_executable(funcs: &[Value], output_path: &str) -> Result<(), RuntimeError> {
+    compile_bytecode_to_executable_with_target(funcs, output_path, None)
+}
+
+/// C-ABI entry point for `compile-bytecode-to-executable-with-target`.
+/// Takes a list of BCFunc values, an output path string, and a target triple string.
+/// Empty target string means host target (same as the 2-arg version).
+#[cfg(feature = "aot")]
+#[no_mangle]
+pub extern "C" fn airl_compile_bytecode_to_executable_with_target(
+    funcs_val: *mut airl_rt::value::RtValue,
+    output_val: *mut airl_rt::value::RtValue,
+    target_val: *mut airl_rt::value::RtValue,
+) -> *mut airl_rt::value::RtValue {
+    let funcs_value = crate::bytecode_vm::rt_to_value(funcs_val);
+    let output_value = crate::bytecode_vm::rt_to_value(output_val);
+    let target_value = crate::bytecode_vm::rt_to_value(target_val);
+
+    let funcs = match &funcs_value {
+        Value::List(items) => items.clone(),
+        _ => {
+            eprintln!("airl_compile_bytecode_to_executable_with_target: first arg must be list of BCFunc");
+            return airl_rt::value::rt_nil();
+        }
+    };
+    let output_path = match &output_value {
+        Value::Str(s) => s.clone(),
+        _ => {
+            eprintln!("airl_compile_bytecode_to_executable_with_target: second arg must be output path string");
+            return airl_rt::value::rt_nil();
+        }
+    };
+    let target_str = match &target_value {
+        Value::Str(s) if !s.is_empty() => Some(s.as_str()),
+        _ => None,
+    };
+
+    match compile_bytecode_to_executable_with_target(&funcs, &output_path, target_str) {
+        Ok(()) => {
+            use airl_rt::value::{rt_variant, rt_str};
+            rt_variant("Ok".into(), rt_str(format!("Compiled to {} (target: {})", output_path, target_str.unwrap_or("host"))))
+        }
+        Err(e) => {
+            use airl_rt::value::{rt_variant, rt_str};
+            rt_variant("Err".into(), rt_str(format!("Compilation error: {}", e)))
+        }
+    }
+}
+
+/// Compile a list of BCFunc values to a native executable via Cranelift AOT,
+/// with an optional cross-compilation target.
+/// `target` of None means host target. Supported targets include
+/// "i686-airlos", "x86_64-airlos", "i686", "x86-64", "aarch64".
+#[cfg(feature = "aot")]
+pub fn compile_bytecode_to_executable_with_target(funcs: &[Value], output_path: &str, target: Option<&str>) -> Result<(), RuntimeError> {
     use crate::bytecode_aot::BytecodeAot;
     use std::collections::HashMap;
 
-    // Unmarshal all BCFunc values (stdlib + user, provided by caller)
+    // Unmarshal all BCFunc values
     let mut bc_funcs = Vec::new();
     for f in funcs {
         bc_funcs.push(value_to_bytecode_func(f)?);
@@ -262,8 +316,8 @@ pub fn compile_bytecode_to_executable(funcs: &[Value], output_path: &str) -> Res
         .map(|f| (f.name.clone(), f.clone()))
         .collect();
 
-    // 3. AOT compile bytecode → native object
-    let mut aot = BytecodeAot::new()
+    // AOT compile bytecode to native object, using the specified target
+    let mut aot = BytecodeAot::new_with_target(target)
         .map_err(|e| RuntimeError::Custom(format!("AOT init: {}", e)))?;
     for func in &bc_funcs {
         aot.compile_all(std::slice::from_ref(func), &func_map)
@@ -278,32 +332,64 @@ pub fn compile_bytecode_to_executable(funcs: &[Value], output_path: &str) -> Res
     std::fs::write(&obj_path, &obj_bytes)
         .map_err(|e| RuntimeError::Custom(format!("write {}: {}", obj_path, e)))?;
 
-    // Get runtime library (embedded or on disk)
+    // For freestanding targets, use cross-linker
+    if target == Some("i686-airlos") {
+        let script = std::env::var("AIRL_LINKER_SCRIPT").unwrap_or_else(|_| "user.ld".into());
+        let mut cmd = std::process::Command::new("i686-elf-ld");
+        cmd.arg("-T").arg(&script);
+        cmd.arg(&obj_path);
+        cmd.arg("-o").arg(output_path);
+        if let Ok(rt_path) = std::env::var("AIRL_RT_AIRLOS") {
+            cmd.arg(&rt_path);
+        }
+        let status = cmd.status();
+        let _ = std::fs::remove_file(&obj_path);
+        return match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => Err(RuntimeError::Custom(format!("cross-linker (i686-elf-ld) failed: {:?}", s.code()))),
+            Err(e) => Err(RuntimeError::Custom(format!("cross-linker (i686-elf-ld) not found: {}", e))),
+        };
+    }
+
+    if target == Some("x86_64-airlos") {
+        let script = std::env::var("AIRL_LINKER_SCRIPT").unwrap_or_else(|_| "user64.ld".into());
+        let mut cmd = std::process::Command::new("x86_64-elf-ld");
+        cmd.arg("-T").arg(&script);
+        cmd.arg(&obj_path);
+        cmd.arg("-o").arg(output_path);
+        if let Ok(rt_path) = std::env::var("AIRL_RT_AIRLOS_X64") {
+            cmd.arg(&rt_path);
+        }
+        let status = cmd.status();
+        let _ = std::fs::remove_file(&obj_path);
+        return match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => Err(RuntimeError::Custom(format!("cross-linker (x86_64-elf-ld) failed: {:?}", s.code()))),
+            Err(e) => Err(RuntimeError::Custom(format!("cross-linker (x86_64-elf-ld) not found: {}", e))),
+        };
+    }
+
+    // Non-freestanding targets: link with system cc
     let rt_lib = crate::bytecode_aot::get_or_extract_rt_lib()
         .map_err(|e| RuntimeError::Custom(e))?;
 
-    // Check if program needs the full runtime (compiler infrastructure)
     let needs_compiler = bc_funcs.iter().any(|f| {
         f.constants.iter().any(|c| matches!(c,
             Value::Str(s) if s == "compile-bytecode-to-executable"
+                || s == "compile-bytecode-to-executable-with-target"
                 || s == "compile-to-executable"
                 || s == "run-bytecode"))
     });
 
-    // Link with system cc
     let mut cmd = std::process::Command::new("cc");
     cmd.arg(&obj_path).arg("-o").arg(output_path);
 
     if needs_compiler {
-        // Link against libairl_runtime.a which contains BOTH compiler infrastructure
-        // (Cranelift, bytecode marshal) AND all airl-rt symbols (airl_call_closure, etc.)
-        // Do NOT link libairl_rt.a separately — it would cause duplicate symbol conflicts
-        // where the linker picks the wrong version of airl-rt functions.
         let runtime_lib = crate::bytecode_aot::find_lib("airl_runtime");
         if !runtime_lib.is_empty() {
             cmd.arg(&runtime_lib);
         } else {
-            cmd.arg(&rt_lib); // fallback: rt only (no compiler available)
+            cmd.arg(&rt_lib);
         }
     } else {
         cmd.arg(&rt_lib);
@@ -417,5 +503,84 @@ mod tests {
     #[test]
     fn test_unknown_opcode() {
         assert!(int_to_op(99).is_err());
+    }
+
+    #[cfg(feature = "aot")]
+    #[test]
+    fn test_compile_with_target_none_uses_host() {
+        // A minimal program: __main__ returns nil
+        let func_val = make_bcfunc(
+            "__main__", 0, 2, 0,
+            vec![],
+            vec![
+                instr(1, 1, 0, 0),  // LoadNil r1
+                instr(25, 0, 1, 0), // Return r1
+            ],
+        );
+        let result = compile_bytecode_to_executable_with_target(
+            &[func_val], "/tmp/test-host-target", None,
+        );
+        // Should either succeed or fail with a linking error (NOT "unsupported target")
+        match result {
+            Ok(()) => {
+                let _ = std::fs::remove_file("/tmp/test-host-target");
+            }
+            Err(e) => {
+                let msg = format!("{}", e);
+                assert!(!msg.contains("unsupported target"),
+                    "target=None should use host path, got: {}", msg);
+                assert!(!msg.contains("cross-linker"),
+                    "target=None should not use cross-linker, got: {}", msg);
+            }
+        }
+    }
+
+    #[cfg(feature = "aot")]
+    #[test]
+    fn test_compile_with_invalid_target_returns_err() {
+        let func_val = make_bcfunc(
+            "__main__", 0, 2, 0,
+            vec![],
+            vec![
+                instr(1, 1, 0, 0),  // LoadNil r1
+                instr(25, 0, 1, 0), // Return r1
+            ],
+        );
+        let result = compile_bytecode_to_executable_with_target(
+            &[func_val], "/tmp/test-bad-target", Some("fake-unsupported-arch"),
+        );
+        assert!(result.is_err(), "invalid target should return Err");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.to_lowercase().contains("unsupported") || msg.to_lowercase().contains("unrecognized") || msg.to_lowercase().contains("target"),
+            "error should mention unsupported/unrecognized target, got: {}", msg);
+    }
+
+    #[cfg(feature = "aot")]
+    #[test]
+    fn test_compile_with_x86_64_airlos_uses_cross_linker() {
+        let func_val = make_bcfunc(
+            "__main__", 0, 2, 0,
+            vec![],
+            vec![
+                instr(1, 1, 0, 0),  // LoadNil r1
+                instr(25, 0, 1, 0), // Return r1
+            ],
+        );
+        let result = compile_bytecode_to_executable_with_target(
+            &[func_val], "/tmp/test-airlos", Some("x86_64-airlos"),
+        );
+        // In CI without cross-linker, this should fail mentioning x86_64-elf-ld
+        // (proving it routed to the cross-linker path, not the host linker)
+        match result {
+            Ok(()) => {
+                // Cross-linker is installed; clean up
+                let _ = std::fs::remove_file("/tmp/test-airlos");
+            }
+            Err(e) => {
+                let msg = format!("{}", e);
+                assert!(msg.contains("x86_64-elf-ld"),
+                    "x86_64-airlos target should route to x86_64-elf-ld cross-linker, got: {}", msg);
+            }
+        }
     }
 }
