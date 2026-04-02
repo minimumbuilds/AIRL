@@ -51,27 +51,39 @@ impl SExpr {
     }
 }
 
+/// Maximum nesting depth for S-expression parsing.
+/// Prevents stack overflow from deeply nested input (SEC-10).
+const MAX_PARSE_DEPTH: usize = 1000;
+
 /// Parse a token stream into a list of top-level S-expressions.
 pub fn parse_sexpr_all(tokens: &[Token]) -> Result<Vec<SExpr>, Diagnostic> {
     let mut pos = 0;
     let mut exprs = Vec::new();
     while pos < tokens.len() && tokens[pos].kind != TokenKind::Eof {
-        let (expr, next) = parse_sexpr(tokens, pos)?;
+        let (expr, next) = parse_sexpr(tokens, pos, 0)?;
         exprs.push(expr);
         pos = next;
     }
     Ok(exprs)
 }
 
-fn parse_sexpr(tokens: &[Token], pos: usize) -> Result<(SExpr, usize), Diagnostic> {
+fn parse_sexpr(tokens: &[Token], pos: usize, depth: usize) -> Result<(SExpr, usize), Diagnostic> {
+    if depth > MAX_PARSE_DEPTH {
+        let span = if pos < tokens.len() { tokens[pos].span } else { Span::dummy() };
+        return Err(Diagnostic::error(
+            format!("maximum nesting depth exceeded ({})", MAX_PARSE_DEPTH),
+            span,
+        ));
+    }
+
     if pos >= tokens.len() {
         return Err(Diagnostic::error("unexpected end of input", Span::dummy()));
     }
 
     let token = &tokens[pos];
     match &token.kind {
-        TokenKind::LParen => parse_list(tokens, pos, TokenKind::LParen, TokenKind::RParen, false),
-        TokenKind::LBracket => parse_list(tokens, pos, TokenKind::LBracket, TokenKind::RBracket, true),
+        TokenKind::LParen => parse_list(tokens, pos, TokenKind::LParen, TokenKind::RParen, false, depth),
+        TokenKind::LBracket => parse_list(tokens, pos, TokenKind::LBracket, TokenKind::RBracket, true, depth),
         _ => {
             let atom = token_to_atom(token)?;
             Ok((SExpr::Atom(atom), pos + 1))
@@ -85,6 +97,7 @@ fn parse_list(
     _open: TokenKind,
     close: TokenKind,
     is_bracket: bool,
+    depth: usize,
 ) -> Result<(SExpr, usize), Diagnostic> {
     let start_span = tokens[pos].span;
     let mut pos = pos + 1; // skip opener
@@ -112,7 +125,7 @@ fn parse_list(
             };
             return Ok((expr, pos + 1));
         }
-        let (item, next) = parse_sexpr(tokens, pos)?;
+        let (item, next) = parse_sexpr(tokens, pos, depth + 1)?;
         items.push(item);
         pos = next;
     }
@@ -232,5 +245,67 @@ mod tests {
         let exprs1 = parse(input);
         // For now just verify it parses without panic
         assert_eq!(exprs1.len(), 1);
+    }
+
+    #[test]
+    fn parse_depth_limit_exceeded() {
+        // Build input with nesting deeper than MAX_PARSE_DEPTH (1000).
+        // Run in a thread with a large stack to avoid overflowing the test
+        // thread's stack before our depth check fires.
+        let result = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let depth = 1002;
+                let input = "(".repeat(depth) + "x" + &")".repeat(depth);
+                let mut lexer = Lexer::new(&input);
+                let tokens = lexer.lex_all().unwrap();
+                parse_sexpr_all(&tokens)
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains("maximum nesting depth exceeded"),
+            "expected depth error, got: {}",
+            err.message,
+        );
+    }
+
+    #[test]
+    fn parse_depth_limit_not_triggered_for_normal_nesting() {
+        // 50 levels of nesting should be fine
+        let depth = 50;
+        let input = "(".repeat(depth) + "x" + &")".repeat(depth);
+        let exprs = parse(&input);
+        assert_eq!(exprs.len(), 1);
+    }
+
+    #[test]
+    fn parse_depth_limit_bracket_lists() {
+        // Bracket lists also count toward the depth limit.
+        // Run in a thread with a large stack (same reason as paren test).
+        let result = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let depth = 1002;
+                let input = "[".repeat(depth) + "x" + &"]".repeat(depth);
+                let mut lexer = Lexer::new(&input);
+                let tokens = lexer.lex_all().unwrap();
+                parse_sexpr_all(&tokens)
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains("maximum nesting depth exceeded"),
+            "expected depth error, got: {}",
+            err.message,
+        );
     }
 }

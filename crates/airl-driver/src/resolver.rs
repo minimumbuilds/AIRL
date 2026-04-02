@@ -56,6 +56,12 @@ pub fn resolve_imports(
     let canonical = std::fs::canonicalize(entry_path)
         .map_err(|e| ResolveError::Io(format!("{}: {}", entry_path, e)))?;
 
+    // The project root is the directory containing the entry file.
+    // All imported files must resolve to paths under this root (SEC-8).
+    let project_root = canonical.parent()
+        .ok_or_else(|| ResolveError::Io("entry file has no parent directory".into()))?
+        .to_path_buf();
+
     let mut resolved: Vec<ResolvedModule> = Vec::new();
     let mut visited: HashSet<PathBuf> = HashSet::new();
     let mut stack: Vec<PathBuf> = Vec::new();
@@ -67,6 +73,7 @@ pub fn resolve_imports(
         &mut visited,
         &mut stack,
         &mut import_map,
+        &project_root,
     )?;
 
     Ok((resolved, import_map))
@@ -78,6 +85,7 @@ fn resolve_recursive(
     visited: &mut HashSet<PathBuf>,
     stack: &mut Vec<PathBuf>,
     import_map: &mut HashMap<PathBuf, Vec<ImportDirective>>,
+    project_root: &Path,
 ) -> Result<(), ResolveError> {
     let canonical = std::fs::canonicalize(file_path)
         .map_err(|e| ResolveError::Io(format!("{}: {}", file_path.display(), e)))?;
@@ -114,7 +122,19 @@ fn resolve_recursive(
             }
 
             let import_path = parent.join(path);
-            resolve_recursive(&import_path, resolved, visited, stack, import_map)?;
+
+            // SEC-8: Canonicalize the import path to resolve symlinks, then
+            // verify it remains under the project root.
+            let canonical_import = import_path.canonicalize()
+                .map_err(|e| ResolveError::Io(format!("{}: {}", import_path.display(), e)))?;
+            if !canonical_import.starts_with(project_root) {
+                return Err(ResolveError::SandboxViolation(
+                    format!("{} (resolves to {} which is outside project root)",
+                            path, canonical_import.display()),
+                ));
+            }
+
+            resolve_recursive(&canonical_import, resolved, visited, stack, import_map, project_root)?;
 
             let stem = Path::new(path)
                 .file_stem()
@@ -366,5 +386,69 @@ mod tests {
             }
             other => panic!("expected SandboxViolation, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn resolve_symlink_bypass_blocked() {
+        // SEC-8: A symlink inside the project that points outside should be rejected
+        let dir = tempdir().unwrap();
+        let outside_dir = tempdir().unwrap();
+
+        // Create a file outside the project
+        let outside_file = write_temp_file(
+            outside_dir.path(),
+            "secret.airl",
+            r#"(defn secret :pub [] : Int 42)"#,
+        );
+
+        // Create a symlink inside the project pointing to the outside file
+        let symlink_path = dir.path().join("sneaky.airl");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside_file, &symlink_path).unwrap();
+        #[cfg(not(unix))]
+        {
+            // On non-unix, skip this test
+            return;
+        }
+
+        let main_path = write_temp_file(
+            dir.path(),
+            "main.airl",
+            r#"(import "sneaky.airl")
+(defn main [] : Int 0)"#,
+        );
+        let result = resolve_imports(main_path.to_str().unwrap());
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ResolveError::SandboxViolation(msg) => {
+                assert!(
+                    msg.contains("outside project root"),
+                    "expected sandbox violation for symlink escape, got: {}",
+                    msg,
+                );
+            }
+            other => panic!("expected SandboxViolation, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resolve_subdirectory_import_allowed() {
+        // Imports into subdirectories should still work
+        let dir = tempdir().unwrap();
+        write_temp_file(
+            dir.path(),
+            "lib/utils.airl",
+            r#"(defn helper :pub [] : Int 1)"#,
+        );
+        let main_path = write_temp_file(
+            dir.path(),
+            "main.airl",
+            r#"(import "lib/utils.airl")
+(defn main [] : Int 0)"#,
+        );
+        let result = resolve_imports(main_path.to_str().unwrap());
+        assert!(result.is_ok(), "subdirectory imports should be allowed: {:?}", result.err());
+        let (modules, _) = result.unwrap();
+        assert_eq!(modules.len(), 2);
     }
 }
