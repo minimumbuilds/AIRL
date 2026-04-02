@@ -507,14 +507,8 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "at-or" => airl_rt::list::airl_at_or(a0!(), a1!(), a2!()),
         "set-at" => airl_rt::list::airl_set_at(a0!(), a1!(), a2!()),
         "list-contains?" => airl_rt::list::airl_list_contains(a0!(), a1!()),
-        "reverse" => airl_rt::misc::airl_reverse_list(a0!()),
-        "concat" => airl_rt::misc::airl_concat_lists(a0!(), a1!()),
-        "flatten" => airl_rt::misc::airl_flatten(a0!()),
-        "range" => airl_rt::misc::airl_range(a0!(), a1!()),
-        "take" => airl_rt::misc::airl_take(a0!(), a1!()),
-        "drop" => airl_rt::misc::airl_drop(a0!(), a1!()),
-        "zip" => airl_rt::misc::airl_zip(a0!(), a1!()),
-        "enumerate" => airl_rt::misc::airl_enumerate(a0!()),
+        // reverse, concat, flatten, range, take, drop, zip, enumerate
+        // deregistered — AIRL stdlib equivalents in prelude.airl take over
 
         // String
         "char-at" => airl_rt::string::airl_char_at(a0!(), a1!()),

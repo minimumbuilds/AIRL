@@ -203,14 +203,6 @@ pub struct RuntimeImports {
     pub sleep_fn: FuncId,
     pub format_time: FuncId,
     pub read_lines: FuncId,
-    pub concat_lists: FuncId,
-    pub range_fn: FuncId,
-    pub reverse_list: FuncId,
-    pub take_fn: FuncId,
-    pub drop_fn: FuncId,
-    pub zip_fn: FuncId,
-    pub flatten_fn: FuncId,
-    pub enumerate_fn: FuncId,
     // Higher-order list ops (closure-accepting)
     pub map_ho: FuncId,
     pub filter_ho: FuncId,
@@ -741,14 +733,6 @@ impl BytecodeAot {
         let sleep_fn = declare_import(m, "airl_sleep", s1.clone());
         let format_time = declare_import(m, "airl_format_time", s2.clone());
         let read_lines = declare_import(m, "airl_read_lines", s1.clone());
-        let concat_lists = declare_import(m, "airl_concat_lists", s2.clone());
-        let range_fn = declare_import(m, "airl_range", s2.clone());
-        let reverse_list = declare_import(m, "airl_reverse_list", s1.clone());
-        let take_fn = declare_import(m, "airl_take", s2.clone());
-        let drop_fn = declare_import(m, "airl_drop", s2.clone());
-        let zip_fn = declare_import(m, "airl_zip", s2.clone());
-        let flatten_fn = declare_import(m, "airl_flatten", s1.clone());
-        let enumerate_fn = declare_import(m, "airl_enumerate", s1.clone());
         // Higher-order list ops (closure + list -> result)
         let map_ho = declare_import(m, "airl_map", s2.clone());
         let filter_ho = declare_import(m, "airl_filter", s2.clone());
@@ -886,8 +870,6 @@ impl BytecodeAot {
             parse_int_radix, int_to_string_radix, get_cwd,
             char_count, str_variadic, format_variadic,
             assert_fn, panic_fn, exit_fn, sleep_fn, format_time, read_lines,
-            concat_lists, range_fn, reverse_list, take_fn, drop_fn, zip_fn,
-            flatten_fn, enumerate_fn,
             map_ho, filter_ho, fold_ho, sort_ho, any_ho, all_ho, find_ho,
             path_join, path_parent, path_filename, path_extension, is_absolute,
             regex_match, regex_find_all, regex_replace, regex_split,
@@ -1057,14 +1039,8 @@ impl BytecodeAot {
         m.insert("sleep".into(),         rt.sleep_fn);
         m.insert("format-time".into(),   rt.format_time);
         m.insert("read-lines".into(),    rt.read_lines);
-        m.insert("concat".into(),        rt.concat_lists);
-        m.insert("range".into(),         rt.range_fn);
-        m.insert("reverse".into(),       rt.reverse_list);
-        m.insert("take".into(),          rt.take_fn);
-        m.insert("drop".into(),          rt.drop_fn);
-        m.insert("zip".into(),           rt.zip_fn);
-        m.insert("flatten".into(),       rt.flatten_fn);
-        m.insert("enumerate".into(),     rt.enumerate_fn);
+        // concat, range, reverse, take, drop, zip, flatten, enumerate
+        // deregistered — AIRL stdlib equivalents in prelude.airl take over
         m.insert("path-join".into(),     rt.path_join);
         m.insert("path-parent".into(),   rt.path_parent);
         m.insert("path-filename".into(), rt.path_filename);
@@ -2091,6 +2067,11 @@ impl BytecodeAot {
                         if is_variadic_special {
                             // handled inline via stack slot + variadic call
                         } else if let Some(&builtin_id) = self.builtin_map.get(callee_name.as_str()) {
+                            if all_functions.contains_key(callee_name.as_str())
+                                || self.compiled_funcs.contains_key(callee_name.as_str())
+                            {
+                                eprintln!("[g3] WARNING: function '{}' shadows builtin — builtin will be used", callee_name);
+                            }
                             call_targets.insert(callee_name.clone(), builtin_id);
                         } else if self.eligible_funcs.contains(callee_name) {
                             // Callee was compiled unboxed — use I64 signature
