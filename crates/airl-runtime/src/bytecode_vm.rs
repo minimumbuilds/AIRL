@@ -733,11 +733,15 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
 // Each child VM (from spawn_child) gets a fresh empty call stack.
 unsafe impl Send for BytecodeVm {}
 
+/// Default maximum call depth for the VM (SEC-11).
+const DEFAULT_MAX_CALL_DEPTH: usize = 10_000;
+
 pub struct BytecodeVm {
     pub functions: HashMap<String, BytecodeFunc>,
     fn_metadata: HashMap<String, crate::bytecode::FnDefMetadata>,
     call_stack: Vec<CallFrame>,
     recursion_depth: usize,
+    max_call_depth: usize,
 }
 
 impl BytecodeVm {
@@ -747,7 +751,13 @@ impl BytecodeVm {
             fn_metadata: HashMap::new(),
             call_stack: Vec::new(),
             recursion_depth: 0,
+            max_call_depth: DEFAULT_MAX_CALL_DEPTH,
         }
+    }
+
+    /// Set the maximum call depth for this VM instance.
+    pub fn set_max_call_depth(&mut self, depth: usize) {
+        self.max_call_depth = depth;
     }
 
     /// Create a child VM for thread-spawn.
@@ -757,6 +767,7 @@ impl BytecodeVm {
             fn_metadata: self.fn_metadata.clone(),
             call_stack: Vec::new(),
             recursion_depth: 0,
+            max_call_depth: self.max_call_depth,
         }
     }
 
@@ -820,7 +831,180 @@ impl BytecodeVm {
         }
     }
 
+    /// Validate all loaded bytecode functions for out-of-bounds register and
+    /// constant references (SEC-12, SEC-13). Must be called before execution.
+    fn validate_bytecode(&self) -> Result<(), RuntimeError> {
+        for (name, func) in &self.functions {
+            let rc = func.register_count as usize;
+            let cc = func.constants.len();
+
+            for (pc, instr) in func.instructions.iter().enumerate() {
+                let err = |msg: String| -> RuntimeError {
+                    RuntimeError::BytecodeValidation(format!(
+                        "function '{}' instruction {}: {}", name, pc, msg
+                    ))
+                };
+
+                // Helper closures for bounds checking
+                let check_reg = |idx: u16, field: &str| -> Result<(), RuntimeError> {
+                    if (idx as usize) >= rc {
+                        Err(err(format!(
+                            "{} register index {} >= register_count {}", field, idx, rc
+                        )))
+                    } else {
+                        Ok(())
+                    }
+                };
+                let check_const = |idx: u16, field: &str| -> Result<(), RuntimeError> {
+                    if (idx as usize) >= cc {
+                        Err(err(format!(
+                            "{} constant index {} >= constants.len() {}", field, idx, cc
+                        )))
+                    } else {
+                        Ok(())
+                    }
+                };
+                // Check a register range [start..start+count)
+                let check_reg_range = |start: u16, count: u16, field: &str| -> Result<(), RuntimeError> {
+                    let end = start as usize + count as usize;
+                    if end > rc {
+                        Err(err(format!(
+                            "{} register range {}..{} exceeds register_count {}", field, start, end, rc
+                        )))
+                    } else {
+                        Ok(())
+                    }
+                };
+
+                match instr.op {
+                    // dst=reg, a=const_idx
+                    Op::LoadConst => {
+                        check_reg(instr.dst, "dst")?;
+                        check_const(instr.a, "a")?;
+                    }
+                    // dst=reg only
+                    Op::LoadNil | Op::LoadTrue | Op::LoadFalse => {
+                        check_reg(instr.dst, "dst")?;
+                    }
+                    // dst=reg, a=reg
+                    Op::Move | Op::Not | Op::Neg => {
+                        check_reg(instr.dst, "dst")?;
+                        check_reg(instr.a, "a")?;
+                    }
+                    // dst=reg, a=reg, b=reg
+                    Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod
+                    | Op::Eq | Op::Ne | Op::Lt | Op::Le | Op::Gt | Op::Ge => {
+                        check_reg(instr.dst, "dst")?;
+                        check_reg(instr.a, "a")?;
+                        check_reg(instr.b, "b")?;
+                    }
+                    // a=offset (signed i16), no register validation needed
+                    Op::Jump => {}
+                    // a=reg, b=offset
+                    Op::JumpIfFalse | Op::JumpIfTrue => {
+                        check_reg(instr.a, "a")?;
+                    }
+                    // dst=reg(return+args base), a=const_idx(func name), b=argc
+                    // args occupy registers [dst+1..dst+1+argc]
+                    Op::Call | Op::CallBuiltin => {
+                        check_reg(instr.dst, "dst")?;
+                        check_const(instr.a, "a")?;
+                        if instr.b > 0 {
+                            check_reg_range(instr.dst + 1, instr.b, "args")?;
+                        }
+                    }
+                    // dst=reg(return+args base), a=reg(callee), b=argc
+                    Op::CallReg => {
+                        check_reg(instr.dst, "dst")?;
+                        check_reg(instr.a, "a")?;
+                        if instr.b > 0 {
+                            check_reg_range(instr.dst + 1, instr.b, "args")?;
+                        }
+                    }
+                    // TailCall reuses current frame, no register indices to validate
+                    Op::TailCall => {}
+                    // a=reg (return value)
+                    Op::Return => {
+                        check_reg(instr.a, "a")?;
+                    }
+                    // dst=reg, a=start_reg, b=count; regs [a..a+b]
+                    Op::MakeList => {
+                        check_reg(instr.dst, "dst")?;
+                        if instr.b > 0 {
+                            check_reg_range(instr.a, instr.b, "list elements")?;
+                        }
+                    }
+                    // dst=reg, a=const_idx(tag), b=reg(inner)
+                    Op::MakeVariant => {
+                        check_reg(instr.dst, "dst")?;
+                        check_const(instr.a, "a")?;
+                        check_reg(instr.b, "b")?;
+                    }
+                    // dst=reg, a=const_idx(tag)
+                    Op::MakeVariant0 => {
+                        check_reg(instr.dst, "dst")?;
+                        check_const(instr.a, "a")?;
+                    }
+                    // dst=reg, a=const_idx(func name), b=capture_start
+                    // capture count comes from the target function, validated dynamically
+                    Op::MakeClosure => {
+                        check_reg(instr.dst, "dst")?;
+                        check_const(instr.a, "a")?;
+                        // b is capture_start — at minimum it must be a valid register
+                        // (capture_count may be 0, in which case b is unused)
+                        // We validate b < rc only if there are captures to read
+                        // Since we don't know capture_count statically here, just
+                        // validate b itself is in range (it's used as start index).
+                        if (instr.b as usize) > rc {
+                            return Err(err(format!(
+                                "b capture_start {} > register_count {}", instr.b, rc
+                            )));
+                        }
+                    }
+                    // dst=reg, a=reg(scrutinee), b=const_idx(tag)
+                    Op::MatchTag => {
+                        check_reg(instr.dst, "dst")?;
+                        check_reg(instr.a, "a")?;
+                        check_const(instr.b, "b")?;
+                    }
+                    // a=offset, no register validation needed
+                    Op::JumpIfNoMatch => {}
+                    // dst=reg, a=reg(scrutinee)
+                    Op::MatchWild => {
+                        check_reg(instr.dst, "dst")?;
+                        check_reg(instr.a, "a")?;
+                    }
+                    // dst=reg, a=reg(source)
+                    Op::TryUnwrap => {
+                        check_reg(instr.dst, "dst")?;
+                        check_reg(instr.a, "a")?;
+                    }
+                    // dst=const_idx(fn name), a=reg(bool), b=const_idx(clause)
+                    Op::AssertRequires | Op::AssertEnsures | Op::AssertInvariant => {
+                        check_const(instr.dst, "dst")?;
+                        check_reg(instr.a, "a")?;
+                        check_const(instr.b, "b")?;
+                    }
+                    // a=reg
+                    Op::MarkMoved => {
+                        check_reg(instr.a, "a")?;
+                    }
+                    // a=reg, b=const_idx (optional — used for error messages)
+                    Op::CheckNotMoved => {
+                        check_reg(instr.a, "a")?;
+                        // b is used as a const index only if in range (see dispatch code)
+                        // so we validate it if non-zero
+                        // Actually the dispatch code does: if (instr.b as usize) < f.constants.len()
+                        // so out-of-bounds b is handled gracefully — skip validation for b
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn exec_main(&mut self) -> Result<Value, RuntimeError> {
+        self.validate_bytecode()?;
         self.push_frame("__main__", &[], 0)
             .and_then(|_| self.run())
     }
@@ -831,9 +1015,9 @@ impl BytecodeVm {
             .ok_or_else(|| RuntimeError::UndefinedSymbol(name.to_string()))?;
 
         self.recursion_depth += 1;
-        if self.recursion_depth > 50_000 {
+        if self.call_stack.len() >= self.max_call_depth || self.recursion_depth > self.max_call_depth {
             self.recursion_depth -= 1;
-            return Err(RuntimeError::Custom("stack overflow".into()));
+            return Err(RuntimeError::StackOverflow { depth: self.max_call_depth });
         }
 
         let reg_count = func.register_count as usize;
@@ -863,9 +1047,9 @@ impl BytecodeVm {
             .ok_or_else(|| RuntimeError::UndefinedSymbol(name.to_string()))?;
 
         self.recursion_depth += 1;
-        if self.recursion_depth > 50_000 {
+        if self.call_stack.len() >= self.max_call_depth || self.recursion_depth > self.max_call_depth {
             self.recursion_depth -= 1;
-            return Err(RuntimeError::Custom("stack overflow".into()));
+            return Err(RuntimeError::StackOverflow { depth: self.max_call_depth });
         }
 
         let reg_count = func.register_count as usize;
@@ -1719,5 +1903,214 @@ mod tests {
             constants: vec![Value::Str("foo".into())],
         };
         assert!(!is_simple_closure(&complex_func));
+    }
+
+    // ── SEC-11: Stack overflow detection ──
+
+    #[test]
+    fn test_stack_overflow_detected() {
+        // Non-tail recursion: f(n) = f(n) + 1
+        // The `+ 1` after the recursive call prevents tail-call optimization.
+        let body = IRNode::Call("+".into(), vec![
+            IRNode::Call("inf".into(), vec![IRNode::Load("n".into())]),
+            IRNode::Int(1),
+        ]);
+        let nodes = vec![
+            IRNode::Func("inf".into(), vec!["n".into()], Box::new(body)),
+            IRNode::Call("inf".into(), vec![IRNode::Int(0)]),
+        ];
+        let mut compiler = BytecodeCompiler::new();
+        let (funcs, main_func) = compiler.compile_program(&nodes);
+        let mut vm = BytecodeVm::new();
+        vm.set_max_call_depth(100);
+        let result = vm.exec_program(funcs, main_func);
+        match result {
+            Err(RuntimeError::StackOverflow { depth: 100 }) => {} // expected
+            other => panic!("expected StackOverflow at depth 100, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_max_call_depth_default() {
+        let vm = BytecodeVm::new();
+        assert_eq!(vm.max_call_depth, DEFAULT_MAX_CALL_DEPTH);
+    }
+
+    #[test]
+    fn test_set_max_call_depth() {
+        let mut vm = BytecodeVm::new();
+        vm.set_max_call_depth(500);
+        assert_eq!(vm.max_call_depth, 500);
+    }
+
+    #[test]
+    fn test_spawn_child_inherits_max_call_depth() {
+        let mut vm = BytecodeVm::new();
+        vm.set_max_call_depth(42);
+        let child = vm.spawn_child();
+        assert_eq!(child.max_call_depth, 42);
+    }
+
+    // ── SEC-12: Register index validation ──
+
+    #[test]
+    fn test_validate_register_oob_dst() {
+        let func = BytecodeFunc {
+            name: "__main__".into(), arity: 0, register_count: 2, capture_count: 0,
+            instructions: vec![
+                // dst=5 but register_count=2
+                Instruction::new(Op::LoadNil, 5, 0, 0),
+            ],
+            constants: vec![],
+        };
+        let mut vm = BytecodeVm::new();
+        vm.load_function(func);
+        match vm.exec_main() {
+            Err(RuntimeError::BytecodeValidation(msg)) => {
+                assert!(msg.contains("register index 5"), "msg was: {}", msg);
+            }
+            other => panic!("expected BytecodeValidation, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_register_oob_a() {
+        let func = BytecodeFunc {
+            name: "__main__".into(), arity: 0, register_count: 2, capture_count: 0,
+            instructions: vec![
+                // Move dst=0, a=10 — a is out of bounds
+                Instruction::new(Op::Move, 0, 10, 0),
+            ],
+            constants: vec![],
+        };
+        let mut vm = BytecodeVm::new();
+        vm.load_function(func);
+        match vm.exec_main() {
+            Err(RuntimeError::BytecodeValidation(msg)) => {
+                assert!(msg.contains("register index 10"), "msg was: {}", msg);
+            }
+            other => panic!("expected BytecodeValidation, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_register_oob_b() {
+        let func = BytecodeFunc {
+            name: "__main__".into(), arity: 0, register_count: 3, capture_count: 0,
+            instructions: vec![
+                Instruction::new(Op::LoadNil, 0, 0, 0),
+                Instruction::new(Op::LoadNil, 1, 0, 0),
+                // Add dst=0, a=0, b=99 — b is out of bounds
+                Instruction::new(Op::Add, 0, 0, 99),
+            ],
+            constants: vec![],
+        };
+        let mut vm = BytecodeVm::new();
+        vm.load_function(func);
+        match vm.exec_main() {
+            Err(RuntimeError::BytecodeValidation(msg)) => {
+                assert!(msg.contains("register index 99"), "msg was: {}", msg);
+            }
+            other => panic!("expected BytecodeValidation, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_valid_bytecode_passes() {
+        // A valid program that should pass validation
+        let func = BytecodeFunc {
+            name: "__main__".into(), arity: 0, register_count: 3, capture_count: 0,
+            instructions: vec![
+                Instruction::new(Op::LoadConst, 0, 0, 0),
+                Instruction::new(Op::Return, 0, 0, 0),
+            ],
+            constants: vec![Value::Int(42)],
+        };
+        let mut vm = BytecodeVm::new();
+        vm.load_function(func);
+        assert_eq!(vm.exec_main().unwrap(), Value::Int(42));
+    }
+
+    // ── SEC-13: Constant index validation ──
+
+    #[test]
+    fn test_validate_constant_oob_loadconst() {
+        let func = BytecodeFunc {
+            name: "__main__".into(), arity: 0, register_count: 2, capture_count: 0,
+            instructions: vec![
+                // LoadConst dst=0, a=5 but constants is empty
+                Instruction::new(Op::LoadConst, 0, 5, 0),
+            ],
+            constants: vec![],
+        };
+        let mut vm = BytecodeVm::new();
+        vm.load_function(func);
+        match vm.exec_main() {
+            Err(RuntimeError::BytecodeValidation(msg)) => {
+                assert!(msg.contains("constant index 5"), "msg was: {}", msg);
+            }
+            other => panic!("expected BytecodeValidation, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_constant_oob_call() {
+        let func = BytecodeFunc {
+            name: "__main__".into(), arity: 0, register_count: 2, capture_count: 0,
+            instructions: vec![
+                // Call dst=0, a=3(const idx for func name), b=0(argc) — but no constants
+                Instruction::new(Op::Call, 0, 3, 0),
+            ],
+            constants: vec![],
+        };
+        let mut vm = BytecodeVm::new();
+        vm.load_function(func);
+        match vm.exec_main() {
+            Err(RuntimeError::BytecodeValidation(msg)) => {
+                assert!(msg.contains("constant index 3"), "msg was: {}", msg);
+            }
+            other => panic!("expected BytecodeValidation, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_constant_oob_make_variant() {
+        let func = BytecodeFunc {
+            name: "__main__".into(), arity: 0, register_count: 3, capture_count: 0,
+            instructions: vec![
+                Instruction::new(Op::LoadNil, 1, 0, 0),
+                // MakeVariant dst=0, a=10(const tag idx), b=1(inner reg) — const oob
+                Instruction::new(Op::MakeVariant, 0, 10, 1),
+            ],
+            constants: vec![],
+        };
+        let mut vm = BytecodeVm::new();
+        vm.load_function(func);
+        match vm.exec_main() {
+            Err(RuntimeError::BytecodeValidation(msg)) => {
+                assert!(msg.contains("constant index 10"), "msg was: {}", msg);
+            }
+            other => panic!("expected BytecodeValidation, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_call_args_register_range() {
+        let func = BytecodeFunc {
+            name: "__main__".into(), arity: 0, register_count: 3, capture_count: 0,
+            instructions: vec![
+                // Call dst=0, a=0(const func name), b=5(argc) — args would be regs 1..6 but only 3 regs
+                Instruction::new(Op::Call, 0, 0, 5),
+            ],
+            constants: vec![Value::Str("foo".into())],
+        };
+        let mut vm = BytecodeVm::new();
+        vm.load_function(func);
+        match vm.exec_main() {
+            Err(RuntimeError::BytecodeValidation(msg)) => {
+                assert!(msg.contains("register range"), "msg was: {}", msg);
+            }
+            other => panic!("expected BytecodeValidation, got: {:?}", other),
+        }
     }
 }

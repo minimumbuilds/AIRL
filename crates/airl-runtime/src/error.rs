@@ -15,6 +15,8 @@ pub enum RuntimeError {
     TryOnNonResult(String),
     Custom(String),
     NonExhaustiveMatch { value: String },
+    StackOverflow { depth: usize },
+    BytecodeValidation(String),
 }
 
 impl fmt::Display for RuntimeError {
@@ -44,6 +46,12 @@ impl fmt::Display for RuntimeError {
             RuntimeError::Custom(msg) => write!(f, "{}", msg),
             RuntimeError::NonExhaustiveMatch { value } => {
                 write!(f, "NonExhaustiveMatch: no arm matched value: {}", value)
+            }
+            RuntimeError::StackOverflow { depth } => {
+                write!(f, "StackOverflow: call depth {} exceeded maximum", depth)
+            }
+            RuntimeError::BytecodeValidation(msg) => {
+                write!(f, "BytecodeValidation: {}", msg)
             }
         }
     }
@@ -127,6 +135,22 @@ mod tests {
         let s = format!("{}", e);
         assert!(s.contains("NonExhaustiveMatch"));
         assert!(s.contains("(Ok 42)"));
+    }
+
+    #[test]
+    fn stack_overflow_display() {
+        let e = RuntimeError::StackOverflow { depth: 10000 };
+        let s = format!("{}", e);
+        assert!(s.contains("StackOverflow"));
+        assert!(s.contains("10000"));
+    }
+
+    #[test]
+    fn bytecode_validation_display() {
+        let e = RuntimeError::BytecodeValidation("register index 5 out of bounds".into());
+        let s = format!("{}", e);
+        assert!(s.contains("BytecodeValidation"));
+        assert!(s.contains("register index 5"));
     }
 
     #[test]
