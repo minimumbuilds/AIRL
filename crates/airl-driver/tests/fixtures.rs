@@ -57,6 +57,8 @@ fn collect_airl_files(dir: &Path) -> Vec<PathBuf> {
 
 #[test]
 fn valid_fixtures_all_pass() {
+    // SEC-6: shell-exec is now disabled by default; enable for fixture tests
+    std::env::set_var("AIRL_ALLOW_EXEC", "*");
     let valid_dir = fixtures_root().join("valid");
     let files = collect_airl_files(&valid_dir);
     assert!(!files.is_empty(), "No valid fixture files found in {:?}", valid_dir);
