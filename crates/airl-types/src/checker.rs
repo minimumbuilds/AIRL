@@ -583,6 +583,20 @@ impl TypeChecker {
             ast::TopLevel::Define(_) => Ok(()), // No type checking for define
             ast::TopLevel::Task(_) => Ok(()),
             ast::TopLevel::UseDecl(_) => Ok(()),
+            ast::TopLevel::ExternC(decl) => {
+                let mut param_tys = Vec::new();
+                for p in &decl.params {
+                    let ty = self.resolve_type(&p.ty)?;
+                    param_tys.push(ty);
+                }
+                let ret_ty = self.resolve_type(&decl.return_type)?;
+                let fn_ty = Ty::Func {
+                    params: param_tys,
+                    ret: Box::new(ret_ty),
+                };
+                self.env.bind(decl.c_name.clone(), fn_ty);
+                Ok(())
+            }
             ast::TopLevel::Import { .. } => Ok(()),
         }
     }

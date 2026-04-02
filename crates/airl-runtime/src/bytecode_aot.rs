@@ -533,6 +533,24 @@ impl BytecodeAot {
         Self::new_with_target(None)
     }
 
+    /// Register an `extern-c` declaration: declare the C symbol as an imported
+    /// function and add it to the builtin map so that normal `Call` opcodes
+    /// resolve to it.
+    pub fn register_extern_c(&mut self, c_name: &str, arity: usize) {
+        if self.builtin_map.contains_key(c_name) {
+            return; // already registered (e.g. via runtime imports)
+        }
+        let mut sig = self.module.make_signature();
+        for _ in 0..arity {
+            sig.params.push(AbiParam::new(self.ptr));
+        }
+        sig.returns.push(AbiParam::new(self.ptr));
+        let func_id = self.module
+            .declare_function(c_name, Linkage::Import, &sig)
+            .unwrap_or_else(|e| panic!("extern-c declare '{}': {}", c_name, e));
+        self.builtin_map.insert(c_name.to_string(), func_id);
+    }
+
     /// Intern a string constant into the object file's data section.
     /// Returns `(DataId, byte_length)`.
     fn intern_string(&mut self, s: &str) -> (cranelift_module::DataId, usize) {
@@ -3136,11 +3154,27 @@ pub const STRING_SOURCE: &str = include_str!("../../../stdlib/string.airl");
 pub const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
 pub const SET_SOURCE: &str = include_str!("../../../stdlib/set.airl");
 
+/// An extern-c declaration extracted from source: C symbol name + arity.
+#[derive(Debug, Clone)]
+pub struct ExternCInfo {
+    pub c_name: String,
+    pub arity: usize,
+}
+
 /// Compile source string to bytecode functions via the Rust-side pipeline.
 pub fn compile_source_to_bytecode(
     source: &str,
     prefix: &str,
 ) -> Result<(Vec<BytecodeFunc>, BytecodeFunc), String> {
+    let (funcs, main, _externs) = compile_source_to_bytecode_with_externs(source, prefix)?;
+    Ok((funcs, main))
+}
+
+/// Like `compile_source_to_bytecode` but also returns extern-c declarations.
+pub fn compile_source_to_bytecode_with_externs(
+    source: &str,
+    prefix: &str,
+) -> Result<(Vec<BytecodeFunc>, BytecodeFunc, Vec<ExternCInfo>), String> {
     use airl_syntax::*;
     use crate::bytecode_compiler::BytecodeCompiler;
 
@@ -3150,9 +3184,18 @@ pub fn compile_source_to_bytecode(
     let mut diags = Diagnostics::new();
 
     let mut tops = Vec::new();
+    let mut extern_c_decls = Vec::new();
     for sexpr in &sexprs {
         match parser::parse_top_level(sexpr, &mut diags) {
-            Ok(top) => tops.push(top),
+            Ok(top) => {
+                if let airl_syntax::ast::TopLevel::ExternC(ref decl) = top {
+                    extern_c_decls.push(ExternCInfo {
+                        c_name: decl.c_name.clone(),
+                        arity: decl.params.len(),
+                    });
+                }
+                tops.push(top);
+            }
             Err(d) => {
                 let mut diags2 = Diagnostics::new();
                 match parser::parse_expr(sexpr, &mut diags2) {
@@ -3167,7 +3210,8 @@ pub fn compile_source_to_bytecode(
         .map(crate::ast_to_ir::compile_top_level)
         .collect();
     let mut bc_compiler = BytecodeCompiler::with_prefix(prefix);
-    Ok(bc_compiler.compile_program(&ir_nodes))
+    let (funcs, main) = bc_compiler.compile_program(&ir_nodes);
+    Ok((funcs, main, extern_c_decls))
 }
 
 /// Full pipeline: source files → native executable.
@@ -3199,7 +3243,8 @@ pub fn compile_to_executable_impl(
         all_source.push_str(&s);
         all_source.push('\n');
     }
-    let (funcs, main_func) = compile_source_to_bytecode(&all_source, "user")?;
+    let (funcs, main_func, extern_c_decls) =
+        compile_source_to_bytecode_with_externs(&all_source, "user")?;
     all_funcs.extend(funcs);
     all_funcs.push(main_func);
 
@@ -3209,6 +3254,9 @@ pub fn compile_to_executable_impl(
         .collect();
 
     let mut aot = BytecodeAot::new()?;
+    for ext in &extern_c_decls {
+        aot.register_extern_c(&ext.c_name, ext.arity);
+    }
     for func in &all_funcs {
         let _ = aot.compile_all(std::slice::from_ref(func), &func_map);
     }

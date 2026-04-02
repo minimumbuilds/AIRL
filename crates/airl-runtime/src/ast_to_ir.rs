@@ -129,6 +129,7 @@ pub fn compile_top_level(top: &TopLevel) -> IRNode {
             IRNode::Func(f.name.clone(), param_names, Box::new(compile_expr(&f.body)))
         }
         TopLevel::Expr(e) => compile_expr(e),
+        TopLevel::ExternC(_) => IRNode::Nil, // no body to compile — handled by AOT
         _ => IRNode::Nil,
     }
 }

@@ -1150,7 +1150,8 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
         all_source.push('\n');
     }
 
-    let (funcs, main_func) = compile_source_to_bytecode(&all_source, "user")?;
+    let (funcs, main_func, extern_c_decls) =
+        compile_source_to_bytecode_with_externs(&all_source, "user")?;
     all_funcs.extend(funcs);
     all_funcs.push(main_func); // Only the user's __main__
 
@@ -1162,6 +1163,10 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
     let mut aot = BytecodeAot::new_with_target(target).map_err(|e| PipelineError::Runtime(
         airl_runtime::error::RuntimeError::TypeError(e)
     ))?;
+
+    for ext in &extern_c_decls {
+        aot.register_extern_c(&ext.c_name, ext.arity);
+    }
 
     for func in &all_funcs {
         aot.compile_all(std::slice::from_ref(func), &func_map)
@@ -1212,11 +1217,23 @@ pub fn compile_to_object_with_imports(entry_path: &str, target: Option<&str>) ->
     let entry_canonical = std::fs::canonicalize(entry_path)
         .map_err(|e| PipelineError::Io(e.to_string()))?;
 
+    let mut extern_c_decls: Vec<airl_runtime::bytecode_aot::ExternCInfo> = Vec::new();
+
     for module in &modules {
         let is_entry = module.path == entry_canonical;
         let directives = import_map.get(&module.path)
             .map(|d| d.as_slice())
             .unwrap_or(&[]);
+
+        // Extract extern-c declarations from this module
+        for top in &module.tops {
+            if let airl_syntax::ast::TopLevel::ExternC(decl) = top {
+                extern_c_decls.push(airl_runtime::bytecode_aot::ExternCInfo {
+                    c_name: decl.c_name.clone(),
+                    arity: decl.params.len(),
+                });
+            }
+        }
 
         // Filter tops: remove Import nodes, skip Expr for non-entry modules
         let filtered_tops: Vec<airl_syntax::ast::TopLevel> = module.tops.iter()
@@ -1266,6 +1283,10 @@ pub fn compile_to_object_with_imports(entry_path: &str, target: Option<&str>) ->
         airl_runtime::error::RuntimeError::TypeError(e)
     ))?;
 
+    for ext in &extern_c_decls {
+        aot.register_extern_c(&ext.c_name, ext.arity);
+    }
+
     for func in &all_funcs {
         aot.compile_all(std::slice::from_ref(func), &func_map)
             .map_err(|e| PipelineError::Runtime(
@@ -1283,15 +1304,34 @@ pub fn compile_to_object_with_imports(entry_path: &str, target: Option<&str>) ->
 /// Compile source string to bytecode functions (shared by run and AOT paths).
 #[cfg(feature = "aot")]
 fn compile_source_to_bytecode(source: &str, prefix: &str) -> Result<(Vec<airl_runtime::bytecode::BytecodeFunc>, airl_runtime::bytecode::BytecodeFunc), PipelineError> {
+    let (funcs, main, _externs) = compile_source_to_bytecode_with_externs(source, prefix)?;
+    Ok((funcs, main))
+}
+
+/// Like `compile_source_to_bytecode` but also returns extern-c declarations.
+#[cfg(feature = "aot")]
+fn compile_source_to_bytecode_with_externs(
+    source: &str,
+    prefix: &str,
+) -> Result<(Vec<airl_runtime::bytecode::BytecodeFunc>, airl_runtime::bytecode::BytecodeFunc, Vec<airl_runtime::bytecode_aot::ExternCInfo>), PipelineError> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
     let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
     let mut diags = Diagnostics::new();
 
     let mut tops = Vec::new();
+    let mut extern_c_decls = Vec::new();
     for sexpr in &sexprs {
         match parser::parse_top_level(sexpr, &mut diags) {
-            Ok(top) => tops.push(top),
+            Ok(top) => {
+                if let airl_syntax::ast::TopLevel::ExternC(ref decl) = top {
+                    extern_c_decls.push(airl_runtime::bytecode_aot::ExternCInfo {
+                        c_name: decl.c_name.clone(),
+                        arity: decl.params.len(),
+                    });
+                }
+                tops.push(top);
+            }
             Err(d) => {
                 let mut diags2 = Diagnostics::new();
                 match parser::parse_expr(sexpr, &mut diags2) {
@@ -1304,5 +1344,6 @@ fn compile_source_to_bytecode(source: &str, prefix: &str) -> Result<(Vec<airl_ru
 
     let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
     let mut bc_compiler = BytecodeCompiler::with_prefix(prefix);
-    Ok(bc_compiler.compile_program(&ir_nodes))
+    let (funcs, main) = bc_compiler.compile_program(&ir_nodes);
+    Ok((funcs, main, extern_c_decls))
 }

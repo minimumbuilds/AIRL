@@ -1,0 +1,26 @@
+;; Test extern-c declaration syntax
+;;
+;; Test 1: Call an existing runtime function with no args
+(extern-c "airl_time_now" [-> Int])
+(let (t : Int (airl_time_now))
+  (if (> t 0)
+    (println "PASS: extern-c airl_time_now returned positive value")
+    (println "FAIL: airl_time_now returned non-positive")))
+
+;; Test 2: Verify normal defn still works alongside extern-c
+(defn my-add :sig [(a : Int) (b : Int) -> Int]
+  :requires ((>= a 0))
+  :ensures ((>= %result 0))
+  :body (+ a b))
+(if (= (my-add 2 3) 5)
+  (println "PASS: defn works alongside extern-c")
+  (println "FAIL: my-add returned wrong value"))
+
+;; Test 3: Use extern-c to call cpu-count (0-arg function)
+(extern-c "airl_cpu_count" [-> Int])
+(let (cpus : Int (airl_cpu_count))
+  (if (> cpus 0)
+    (println "PASS: extern-c airl_cpu_count returned positive")
+    (println "FAIL: airl_cpu_count returned non-positive")))
+
+(println "extern-c tests complete")

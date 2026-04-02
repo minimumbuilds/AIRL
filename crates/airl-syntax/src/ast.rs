@@ -18,6 +18,7 @@ pub enum TopLevel {
         only: Option<Vec<String>>,
         span: Span,
     },
+    ExternC(ExternCDecl),
     Expr(Expr), // bare expression at top level (REPL)
 }
 
@@ -309,6 +310,18 @@ pub enum UseKind {
     Symbols(Vec<Symbol>),
     Prefixed(Symbol),
     All,
+}
+
+// ── Extern C Declaration ───────────────────────────────────
+
+/// FFI declaration for calling a C function by symbol name.
+/// Syntax: (extern-c "c_symbol_name" [(param : Type) ... -> ReturnType])
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternCDecl {
+    pub c_name: String,
+    pub params: Vec<Param>,
+    pub return_type: AstType,
+    pub span: Span,
 }
 
 // ── Pretty-printing Expr back to AIRL S-expression syntax ───

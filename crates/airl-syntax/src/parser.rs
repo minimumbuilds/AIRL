@@ -17,6 +17,7 @@ pub fn parse_top_level(sexpr: &SExpr, diags: &mut Diagnostics) -> Result<TopLeve
                     "task" => parse_task(&items[1..], *span, diags).map(TopLevel::Task),
                     "use" => parse_use(&items[1..], *span, diags).map(TopLevel::UseDecl),
                     "import" => parse_import(&items[1..], *span, diags),
+                    "extern-c" => parse_extern_c(&items[1..], *span, diags).map(TopLevel::ExternC),
                     _ => parse_expr(sexpr, diags).map(TopLevel::Expr),
                 }
             } else {
@@ -1203,6 +1204,21 @@ fn parse_import(items: &[SExpr], span: Span, _diags: &mut Diagnostics) -> Result
     Ok(TopLevel::Import { path, alias, only, span })
 }
 
+// ── extern-c parsing ──────────────────────────────────
+
+fn parse_extern_c(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<ExternCDecl, Diagnostic> {
+    // (extern-c "c_name" [params... -> RetType])
+    if items.is_empty() {
+        return Err(Diagnostic::error("extern-c requires a C function name string", span));
+    }
+    let c_name = expect_string(&items[0])?;
+    if items.len() < 2 {
+        return Err(Diagnostic::error("extern-c requires a signature after the C name", span));
+    }
+    let (params, return_type) = parse_sig(&items[1], diags)?;
+    Ok(ExternCDecl { c_name, params, return_type, span })
+}
+
 // ── use parsing ────────────────────────────────────────
 
 fn parse_use(items: &[SExpr], span: Span, _diags: &mut Diagnostics) -> Result<UseDef, Diagnostic> {
@@ -1672,5 +1688,47 @@ mod tests {
         let mut diags = Diagnostics::new();
         let _ = parse_top_level(&sexprs[0], &mut diags);
         assert!(diags.has_errors(), "expected error for missing contracts");
+    }
+
+    #[test]
+    fn parse_extern_c_no_params() {
+        let tops = parse_top(r#"(extern-c "airl_time_now" [-> Int])"#);
+        assert_eq!(tops.len(), 1);
+        if let TopLevel::ExternC(decl) = &tops[0] {
+            assert_eq!(decl.c_name, "airl_time_now");
+            assert!(decl.params.is_empty());
+            assert_eq!(decl.return_type.to_airl(), "Int");
+        } else {
+            panic!("expected ExternC, got {:?}", tops[0]);
+        }
+    }
+
+    #[test]
+    fn parse_extern_c_with_params() {
+        let tops = parse_top(r#"(extern-c "airl_getenv" [(name : String) -> Any])"#);
+        assert_eq!(tops.len(), 1);
+        if let TopLevel::ExternC(decl) = &tops[0] {
+            assert_eq!(decl.c_name, "airl_getenv");
+            assert_eq!(decl.params.len(), 1);
+            assert_eq!(decl.params[0].name, "name");
+            assert_eq!(decl.return_type.to_airl(), "Any");
+        } else {
+            panic!("expected ExternC, got {:?}", tops[0]);
+        }
+    }
+
+    #[test]
+    fn parse_extern_c_alongside_defn() {
+        let input = r#"
+            (extern-c "airl_time_now" [-> Int])
+            (defn my-add :sig [(a : Int) (b : Int) -> Int]
+              :requires ((>= a 0))
+              :ensures ((>= %result 0))
+              :body (+ a b))
+        "#;
+        let tops = parse_top(input);
+        assert_eq!(tops.len(), 2);
+        assert!(matches!(&tops[0], TopLevel::ExternC(_)));
+        assert!(matches!(&tops[1], TopLevel::Defn(_)));
     }
 }
