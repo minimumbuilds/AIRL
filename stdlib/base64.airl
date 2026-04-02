@@ -1,0 +1,152 @@
+;; ── AIRL Standard Library: Base64 ──────────────────
+;; RFC 4648 Base64 encoding/decoding in pure AIRL.
+;; Uses byte primitives: bytes-from-string, bytes-to-string,
+;;   bytes-from-int8, bytes-concat-all, at, length
+;; Names use b- prefix to avoid builtin collision.
+
+;; ── b64-char : map 6-bit value (0-63) to base64 character byte ──
+(defn b64-char
+  :sig [(idx : i64) -> Bytes]
+  :intent "Map a 6-bit index to the corresponding Base64 character as a 1-byte Bytes"
+  :requires [(>= idx 0) (<= idx 63)]
+  :ensures [(valid result)]
+  :body (let (tbl : Bytes (bytes-from-string "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"))
+           (bytes-from-int8 (at tbl idx))))
+
+;; ── b64-val : map base64 character byte to 6-bit value ──
+(defn b64-val
+  :sig [(b : i64) -> i64]
+  :intent "Map a Base64 character byte to its 6-bit value, or -1 for padding/invalid"
+  :requires [(>= b 0)]
+  :ensures [(>= result -1)]
+  :body (if (and (>= b 65) (<= b 90))
+          (- b 65)
+          (if (and (>= b 97) (<= b 122))
+            (+ (- b 97) 26)
+            (if (and (>= b 48) (<= b 57))
+              (+ (- b 48) 52)
+              (if (= b 43)
+                62
+                (if (= b 47)
+                  63
+                  -1))))))
+
+;; ── b64-encode-triple : encode 3 bytes into 4 base64 chars ──
+(defn b64-encode-triple
+  :sig [(a : i64) (b : i64) (c : i64) -> List]
+  :intent "Encode 3 bytes into a list of 4 base64 character bytes"
+  :requires [(>= a 0) (>= b 0) (>= c 0)]
+  :ensures [(valid result)]
+  :body (let (n : i64 (+ (* a 65536) (+ (* b 256) c)))
+           [(b64-char (/ n 262144))
+            (b64-char (% (/ n 4096) 64))
+            (b64-char (% (/ n 64) 64))
+            (b64-char (% n 64))]))
+
+;; ── b64-encode-loop : process input bytes 3 at a time ──
+(defn b64-encode-loop
+  :sig [(src : Bytes) (i : i64) (len : i64) -> List]
+  :intent "Process input bytes in groups of 3, producing base64 output bytes"
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body (if (>= i len)
+          []
+          (let (remaining : i64 (- len i))
+            (if (>= remaining 3)
+              (let (a : i64 (at src i))
+                   (b : i64 (at src (+ i 1)))
+                   (c : i64 (at src (+ i 2)))
+                   (quad : List (b64-encode-triple a b c))
+                (concat quad (b64-encode-loop src (+ i 3) len)))
+              (if (= remaining 2)
+                (let (a : i64 (at src i))
+                     (b : i64 (at src (+ i 1)))
+                     (n : i64 (+ (* a 65536) (* b 256)))
+                  [(b64-char (/ n 262144))
+                   (b64-char (% (/ n 4096) 64))
+                   (b64-char (% (/ n 64) 64))
+                   (bytes-from-int8 61)])
+                (let (a : i64 (at src i))
+                     (n : i64 (* a 65536))
+                  [(b64-char (/ n 262144))
+                   (b64-char (% (/ n 4096) 64))
+                   (bytes-from-int8 61)
+                   (bytes-from-int8 61)]))))))
+
+;; ── b-base64-encode : encode a string to base64 ──
+(defn b-base64-encode
+  :sig [(s : String) -> String]
+  :intent "Encode a string to Base64 (RFC 4648)"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (let (src : Bytes (bytes-from-string s))
+             (len : i64 (length src))
+          (if (= len 0)
+            ""
+            (let (parts : List (b64-encode-loop src 0 len))
+                 (result : Bytes (bytes-concat-all parts))
+              (bytes-to-string result 0 (length result))))))
+
+;; ── b64-count-padding : count trailing '=' bytes ──
+(defn b64-count-padding
+  :sig [(src : Bytes) (len : i64) -> i64]
+  :intent "Count trailing padding characters in base64 input"
+  :requires [(>= len 0)]
+  :ensures [(>= result 0)]
+  :body (if (= len 0)
+          0
+          (if (= (at src (- len 1)) 61)
+            (if (and (>= len 2) (= (at src (- len 2)) 61))
+              2
+              1)
+            0)))
+
+;; ── b64-decode-quad : decode 4 base64 chars into 1-3 bytes ──
+(defn b64-decode-quad
+  :sig [(v0 : i64) (v1 : i64) (v2 : i64) (v3 : i64) (pad : i64) -> List]
+  :intent "Decode 4 base64 values into output bytes, respecting padding count"
+  :requires [(>= v0 0) (>= v1 0)]
+  :ensures [(valid result)]
+  :body (let (n : i64 (+ (* v0 262144) (+ (* v1 4096) (+ (* v2 64) v3))))
+          (if (= pad 2)
+            [(bytes-from-int8 (% (/ n 65536) 256))]
+            (if (= pad 1)
+              [(bytes-from-int8 (% (/ n 65536) 256))
+               (bytes-from-int8 (% (/ n 256) 256))]
+              [(bytes-from-int8 (% (/ n 65536) 256))
+               (bytes-from-int8 (% (/ n 256) 256))
+               (bytes-from-int8 (% n 256))]))))
+
+;; ── b64-decode-loop : process base64 input 4 chars at a time ──
+(defn b64-decode-loop
+  :sig [(src : Bytes) (i : i64) (len : i64) (pad : i64) -> List]
+  :intent "Process base64 input in groups of 4 characters"
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body (if (>= i len)
+          []
+          (let (v0 : i64 (b64-val (at src i)))
+               (v1 : i64 (b64-val (at src (+ i 1))))
+               (raw2 : i64 (at src (+ i 2)))
+               (raw3 : i64 (at src (+ i 3)))
+               (v2 : i64 (if (= raw2 61) 0 (b64-val raw2)))
+               (v3 : i64 (if (= raw3 61) 0 (b64-val raw3)))
+            (let (is-last : bool (>= (+ i 4) len))
+                 (this-pad : i64 (if is-last pad 0))
+                 (decoded : List (b64-decode-quad v0 v1 v2 v3 this-pad))
+              (concat decoded (b64-decode-loop src (+ i 4) len pad))))))
+
+;; ── b-base64-decode : decode a base64 string ──
+(defn b-base64-decode
+  :sig [(s : String) -> String]
+  :intent "Decode a Base64 string (RFC 4648)"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (let (src : Bytes (bytes-from-string s))
+             (len : i64 (length src))
+          (if (= len 0)
+            ""
+            (let (pad : i64 (b64-count-padding src len))
+                 (parts : List (b64-decode-loop src 0 len pad))
+                 (result : Bytes (bytes-concat-all parts))
+              (bytes-to-string result 0 (length result))))))

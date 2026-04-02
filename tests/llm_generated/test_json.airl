@@ -1,0 +1,73 @@
+;; ── JSON Tests ──
+
+;; ── Stringify tests ──
+(assert-eq (b-json-stringify nil) "null" "stringify nil")
+(assert-eq (b-json-stringify true) "true" "stringify true")
+(assert-eq (b-json-stringify false) "false" "stringify false")
+(assert-eq (b-json-stringify 42) "42" "stringify int")
+(assert-eq (b-json-stringify 0) "0" "stringify zero")
+(assert-eq (b-json-stringify -7) "-7" "stringify negative int")
+(assert-eq (b-json-stringify "hello") "\"hello\"" "stringify string")
+(assert-eq (b-json-stringify "") "\"\"" "stringify empty string")
+(assert-eq (b-json-stringify [1 2 3]) "[1,2,3]" "stringify int list")
+(assert-eq (b-json-stringify []) "[]" "stringify empty list")
+(assert-eq (b-json-stringify ["a" "b"]) "[\"a\",\"b\"]" "stringify string list")
+
+;; ── Stringify with escapes ──
+(assert-eq (b-json-stringify "he\"llo") "\"he\\\"llo\"" "stringify string with quote")
+
+;; ── Stringify nested ──
+(assert-eq (b-json-stringify [[1 2] [3 4]]) "[[1,2],[3,4]]" "stringify nested lists")
+
+;; ── Parse tests ──
+(assert-eq (b-json-parse "null") nil "parse null")
+(assert-eq (b-json-parse "true") true "parse true")
+(assert-eq (b-json-parse "false") false "parse false")
+(assert-eq (b-json-parse "42") 42 "parse int")
+(assert-eq (b-json-parse "0") 0 "parse zero")
+(assert-eq (b-json-parse "-7") -7 "parse negative int")
+(assert-eq (b-json-parse "\"hello\"") "hello" "parse string")
+(assert-eq (b-json-parse "\"\"") "" "parse empty string")
+(assert-eq (b-json-parse "[1,2,3]") [1 2 3] "parse int array")
+(assert-eq (b-json-parse "[]") [] "parse empty array")
+
+;; ── Parse with whitespace ──
+(assert-eq (b-json-parse "  42  ") 42 "parse int with whitespace")
+(assert-eq (b-json-parse "[ 1 , 2 , 3 ]") [1 2 3] "parse array with spaces")
+
+;; ── Parse strings with escapes ──
+(assert-eq (b-json-parse "\"he\\\"llo\"") "he\"llo" "parse string with escaped quote")
+(assert-eq (b-json-parse "\"line1\\nline2\"") "line1\nline2" "parse string with newline")
+
+;; ── Parse object ──
+(let (obj : Map (b-json-parse "{\"name\":\"AIRL\",\"version\":1}"))
+  (do
+    (assert-eq (map-get obj "name") "AIRL" "parse object string value")
+    (assert-eq (map-get obj "version") 1 "parse object int value")))
+
+;; ── Parse nested ──
+(assert-eq (b-json-parse "[[1,2],[3,4]]") [[1 2] [3 4]] "parse nested arrays")
+
+;; ── Round-trip tests ──
+(assert-eq (b-json-parse (b-json-stringify 42)) 42 "round-trip int")
+(assert-eq (b-json-parse (b-json-stringify "hello")) "hello" "round-trip string")
+(assert-eq (b-json-parse (b-json-stringify true)) true "round-trip bool")
+(assert-eq (b-json-parse (b-json-stringify nil)) nil "round-trip nil")
+(assert-eq (b-json-parse (b-json-stringify [1 2 3])) [1 2 3] "round-trip list")
+
+(println "All JSON tests passed!")
+
+;; ── Map stringify tests ──
+(let (m : Map (map-set (map-set (map-new) "a" 1) "b" 2))
+  (let (s : String (b-json-stringify m))
+    (let (parsed : Map (b-json-parse s))
+      (do
+        (assert-eq (map-get parsed "a") 1 "map round-trip a")
+        (assert-eq (map-get parsed "b") 2 "map round-trip b")))))
+
+;; ── Parse float ──
+(assert-eq (b-json-parse "3.14") 3.14 "parse float")
+
+;; ── Stringify map ──
+(let (m : Map (map-set (map-new) "key" "value"))
+  (assert-eq (b-json-stringify m) "{\"key\":\"value\"}" "stringify single-entry map"))

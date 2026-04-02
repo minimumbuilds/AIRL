@@ -1,0 +1,280 @@
+;; ── AIRL Standard Library: JSON ──────────────────
+;; JSON serializer/deserializer in pure AIRL.
+;; Uses type-of for dispatch, byte primitives for parsing.
+;; Names use b- prefix to avoid builtin collision.
+
+;; ══════════════════════════════════════════════════
+;; JSON Stringify
+;; ══════════════════════════════════════════════════
+
+;; ── json-escape-loop : escape special chars in a string ──
+(defn json-escape-loop
+  :sig [(src : Bytes) (i : i64) (len : i64) -> List]
+  :intent "Build list of byte chunks with JSON escapes applied"
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body (if (= i len)
+          []
+          (let (b : i64 (at src i))
+               (rest : List (json-escape-loop src (+ i 1) len))
+            (if (= b 34)  ;; double quote
+              (concat [(bytes-from-string "\\\"")] rest)
+              (if (= b 92)  ;; backslash
+                (concat [(bytes-from-string "\\\\")] rest)
+                (if (= b 10)  ;; newline
+                  (concat [(bytes-from-string "\\n")] rest)
+                  (if (= b 13)  ;; carriage return
+                    (concat [(bytes-from-string "\\r")] rest)
+                    (if (= b 9)  ;; tab
+                      (concat [(bytes-from-string "\\t")] rest)
+                      (concat [(bytes-from-int8 b)] rest)))))))))
+
+;; ── json-escape : escape a string for JSON ──
+(defn json-escape
+  :sig [(s : String) -> String]
+  :intent "Escape special characters in a string for JSON output"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (let (src : Bytes (bytes-from-string s))
+             (len : i64 (length src))
+             (parts : List (json-escape-loop src 0 len))
+             (result : Bytes (bytes-concat-all parts))
+          (bytes-to-string result 0 (length result))))
+
+;; ── json-stringify-list-loop : stringify list elements with commas ──
+(defn json-stringify-list-loop
+  :sig [(lst : List) (i : i64) (len : i64) -> String]
+  :intent "Stringify list elements separated by commas"
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body (if (= i len)
+          ""
+          (let (elem : String (b-json-stringify (at lst i)))
+               (rest : String (json-stringify-list-loop lst (+ i 1) len))
+            (if (= i (- len 1))
+              elem
+              (str elem "," rest)))))
+
+;; ── json-stringify-map-loop : stringify map entries ──
+(defn json-stringify-map-loop
+  :sig [(entries : List) (i : i64) (len : i64) -> String]
+  :intent "Stringify map key-value pairs separated by commas"
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body (if (= i len)
+          ""
+          (let (pair : List (at entries i))
+               (key : String (str "\"" (json-escape (str (head pair))) "\""))
+               (val : String (b-json-stringify (at pair 1)))
+               (entry : String (str key ":" val))
+               (rest : String (json-stringify-map-loop entries (+ i 1) len))
+            (if (= i (- len 1))
+              entry
+              (str entry "," rest)))))
+
+;; ── b-json-stringify : convert any AIRL value to JSON string ──
+(defn b-json-stringify
+  :sig [(val : Any) -> String]
+  :intent "Serialize an AIRL value to a JSON string"
+  :requires [(valid val)]
+  :ensures [(valid result)]
+  :body (let (t : String (type-of val))
+          (if (= t "nil")
+            "null"
+            (if (= t "bool")
+              (if val "true" "false")
+              (if (= t "int")
+                (str val)
+                (if (= t "float")
+                  (str val)
+                  (if (= t "string")
+                    (str "\"" (json-escape val) "\"")
+                    (if (= t "list")
+                      (str "[" (json-stringify-list-loop val 0 (length val)) "]")
+                      (if (= t "map")
+                        (let (entries : List (map-entries val))
+                          (str "{" (json-stringify-map-loop entries 0 (length entries)) "}"))
+                        (str "\"<" t ">\""))))))))))
+
+;; ══════════════════════════════════════════════════
+;; JSON Parser — recursive descent
+;; ══════════════════════════════════════════════════
+
+;; The parser returns [value, next-position] pairs so we can
+;; track how far we've consumed in the input.
+
+;; ── json-skip-ws : skip whitespace bytes ──
+(defn json-skip-ws
+  :sig [(src : Bytes) (pos : i64) (len : i64) -> i64]
+  :intent "Skip whitespace (space, tab, newline, CR) starting at pos"
+  :requires [(>= pos 0)]
+  :ensures [(>= result pos)]
+  :body (if (>= pos len)
+          pos
+          (let (b : i64 (at src pos))
+            (if (or (= b 32) (or (= b 9) (or (= b 10) (= b 13))))
+              (json-skip-ws src (+ pos 1) len)
+              pos))))
+
+;; ── json-parse-string-loop : collect bytes of a JSON string ──
+(defn json-parse-string-loop
+  :sig [(src : Bytes) (pos : i64) (len : i64) -> List]
+  :intent "Collect string bytes handling escapes, return [bytesList, endPos]"
+  :requires [(>= pos 0)]
+  :ensures [(valid result)]
+  :body (if (>= pos len)
+          [[] pos]
+          (let (b : i64 (at src pos))
+            (if (= b 34) ;; closing quote
+              [[] pos]
+              (if (= b 92) ;; backslash escape
+                (let (next : i64 (at src (+ pos 1)))
+                     (escaped : Bytes (if (= next 110) (bytes-from-int8 10)   ;; \n
+                                        (if (= next 116) (bytes-from-int8 9)  ;; \t
+                                          (if (= next 114) (bytes-from-int8 13) ;; \r
+                                            (bytes-from-int8 next)))))          ;; \\ \" etc
+                     (rest : List (json-parse-string-loop src (+ pos 2) len))
+                  [(concat [escaped] (at rest 0)) (at rest 1)])
+                (let (rest : List (json-parse-string-loop src (+ pos 1) len))
+                  [(concat [(bytes-from-int8 b)] (at rest 0)) (at rest 1)]))))))
+
+;; ── json-parse-string : parse a JSON string starting after opening quote ──
+(defn json-parse-string
+  :sig [(src : Bytes) (pos : i64) (len : i64) -> List]
+  :intent "Parse JSON string, return [string-value, position-after-closing-quote]"
+  :requires [(>= pos 0)]
+  :ensures [(valid result)]
+  :body (let (result : List (json-parse-string-loop src pos len))
+             (parts : List (at result 0))
+             (end-pos : i64 (at result 1))
+          (if (= (length parts) 0)
+            ["" (+ end-pos 1)]
+            (let (bytes : Bytes (bytes-concat-all parts))
+              [(bytes-to-string bytes 0 (length bytes)) (+ end-pos 1)]))))
+
+;; ── json-parse-number-end : find end of number literal ──
+(defn json-parse-number-end
+  :sig [(src : Bytes) (pos : i64) (len : i64) -> i64]
+  :intent "Find position after last digit/dot/sign/e of number"
+  :requires [(>= pos 0)]
+  :ensures [(>= result pos)]
+  :body (if (>= pos len)
+          pos
+          (let (b : i64 (at src pos))
+            (if (or (and (>= b 48) (<= b 57))  ;; 0-9
+                    (or (= b 46) (or (= b 45) (or (= b 43) (or (= b 101) (= b 69)))))) ;; . - + e E
+              (json-parse-number-end src (+ pos 1) len)
+              pos))))
+
+;; ── json-has-dot : check if number bytes contain a decimal point ──
+(defn json-has-dot
+  :sig [(src : Bytes) (start : i64) (end : i64) -> bool]
+  :intent "Check if byte range contains a dot (for float detection)"
+  :requires [(>= start 0)]
+  :ensures [(valid result)]
+  :body (if (>= start end)
+          false
+          (if (= (at src start) 46)
+            true
+            (json-has-dot src (+ start 1) end))))
+
+;; ── json-parse-int : parse integer from bytes ──
+(defn json-parse-int-loop
+  :sig [(src : Bytes) (pos : i64) (end : i64) (acc : i64) (neg : bool) -> i64]
+  :intent "Accumulate digits into an integer"
+  :requires [(>= pos 0)]
+  :ensures [(valid result)]
+  :body (if (>= pos end)
+          (if neg (- 0 acc) acc)
+          (let (b : i64 (at src pos))
+            (json-parse-int-loop src (+ pos 1) end (+ (* acc 10) (- b 48)) neg))))
+
+;; ── json-parse-number : parse a JSON number ──
+(defn json-parse-number
+  :sig [(src : Bytes) (pos : i64) (len : i64) -> List]
+  :intent "Parse JSON number, return [value, next-position]"
+  :requires [(>= pos 0)]
+  :ensures [(valid result)]
+  :body (let (end : i64 (json-parse-number-end src pos len))
+             (num-str : String (bytes-to-string src pos (- end pos)))
+          (if (json-has-dot src pos end)
+            ;; Float — use AIRL's built-in float parsing
+            [(match (string-to-float num-str) (Ok v) v (Err _) 0) end]
+            ;; Integer
+            (let (neg : bool (= (at src pos) 45))
+                 (start : i64 (if neg (+ pos 1) pos))
+              [(json-parse-int-loop src start end 0 neg) end]))))
+
+;; ── json-parse-array-loop : parse array elements ──
+(defn json-parse-array-loop
+  :sig [(src : Bytes) (pos : i64) (len : i64) -> List]
+  :intent "Parse comma-separated array elements, return [elements-list, next-position]"
+  :requires [(>= pos 0)]
+  :ensures [(valid result)]
+  :body (let (p : i64 (json-skip-ws src pos len))
+          (if (= (at src p) 93) ;; ]
+            [[] (+ p 1)]
+            (let (result : List (json-parse-value src p len))
+                 (val : Any (at result 0))
+                 (p2 : i64 (json-skip-ws src (at result 1) len))
+                 (next-pos : i64 (if (= (at src p2) 44) (+ p2 1) p2))
+                 (rest : List (json-parse-array-loop src next-pos len))
+              [(cons val (at rest 0)) (at rest 1)]))))
+
+;; ── json-parse-object-loop : parse object key-value pairs ──
+(defn json-parse-object-loop
+  :sig [(src : Bytes) (pos : i64) (len : i64) (acc : Map) -> List]
+  :intent "Parse comma-separated key:value pairs, return [map, next-position]"
+  :requires [(>= pos 0)]
+  :ensures [(valid result)]
+  :body (let (p : i64 (json-skip-ws src pos len))
+          (if (= (at src p) 125) ;; }
+            [acc (+ p 1)]
+            ;; Parse key (must be a string)
+            (let (key-result : List (json-parse-string src (+ p 1) len))
+                 (key : String (at key-result 0))
+                 (p2 : i64 (json-skip-ws src (at key-result 1) len))
+                 ;; Skip colon
+                 (p3 : i64 (+ p2 1))
+                 ;; Parse value
+                 (val-result : List (json-parse-value src p3 len))
+                 (val : Any (at val-result 0))
+                 (p4 : i64 (json-skip-ws src (at val-result 1) len))
+                 (next-pos : i64 (if (= (at src p4) 44) (+ p4 1) p4))
+              (json-parse-object-loop src next-pos len (map-set acc key val))))))
+
+;; ── json-parse-value : parse any JSON value ──
+(defn json-parse-value
+  :sig [(src : Bytes) (pos : i64) (len : i64) -> List]
+  :intent "Parse a JSON value at pos, return [value, next-position]"
+  :requires [(>= pos 0)]
+  :ensures [(valid result)]
+  :body (let (p : i64 (json-skip-ws src pos len))
+             (b : i64 (at src p))
+          ;; Dispatch on first byte
+          (if (= b 34) ;; " -> string
+            (json-parse-string src (+ p 1) len)
+            (if (= b 91) ;; [ -> array
+              (json-parse-array-loop src (+ p 1) len)
+              (if (= b 123) ;; { -> object
+                (json-parse-object-loop src (+ p 1) len (map-new))
+                (if (= b 116) ;; t -> true
+                  [true (+ p 4)]
+                  (if (= b 102) ;; f -> false
+                    [false (+ p 5)]
+                    (if (= b 110) ;; n -> null
+                      [nil (+ p 4)]
+                      ;; Must be a number
+                      (json-parse-number src p len)))))))))
+
+;; ── b-json-parse : parse a JSON string into an AIRL value ──
+(defn b-json-parse
+  :sig [(s : String) -> Any]
+  :intent "Parse a JSON string into an AIRL value"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (let (src : Bytes (bytes-from-string s))
+             (len : i64 (length src))
+          (if (= len 0)
+            nil
+            (at (json-parse-value src 0 len) 0))))
