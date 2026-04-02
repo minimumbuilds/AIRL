@@ -1,0 +1,13 @@
+;; ── SHA-256 Test Vectors ──
+
+;; FIPS 180-4 / NIST test vectors
+(assert-eq (b-sha256 "") "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "sha256 empty string")
+(assert-eq (b-sha256 "abc") "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" "sha256 abc")
+(assert-eq (b-sha256 "hello") "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" "sha256 hello")
+
+;; Multi-block test (>= 56 bytes triggers 2 blocks)
+(assert-eq (b-sha256 "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
+           "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+           "sha256 two-block")
+
+(println "All SHA-256 tests passed")

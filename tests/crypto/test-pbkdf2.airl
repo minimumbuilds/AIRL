@@ -1,0 +1,14 @@
+;; ── PBKDF2-HMAC-SHA-256 Test Vectors ──
+
+;; RFC 6070 Test Vector 1 (adapted for SHA-256)
+;; Password: "password", Salt: "salt", c=1, dkLen=32
+(assert-eq (b-pbkdf2-sha256 "password" "salt" 1 32)
+           "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"
+           "pbkdf2-sha256 c=1")
+
+;; c=2
+(assert-eq (b-pbkdf2-sha256 "password" "salt" 2 32)
+           "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43"
+           "pbkdf2-sha256 c=2")
+
+(println "All PBKDF2-HMAC-SHA-256 tests passed")

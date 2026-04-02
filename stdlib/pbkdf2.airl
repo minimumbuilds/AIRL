@@ -1,0 +1,78 @@
+;; ── AIRL Standard Library: PBKDF2-HMAC-SHA-256 ──────────────────
+;; RFC 2898 PBKDF2 using HMAC-SHA-256.
+;; Depends on sha256.airl and hmac.airl.
+;; Names use b- prefix to avoid builtin collision.
+
+;; ── XOR two equal-length Bytes ──
+
+(defn pbkdf2-xor-loop
+  :sig [(a : Bytes) (b : Bytes) (i : i64) (len : i64) -> List]
+  :intent "XOR corresponding bytes of a and b"
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body (if (= i len) []
+          (cons (bytes-from-int8 (bitwise-xor (at a i) (at b i)))
+                (pbkdf2-xor-loop a b (+ i 1) len))))
+
+(defn pbkdf2-xor-bytes
+  :sig [(a : Bytes) (b : Bytes) -> Bytes]
+  :intent "XOR two equal-length Bytes values"
+  :requires [(= (length a) (length b))]
+  :ensures [(= (length result) (length a))]
+  :body (bytes-concat-all (pbkdf2-xor-loop a b 0 (length a))))
+
+;; ── PBKDF2 F function: iterative HMAC with XOR accumulation ──
+
+(defn pbkdf2-f-loop
+  :sig [(key : Bytes) (u-prev : Bytes) (acc : Bytes) (iter : i64) -> Bytes]
+  :intent "Iterate HMAC and XOR results for PBKDF2 F function"
+  :requires [(>= iter 0)]
+  :ensures [(valid result)]
+  :body (if (= iter 0) acc
+          (let (u-next : Bytes (b-hmac-sha256-bytes key u-prev))
+               (new-acc : Bytes (pbkdf2-xor-bytes acc u-next))
+            (pbkdf2-f-loop key u-next new-acc (- iter 1)))))
+
+(defn pbkdf2-f
+  :sig [(key : Bytes) (salt : Bytes) (iterations : i64) (block-idx : i64) -> Bytes]
+  :intent "PBKDF2 F(Password, Salt, c, i) = U1 ^ U2 ^ ... ^ Uc"
+  :requires [(>= iterations 1) (>= block-idx 1)]
+  :ensures [(valid result)]
+  :body (let (int-bytes : List (be32-to-list block-idx))
+             (salt-i : Bytes (bytes-concat-all (cons salt int-bytes)))
+             (u1 : Bytes (b-hmac-sha256-bytes key salt-i))
+          (pbkdf2-f-loop key u1 u1 (- iterations 1))))
+
+;; ── PBKDF2 block generation ──
+
+(defn pbkdf2-blocks
+  :sig [(key : Bytes) (salt : Bytes) (iterations : i64) (block-idx : i64) (blocks-needed : i64) -> List]
+  :intent "Generate PBKDF2 output blocks T1..Tn"
+  :requires [(>= block-idx 1)]
+  :ensures [(valid result)]
+  :body (if (> block-idx blocks-needed) []
+          (cons (pbkdf2-f key salt iterations block-idx)
+                (pbkdf2-blocks key salt iterations (+ block-idx 1) blocks-needed))))
+
+;; ── Public API ──
+
+(defn b-pbkdf2-sha256-bytes
+  :sig [(password : Bytes) (salt : Bytes) (iterations : i64) (dk-len : i64) -> Bytes]
+  :intent "PBKDF2-HMAC-SHA-256: derive dk-len bytes from password and salt"
+  :requires [(>= iterations 1) (>= dk-len 1)]
+  :ensures [(= (length result) dk-len)]
+  :body (let (blocks-needed : i64 (+ (/ dk-len 32) (if (= (% dk-len 32) 0) 0 1)))
+             (all-blocks : Bytes (bytes-concat-all (pbkdf2-blocks password salt iterations 1 blocks-needed)))
+          (bytes-slice all-blocks 0 dk-len)))
+
+(defn b-pbkdf2-sha256
+  :sig [(password : String) (salt : String) (iterations : i64) (dk-len : i64) -> String]
+  :intent "PBKDF2-HMAC-SHA-256 hex output"
+  :requires [(>= iterations 1) (>= dk-len 1)]
+  :ensures [(valid result)]
+  :body (let (dk : Bytes (b-pbkdf2-sha256-bytes (bytes-from-string password)
+                                                 (bytes-from-string salt)
+                                                 iterations dk-len))
+             (hex-parts : List (bytes-to-hex-loop dk 0 dk-len))
+             (hex-buf : Bytes (bytes-concat-all hex-parts))
+          (bytes-to-string hex-buf 0 (* dk-len 2))))

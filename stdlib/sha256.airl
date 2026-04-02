@@ -1,0 +1,328 @@
+;; ── AIRL Standard Library: SHA-256 ──────────────────
+;; FIPS 180-4 SHA-256 in pure AIRL.
+;; Uses: bitwise-and/or/xor/shl/shr, bytes-from-string,
+;;   bytes-to-string, bytes-from-int8, bytes-concat-all, at, length
+;; Names use b- prefix to avoid builtin collision.
+
+;; ── 32-bit unsigned arithmetic helpers ──
+
+(defn u32
+  :sig [(x : i64) -> i64]
+  :intent "Mask value to 32 bits"
+  :requires [(valid x)]
+  :ensures [(>= result 0) (<= result 4294967295)]
+  :body (bitwise-and x 4294967295))
+
+(defn u32-rotr
+  :sig [(x : i64) (n : i64) -> i64]
+  :intent "32-bit right rotate"
+  :requires [(>= n 0) (<= n 31)]
+  :ensures [(>= result 0)]
+  :body (u32 (bitwise-or (bitwise-shr x n) (bitwise-shl x (- 32 n)))))
+
+(defn u32-not
+  :sig [(x : i64) -> i64]
+  :intent "32-bit bitwise NOT"
+  :requires [(>= x 0)]
+  :ensures [(>= result 0)]
+  :body (bitwise-xor x 4294967295))
+
+(defn u32-add2
+  :sig [(a : i64) (b : i64) -> i64]
+  :intent "Add two values mod 2^32"
+  :requires [(>= a 0) (>= b 0)]
+  :ensures [(>= result 0)]
+  :body (u32 (+ a b)))
+
+(defn u32-add5
+  :sig [(a : i64) (b : i64) (c : i64) (d : i64) (e : i64) -> i64]
+  :intent "Add five values mod 2^32"
+  :requires [(>= a 0)]
+  :ensures [(>= result 0)]
+  :body (u32 (+ a (+ b (+ c (+ d e))))))
+
+;; ── List indexing ──
+
+(defn list-nth
+  :sig [(lst : List) (n : i64) -> i64]
+  :intent "Get nth element of a list (0-indexed)"
+  :requires [(>= n 0)]
+  :ensures [(valid result)]
+  :body (head (drop n lst)))
+
+;; ── SHA-256 logical functions ──
+
+(defn sha256-ch
+  :sig [(x : i64) (y : i64) (z : i64) -> i64]
+  :intent "Ch(x,y,z) = (x AND y) XOR (NOT x AND z)"
+  :requires [(>= x 0)]
+  :ensures [(>= result 0)]
+  :body (bitwise-xor (bitwise-and x y) (bitwise-and (u32-not x) z)))
+
+(defn sha256-maj
+  :sig [(x : i64) (y : i64) (z : i64) -> i64]
+  :intent "Maj(x,y,z) = (x AND y) XOR (x AND z) XOR (y AND z)"
+  :requires [(>= x 0)]
+  :ensures [(>= result 0)]
+  :body (bitwise-xor (bitwise-and x y) (bitwise-xor (bitwise-and x z) (bitwise-and y z))))
+
+(defn sha256-bsig0
+  :sig [(x : i64) -> i64]
+  :intent "Big Sigma 0: ROTR2 XOR ROTR13 XOR ROTR22"
+  :requires [(>= x 0)]
+  :ensures [(>= result 0)]
+  :body (bitwise-xor (u32-rotr x 2) (bitwise-xor (u32-rotr x 13) (u32-rotr x 22))))
+
+(defn sha256-bsig1
+  :sig [(x : i64) -> i64]
+  :intent "Big Sigma 1: ROTR6 XOR ROTR11 XOR ROTR25"
+  :requires [(>= x 0)]
+  :ensures [(>= result 0)]
+  :body (bitwise-xor (u32-rotr x 6) (bitwise-xor (u32-rotr x 11) (u32-rotr x 25))))
+
+(defn sha256-ssig0
+  :sig [(x : i64) -> i64]
+  :intent "Small sigma 0: ROTR7 XOR ROTR18 XOR SHR3"
+  :requires [(>= x 0)]
+  :ensures [(>= result 0)]
+  :body (bitwise-xor (u32-rotr x 7) (bitwise-xor (u32-rotr x 18) (bitwise-shr x 3))))
+
+(defn sha256-ssig1
+  :sig [(x : i64) -> i64]
+  :intent "Small sigma 1: ROTR17 XOR ROTR19 XOR SHR10"
+  :requires [(>= x 0)]
+  :ensures [(>= result 0)]
+  :body (bitwise-xor (u32-rotr x 17) (bitwise-xor (u32-rotr x 19) (bitwise-shr x 10))))
+
+;; ── Hex encoding ──
+
+(defn hex-nibble
+  :sig [(n : i64) -> i64]
+  :intent "Convert 0-15 to ASCII hex character byte value"
+  :requires [(>= n 0) (<= n 15)]
+  :ensures [(>= result 48)]
+  :body (if (< n 10) (+ 48 n) (+ 87 n)))
+
+(defn hex-byte-bytes
+  :sig [(b : i64) -> Bytes]
+  :intent "Convert byte value to 2-character hex Bytes"
+  :requires [(>= b 0) (<= b 255)]
+  :ensures [(valid result)]
+  :body (bytes-concat-all [(bytes-from-int8 (hex-nibble (/ b 16)))
+                            (bytes-from-int8 (hex-nibble (% b 16)))]))
+
+(defn bytes-to-hex-loop
+  :sig [(buf : Bytes) (i : i64) (len : i64) -> List]
+  :intent "Convert each byte to hex, returning list of 2-byte Bytes"
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body (if (= i len) []
+          (cons (hex-byte-bytes (at buf i)) (bytes-to-hex-loop buf (+ i 1) len))))
+
+;; ── Big-endian word operations ──
+
+(defn be32-get
+  :sig [(buf : Bytes) (off : i64) -> i64]
+  :intent "Read big-endian 32-bit word from Bytes at byte offset"
+  :requires [(>= off 0)]
+  :ensures [(>= result 0)]
+  :body (+ (* (at buf off) 16777216)
+           (+ (* (at buf (+ off 1)) 65536)
+              (+ (* (at buf (+ off 2)) 256)
+                 (at buf (+ off 3))))))
+
+(defn be32-to-list
+  :sig [(w : i64) -> List]
+  :intent "Convert 32-bit word to list of 4 big-endian byte Bytes"
+  :requires [(>= w 0)]
+  :ensures [(valid result)]
+  :body [(bytes-from-int8 (% (/ w 16777216) 256))
+         (bytes-from-int8 (% (/ w 65536) 256))
+         (bytes-from-int8 (% (/ w 256) 256))
+         (bytes-from-int8 (% w 256))])
+
+(defn be64-to-list
+  :sig [(val : i64) -> List]
+  :intent "Convert 64-bit value to list of 8 big-endian byte Bytes"
+  :requires [(>= val 0)]
+  :ensures [(valid result)]
+  :body (let (hi : i64 (/ val 4294967296))
+             (lo : i64 (% val 4294967296))
+          (concat (be32-to-list hi) (be32-to-list lo))))
+
+;; ── Zero-byte list builder ──
+
+(defn make-zero-bytes
+  :sig [(n : i64) -> List]
+  :intent "Create list of n zero-byte Bytes values"
+  :requires [(>= n 0)]
+  :ensures [(valid result)]
+  :body (if (= n 0) []
+          (cons (bytes-from-int8 0) (make-zero-bytes (- n 1)))))
+
+;; ── SHA-256 message padding ──
+
+(defn sha256-pad
+  :sig [(msg : Bytes) -> Bytes]
+  :intent "Pad message per FIPS 180-4 section 5.1.1"
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (let (len : i64 (length msg))
+             (bit-len : i64 (* len 8))
+             (mod-val : i64 (% (+ len 1) 64))
+             (pad-zeros : i64 (if (<= mod-val 56) (- 56 mod-val) (- 120 mod-val)))
+          (bytes-concat-all (concat [msg (bytes-from-int8 128)]
+                                    (concat (make-zero-bytes pad-zeros)
+                                            (be64-to-list bit-len))))))
+
+;; ── Message schedule ──
+
+(defn sha256-schedule-init
+  :sig [(block : Bytes) (base : i64) (i : i64) -> List]
+  :intent "Extract 16 big-endian 32-bit words from a 64-byte block"
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body (if (= i 16) []
+          (cons (be32-get block (+ base (* i 4)))
+                (sha256-schedule-init block base (+ i 1)))))
+
+(defn sha256-schedule-extend-step
+  :sig [(w : List) (i : i64) -> List]
+  :intent "Extend message schedule by one word using sigma functions"
+  :requires [(>= i 16)]
+  :ensures [(valid result)]
+  :body (let (w2 : i64 (list-nth w (- i 2)))
+             (w7 : i64 (list-nth w (- i 7)))
+             (w15 : i64 (list-nth w (- i 15)))
+             (w16 : i64 (list-nth w (- i 16)))
+             (s0 : i64 (sha256-ssig0 w15))
+             (s1 : i64 (sha256-ssig1 w2))
+             (new-w : i64 (u32 (+ s1 (+ w7 (+ s0 w16)))))
+          (concat w [new-w])))
+
+(defn sha256-schedule-extend
+  :sig [(w : List) (i : i64) -> List]
+  :intent "Extend message schedule from 16 to 64 words"
+  :requires [(>= i 16)]
+  :ensures [(valid result)]
+  :body (if (= i 64) w
+          (sha256-schedule-extend (sha256-schedule-extend-step w i) (+ i 1))))
+
+(defn sha256-schedule
+  :sig [(block : Bytes) (base : i64) -> List]
+  :intent "Build full 64-word message schedule from a 64-byte block"
+  :requires [(>= base 0)]
+  :ensures [(valid result)]
+  :body (sha256-schedule-extend (sha256-schedule-init block base 0) 16))
+
+;; ── Compression ──
+
+(defn sha256-compress-round
+  :sig [(state : List) (ki : i64) (wi : i64) -> List]
+  :intent "One SHA-256 compression round updating 8 working variables"
+  :requires [(valid state)]
+  :ensures [(valid result)]
+  :body (let (a : i64 (list-nth state 0))
+             (b : i64 (list-nth state 1))
+             (c : i64 (list-nth state 2))
+             (d : i64 (list-nth state 3))
+             (e : i64 (list-nth state 4))
+             (f : i64 (list-nth state 5))
+             (g : i64 (list-nth state 6))
+             (h : i64 (list-nth state 7))
+             (t1 : i64 (u32-add5 h (sha256-bsig1 e) (sha256-ch e f g) ki wi))
+             (t2 : i64 (u32-add2 (sha256-bsig0 a) (sha256-maj a b c)))
+          [(u32-add2 t1 t2) a b c (u32-add2 d t1) e f g]))
+
+(defn sha256-compress-loop
+  :sig [(state : List) (k : List) (w : List) (i : i64) -> List]
+  :intent "Run 64 compression rounds using head/tail for K and W"
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body (if (= i 64) state
+          (sha256-compress-loop
+            (sha256-compress-round state (head k) (head w))
+            (tail k) (tail w) (+ i 1))))
+
+(defn sha256-add-hash
+  :sig [(h : List) (state : List) -> List]
+  :intent "Add compressed state back to current hash values"
+  :requires [(valid h) (valid state)]
+  :ensures [(valid result)]
+  :body [(u32-add2 (list-nth h 0) (list-nth state 0))
+         (u32-add2 (list-nth h 1) (list-nth state 1))
+         (u32-add2 (list-nth h 2) (list-nth state 2))
+         (u32-add2 (list-nth h 3) (list-nth state 3))
+         (u32-add2 (list-nth h 4) (list-nth state 4))
+         (u32-add2 (list-nth h 5) (list-nth state 5))
+         (u32-add2 (list-nth h 6) (list-nth state 6))
+         (u32-add2 (list-nth h 7) (list-nth state 7))])
+
+(defn sha256-compress-block
+  :sig [(hash : List) (k : List) (padded : Bytes) (base : i64) -> List]
+  :intent "Compress one 64-byte block against current hash state"
+  :requires [(valid hash)]
+  :ensures [(valid result)]
+  :body (let (w : List (sha256-schedule padded base))
+          (sha256-add-hash hash (sha256-compress-loop hash k w 0))))
+
+;; ── Block processing ──
+
+(defn sha256-process-blocks
+  :sig [(hash : List) (k : List) (padded : Bytes) (off : i64) (len : i64) -> List]
+  :intent "Process all 64-byte blocks of padded message"
+  :requires [(>= off 0)]
+  :ensures [(valid result)]
+  :body (if (>= off len) hash
+          (sha256-process-blocks
+            (sha256-compress-block hash k padded off)
+            k padded (+ off 64) len)))
+
+;; ── Hash to bytes ──
+
+(defn sha256-hash-to-bytes
+  :sig [(hash : List) -> Bytes]
+  :intent "Convert 8 hash words to 32-byte digest"
+  :requires [(valid hash)]
+  :ensures [(valid result)]
+  :body (bytes-concat-all (flatten (map (fn [w] (be32-to-list w)) hash))))
+
+;; ── Public API ──
+
+(defn b-sha256-bytes
+  :sig [(msg : Bytes) -> Bytes]
+  :intent "Compute SHA-256 digest of Bytes, returning 32-byte Bytes"
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (let (padded : Bytes (sha256-pad msg))
+             (plen : i64 (length padded))
+             (k : List [1116352408 1899447441 3049323471 3921009573
+                         961987163 1508970993 2453635748 2870763221
+                         3624381080 310598401 607225278 1426881987
+                         1925078388 2162078206 2614888103 3248222580
+                         3835390401 4022224774 264347078 604807628
+                         770255983 1249150122 1555081692 1996064986
+                         2554220882 2821834349 2952996808 3210313671
+                         3336571891 3584528711 113926993 338241895
+                         666307205 773529912 1294757372 1396182291
+                         1695183700 1986661051 2177026350 2456956037
+                         2730485921 2820302411 3259730800 3345764771
+                         3516065817 3600352804 4094571909 275423344
+                         430227734 506948616 659060556 883997877
+                         958139571 1322822218 1537002063 1747873779
+                         1955562222 2024104815 2227730452 2361852424
+                         2428436474 2756734187 3204031479 3329325298])
+             (h0 : List [1779033703 3144134277 1013904242 2773480762
+                          1359893119 2600822924 528734635 1541459225])
+             (hash : List (sha256-process-blocks h0 k padded 0 plen))
+          (sha256-hash-to-bytes hash)))
+
+(defn b-sha256
+  :sig [(s : String) -> String]
+  :intent "Compute SHA-256 hex digest of a String"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (let (digest : Bytes (b-sha256-bytes (bytes-from-string s)))
+             (hex-parts : List (bytes-to-hex-loop digest 0 32))
+             (hex-buf : Bytes (bytes-concat-all hex-parts))
+          (bytes-to-string hex-buf 0 64)))

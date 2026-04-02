@@ -1,0 +1,61 @@
+;; ── AIRL Standard Library: HMAC-SHA-256 ──────────────────
+;; RFC 2104 HMAC using SHA-256.
+;; Depends on sha256.airl (b-sha256-bytes, bytes-to-hex-loop, make-zero-bytes).
+;; Names use b- prefix to avoid builtin collision.
+
+;; ── Key preparation ──
+
+(defn hmac-pad-key
+  :sig [(key : Bytes) -> Bytes]
+  :intent "Prepare HMAC key: hash if > 64 bytes, zero-pad to 64 bytes"
+  :requires [(valid key)]
+  :ensures [(= (length result) 64)]
+  :body (let (klen : i64 (length key))
+             (k : Bytes (if (> klen 64) (b-sha256-bytes key) key))
+             (pad-needed : i64 (- 64 (length k)))
+          (if (= pad-needed 0)
+            k
+            (bytes-concat-all (cons k (make-zero-bytes pad-needed))))))
+
+;; ── XOR key with pad byte ──
+
+(defn hmac-xor-loop
+  :sig [(key : Bytes) (pad : i64) (i : i64) (len : i64) -> List]
+  :intent "XOR each byte of key with pad byte"
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body (if (= i len) []
+        (cons (bytes-from-int8 (bitwise-xor (at key i) pad))
+              (hmac-xor-loop key pad (+ i 1) len))))
+
+(defn hmac-xor-key
+  :sig [(key : Bytes) (pad : i64) -> Bytes]
+  :intent "XOR 64-byte key with pad byte, returning 64-byte Bytes"
+  :requires [(= (length key) 64)]
+  :ensures [(= (length result) 64)]
+  :body (bytes-concat-all (hmac-xor-loop key pad 0 64)))
+
+;; ── HMAC-SHA-256 public API ──
+
+(defn b-hmac-sha256-bytes
+  :sig [(key : Bytes) (msg : Bytes) -> Bytes]
+  :intent "HMAC-SHA-256: returns 32-byte digest"
+  :requires [(valid key) (valid msg)]
+  :ensures [(valid result)]
+  :body (let (k : Bytes (hmac-pad-key key))
+             (i-key-pad : Bytes (hmac-xor-key k 54))
+             (o-key-pad : Bytes (hmac-xor-key k 92))
+             (inner-msg : Bytes (bytes-concat-all [i-key-pad msg]))
+             (inner-hash : Bytes (b-sha256-bytes inner-msg))
+             (outer-msg : Bytes (bytes-concat-all [o-key-pad inner-hash]))
+          (b-sha256-bytes outer-msg)))
+
+(defn b-hmac-sha256
+  :sig [(key : String) (msg : String) -> String]
+  :intent "HMAC-SHA-256 hex digest from String key and message"
+  :requires [(valid key) (valid msg)]
+  :ensures [(valid result)]
+  :body (let (digest : Bytes (b-hmac-sha256-bytes (bytes-from-string key) (bytes-from-string msg)))
+             (hex-parts : List (bytes-to-hex-loop digest 0 32))
+             (hex-buf : Bytes (bytes-concat-all hex-parts))
+          (bytes-to-string hex-buf 0 64)))
