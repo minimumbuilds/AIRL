@@ -7,15 +7,26 @@ license.workspace = true
 [lib]
 crate-type = ["staticlib", "rlib"]
 
+[lints.rust.unexpected_cfgs]
+level = "allow"
+check-cfg = ['cfg(target_os, values("airlos"))']
+
+[features]
+default = []
+airlos = []
+
 [dependencies]
 sha2 = "0.10"
 hmac = "0.12"
 base64 = "0.22"
-rand = "0.8"
-regex = "1"
 hex = "0.4"
 crc32c = "0.6"
 pbkdf2 = "0.12"
+
+# These crates require std and OS support — exclude on airlos
+[target.'cfg(not(target_os = "airlos"))'.dependencies]
+rand = "0.8"
+regex = "1"
 flate2 = "1"
 snap = "1"
 lz4_flex = "0.11"

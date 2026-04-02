@@ -1,5 +1,9 @@
+#[cfg(not(target_os = "airlos"))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+#[cfg(target_os = "airlos")]
+pub mod airlos;
 
 pub mod value;
 pub mod memory;
@@ -15,4 +19,5 @@ pub mod math;
 pub mod variant;
 pub mod closure;
 pub mod misc;
+#[cfg(not(target_os = "airlos"))]
 pub mod thread;
