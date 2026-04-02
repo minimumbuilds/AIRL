@@ -1,8 +1,12 @@
-# AIRL Reference Guide
+# AIRL Reference Guide (v1.1.0)
 
 > A complete reference for writing AIRL (AI Intermediate Representation Language) programs.
 > AIRL is an S-expression language designed for AI systems, featuring mandatory contracts,
 > linear ownership, tensor operations, and multi-agent orchestration.
+>
+> **v1.1.0** introduced the stdlib migration: ~150 functions remain as compiler intrinsics
+> (always available), while 73 functions moved to the pure-AIRL standard library (auto-loaded
+> from `stdlib/`). New features: `extern-c` declarations and byte-array intrinsics.
 
 ---
 
@@ -305,7 +309,11 @@ Unwrap an `(Ok val)` to `val`, or propagate `(Err ...)` as a runtime error:
 
 ---
 
-## 6. Builtin Functions
+## 6. Intrinsics (Always Available)
+
+As of v1.1.0, AIRL has ~150 **compiler intrinsics** — built into the runtime as `extern "C"` functions, always available without any imports. These include arithmetic, comparison, logic, type conversion, collections (core), string (core), float math, byte encoding, TCP, compression, regex, concurrency, and tensors.
+
+An additional 73 functions live in the **standard library** (`stdlib/`), written in pure AIRL and auto-loaded as a prelude. These include string helpers, JSON, base64, crypto (SHA-256, HMAC, PBKDF2), file I/O, directory I/O, system functions, paths, and extended map/set/collection operations. See sections 11–15 for stdlib documentation.
 
 ### Arithmetic
 
@@ -455,15 +463,20 @@ All float math builtins operate on `f64` values. Integer arguments are promoted 
 | `getenv` | `(getenv name)` → Str/Nil | Read environment variable |
 | `get-args` | `(get-args)` → List | Command-line arguments as list of strings |
 
-### Network/JSON
+### JSON (stdlib — auto-loaded from `stdlib/json.airl`)
+
+JSON functions were compiler builtins prior to v1.1.0 and are now implemented in pure AIRL. Auto-loaded in the prelude.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `http-request` | `(http-request method url headers body)` → Map | HTTP request. Method: `"GET"`, `"POST"`, `"PUT"`, `"DELETE"`, `"PATCH"`, `"HEAD"` |
 | `json-parse` | `(json-parse str)` → any | Parse JSON string into AIRL value |
 | `json-stringify` | `(json-stringify val)` → Str | Serialize AIRL value to JSON string |
 
-### File I/O
+**HTTP:** Use the AIReqL library (`../AIReqL`). See the AIRL-Header.md for the AIReqL API.
+
+### File I/O (stdlib — auto-loaded from `stdlib/io.airl`)
+
+These functions were compiler builtins prior to v1.1.0 and are now implemented in pure AIRL. Auto-loaded in the prelude.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -480,7 +493,9 @@ All float math builtins operate on `f64` values. Integer arguments are promoted 
 | `file-size` | `(file-size path)` → Int | File size in bytes |
 | `is-dir?` | `(is-dir? path)` → Bool | Check if path is a directory |
 
-### Path (v0.3.0)
+### Path (stdlib — auto-loaded from `stdlib/path.airl`)
+
+Path functions were compiler builtins prior to v1.1.0 and are now implemented in pure AIRL. Auto-loaded in the prelude.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -499,15 +514,38 @@ All float math builtins operate on `f64` values. Integer arguments are promoted 
 | `regex-replace` | `(regex-replace pattern str replacement)` → Str | Replace all matches |
 | `regex-split` | `(regex-split pattern str)` → List | Split by pattern |
 
-### Crypto (v0.3.0)
+### Crypto (stdlib — auto-loaded from `stdlib/sha256.airl`, `stdlib/hmac.airl`, `stdlib/pbkdf2.airl`, `stdlib/base64.airl`)
+
+These functions were compiler builtins prior to v1.1.0 and are now implemented in pure AIRL. They are auto-loaded in the prelude — no imports needed.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `sha256` | `(sha256 str)` → Str | SHA-256 hash (hex string) |
+| `sha512` | `(sha512 str)` → Str | SHA-512 hash (hex string) |
 | `hmac-sha256` | `(hmac-sha256 key message)` → Str | HMAC-SHA256 (hex string) |
+| `hmac-sha512` | `(hmac-sha512 key message)` → Str | HMAC-SHA512 (hex string) |
+| `sha256-bytes` | `(sha256-bytes buf)` → IntList | Raw 32-byte hash of IntList |
+| `sha512-bytes` | `(sha512-bytes buf)` → IntList | Raw 64-byte hash of IntList |
+| `hmac-sha256-bytes` | `(hmac-sha256-bytes key data)` → IntList | Raw HMAC of IntList inputs |
+| `hmac-sha512-bytes` | `(hmac-sha512-bytes key data)` → IntList | Raw HMAC of IntList inputs |
+| `pbkdf2-sha256` | `(pbkdf2-sha256 password salt iterations key-length)` → IntList | Key derivation |
+| `pbkdf2-sha512` | `(pbkdf2-sha512 password salt iterations key-length)` → IntList | Key derivation |
 | `base64-encode` | `(base64-encode str)` → Str | Base64 encode |
 | `base64-decode` | `(base64-decode str)` → Str | Base64 decode |
-| `random-bytes` | `(random-bytes n)` → List | List of n random byte values (0-255) |
+| `base64-encode-bytes` | `(base64-encode-bytes buf)` → Str | Encode IntList to base64 string |
+| `base64-decode-bytes` | `(base64-decode-bytes s)` → IntList | Decode base64 string to IntList |
+| `random-bytes` | `(random-bytes n)` → List | List of n random byte values (0-255) — intrinsic |
+
+### Byte-Array Intrinsics (v1.1.0)
+
+Low-level byte-array operations for mutable, fixed-size byte buffers. These complement the IntList-based byte functions.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `bytes-alloc` | `(bytes-alloc n)` → ByteArray | Allocate a zero-filled byte array of size n |
+| `bytes-get` | `(bytes-get buf index)` → Int | Read byte at index (0-255) |
+| `bytes-set!` | `(bytes-set! buf index value)` → Nil | Write byte at index (mutates in place) |
+| `bytes-length` | `(bytes-length buf)` → Int | Length of byte array |
 
 ### Byte Encoding (v0.4.0)
 
@@ -650,6 +688,28 @@ All tensors are f32 internally. Shapes are specified as bracket lists of integer
     (let (c : tensor (tensor.matmul a b))
       (print "sum =" (tensor.sum c)))))
 ```
+
+---
+
+## 6a. `extern-c` Declarations (v1.1.0)
+
+AIRL can call C functions directly using the `extern-c` syntax. This is how the stdlib implements functions that need low-level runtime support:
+
+```lisp
+(extern-c "c_function_name" [(param1 : Type1) (param2 : Type2) -> ReturnType])
+```
+
+The string is the C symbol name. The signature uses standard AIRL type syntax. Once declared, the function is callable like any other AIRL function:
+
+```lisp
+;; Declare a C function
+(extern-c "airl_read_file" [(path : String) -> String])
+
+;; Call it
+(airl_read_file "data.txt")
+```
+
+**When to use:** Stdlib modules use `extern-c` to access runtime primitives (file I/O, system calls, etc.) that cannot be implemented in pure AIRL. User code rarely needs `extern-c` directly — prefer stdlib functions.
 
 ---
 
@@ -945,7 +1005,11 @@ AIRL currently has no test runner, no `deftest` form, and no test discovery.
 
 ## 11. Standard Library (Collections)
 
-AIRL includes a standard library of 15 collection functions, written in pure AIRL and auto-loaded as a prelude before user code. No imports needed — these are always available.
+AIRL's standard library is written in pure AIRL and auto-loaded as a prelude before user code. No imports needed — all stdlib functions are always available.
+
+As of v1.1.0, the stdlib has **13 modules** across `stdlib/`: `collections.airl`, `math.airl`, `result.airl`, `string.airl`, `map.airl`, `set.airl`, `json.airl`, `base64.airl`, `sha256.airl`, `hmac.airl`, `pbkdf2.airl`, `io.airl`, `path.airl`. The prelude (`stdlib/prelude.airl`) loads all modules automatically.
+
+The collections module provides 18 core list-processing functions:
 
 ### Core: map, filter, fold
 
@@ -1104,7 +1168,7 @@ Combinators for working with `Result` values (`(Ok v)` / `(Err e)`) without verb
 
 ## 14. Standard Library (String)
 
-String manipulation functions. 13 Rust builtins for character-level access, plus 10 pure AIRL helpers. Auto-loaded in the prelude.
+String manipulation functions. As of v1.1.0, all string functions (character access, search, transformation, split/join, and helpers) are implemented in pure AIRL in `stdlib/string.airl`. Auto-loaded in the prelude.
 
 ### Character Access
 

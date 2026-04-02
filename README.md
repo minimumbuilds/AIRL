@@ -22,7 +22,7 @@ AIRL is a typed, contract-verified programming language for inter-agent communic
 
 **[Project Analysis — Milestones, Strengths & Differentiators](docs/PROJECT-ANALYSIS.md)**
 
-## Self-Hosted Compiler (v0.9.0)
+## Self-Hosted Compiler (v1.1.0)
 
 **AIRL compiles itself.** The G3 compiler is written entirely in AIRL and produces native x86-64 and ARM64 binaries:
 
@@ -170,8 +170,9 @@ Every existing programming language optimizes for human readability. AIRL optimi
 - Pattern matching with exhaustiveness checking
 - First-class functions and closures
 - Thread-per-task concurrency with message-passing channels
-- **68 stdlib functions** — collections (18), math (12), result combinators (8), string (10), map (8), set (12) — auto-loaded as prelude
-- **100+ Rust builtins** — list (7), string (17), map (10), file I/O (11), float math (15), path (5), regex (4), crypto (5), bytes (12), TCP (8), threads (10), system (7), JSON (2), HTTP (1)
+- **13 stdlib modules** — collections, math, result, string, map, set, json, base64, sha256, hmac, pbkdf2, io, path — auto-loaded as prelude. 73 functions migrated from Rust builtins to pure AIRL in v1.1.0
+- **~150 compiler intrinsics** — arithmetic, comparison, logic, float math, bytes, TCP, compression, regex, concurrency, tensors
+- **`extern-c` declarations** — call C functions from AIRL for low-level runtime access
 
 ### Distribution Model
 
@@ -243,7 +244,7 @@ AIRL Source
 | `airl-syntax` | Lexer, parser, AST, diagnostics |
 | `airl-types` | Type checker, linearity, exhaustiveness |
 | `airl-contracts` | Contract violation types |
-| `airl-rt` | Runtime library (`libairl_rt.a`) — all builtins as `extern "C"` |
+| `airl-rt` | Runtime library (`libairl_rt.a`) — ~150 intrinsics as `extern "C"` + stubs for stdlib |
 | `airl-runtime` | AOT compiler (Cranelift) |
 | `airl-codegen` | Cranelift tensor codegen |
 | `airl-solver` | Z3 SMT formal verification |
@@ -341,11 +342,11 @@ cargo run --release --features aot -- run examples/01-hello-world/hello_world.ai
 
 ## Project Stats
 
-- **Self-hosted compiler** — AIRL compiles itself to native binaries (since v0.6.0, current v0.9.0)
+- **Self-hosted compiler** — AIRL compiles itself to native binaries (since v0.6.0, current v1.1.0)
 - **68 AOT tests** — all pass through both the Rust-hosted and self-compiled pipelines
 - **~478 Rust tests** across 10 crates
 - **Cross-platform** — Linux x86-64 and macOS ARM64
-- **68 stdlib functions** + **100+ Rust builtins**
+- **13 stdlib modules** + **~150 compiler intrinsics**
 - **42x faster than Python** on pure arithmetic (AOT)
 - **Contracts always enforced** — native conditional branches in AOT
 - **Fixpoint verified** — bootstrap compiler produces identical output when self-compiled

@@ -1,4 +1,4 @@
-# AIRL Reference Header
+# AIRL Reference Header (v1.1.0)
 
 ## TRAPS
 
@@ -36,6 +36,7 @@
 (match EXPR PAT1 BODY1 PAT2 BODY2 ...)   ;; flat pairs
 (fn [p1 p2 ...] BODY)                    ;; lambda, no type annotations
 (try EXPR)                               ;; unwrap Ok or propagate Err as runtime error
+(extern-c "c_name" [PARAMS -> RET])      ;; declare C function callable from AIRL (v1.1.0)
 ```
 
 ### Types
@@ -67,7 +68,9 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 
 ## SIGS
 
-### Arithmetic (2-arg, same type, no mixed int/float)
+> **v1.1.0 split:** Functions marked **(intrinsic)** are compiled into the runtime. Functions marked **(stdlib)** are pure AIRL, auto-loaded from `stdlib/`. Both are always available — no imports needed.
+
+### Arithmetic (2-arg, same type, no mixed int/float) — intrinsic
 ```
 (+ a b) -> same     ; Int/Float/Str. Str = concat
 (- a b) -> same     ; Int/Float
@@ -76,10 +79,10 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (% a b) -> same     ; remainder. DivByZero on 0
 ```
 
-### Comparison (2-arg -> Bool, works on Int/Float/Str)
+### Comparison (2-arg -> Bool, works on Int/Float/Str) — intrinsic
 `=` `!=` `<` `>` `<=` `>=`
 
-### Logic
+### Logic — intrinsic
 ```
 (and a b) -> Bool    ; BINARY ONLY, EAGER (not short-circuit)
 (or a b) -> Bool     ; BINARY ONLY, EAGER
@@ -87,7 +90,7 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (xor a b) -> Bool
 ```
 
-### Bitwise (2-arg -> Int)
+### Bitwise (2-arg -> Int) — intrinsic
 ```
 (bitwise-and a b) -> Int    ; AND
 (bitwise-or a b) -> Int     ; OR
@@ -96,7 +99,7 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (bitwise-shr a n) -> Int    ; LOGICAL right shift (unsigned, no sign-extend)
 ```
 
-### Collections (builtins)
+### Collections (intrinsic)
 ```
 (length xs) -> Int              ; list length or string BYTE length
 (at xs i) -> elem               ; 0-based, errors on out-of-bounds
@@ -148,7 +151,7 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (product-list xs) -> Int
 ```
 
-### Float math (builtins, accept Int or Float via auto-coerce)
+### Float math (intrinsic, accept Int or Float via auto-coerce)
 ```
 (sqrt x) (sin x) (cos x) (tan x) (log x) (exp x) -> Float
 (floor x) (ceil x) (round x) -> Int     ; rounding
@@ -158,7 +161,7 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (is-nan? x) (is-infinite? x) -> Bool
 ```
 
-### String (builtins)
+### String (stdlib — `stdlib/string.airl`, was builtins pre-v1.1.0)
 ```
 (str a b ...) -> Str            ; VARIADIC concat, auto-coerces all types. Preferred over nested +
 (char-at s i) -> Str            ; single char, Unicode-safe, errors on OOB
@@ -208,7 +211,7 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (ok-or val err) -> Result       ; nil->(Err err), non-nil->(Ok val)
 ```
 
-### Map (builtins — keys are STRING ONLY)
+### Map (intrinsic — keys are STRING ONLY)
 ```
 (map-new) -> Map
 (map-from [k1 v1 k2 v2 ...]) -> Map     ; flat key-value list, keys must be strings
@@ -265,7 +268,7 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (assert cond msg) -> Bool       ; panic if false
 ```
 
-### File I/O (all paths sandboxed: no absolute paths, no `..`)
+### File I/O (stdlib — `stdlib/io.airl`, all paths sandboxed: no absolute paths, no `..`)
 ```
 (read-file p) -> Str  (write-file p content) -> Nil  (append-file p content) -> Nil  (read-lines p) -> List
 (file-exists? p) -> Bool  (is-dir? p) -> Bool  (file-size p) -> Int
@@ -276,13 +279,13 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (file-mtime p) -> Int                          ; modification time as epoch millis, -1 on error
 ```
 
-### Path
+### Path (stdlib — `stdlib/path.airl`)
 ```
 (path-join parts...) -> Str  (path-parent p) -> Str  (path-filename p) -> Str
 (path-extension p) -> Str  (is-absolute? p) -> Bool
 ```
 
-### Regex
+### Regex — intrinsic
 ```
 (regex-match pat s) -> Str/nil        ; first match or nil
 (regex-find-all pat s) -> List        ; all matches
@@ -290,7 +293,7 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (regex-split pat s) -> List
 ```
 
-### Crypto
+### Crypto (stdlib — `stdlib/sha256.airl`, `stdlib/hmac.airl`, `stdlib/pbkdf2.airl`, `stdlib/base64.airl`)
 ```
 (sha256 s) -> Str  (sha512 s) -> Str          ; hex digest of string
 (hmac-sha256 key msg) -> Str  (hmac-sha512 key msg) -> Str  ; hex HMAC of strings
@@ -306,7 +309,7 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (random-bytes n) -> List              ; n random bytes (0-255)
 ```
 
-### System
+### System (stdlib — `stdlib/io.airl`)
 ```
 (shell-exec cmd args-list) -> Result[Map, Str]  ; Ok map: {"stdout" "stderr" "exit-code"}
 (shell-exec-with-stdin cmd args-list stdin-str) -> Result[Map, Str]  ; pipe stdin to process
@@ -319,7 +322,7 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (cpu-count) -> Int                    ; logical CPU count
 ```
 
-### Network/JSON
+### JSON (stdlib — `stdlib/json.airl`)
 ```
 (json-parse s) -> any
 (json-stringify v) -> Str
@@ -337,14 +340,14 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 ```
 Compile with: `g3 -- aireql-util.airl aireql-transport.airl aireql.airl aireql-session.airl your-app.airl`
 
-### Thread (thread-per-task, message-passing only)
+### Thread (thread-per-task, message-passing only) — intrinsic
 ```
 (thread-spawn closure) -> Int                       ; spawn thread running 0-arg closure, returns handle
 (thread-join handle) -> Result[any, Str]            ; block until done. Ok(value) or Err(msg)
 (thread-set-affinity core-id) -> Result[Nil, Str]   ; pin calling thread to CPU core (Linux only)
 ```
 
-### Channel (unbounded, std::sync::mpsc)
+### Channel (unbounded, std::sync::mpsc) — intrinsic
 ```
 (channel-new) -> [Int Int]                          ; returns [sender-handle receiver-handle]
 (channel-send tx value) -> Result[Bool, Str]        ; send value. Err if closed
@@ -354,7 +357,15 @@ Compile with: `g3 -- aireql-util.airl aireql-transport.airl aireql.airl aireql-s
 (channel-close handle) -> Bool                      ; close sender or receiver
 ```
 
-### Bytes (big-endian, IntList = byte sequences)
+### Byte-Array Intrinsics (v1.1.0) — intrinsic
+```
+(bytes-alloc n) -> ByteArray             ; allocate zero-filled byte array
+(bytes-get buf index) -> Int             ; read byte at index (0-255)
+(bytes-set! buf index value) -> Nil      ; write byte at index (mutates)
+(bytes-length buf) -> Int                ; length of byte array
+```
+
+### Bytes (big-endian, IntList = byte sequences) — intrinsic
 ```
 (bytes-from-int16 n) -> IntList       ; i16 to 2 bytes BE
 (bytes-from-int32 n) -> IntList       ; i32 to 4 bytes BE
@@ -370,7 +381,7 @@ Compile with: `g3 -- aireql-util.airl aireql-transport.airl aireql.airl aireql-s
 (crc32c buf) -> Int                   ; CRC32C checksum
 ```
 
-### Compression (IntList in, IntList out)
+### Compression (IntList in, IntList out) — intrinsic
 ```
 (gzip-compress buf) -> IntList
 (gzip-decompress buf) -> IntList
@@ -382,7 +393,7 @@ Compile with: `g3 -- aireql-util.airl aireql-transport.airl aireql.airl aireql-s
 (zstd-decompress buf) -> IntList
 ```
 
-### TCP (handle-based, all return Result)
+### TCP (handle-based, all return Result) — intrinsic
 ```
 (tcp-listen port backlog) -> Result[Int, Str]      ; bind + listen, returns server handle
 (tcp-accept handle) -> Result[Int, Str]            ; blocking accept, returns connection handle

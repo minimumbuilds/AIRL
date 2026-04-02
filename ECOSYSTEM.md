@@ -8,7 +8,7 @@ The compiler is self-hosted: the G3 binary is written in AIRL and compiles itsel
 
 ## Core
 
-### AIRL (v0.9.0)
+### AIRL (v1.1.0)
 
 The compiler and runtime. 10-crate Rust workspace + self-hosted bootstrap compiler.
 
@@ -18,7 +18,7 @@ The compiler and runtime. 10-crate Rust workspace + self-hosted bootstrap compil
 | `airl-types` | Type checker, linearity, exhaustiveness |
 | `airl-contracts` | Contract violation types |
 | `airl-runtime` | AOT compiler (Cranelift) |
-| `airl-rt` | Runtime library -- extern "C" builtins (160+) |
+| `airl-rt` | Runtime library -- ~150 compiler intrinsics (extern "C") + extern-c stubs for stdlib |
 | `airl-codegen` | Cranelift code generation |
 | `airl-solver` | Z3 SMT contract verification |
 | `airl-agent` | Multi-agent transport (TCP, Unix, stdio) |
@@ -27,7 +27,7 @@ The compiler and runtime. 10-crate Rust workspace + self-hosted bootstrap compil
 
 **Bootstrap:** 30 AIRL files (~27K lines) implementing lexer, parser, bytecode compiler, and G3 driver.
 
-**Stdlib:** 6 modules (68 functions) -- collections, math, result combinators, strings, maps, sets.
+**Stdlib:** 13 modules -- collections, math, result, string, map, set, json, base64, sha256, hmac, pbkdf2, io, path. 73 functions migrated from Rust builtins to pure AIRL in v1.1.0.
 
 **Stats:** 31K Rust LOC, 27K AIRL LOC, 443 commits, 575 unit tests, 58 AOT tests.
 
@@ -242,7 +242,7 @@ Interactive shell targeting AIRLOS. REPL with command parsing, built-in commands
 
 | Project | Language | LOC | Commits | Status |
 |---------|----------|-----|---------|--------|
-| AIRL | Rust + AIRL | 58,759 | 443 | v0.9.0, self-hosted |
+| AIRL | Rust + AIRL | 58,759 | 443 | v1.1.0, self-hosted |
 | AIRL_castle | AIRL | 7,100 | 50 | Functional |
 | AIRLOS | C + asm | 6,100 | 55+ | Prototype |
 | AirLift | AIRL | 2,563 | 6 | Functional |
