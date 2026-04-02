@@ -85,3 +85,233 @@
   :requires [(valid s) (not (= sub ""))]
   :ensures [(>= result 0)]
   :body (- (length (split s sub)) 1))
+
+;; ══════════════════════════════════════════════════════════════════
+;; Byte-based string operations (pure AIRL, no Rust builtins)
+;; Uses: bytes-from-string, bytes-to-string, bytes-from-int8,
+;;       bytes-concat-all, bytes-slice, at, length
+;; Names use b- prefix to avoid collision with current Rust builtins.
+;; Once builtins are removed from the compiler registry, these can
+;; be renamed to the canonical names (starts-with, ends-with, etc.).
+;; ══════════════════════════════════════════════════════════════════
+
+;; ── helper: compare bytes at offset ──
+(defn bytes-match-at
+  :sig [(haystack : Bytes) (needle : Bytes) (offset : i64) (nlen : i64) (i : i64) -> bool]
+  :intent "Check if needle bytes match haystack at given offset starting from index i"
+  :requires [(>= offset 0) (>= i 0)]
+  :ensures [(valid result)]
+  :body (if (= i nlen)
+          true
+          (if (= (at haystack (+ offset i)) (at needle i))
+            (bytes-match-at haystack needle offset nlen (+ i 1))
+            false)))
+
+;; ── b-starts-with : check if string starts with prefix ──
+(defn b-starts-with
+  :sig [(s : String) (prefix : String) -> bool]
+  :intent "Check if s starts with prefix using byte comparison"
+  :requires [(valid s) (valid prefix)]
+  :ensures [(valid result)]
+  :body (let (sb : Bytes (bytes-from-string s))
+             (pb : Bytes (bytes-from-string prefix))
+             (slen : i64 (length sb))
+             (plen : i64 (length pb))
+          (if (> plen slen)
+            false
+            (bytes-match-at sb pb 0 plen 0))))
+
+;; ── b-ends-with : check if string ends with suffix ──
+(defn b-ends-with
+  :sig [(s : String) (suffix : String) -> bool]
+  :intent "Check if s ends with suffix using byte comparison"
+  :requires [(valid s) (valid suffix)]
+  :ensures [(valid result)]
+  :body (let (sb : Bytes (bytes-from-string s))
+             (xb : Bytes (bytes-from-string suffix))
+             (slen : i64 (length sb))
+             (xlen : i64 (length xb))
+          (if (> xlen slen)
+            false
+            (bytes-match-at sb xb (- slen xlen) xlen 0))))
+
+;; ── helper: scan for needle in haystack ──
+(defn bytes-scan
+  :sig [(haystack : Bytes) (needle : Bytes) (hlen : i64) (nlen : i64) (pos : i64) (limit : i64) -> i64]
+  :intent "Find first occurrence of needle in haystack, return byte offset or -1"
+  :requires [(>= pos 0)]
+  :ensures [(>= result -1)]
+  :body (if (> pos limit)
+          -1
+          (if (bytes-match-at haystack needle pos nlen 0)
+            pos
+            (bytes-scan haystack needle hlen nlen (+ pos 1) limit))))
+
+;; ── b-index-of : find first occurrence of substring ──
+(defn b-index-of
+  :sig [(s : String) (sub : String) -> i64]
+  :intent "Find byte index of first occurrence of sub in s, or -1"
+  :requires [(valid s) (valid sub)]
+  :ensures [(>= result -1)]
+  :body (let (sb : Bytes (bytes-from-string s))
+             (nb : Bytes (bytes-from-string sub))
+             (slen : i64 (length sb))
+             (nlen : i64 (length nb))
+          (if (= nlen 0)
+            0
+            (if (> nlen slen)
+              -1
+              (bytes-scan sb nb slen nlen 0 (- slen nlen))))))
+
+;; ── b-contains : check if string contains substring ──
+(defn b-contains
+  :sig [(s : String) (sub : String) -> bool]
+  :intent "Check if s contains sub using byte scanning"
+  :requires [(valid s) (valid sub)]
+  :ensures [(valid result)]
+  :body (not (= (b-index-of s sub) -1)))
+
+;; ── helper: byte-level case transforms ──
+(defn to-lower-byte
+  :sig [(b : i64) -> i64]
+  :intent "Convert ASCII uppercase byte to lowercase"
+  :requires [(>= b 0)]
+  :ensures [(>= result 0)]
+  :body (if (and (>= b 65) (<= b 90))
+          (+ b 32)
+          b))
+
+(defn to-upper-byte
+  :sig [(b : i64) -> i64]
+  :intent "Convert ASCII lowercase byte to uppercase"
+  :requires [(>= b 0)]
+  :ensures [(>= result 0)]
+  :body (if (and (>= b 97) (<= b 122))
+          (- b 32)
+          b))
+
+;; Build a list of 1-byte arrays with each byte lowercased
+(defn lower-bytes-loop
+  :sig [(src : Bytes) (i : i64) (len : i64) -> List]
+  :intent "Collect lowercased bytes as list of 1-byte arrays"
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body (if (= i len)
+          []
+          (cons (bytes-from-int8 (to-lower-byte (at src i)))
+                (lower-bytes-loop src (+ i 1) len))))
+
+;; Build a list of 1-byte arrays with each byte uppercased
+(defn upper-bytes-loop
+  :sig [(src : Bytes) (i : i64) (len : i64) -> List]
+  :intent "Collect uppercased bytes as list of 1-byte arrays"
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body (if (= i len)
+          []
+          (cons (bytes-from-int8 (to-upper-byte (at src i)))
+                (upper-bytes-loop src (+ i 1) len))))
+
+;; ── b-to-lower : convert ASCII uppercase to lowercase ──
+(defn b-to-lower
+  :sig [(s : String) -> String]
+  :intent "Convert ASCII uppercase characters to lowercase"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (let (sb : Bytes (bytes-from-string s))
+             (len : i64 (length sb))
+             (parts : List (lower-bytes-loop sb 0 len))
+             (result : Bytes (bytes-concat-all parts))
+          (bytes-to-string result 0 len)))
+
+;; ── b-to-upper : convert ASCII lowercase to uppercase ──
+(defn b-to-upper
+  :sig [(s : String) -> String]
+  :intent "Convert ASCII lowercase characters to uppercase"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (let (sb : Bytes (bytes-from-string s))
+             (len : i64 (length sb))
+             (parts : List (upper-bytes-loop sb 0 len))
+             (result : Bytes (bytes-concat-all parts))
+          (bytes-to-string result 0 len)))
+
+;; ── helper: whitespace detection and trim boundaries ──
+(defn is-whitespace-byte
+  :sig [(b : i64) -> bool]
+  :intent "Check if byte is ASCII whitespace (space, tab, newline, carriage return)"
+  :requires [(>= b 0)]
+  :ensures [(valid result)]
+  :body (or (= b 32) (or (= b 9) (or (= b 10) (= b 13)))))
+
+(defn trim-left-pos
+  :sig [(buf : Bytes) (i : i64) (len : i64) -> i64]
+  :intent "Find first non-whitespace byte position from left"
+  :requires [(>= i 0)]
+  :ensures [(>= result 0)]
+  :body (if (= i len)
+          i
+          (if (is-whitespace-byte (at buf i))
+            (trim-left-pos buf (+ i 1) len)
+            i)))
+
+(defn trim-right-pos
+  :sig [(buf : Bytes) (i : i64) -> i64]
+  :intent "Find last non-whitespace byte position from right (exclusive)"
+  :requires [(>= i 0)]
+  :ensures [(>= result 0)]
+  :body (if (= i 0)
+          0
+          (if (is-whitespace-byte (at buf (- i 1)))
+            (trim-right-pos buf (- i 1))
+            i)))
+
+;; ── b-trim : trim leading and trailing whitespace ──
+(defn b-trim
+  :sig [(s : String) -> String]
+  :intent "Trim leading and trailing ASCII whitespace"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (let (sb : Bytes (bytes-from-string s))
+             (len : i64 (length sb))
+             (left : i64 (trim-left-pos sb 0 len))
+             (right : i64 (trim-right-pos sb len))
+          (if (>= left right)
+            ""
+            (bytes-to-string sb left (- right left)))))
+
+;; ── char-alpha : check if first byte is ASCII alphabetic ──
+(defn char-alpha
+  :sig [(s : String) -> bool]
+  :intent "Check if first character is ASCII alphabetic (A-Z or a-z)"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (let (sb : Bytes (bytes-from-string s))
+          (if (= (length sb) 0)
+            false
+            (let (b : i64 (at sb 0))
+              (or (and (>= b 65) (<= b 90))
+                  (and (>= b 97) (<= b 122)))))))
+
+;; ── char-digit : check if first byte is ASCII digit ──
+(defn char-digit
+  :sig [(s : String) -> bool]
+  :intent "Check if first character is ASCII digit (0-9)"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (let (sb : Bytes (bytes-from-string s))
+          (if (= (length sb) 0)
+            false
+            (let (b : i64 (at sb 0))
+              (and (>= b 48) (<= b 57))))))
+
+;; ── char-whitespace : check if first byte is ASCII whitespace ──
+(defn char-whitespace
+  :sig [(s : String) -> bool]
+  :intent "Check if first character is ASCII whitespace"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (let (sb : Bytes (bytes-from-string s))
+          (if (= (length sb) 0)
+            false
+            (is-whitespace-byte (at sb 0)))))
