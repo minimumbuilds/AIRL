@@ -18,6 +18,35 @@ fn type_err(msg: &str) -> RuntimeError {
     RuntimeError::TypeError(format!("bytecode marshal: {}", msg))
 }
 
+/// SEC-15: Validate the AIRL_LINKER_SCRIPT env var if explicitly set.
+/// When the env var is not set, returns the default path without validation
+/// (the linker will handle missing defaults). When explicitly set, validates
+/// that the path exists and is a regular file (not a symlink to an unexpected location).
+fn validate_linker_script_env(default: &str) -> Result<String, RuntimeError> {
+    match std::env::var("AIRL_LINKER_SCRIPT") {
+        Ok(script) => {
+            let path = std::path::Path::new(&script);
+            if !path.exists() {
+                return Err(RuntimeError::Custom(format!(
+                    "AIRL_LINKER_SCRIPT: path does not exist: {}", script
+                )));
+            }
+            let metadata = std::fs::metadata(&script).map_err(|e| {
+                RuntimeError::Custom(format!(
+                    "AIRL_LINKER_SCRIPT: cannot read metadata for {}: {}", script, e
+                ))
+            })?;
+            if !metadata.is_file() {
+                return Err(RuntimeError::Custom(format!(
+                    "AIRL_LINKER_SCRIPT: path is not a regular file: {}", script
+                )));
+            }
+            Ok(script)
+        }
+        Err(_) => Ok(default.into()),
+    }
+}
+
 /// Convert a Value::Int to u16, for register/index fields.
 fn value_to_u16(val: &Value, field: &str) -> Result<u16, RuntimeError> {
     match val {
@@ -334,7 +363,7 @@ pub fn compile_bytecode_to_executable_with_target(funcs: &[Value], output_path: 
 
     // For freestanding targets, use cross-linker
     if target == Some("i686-airlos") {
-        let script = std::env::var("AIRL_LINKER_SCRIPT").unwrap_or_else(|_| "user.ld".into());
+        let script = validate_linker_script_env("user.ld")?;
         let mut cmd = std::process::Command::new("i686-elf-ld");
         cmd.arg("-T").arg(&script);
         cmd.arg(&obj_path);
@@ -352,7 +381,7 @@ pub fn compile_bytecode_to_executable_with_target(funcs: &[Value], output_path: 
     }
 
     if target == Some("x86_64-airlos") {
-        let script = std::env::var("AIRL_LINKER_SCRIPT").unwrap_or_else(|_| "user64.ld".into());
+        let script = validate_linker_script_env("user64.ld")?;
         let mut cmd = std::process::Command::new("x86_64-elf-ld");
         cmd.arg("-T").arg(&script);
         cmd.arg(&obj_path);
@@ -405,6 +434,10 @@ pub fn compile_bytecode_to_executable_with_target(funcs: &[Value], output_path: 
         .map_err(|e| RuntimeError::Custom(format!("linker: {}", e)))?;
 
     let _ = std::fs::remove_file(&obj_path);
+    // SEC-14: clean up temp runtime library after linking
+    if rt_lib.starts_with(&std::env::temp_dir().to_string_lossy().to_string()) {
+        let _ = std::fs::remove_file(&rt_lib);
+    }
 
     if status.success() {
         Ok(())
@@ -503,6 +536,52 @@ mod tests {
     #[test]
     fn test_unknown_opcode() {
         assert!(int_to_op(99).is_err());
+    }
+
+    // --- SEC-15 tests: linker script validation ---
+
+    #[test]
+    fn test_validate_linker_script_env_default_when_unset() {
+        // When AIRL_LINKER_SCRIPT is not set, should return the default
+        std::env::remove_var("AIRL_LINKER_SCRIPT");
+        let result = validate_linker_script_env("user.ld");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "user.ld");
+    }
+
+    #[test]
+    fn test_validate_linker_script_env_nonexistent_path() {
+        // When AIRL_LINKER_SCRIPT points to a nonexistent file, should error
+        std::env::set_var("AIRL_LINKER_SCRIPT", "/tmp/nonexistent_linker_script_42.ld");
+        let result = validate_linker_script_env("user.ld");
+        std::env::remove_var("AIRL_LINKER_SCRIPT");
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("does not exist"), "error should mention 'does not exist', got: {}", msg);
+    }
+
+    #[test]
+    fn test_validate_linker_script_env_directory_not_file() {
+        // When AIRL_LINKER_SCRIPT points to a directory, should error
+        std::env::set_var("AIRL_LINKER_SCRIPT", "/tmp");
+        let result = validate_linker_script_env("user.ld");
+        std::env::remove_var("AIRL_LINKER_SCRIPT");
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("not a regular file"), "error should mention 'not a regular file', got: {}", msg);
+    }
+
+    #[test]
+    fn test_validate_linker_script_env_valid_file() {
+        // When AIRL_LINKER_SCRIPT points to an existing regular file, should succeed
+        let test_path = "/tmp/test_linker_script_sec15.ld";
+        std::fs::write(test_path, "/* test linker script */").unwrap();
+        std::env::set_var("AIRL_LINKER_SCRIPT", test_path);
+        let result = validate_linker_script_env("user.ld");
+        std::env::remove_var("AIRL_LINKER_SCRIPT");
+        let _ = std::fs::remove_file(test_path);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), test_path);
     }
 
     #[cfg(feature = "aot")]

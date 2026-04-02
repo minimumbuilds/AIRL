@@ -3229,6 +3229,10 @@ pub fn compile_to_executable_impl(
 
     let status = cmd.status().map_err(|e| format!("linker: {}", e))?;
     let _ = std::fs::remove_file(&obj_path);
+    // SEC-14: clean up temp runtime library after linking
+    if rt_lib.starts_with(&std::env::temp_dir().to_string_lossy().to_string()) {
+        let _ = std::fs::remove_file(&rt_lib);
+    }
 
     if status.success() {
         Ok(())
@@ -3241,6 +3245,16 @@ pub fn compile_to_executable_impl(
 /// Empty if the library wasn't found during compilation (development builds).
 const EMBEDDED_RT_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libairl_rt.a.gz"));
 
+/// Generate a unique temp file path for the runtime library.
+/// Uses PID and timestamp to avoid predictable paths (SEC-14: TOCTOU mitigation).
+fn unique_rt_temp_path() -> std::path::PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    std::env::temp_dir().join(format!("libairl_rt_{}_{}.a", std::process::id(), nanos))
+}
+
 /// Extract the embedded compressed runtime to a temp file. Returns the path, or None if not embedded.
 pub fn extract_embedded_rt() -> Option<String> {
     if EMBEDDED_RT_GZ.is_empty() { return None; }
@@ -3248,7 +3262,7 @@ pub fn extract_embedded_rt() -> Option<String> {
     let mut decoder = flate2::read::GzDecoder::new(EMBEDDED_RT_GZ);
     let mut data = Vec::new();
     decoder.read_to_end(&mut data).ok()?;
-    let tmp = std::env::temp_dir().join("libairl_rt.a");
+    let tmp = unique_rt_temp_path();
     std::fs::write(&tmp, &data).ok()?;
     Some(tmp.to_string_lossy().to_string())
 }
@@ -3262,7 +3276,7 @@ pub fn get_or_extract_rt_lib() -> Result<String, String> {
         let mut data = Vec::new();
         decoder.read_to_end(&mut data)
             .map_err(|e| format!("decompress embedded runtime: {}", e))?;
-        let tmp = std::env::temp_dir().join("libairl_rt.a");
+        let tmp = unique_rt_temp_path();
         std::fs::write(&tmp, &data)
             .map_err(|e| format!("write runtime to {}: {}", tmp.display(), e))?;
         return Ok(tmp.to_string_lossy().to_string());
@@ -3445,5 +3459,39 @@ mod tests {
         // Should succeed (with a warning to stderr) rather than error
         let result = aot.compile_func(&func, &all);
         assert!(result.is_ok(), "Unresolved function should warn, not error: {:?}", result.err());
+    }
+
+    // --- SEC-14 tests: unique temp file paths ---
+
+    #[test]
+    fn unique_rt_temp_path_is_unpredictable() {
+        let p1 = unique_rt_temp_path();
+        // Small delay to ensure different timestamp
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let p2 = unique_rt_temp_path();
+        assert_ne!(p1, p2, "Consecutive temp paths should differ");
+        // Verify paths contain PID
+        let pid = std::process::id().to_string();
+        assert!(p1.to_string_lossy().contains(&pid),
+            "Temp path should contain PID: {:?}", p1);
+    }
+
+    #[test]
+    fn unique_rt_temp_path_not_predictable_fixed_name() {
+        let p = unique_rt_temp_path();
+        let name = p.file_name().unwrap().to_string_lossy();
+        // Must NOT be the old predictable name
+        assert_ne!(name, "libairl_rt.a",
+            "Temp path should not use the fixed predictable name");
+        assert!(name.starts_with("libairl_rt_"),
+            "Temp path should start with libairl_rt_ prefix: {}", name);
+    }
+
+    #[test]
+    fn unique_rt_temp_path_is_in_temp_dir() {
+        let p = unique_rt_temp_path();
+        let temp = std::env::temp_dir();
+        assert!(p.starts_with(&temp),
+            "Temp path should be under temp dir: {:?} vs {:?}", p, temp);
     }
 }
