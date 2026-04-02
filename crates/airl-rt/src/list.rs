@@ -1,3 +1,5 @@
+use core::sync::atomic::Ordering;
+
 use crate::error::rt_error;
 use crate::memory::airl_value_retain;
 use crate::value::{rt_bool, rt_bytes, rt_int, rt_list, RtData, RtValue, TAG_LIST};
@@ -147,7 +149,7 @@ pub extern "C" fn airl_at(list: *mut RtValue, index: *mut RtValue) -> *mut RtVal
 pub extern "C" fn airl_append(list: *mut RtValue, elem: *mut RtValue) -> *mut RtValue {
     let v = unsafe { &mut *list };
     // COW fast path: sole owner, not a view, at start of array
-    if v.rc == 1 {
+    if v.rc.load(Ordering::Acquire) == 1 {
         match &mut v.data {
             RtData::List { items, offset, parent } if parent.is_none() && *offset == 0 => {
                 airl_value_retain(elem);
@@ -199,7 +201,14 @@ pub extern "C" fn airl_at_or(list: *mut RtValue, idx: *mut RtValue, default: *mu
     let v = unsafe { &*list };
     let iv = unsafe { &*idx };
     let i = match &iv.data {
-        RtData::Int(n) => *n as usize,
+        RtData::Int(n) => {
+            // SEC-4: Negative indices should return default, not wrap to huge usize
+            if *n < 0 {
+                airl_value_retain(default);
+                return default;
+            }
+            *n as usize
+        }
         _ => rt_error("at-or: index must be Int"),
     };
     match &v.data {
@@ -365,6 +374,8 @@ pub extern "C" fn airl_sort(closure: *mut RtValue, list: *mut RtValue) -> *mut R
             let args: [*mut RtValue; 2] = [vec[j - 1], vec[j]];
             let cmp = airl_call_closure(closure, args.as_ptr(), 2);
             let is_less = unsafe { matches!(&(*cmp).data, RtData::Bool(true)) };
+            // SEC-3: Release the comparison result to prevent memory leak
+            crate::memory::airl_value_release(cmp);
             if !is_less {
                 vec.swap(j - 1, j);
                 j -= 1;
@@ -566,7 +577,7 @@ mod tests {
         unsafe {
             let a = rt_int(1);
             let list = rt_list(vec![a]);
-            assert_eq!((*list).rc, 1);
+            assert_eq!((*list).rc.load(Ordering::Relaxed), 1);
             let elem = rt_int(2);
             let result = airl_append(list, elem);
             assert_eq!(result, list, "COW append should return same pointer when rc == 1");
@@ -585,7 +596,7 @@ mod tests {
             let a = rt_int(1);
             let list = rt_list(vec![a]);
             airl_value_retain(list); // rc == 2 -> shared
-            assert_eq!((*list).rc, 2);
+            assert_eq!((*list).rc.load(Ordering::Relaxed), 2);
             let elem = rt_int(2);
             let result = airl_append(list, elem);
             assert_ne!(result, list, "append should return new pointer when rc > 1");
@@ -658,7 +669,7 @@ mod tests {
         unsafe {
             let a = rt_int(1);
             let list = rt_list(vec![a]);
-            assert_eq!((*list).rc, 1);
+            assert_eq!((*list).rc.load(Ordering::Relaxed), 1);
             let elem = rt_int(2);
             let result = airl_append(list, elem);
             assert_eq!(result, list, "rc==1, no parent, offset==0 should be in-place");
@@ -692,7 +703,7 @@ mod tests {
             let list = rt_list(vec![a, b, c]);
             let view = airl_tail(list);
             // view has rc==1 but parent is Some -- must clone
-            assert_eq!((*view).rc, 1);
+            assert_eq!((*view).rc.load(Ordering::Relaxed), 1);
             let elem = rt_int(4);
             let result = airl_append(view, elem);
             assert_ne!(result, view, "view (parent is Some) should clone");
@@ -855,6 +866,74 @@ mod tests {
                 "RtData::List discriminant must be stable for AOT tag consistency"
             );
             airl_value_release(runtime);
+        }
+    }
+
+    // ── SEC-4: Negative index in at-or ───────────────────────────────
+
+    #[test]
+    fn at_or_negative_index_returns_default() {
+        unsafe {
+            let a = rt_int(10);
+            let b = rt_int(20);
+            let list = rt_list(vec![a, b]);
+            let idx = rt_int(-1);
+            let default = rt_int(99);
+            let result = airl_at_or(list, idx, default);
+            assert_eq!((*result).as_int(), 99);
+            airl_value_release(result);
+            airl_value_release(default);
+            airl_value_release(idx);
+            airl_value_release(list);
+        }
+    }
+
+    #[test]
+    fn at_or_negative_large_index_returns_default() {
+        unsafe {
+            let a = rt_int(10);
+            let list = rt_list(vec![a]);
+            let idx = rt_int(i64::MIN);
+            let default = rt_int(42);
+            let result = airl_at_or(list, idx, default);
+            assert_eq!((*result).as_int(), 42);
+            airl_value_release(result);
+            airl_value_release(default);
+            airl_value_release(idx);
+            airl_value_release(list);
+        }
+    }
+
+    #[test]
+    fn at_or_valid_index_returns_element() {
+        unsafe {
+            let a = rt_int(10);
+            let b = rt_int(20);
+            let list = rt_list(vec![a, b]);
+            let idx = rt_int(1);
+            let default = rt_int(99);
+            let result = airl_at_or(list, idx, default);
+            assert_eq!((*result).as_int(), 20);
+            airl_value_release(result);
+            airl_value_release(default);
+            airl_value_release(idx);
+            airl_value_release(list);
+        }
+    }
+
+    #[test]
+    fn at_or_out_of_bounds_returns_default() {
+        unsafe {
+            let a = rt_int(10);
+            let list = rt_list(vec![a]);
+            let idx = rt_int(5);
+            let default = rt_int(77);
+            let result = airl_at_or(list, idx, default);
+            assert_eq!((*result).as_int(), 77);
+            airl_value_release(result);
+            airl_value_release(default);
+            airl_value_release(idx);
+            airl_value_release(list);
         }
     }
 }

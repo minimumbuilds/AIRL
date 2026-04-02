@@ -141,6 +141,7 @@ pub extern "C" fn airl_call_closure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::sync::atomic::Ordering;
     use crate::memory::airl_value_release;
     use crate::value::{rt_int, TAG_CLOSURE};
 
@@ -164,13 +165,13 @@ mod tests {
     fn make_closure_with_captures() {
         unsafe {
             let cap = rt_int(99);
-            assert_eq!((*cap).rc, 1);
+            assert_eq!((*cap).rc.load(Ordering::Relaxed), 1);
 
             let caps: *const *mut RtValue = &cap as *const *mut RtValue;
             let closure = airl_make_closure(std::ptr::null(), caps, 1);
 
             // Capture was retained — rc should be 2
-            assert_eq!((*cap).rc, 2);
+            assert_eq!((*cap).rc.load(Ordering::Relaxed), 2);
 
             match &(*closure).data {
                 RtData::Closure { captures, .. } => {
@@ -182,7 +183,7 @@ mod tests {
 
             // Releasing the closure decrements the capture's rc back to 1
             airl_value_release(closure);
-            assert_eq!((*cap).rc, 1);
+            assert_eq!((*cap).rc.load(Ordering::Relaxed), 1);
 
             // Clean up the original reference
             airl_value_release(cap);

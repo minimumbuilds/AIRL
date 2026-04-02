@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
+use core::sync::atomic::AtomicU32;
 
 use crate::error::rt_error;
 
@@ -38,7 +39,7 @@ pub enum RtData {
 #[repr(C)]
 pub struct RtValue {
     pub tag: u8,
-    pub rc: u32,
+    pub rc: AtomicU32,
     pub data: RtData,
 }
 
@@ -118,7 +119,7 @@ unsafe impl Send for SendableRtValue {}
 
 impl RtValue {
     pub fn alloc(tag: u8, data: RtData) -> *mut RtValue {
-        let v = RtValue { tag, rc: 1, data };
+        let v = RtValue { tag, rc: AtomicU32::new(1), data };
         Box::into_raw(Box::new(v))
     }
 }
@@ -392,6 +393,7 @@ impl fmt::Display for RtValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::sync::atomic::Ordering;
 
     unsafe fn free_value(ptr: *mut RtValue) {
         drop(Box::from_raw(ptr));
@@ -650,11 +652,11 @@ mod tests {
     fn test_sendable_retains_on_new() {
         unsafe {
             let v = rt_int(10);
-            assert_eq!((*v).rc, 1);
+            assert_eq!((*v).rc.load(Ordering::Relaxed), 1);
             let sv = SendableRtValue::new(v);
-            assert_eq!((*v).rc, 2);
+            assert_eq!((*v).rc.load(Ordering::Relaxed), 2);
             drop(sv); // should release
-            assert_eq!((*v).rc, 1);
+            assert_eq!((*v).rc.load(Ordering::Relaxed), 1);
             crate::memory::airl_value_release(v);
         }
     }
@@ -663,16 +665,16 @@ mod tests {
     fn test_sendable_into_raw_no_double_release() {
         unsafe {
             let v = rt_int(20);
-            assert_eq!((*v).rc, 1);
+            assert_eq!((*v).rc.load(Ordering::Relaxed), 1);
             let sv = SendableRtValue::new(v);
-            assert_eq!((*v).rc, 2);
+            assert_eq!((*v).rc.load(Ordering::Relaxed), 2);
             let raw = sv.into_raw();
             // into_raw consumed the wrapper without releasing
-            assert_eq!((*v).rc, 2);
+            assert_eq!((*v).rc.load(Ordering::Relaxed), 2);
             assert_eq!(raw, v);
             // Manually release the extra ref
             crate::memory::airl_value_release(v);
-            assert_eq!((*v).rc, 1);
+            assert_eq!((*v).rc.load(Ordering::Relaxed), 1);
             crate::memory::airl_value_release(v);
         }
     }
@@ -682,12 +684,12 @@ mod tests {
         unsafe {
             let v = rt_int(30);
             crate::memory::airl_value_retain(v); // manually retain
-            assert_eq!((*v).rc, 2);
+            assert_eq!((*v).rc.load(Ordering::Relaxed), 2);
             let sv = SendableRtValue::from_retained(v);
             // from_retained does NOT retain again
-            assert_eq!((*v).rc, 2);
+            assert_eq!((*v).rc.load(Ordering::Relaxed), 2);
             drop(sv); // releases once
-            assert_eq!((*v).rc, 1);
+            assert_eq!((*v).rc.load(Ordering::Relaxed), 1);
             crate::memory::airl_value_release(v);
         }
     }

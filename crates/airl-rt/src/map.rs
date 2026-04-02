@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use core::sync::atomic::Ordering;
 
 use crate::error::rt_error;
 use crate::memory::{airl_value_retain, airl_value_release};
@@ -108,7 +109,8 @@ pub extern "C" fn airl_map_set(
 
     let v = unsafe { &mut *m };
     // COW fast path: sole owner → mutate in place (O(1) instead of O(N))
-    if v.rc == 1 {
+    // SEC-18: Use atomic load with Acquire ordering to prevent race conditions
+    if v.rc.load(Ordering::Acquire) == 1 {
         match &mut v.data {
             RtData::Map(map) => {
                 // Avoid key allocation when key already exists — update value in place
@@ -175,7 +177,8 @@ pub extern "C" fn airl_map_remove(m: *mut RtValue, key: *mut RtValue) -> *mut Rt
 
     let v = unsafe { &mut *m };
     // COW fast path: sole owner → mutate in place
-    if v.rc == 1 {
+    // SEC-18: Use atomic load with Acquire ordering to prevent race conditions
+    if v.rc.load(Ordering::Acquire) == 1 {
         match &mut v.data {
             RtData::Map(map) => {
                 if let Some(old_val) = map.remove(k) {

@@ -1,33 +1,52 @@
 use std::collections::HashMap;
+use core::sync::atomic::Ordering;
 
 use crate::value::{rt_bool, rt_bytes, rt_float, rt_int, rt_nil, rt_str, rt_unit, rt_variant, RtData, RtValue};
 
-/// Increment refcount. Null-safe.
+/// Increment refcount atomically. Null-safe.
+///
+/// SEC-1: Uses AtomicU32::fetch_add to prevent data races on the refcount.
+/// SEC-2: When rc reaches u32::MAX, the value becomes immortal (never freed).
 #[no_mangle]
 pub extern "C" fn airl_value_retain(ptr: *mut RtValue) {
     if ptr.is_null() {
         return;
     }
     unsafe {
-        (*ptr).rc = (*ptr).rc.saturating_add(1);
+        let old = (*ptr).rc.fetch_add(1, Ordering::Relaxed);
+        // SEC-2: If we just incremented past the immortal threshold,
+        // clamp back to u32::MAX to make the value immortal.
+        if old >= u32::MAX - 1 {
+            (*ptr).rc.store(u32::MAX, Ordering::Relaxed);
+        }
     }
 }
 
-/// Decrement refcount, free at zero. Null-safe.
+/// Decrement refcount atomically, free at zero. Null-safe.
+///
+/// SEC-1: Uses AtomicU32::fetch_sub to prevent data races on the refcount.
+/// SEC-2: Immortal values (rc == u32::MAX) are never freed.
 #[no_mangle]
 pub extern "C" fn airl_value_release(ptr: *mut RtValue) {
     if ptr.is_null() {
         return;
     }
     unsafe {
-        let rc = (*ptr).rc;
-        if rc == 0 {
-            // Already freed or invalid — do nothing
+        // SEC-2: Immortal values are never freed
+        let current = (*ptr).rc.load(Ordering::Relaxed);
+        if current == u32::MAX {
             return;
         }
-        (*ptr).rc = rc - 1;
-        if (*ptr).rc == 0 {
+        // fetch_sub returns the previous value. If prev was 1, the new value
+        // is 0 and we should free. If prev was 0, something is very wrong
+        // (double-free) — restore to 0 and bail.
+        let prev = (*ptr).rc.fetch_sub(1, Ordering::AcqRel);
+        if prev == 1 {
+            // Refcount is now 0 — we have exclusive access. Free.
             free_value(ptr);
+        } else if prev == 0 {
+            // Double-release detected — restore to 0, do nothing.
+            (*ptr).rc.store(0, Ordering::Relaxed);
         }
     }
 }
@@ -127,11 +146,11 @@ mod tests {
     fn test_retain_release_basic() {
         unsafe {
             let v = rt_int(10);
-            assert_eq!((*v).rc, 1);
+            assert_eq!((*v).rc.load(Ordering::Relaxed), 1);
             airl_value_retain(v);
-            assert_eq!((*v).rc, 2);
+            assert_eq!((*v).rc.load(Ordering::Relaxed), 2);
             airl_value_release(v);
-            assert_eq!((*v).rc, 1);
+            assert_eq!((*v).rc.load(Ordering::Relaxed), 1);
             // Final release frees — don't access after this
             airl_value_release(v);
         }
@@ -151,7 +170,7 @@ mod tests {
             let c = airl_value_clone(v);
             assert!(!c.is_null());
             assert_eq!((*c).as_int(), 99);
-            assert_eq!((*c).rc, 1);
+            assert_eq!((*c).rc.load(Ordering::Relaxed), 1);
             airl_value_release(v);
             airl_value_release(c);
         }
@@ -162,24 +181,62 @@ mod tests {
         unsafe {
             let a = rt_int(1);
             let b = rt_int(2);
-            assert_eq!((*a).rc, 1);
-            assert_eq!((*b).rc, 1);
+            assert_eq!((*a).rc.load(Ordering::Relaxed), 1);
+            assert_eq!((*b).rc.load(Ordering::Relaxed), 1);
 
             let list = rt_list(vec![a, b]);
 
             // Clone the list — items should be retained (rc=2)
             let cloned = airl_value_clone(list);
             assert!(!cloned.is_null());
-            assert_eq!((*a).rc, 2);
-            assert_eq!((*b).rc, 2);
+            assert_eq!((*a).rc.load(Ordering::Relaxed), 2);
+            assert_eq!((*b).rc.load(Ordering::Relaxed), 2);
 
             // Release cloned list — items back to rc=1
             airl_value_release(cloned);
-            assert_eq!((*a).rc, 1);
-            assert_eq!((*b).rc, 1);
+            assert_eq!((*a).rc.load(Ordering::Relaxed), 1);
+            assert_eq!((*b).rc.load(Ordering::Relaxed), 1);
 
             // Release original list — items freed
             airl_value_release(list);
+        }
+    }
+
+    // ── SEC-2: Immortal sentinel tests ───────────────────────────────
+
+    #[test]
+    fn test_saturated_rc_becomes_immortal() {
+        unsafe {
+            let v = rt_int(42);
+            // Set rc to MAX - 1 to test saturation behavior
+            (*v).rc.store(u32::MAX - 1, Ordering::Relaxed);
+            airl_value_retain(v); // should clamp to u32::MAX
+            assert_eq!((*v).rc.load(Ordering::Relaxed), u32::MAX);
+            // Further retains should keep it at MAX
+            airl_value_retain(v);
+            assert_eq!((*v).rc.load(Ordering::Relaxed), u32::MAX);
+            // Release should be a no-op on immortal values
+            airl_value_release(v);
+            assert_eq!((*v).rc.load(Ordering::Relaxed), u32::MAX);
+            // Clean up: force-set rc to 1 so we can free
+            (*v).rc.store(1, Ordering::Relaxed);
+            airl_value_release(v);
+        }
+    }
+
+    #[test]
+    fn test_immortal_release_is_noop() {
+        unsafe {
+            let v = rt_int(99);
+            (*v).rc.store(u32::MAX, Ordering::Relaxed);
+            // Multiple releases should all be no-ops
+            airl_value_release(v);
+            airl_value_release(v);
+            airl_value_release(v);
+            assert_eq!((*v).rc.load(Ordering::Relaxed), u32::MAX);
+            // Clean up
+            (*v).rc.store(1, Ordering::Relaxed);
+            airl_value_release(v);
         }
     }
 }
