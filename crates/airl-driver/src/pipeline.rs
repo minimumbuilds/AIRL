@@ -16,6 +16,7 @@ const RESULT_SOURCE: &str = include_str!("../../../stdlib/result.airl");
 const STRING_SOURCE: &str = include_str!("../../../stdlib/string.airl");
 const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
 const SET_SOURCE: &str = include_str!("../../../stdlib/set.airl");
+const IO_SOURCE: &str = include_str!("../../../stdlib/io.airl");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineMode {
@@ -149,6 +150,7 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
         (STRING_SOURCE, "string"),
         (MAP_SOURCE, "map"),
         (SET_SOURCE, "set"),
+        (IO_SOURCE, "io"),
     ] {
         compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
     }
@@ -207,6 +209,7 @@ pub fn run_file_with_preloads(path: &str, preloads: &[String]) -> Result<Value, 
         (STRING_SOURCE, "string"),
         (MAP_SOURCE, "map"),
         (SET_SOURCE, "set"),
+        (IO_SOURCE, "io"),
     ] {
         compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
     }
@@ -637,6 +640,7 @@ pub fn run_file_with_imports(entry_path: &str) -> Result<Value, PipelineError> {
         (STRING_SOURCE, "string"),
         (MAP_SOURCE, "map"),
         (SET_SOURCE, "set"),
+        (IO_SOURCE, "io"),
     ] {
         compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
     }
@@ -917,6 +921,7 @@ pub fn compile_and_load_stdlib_bytecode_repl(vm: &mut BytecodeVm) -> Result<(), 
         (STRING_SOURCE, "string"),
         (MAP_SOURCE, "map"),
         (SET_SOURCE, "set"),
+        (IO_SOURCE, "io"),
     ] {
         compile_and_load_stdlib_bytecode(vm, src, name)?;
     }
@@ -1141,6 +1146,16 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
         all_funcs.extend(funcs);
     }
 
+    // 1b. Compile stdlib with extern-c declarations (io.airl)
+    let mut stdlib_extern_c_decls: Vec<airl_runtime::bytecode_aot::ExternCInfo> = Vec::new();
+    for (src, name) in &[
+        (IO_SOURCE, "io"),
+    ] {
+        let (funcs, _stdlib_main, externs) = compile_source_to_bytecode_with_externs(src, name)?;
+        all_funcs.extend(funcs);
+        stdlib_extern_c_decls.extend(externs);
+    }
+
     // 2. Compile user source files to bytecode
     let mut all_source = String::new();
     for path in paths {
@@ -1164,7 +1179,7 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
         airl_runtime::error::RuntimeError::TypeError(e)
     ))?;
 
-    for ext in &extern_c_decls {
+    for ext in stdlib_extern_c_decls.iter().chain(&extern_c_decls) {
         aot.register_extern_c(&ext.c_name, ext.arity);
     }
 
@@ -1213,11 +1228,19 @@ pub fn compile_to_object_with_imports(entry_path: &str, target: Option<&str>) ->
         all_funcs.extend(funcs);
     }
 
+    // 1b. Compile stdlib with extern-c declarations (io.airl)
+    let mut extern_c_decls: Vec<airl_runtime::bytecode_aot::ExternCInfo> = Vec::new();
+    for (src, name) in &[
+        (IO_SOURCE, "io"),
+    ] {
+        let (funcs, _stdlib_main, externs) = compile_source_to_bytecode_with_externs(src, name)?;
+        all_funcs.extend(funcs);
+        extern_c_decls.extend(externs);
+    }
+
     // 2. Compile each module in dependency order
     let entry_canonical = std::fs::canonicalize(entry_path)
         .map_err(|e| PipelineError::Io(e.to_string()))?;
-
-    let mut extern_c_decls: Vec<airl_runtime::bytecode_aot::ExternCInfo> = Vec::new();
 
     for module in &modules {
         let is_entry = module.path == entry_canonical;

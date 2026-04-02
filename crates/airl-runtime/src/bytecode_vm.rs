@@ -539,8 +539,7 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "println" => airl_rt::io::airl_println(a0!()),
         "eprint" => airl_rt::io::airl_eprint(a0!()),
         "eprintln" => airl_rt::io::airl_eprintln(a0!()),
-        "read-line" => airl_rt::io::airl_read_line(),
-        "read-stdin" => airl_rt::io::airl_read_stdin(),
+        // read-line, read-stdin deregistered — AIRL stdlib equivalents in io.airl take over
 
         // Variadic str / format
         "str" => airl_rt::misc::airl_str_variadic(args.as_ptr(), argc as i64),
@@ -556,23 +555,9 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         // map-from, map-get-or, map-values, map-size
         // deregistered — AIRL stdlib equivalents in map.airl take over
 
-        // File I/O
-        "read-file" => airl_rt::io::airl_read_file(a0!()),
-        "write-file" => airl_rt::io::airl_write_file(a0!(), a1!()),
-        "file-exists?" => airl_rt::io::airl_file_exists(a0!()),
-        "read-lines" => airl_rt::misc::airl_read_lines(a0!()),
-        "get-args" => airl_rt::io::airl_get_args(),
-        "append-file" => airl_rt::io::airl_append_file(a0!(), a1!()),
-        "delete-file" => airl_rt::io::airl_delete_file(a0!()),
-        "delete-dir" => airl_rt::io::airl_delete_dir(a0!()),
-        "rename-file" => airl_rt::io::airl_rename_file(a0!(), a1!()),
-        "create-dir" => airl_rt::io::airl_create_dir(a0!()),
-        "read-dir" => airl_rt::io::airl_read_dir(a0!()),
-        "file-size" => airl_rt::io::airl_file_size(a0!()),
-        "is-dir?" => airl_rt::io::airl_is_dir(a0!()),
-        "temp-file" => airl_rt::io::airl_temp_file(a0!()),
-        "temp-dir" => airl_rt::io::airl_temp_dir(a0!()),
-        "file-mtime" => airl_rt::io::airl_file_mtime(a0!()),
+        // File I/O, Directory I/O, Stream I/O (read-line, read-lines, read-stdin),
+        // System (get-args, getenv, exit, sleep, time-now, cpu-count, format-time, get-cwd)
+        // deregistered — AIRL stdlib equivalents in io.airl take over
 
         // Utility
         "type-of" => airl_rt::io::airl_type_of(a0!()),
@@ -585,19 +570,16 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "string-to-float" => airl_rt::string::airl_string_to_float(a0!()),
         "panic" => airl_rt::misc::airl_panic(a0!()),
         "assert" => airl_rt::misc::airl_assert(a0!(), a1!()),
-        "cpu-count" => airl_rt::misc::airl_cpu_count(),
-        "time-now" => airl_rt::misc::airl_time_now(),
-        "sleep" => airl_rt::misc::airl_sleep(a0!()),
-        "format-time" => airl_rt::misc::airl_format_time(a0!(), a1!()),
-        "getenv" => airl_rt::misc::airl_getenv(a0!()),
+        // cpu-count, time-now, sleep, format-time, getenv
+        // deregistered — AIRL stdlib equivalents in io.airl take over
         // json-parse, json-stringify
         // deregistered — AIRL stdlib equivalents in json.airl take over
         "shell-exec" => airl_rt::misc::airl_shell_exec(a0!(), a1!()),
         "shell-exec-with-stdin" => airl_rt::misc::airl_shell_exec_with_stdin(a0!(), a1!(), a2!()),
-        "exit" => airl_rt::misc::airl_exit(a0!()),
+        // exit deregistered — AIRL stdlib equivalent in io.airl takes over
         "parse-int-radix" => airl_rt::misc::airl_parse_int_radix(a0!(), a1!()),
         "int-to-string-radix" => airl_rt::misc::airl_int_to_string_radix(a0!(), a1!()),
-        "get-cwd" => airl_rt::misc::airl_get_cwd(),
+        // get-cwd deregistered — AIRL stdlib equivalent in io.airl takes over
 
         // Float math
         "sqrt" => airl_rt::math::airl_sqrt(a0!()),
@@ -704,6 +686,37 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "compile-bytecode-to-executable" => dispatch_compile_bytecode_to_executable(args),
         "compile-bytecode-to-executable-with-target" => dispatch_compile_bytecode_to_executable_with_target(args),
         "run-bytecode" => dispatch_run_bytecode(args),
+
+        // extern-c name aliases — used by io.airl AIRL wrappers to call C functions
+        // File I/O
+        "airl_read_file" => airl_rt::io::airl_read_file(a0!()),
+        "airl_write_file" => airl_rt::io::airl_write_file(a0!(), a1!()),
+        "airl_append_file" => airl_rt::io::airl_append_file(a0!(), a1!()),
+        "airl_delete_file" => airl_rt::io::airl_delete_file(a0!()),
+        "airl_file_exists" => airl_rt::io::airl_file_exists(a0!()),
+        "airl_file_size" => airl_rt::io::airl_file_size(a0!()),
+        "airl_file_mtime" => airl_rt::io::airl_file_mtime(a0!()),
+        "airl_rename_file" => airl_rt::io::airl_rename_file(a0!(), a1!()),
+        "airl_temp_file" => airl_rt::io::airl_temp_file(a0!()),
+        // Directory I/O
+        "airl_read_dir" => airl_rt::io::airl_read_dir(a0!()),
+        "airl_create_dir" => airl_rt::io::airl_create_dir(a0!()),
+        "airl_delete_dir" => airl_rt::io::airl_delete_dir(a0!()),
+        "airl_is_dir" => airl_rt::io::airl_is_dir(a0!()),
+        "airl_get_cwd" => airl_rt::misc::airl_get_cwd(),
+        "airl_temp_dir" => airl_rt::io::airl_temp_dir(a0!()),
+        // Stream I/O
+        "airl_read_line" => airl_rt::io::airl_read_line(),
+        "airl_read_lines" => airl_rt::misc::airl_read_lines(a0!()),
+        "airl_read_stdin" => airl_rt::io::airl_read_stdin(),
+        // System
+        "airl_get_args" => airl_rt::io::airl_get_args(),
+        "airl_getenv" => airl_rt::misc::airl_getenv(a0!()),
+        "airl_exit" => airl_rt::misc::airl_exit(a0!()),
+        "airl_sleep" => airl_rt::misc::airl_sleep(a0!()),
+        "airl_time_now" => airl_rt::misc::airl_time_now(),
+        "airl_cpu_count" => airl_rt::misc::airl_cpu_count(),
+        "airl_format_time" => airl_rt::misc::airl_format_time(a0!(), a1!()),
 
         // Not found
         _ => return None,

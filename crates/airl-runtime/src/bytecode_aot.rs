@@ -864,8 +864,8 @@ impl BytecodeAot {
         m.insert("println".into(),    rt.println);
         m.insert("eprint".into(),     rt.eprint);
         m.insert("eprintln".into(),   rt.eprintln);
-        m.insert("read-line".into(),  rt.read_line);
-        m.insert("read-stdin".into(), rt.read_stdin);
+        // read-line, read-stdin
+        // deregistered — AIRL stdlib equivalents in io.airl take over
         m.insert("type-of".into(), rt.type_of);
         m.insert("valid".into(),   rt.valid);
 
@@ -891,22 +891,10 @@ impl BytecodeAot {
         // map-from, map-get-or, map-values, map-size
         // deregistered — AIRL stdlib equivalents in map.airl take over
 
-        // File I/O
-        m.insert("read-file".into(),    rt.read_file);
-        m.insert("write-file".into(),   rt.write_file);
-        m.insert("file-exists?".into(), rt.file_exists);
-        m.insert("append-file".into(),  rt.append_file);
-        m.insert("delete-file".into(),  rt.delete_file);
-        m.insert("delete-dir".into(),   rt.delete_dir);
-        m.insert("rename-file".into(),  rt.rename_file);
-        m.insert("read-dir".into(),     rt.read_dir);
-        m.insert("create-dir".into(),   rt.create_dir);
-        m.insert("file-size".into(),    rt.file_size);
-        m.insert("is-dir?".into(),      rt.is_dir);
-        m.insert("temp-file".into(),     rt.temp_file);
-        m.insert("temp-dir".into(),      rt.temp_dir);
-        m.insert("file-mtime".into(),    rt.file_mtime);
-        m.insert("get-args".into(),     rt.get_args);
+        // File I/O, Directory I/O (read-file, write-file, file-exists?, append-file,
+        // delete-file, delete-dir, rename-file, read-dir, create-dir, file-size,
+        // is-dir?, temp-file, temp-dir, file-mtime, get-args)
+        // deregistered — AIRL stdlib equivalents in io.airl take over
         m.insert("run-bytecode".into(), rt.run_bytecode);
         m.insert("compile-to-executable".into(), rt.compile_to_exe);
         m.insert("compile-bytecode-to-executable".into(), rt.compile_bc_to_exe);
@@ -937,12 +925,8 @@ impl BytecodeAot {
         m.insert("is-nan?".into(),      rt.is_nan);
         m.insert("is-infinite?".into(), rt.is_infinite);
 
-        // System
-        m.insert("cpu-count".into(), rt.cpu_count);
-        m.insert("time-now".into(), rt.time_now);
-
-        // Environment
-        m.insert("getenv".into(), rt.getenv);
+        // System (cpu-count, time-now), Environment (getenv)
+        // deregistered — AIRL stdlib equivalents in io.airl take over
 
         // json-parse, json-stringify
         // deregistered — AIRL stdlib equivalents in json.airl take over
@@ -952,16 +936,14 @@ impl BytecodeAot {
         m.insert("shell-exec-with-stdin".into(), rt.shell_exec_with_stdin);
         m.insert("parse-int-radix".into(),    rt.parse_int_radix);
         m.insert("int-to-string-radix".into(), rt.int_to_string_radix);
-        m.insert("get-cwd".into(),            rt.get_cwd);
+        // get-cwd deregistered — AIRL stdlib equivalent in io.airl takes over
 
         // Misc builtins
         m.insert("char-count".into(),    rt.char_count);
         m.insert("assert".into(),        rt.assert_fn);
         m.insert("panic".into(),         rt.panic_fn);
-        m.insert("exit".into(),          rt.exit_fn);
-        m.insert("sleep".into(),         rt.sleep_fn);
-        m.insert("format-time".into(),   rt.format_time);
-        m.insert("read-lines".into(),    rt.read_lines);
+        // exit, sleep, format-time, read-lines
+        // deregistered — AIRL stdlib equivalents in io.airl take over
         // concat, range, reverse, take, drop, zip, flatten, enumerate
         // deregistered — AIRL stdlib equivalents in prelude.airl take over
         // path-join, path-parent, path-filename, path-extension, is-absolute?
@@ -3048,6 +3030,7 @@ pub const RESULT_SOURCE: &str = include_str!("../../../stdlib/result.airl");
 pub const STRING_SOURCE: &str = include_str!("../../../stdlib/string.airl");
 pub const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
 pub const SET_SOURCE: &str = include_str!("../../../stdlib/set.airl");
+pub const IO_SOURCE: &str = include_str!("../../../stdlib/io.airl");
 
 /// An extern-c declaration extracted from source: C symbol name + arity.
 #[derive(Debug, Clone)]
@@ -3117,7 +3100,7 @@ pub fn compile_to_executable_impl(
 ) -> Result<(), String> {
     let mut all_funcs: Vec<BytecodeFunc> = Vec::new();
 
-    // 1. Compile stdlib
+    // 1. Compile stdlib (pure AIRL — no extern-c)
     for (src, name) in &[
         (COLLECTIONS_SOURCE, "collections"),
         (MATH_SOURCE, "math"),
@@ -3128,6 +3111,16 @@ pub fn compile_to_executable_impl(
     ] {
         let (funcs, _stdlib_main) = compile_source_to_bytecode(src, name)?;
         all_funcs.extend(funcs);
+    }
+
+    // 1b. Compile stdlib with extern-c declarations (io.airl)
+    let mut stdlib_extern_c_decls: Vec<ExternCInfo> = Vec::new();
+    for (src, name) in &[
+        (IO_SOURCE, "io"),
+    ] {
+        let (funcs, _stdlib_main, externs) = compile_source_to_bytecode_with_externs(src, name)?;
+        all_funcs.extend(funcs);
+        stdlib_extern_c_decls.extend(externs);
     }
 
     // 2. Compile user sources
@@ -3149,7 +3142,7 @@ pub fn compile_to_executable_impl(
         .collect();
 
     let mut aot = BytecodeAot::new()?;
-    for ext in &extern_c_decls {
+    for ext in stdlib_extern_c_decls.iter().chain(&extern_c_decls) {
         aot.register_extern_c(&ext.c_name, ext.arity);
     }
     for func in &all_funcs {

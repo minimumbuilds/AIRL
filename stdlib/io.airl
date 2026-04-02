@@ -2,32 +2,201 @@
 ;;
 ;; These wrappers call C runtime functions via extern-c declarations.
 ;; They add AIRL-level contracts (requires/ensures) around the raw C calls.
-;; This is the proof-of-concept for migrating builtins to AIRL wrappers.
+;; Builtins deregistered from the AOT map and VM dispatch — these are
+;; now the canonical implementations.
 
-;; ── extern-c declarations ──
-(extern-c "airl_print"       [(v : String) -> Unit])
-(extern-c "airl_println"     [(v : String) -> Unit])
+;; ════════════════════════════════════════════════════════════════
+;; File I/O (Batch 7a)
+;; ════════════════════════════════════════════════════════════════
+
 (extern-c "airl_read_file"   [(path : String) -> String])
 (extern-c "airl_write_file"  [(path : String) (content : String) -> Bool])
+(extern-c "airl_append_file" [(path : String) (content : String) -> Bool])
+(extern-c "airl_delete_file" [(path : String) -> Bool])
 (extern-c "airl_file_exists" [(path : String) -> Bool])
+(extern-c "airl_file_size"   [(path : String) -> i64])
+(extern-c "airl_file_mtime"  [(path : String) -> i64])
+(extern-c "airl_rename_file" [(old : String) (new : String) -> Bool])
+(extern-c "airl_temp_file"   [(prefix : String) -> String])
 
-;; ── safe-read-file: read with contract ──
-(defn safe-read-file
+(defn read-file
   :sig [(path : String) -> String]
   :requires [(valid path)]
   :ensures [(valid result)]
   :body (airl_read_file path))
 
-;; ── safe-write-file: write with contract ──
-(defn safe-write-file
+(defn write-file
   :sig [(path : String) (content : String) -> Bool]
   :requires [(valid path) (valid content)]
   :ensures [(valid result)]
   :body (airl_write_file path content))
 
-;; ── safe-file-exists?: existence check with contract ──
-(defn safe-file-exists?
+(defn append-file
+  :sig [(path : String) (content : String) -> Bool]
+  :requires [(valid path) (valid content)]
+  :ensures [(valid result)]
+  :body (airl_append_file path content))
+
+(defn delete-file
+  :sig [(path : String) -> Bool]
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body (airl_delete_file path))
+
+(defn file-exists?
   :sig [(path : String) -> Bool]
   :requires [(valid path)]
   :ensures [(valid result)]
   :body (airl_file_exists path))
+
+(defn file-size
+  :sig [(path : String) -> i64]
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body (airl_file_size path))
+
+(defn file-mtime
+  :sig [(path : String) -> i64]
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body (airl_file_mtime path))
+
+(defn rename-file
+  :sig [(old : String) (new : String) -> Bool]
+  :requires [(valid old) (valid new)]
+  :ensures [(valid result)]
+  :body (airl_rename_file old new))
+
+(defn temp-file
+  :sig [(prefix : String) -> String]
+  :requires [(valid prefix)]
+  :ensures [(valid result)]
+  :body (airl_temp_file prefix))
+
+;; ════════════════════════════════════════════════════════════════
+;; Directory I/O (Batch 7b)
+;; ════════════════════════════════════════════════════════════════
+
+(extern-c "airl_read_dir"   [(path : String) -> List])
+(extern-c "airl_create_dir" [(path : String) -> Bool])
+(extern-c "airl_delete_dir" [(path : String) -> Bool])
+(extern-c "airl_is_dir"     [(path : String) -> Bool])
+(extern-c "airl_get_cwd"    [-> String])
+(extern-c "airl_temp_dir"   [(prefix : String) -> String])
+
+(defn read-dir
+  :sig [(path : String) -> List]
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body (airl_read_dir path))
+
+(defn create-dir
+  :sig [(path : String) -> Bool]
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body (airl_create_dir path))
+
+(defn delete-dir
+  :sig [(path : String) -> Bool]
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body (airl_delete_dir path))
+
+(defn is-dir?
+  :sig [(path : String) -> Bool]
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body (airl_is_dir path))
+
+(defn get-cwd
+  :sig [-> String]
+  :ensures [(valid result)]
+  :body (airl_get_cwd))
+
+(defn temp-dir
+  :sig [(prefix : String) -> String]
+  :requires [(valid prefix)]
+  :ensures [(valid result)]
+  :body (airl_temp_dir prefix))
+
+;; ════════════════════════════════════════════════════════════════
+;; Stream I/O (Batch 7c)
+;; ════════════════════════════════════════════════════════════════
+
+(extern-c "airl_print"       [(v : String) -> Unit])
+(extern-c "airl_println"     [(v : String) -> Unit])
+(extern-c "airl_eprint"      [(v : String) -> Unit])
+(extern-c "airl_eprintln"    [(v : String) -> Unit])
+(extern-c "airl_read_line"   [-> String])
+(extern-c "airl_read_lines"  [(path : String) -> List])
+(extern-c "airl_read_stdin"  [-> String])
+
+(defn read-line
+  :sig [-> String]
+  :ensures [(valid result)]
+  :body (airl_read_line))
+
+(defn read-lines
+  :sig [(path : String) -> List]
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body (airl_read_lines path))
+
+(defn read-stdin
+  :sig [-> String]
+  :ensures [(valid result)]
+  :body (airl_read_stdin))
+
+;; NOTE: print, println, eprint, eprintln are NOT deregistered.
+;; print is variadic in the AOT compiler (special-cased in compile_func)
+;; and in the VM (argc-dependent dispatch). Wrapping variadic builtins
+;; in single-arity AIRL functions would break multi-arg print calls.
+;; The extern-c declarations above are kept for direct use.
+
+;; ════════════════════════════════════════════════════════════════
+;; System (Batch 7d)
+;; ════════════════════════════════════════════════════════════════
+
+(extern-c "airl_get_args"    [-> List])
+(extern-c "airl_getenv"      [(name : String) -> String])
+(extern-c "airl_exit"        [(code : i64) -> Unit])
+(extern-c "airl_sleep"       [(ms : i64) -> Unit])
+(extern-c "airl_time_now"    [-> i64])
+(extern-c "airl_cpu_count"   [-> i64])
+(extern-c "airl_format_time" [(ms : i64) (fmt : String) -> String])
+
+(defn get-args
+  :sig [-> List]
+  :ensures [(valid result)]
+  :body (airl_get_args))
+
+(defn getenv
+  :sig [(name : String) -> String]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body (airl_getenv name))
+
+(defn exit
+  :sig [(code : i64) -> Unit]
+  :body (airl_exit code))
+
+(defn sleep
+  :sig [(ms : i64) -> Unit]
+  :requires [(>= ms 0)]
+  :body (airl_sleep ms))
+
+(defn time-now
+  :sig [-> i64]
+  :ensures [(valid result)]
+  :body (airl_time_now))
+
+(defn cpu-count
+  :sig [-> i64]
+  :ensures [(> result 0)]
+  :body (airl_cpu_count))
+
+(defn format-time
+  :sig [(ms : i64) (fmt : String) -> String]
+  :requires [(valid fmt)]
+  :ensures [(valid result)]
+  :body (airl_format_time ms fmt))
