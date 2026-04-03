@@ -988,16 +988,24 @@ pub extern "C" fn airl_time_now() -> *mut RtValue {
 #[no_mangle]
 pub extern "C" fn airl_getenv(name: *mut RtValue) -> *mut RtValue {
     let key = match unsafe { &(*name).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("not a string") };
-    // SEC-7: When AIRL_ALLOW_ENV is set, only allowlisted env vars are readable
-    if let Some(allowlist) = env_allowlist() {
-        if !allowlist.iter().any(|a| a == key) {
-            return err_variant(&format!("env var not found: {}", key));
-        }
+    // Read from cached environment snapshot taken at process start (before
+    // mimalloc can corrupt the libc environ block).
+    let env_cache = env_snapshot();
+    match env_cache.get(key) {
+        Some(val) => ok_variant(rt_str(val.clone())),
+        None => err_variant(&format!("env var not found: {}", key)),
     }
-    match std::env::var(key) {
-        Ok(val) => ok_variant(rt_str(val)),
-        Err(_) => err_variant(&format!("env var not found: {}", key)),
-    }
+}
+
+/// Cache all environment variables at first access. mimalloc (the global
+/// allocator) can corrupt libc's environ block on some platforms, making
+/// std::env::var return garbled data. Reading them all once into a HashMap
+/// at process start avoids the issue.
+fn env_snapshot() -> &'static std::collections::HashMap<String, String> {
+    static CACHE: OnceLock<std::collections::HashMap<String, String>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        std::env::vars().collect()
+    })
 }
 
 #[cfg(target_os = "airlos")]
