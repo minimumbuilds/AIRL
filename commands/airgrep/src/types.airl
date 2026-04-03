@@ -1,0 +1,80 @@
+;; ── airgrep: File Type Definitions ─────────────────────────────
+;;
+;; Maps type names (like "rust", "py") to file extensions.
+;; Used for --type / -t filtering.
+
+;; ── add-type : add a type entry to the type map ──
+(defn add-type
+  :sig [(m : _) (name : String) (extensions : List) -> _]
+  :requires [(valid m) (valid name)]
+  :ensures [(valid result)]
+  :body (map-set m name extensions))
+
+;; ── default-type-map : returns Map of type-name to extension list ──
+(defn default-type-map
+  :sig [-> _]
+  :requires [true]
+  :ensures [(valid result)]
+  :body (map-set (map-set (map-set (map-set (map-set
+         (map-set (map-set (map-set (map-set (map-set
+         (map-set (map-set (map-set (map-set (map-set
+         (map-set (map-set (map-set (map-set (map-set
+           (map-new)
+           "airl" ["airl"])
+           "rust" ["rs"])
+           "c" ["c" "h"])
+           "cpp" ["cpp" "cc" "cxx" "hpp" "hh" "hxx"])
+           "py" ["py" "pyi"])
+           "js" ["js" "mjs" "cjs"])
+           "ts" ["ts" "tsx" "mts"])
+           "java" ["java"])
+           "go" ["go"])
+           "rb" ["rb"])
+           "sh" ["sh" "bash" "zsh"])
+           "md" ["md" "markdown"])
+           "json" ["json"])
+           "yaml" ["yaml" "yml"])
+           "toml" ["toml"])
+           "xml" ["xml"])
+           "html" ["html" "htm"])
+           "css" ["css" "scss" "sass"])
+           "sql" ["sql"])
+           "asm" ["asm" "s" "S"]))
+
+;; ── ext-matches-type-rec : check if extension is in the list ──
+(defn ext-matches-type-rec
+  :sig [(ext : String) (extensions : List) -> Bool]
+  :requires [(valid ext)]
+  :ensures [(valid result)]
+  :body (if (empty? extensions)
+          false
+          (if (= ext (head extensions))
+            true
+            (ext-matches-type-rec ext (tail extensions)))))
+
+;; ── file-matches-type : check if a file path matches a type name ──
+(defn file-matches-type
+  :sig [(path : String) (type-name : String) (type-map : _) -> Bool]
+  :requires [(valid path) (valid type-name)]
+  :ensures [(valid result)]
+  :body (if (map-has type-map type-name)
+          (let (ext : String (path-extension path))
+            (ext-matches-type-rec ext (map-get type-map type-name)))
+          false))
+
+;; ── format-type-entry : format one type for display ──
+(defn format-type-entry
+  :sig [(name : String) (type-map : _) -> String]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body (let (exts : List (map-get type-map name))
+          (let (ext-strs : List (map (fn [e] (str "*." e)) exts))
+            (str name ": " (join ext-strs ", ")))))
+
+;; ── list-types : format type list for --type-list output ──
+(defn list-types
+  :sig [(type-map : _) -> String]
+  :requires [(valid type-map)]
+  :ensures [(valid result)]
+  :body (let (names : List (map-keys type-map))
+          (join (map (fn [n] (format-type-entry n type-map)) names) "\n")))

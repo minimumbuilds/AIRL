@@ -1,0 +1,135 @@
+;; ── airgrep: CLI Definition and Dispatch ──────────────────────
+;;
+;; Builds the CairLI app with all flags, converts parsed args
+;; to options maps, orchestrates walk → search → format → exit code.
+
+;; ── add-flags-rec : fold flag configs onto app ──
+(defn add-flags-rec
+  :sig [(app : _) (flag-configs : List) -> _]
+  :requires [(valid app)]
+  :ensures [(valid result)]
+  :body (if (empty? flag-configs)
+          app
+          (add-flags-rec (cairli-add-flag app (head flag-configs)) (tail flag-configs))))
+
+;; ── build-app : construct CairLI app with all flags ──
+(defn build-app
+  :sig [-> _]
+  :requires [true]
+  :ensures [(valid result)]
+  :body (let (app : _ (cairli-app (map-from ["name" "airgrep" "version" "0.1.0"
+                                              "description" "Recursive search tool written in pure AIRL"])))
+          (let (app1 : _ (cairli-add-positional app (map-from ["name" "pattern" "help" "Search pattern" "required" false "default" ""])))
+            (let (app2 : _ (cairli-add-positional app1 (map-from ["name" "path" "help" "File or directory to search" "required" false "default" "."])))
+          (add-flags-rec app2
+            (cons (map-from ["name" "ignore-case" "short" "i" "type" "bool" "help" "Case insensitive search"])
+            (cons (map-from ["name" "word-regexp" "short" "w" "type" "bool" "help" "Match whole words only"])
+            (cons (map-from ["name" "fixed-strings" "short" "F" "type" "bool" "help" "Treat pattern as literal string"])
+            (cons (map-from ["name" "invert-match" "short" "v" "type" "bool" "help" "Invert match"])
+            (cons (map-from ["name" "count" "short" "c" "type" "bool" "help" "Show match count per file"])
+            (cons (map-from ["name" "files-with-matches" "short" "l" "type" "bool" "help" "Show only filenames"])
+            (cons (map-from ["name" "quiet" "short" "q" "type" "bool" "help" "Quiet mode"])
+            (cons (map-from ["name" "max-count" "short" "m" "type" "int" "help" "Max matches per file" "default" "0"])
+            (cons (map-from ["name" "after-context" "short" "A" "type" "int" "help" "Lines after match" "default" "0"])
+            (cons (map-from ["name" "before-context" "short" "B" "type" "int" "help" "Lines before match" "default" "0"])
+            (cons (map-from ["name" "context" "short" "C" "type" "int" "help" "Lines before and after" "default" "0"])
+            (cons (map-from ["name" "color" "type" "string" "help" "Color: auto, always, never" "default" "auto"])
+            (cons (map-from ["name" "hidden" "type" "bool" "help" "Search hidden files"])
+            (cons (map-from ["name" "no-ignore" "type" "bool" "help" "Don't respect .gitignore"])
+            (cons (map-from ["name" "glob" "short" "g" "type" "string" "help" "Include files matching glob" "default" ""])
+            (cons (map-from ["name" "type" "short" "t" "type" "string" "help" "Only search files of TYPE" "default" ""])
+            (cons (map-from ["name" "type-list" "type" "bool" "help" "Show supported file types"])
+            (cons (map-from ["name" "max-depth" "type" "int" "help" "Max directory depth" "default" "999"])
+            (cons (map-from ["name" "line-number" "short" "n" "type" "bool" "help" "Show line numbers"])
+            []))))))))))))))))))))))))
+
+;; ── resolve-color : decide if color should be used ──
+(defn resolve-color
+  :sig [(color-str : String) -> Bool]
+  :requires [(valid color-str)]
+  :ensures [(valid result)]
+  :body (if (= color-str "always")
+          true
+          (if (= color-str "never")
+            false
+            ;; "auto" — use color if stdout is a tty (approximate: default to true)
+            true)))
+
+;; ── build-search-opts : convert parsed CairLI context to search options map ──
+(defn build-search-opts
+  :sig [(ctx : _) -> _]
+  :requires [(valid ctx)]
+  :ensures [(valid result)]
+  :body (let (before : i64 (cairli-flag ctx "before-context"))
+              (after : i64 (cairli-flag ctx "after-context"))
+              (context : i64 (cairli-flag ctx "context"))
+          (let (eff-before : i64 (if (> context 0) context before))
+               (eff-after : i64 (if (> context 0) context after))
+          (map-from ["ignore-case" (cairli-flag ctx "ignore-case")
+                     "word-regexp" (cairli-flag ctx "word-regexp")
+                     "fixed-strings" (cairli-flag ctx "fixed-strings")
+                     "invert-match" (cairli-flag ctx "invert-match")
+                     "count-only" (cairli-flag ctx "count")
+                     "files-only" (cairli-flag ctx "files-with-matches")
+                     "quiet" (cairli-flag ctx "quiet")
+                     "max-count" (cairli-flag ctx "max-count")
+                     "before-context" eff-before
+                     "after-context" eff-after
+                     "color" (resolve-color (cairli-flag ctx "color"))
+                     "hidden" (cairli-flag ctx "hidden")
+                     "no-ignore" (cairli-flag ctx "no-ignore")
+                     "glob" (cairli-flag ctx "glob")
+                     "type" (cairli-flag ctx "type")
+                     "type-map" (default-type-map)
+                     "max-depth" (cairli-flag ctx "max-depth")]))))
+
+;; ── search-files-rec : search each file and collect results ──
+(defn search-files-rec
+  :sig [(files : List) (regex : String) (opts : _) (acc : List) -> List]
+  :requires [(valid files)]
+  :ensures [(valid result)]
+  :body (if (empty? files)
+          (reverse acc)
+          (let (file-path : String (head files))
+               (file-result : _ (search-file file-path regex opts))
+            (search-files-rec (tail files) regex opts (cons file-result acc)))))
+
+;; ── has-any-matches : check if any file had matches ──
+(defn has-any-matches
+  :sig [(results : List) -> Bool]
+  :requires [(valid results)]
+  :ensures [(valid result)]
+  :body (if (empty? results)
+          false
+          (if (> (map-get (head results) "match-count") 0)
+            true
+            (has-any-matches (tail results)))))
+
+;; ── run-search : orchestrate walk → search → format → exit code ──
+(defn run-search
+  :sig [(ctx : _) -> i64]
+  :requires [(valid ctx)]
+  :ensures [(valid result)]
+  :body (let (pattern : String (cairli-positional ctx "pattern"))
+              (search-path : String (cairli-positional ctx "path"))
+          (let (opts : _ (build-search-opts ctx))
+            (let (regex : String (build-regex pattern opts))
+                 (files : List (walk-files search-path opts))
+              (let (results : List (search-files-rec files regex opts []))
+                (let (total : i64 (print-results results regex opts))
+                  (if (has-any-matches results) 0 1)))))))
+
+;; ── dispatch : handle --type-list, then call run-search ──
+(defn dispatch
+  :sig [(ctx : _) -> i64]
+  :requires [(valid ctx)]
+  :ensures [(valid result)]
+  :body (if (cairli-flag ctx "type-list")
+          (do
+            (print (str (list-types (default-type-map)) "\n"))
+            0)
+          (if (= (cairli-positional ctx "pattern") "")
+            (do
+              (eprint "error: missing required argument: <pattern>\nTry 'airgrep --help' for more information.\n")
+              (exit 2))
+            (run-search ctx))))

@@ -1,0 +1,8 @@
+;; ── airgrep: Entry Point ───────────────────────────────────────
+;;
+;; Top-level expressions — g3 AOT runs these directly.
+;; No defn main; the last source file's top-level code is the entry point.
+
+(let (app : _ (build-app))
+  (let (ctx : _ (cairli-run-or-die app (get-args)))
+    (exit (dispatch ctx))))

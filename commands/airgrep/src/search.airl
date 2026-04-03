@@ -1,0 +1,174 @@
+;; ── airgrep: Line-by-Line Search Engine ────────────────────────
+;;
+;; Searches file contents line by line with regex, supporting
+;; context lines (-B/-A/-C), max count (-m), invert match (-v),
+;; and binary file detection.
+
+;; ── build-regex : construct final regex from pattern + flags ──
+;; Handles -i (case insensitive prefix), -w (word boundary), -F (fixed string)
+(defn build-regex
+  :sig [(pattern : String) (opts : _) -> String]
+  :requires [(valid pattern)]
+  :ensures [(valid result)]
+  :body (let (fixed : Bool (map-get-or opts "fixed-strings" false))
+              (word : Bool (map-get-or opts "word-regexp" false))
+              (icase : Bool (map-get-or opts "ignore-case" false))
+          (let (pat1 : String (if fixed (escape-regex pattern) pattern))
+            (let (pat2 : String (if word (str "\\b" pat1 "\\b") pat1))
+              (let (pat3 : String (if icase (str "(?i)" pat2) pat2))
+                pat3)))))
+
+;; ── search-line : test one line against pattern ──
+;; Returns true if the line matches (or doesn't match with -v invert)
+(defn search-line
+  :sig [(line : String) (regex : String) (invert : Bool) -> Bool]
+  :requires [(valid line) (valid regex)]
+  :ensures [(valid result)]
+  :body (let (matched : _ (regex-match regex line))
+          (let (has-match : Bool (not (= matched nil)))
+            (if invert (not has-match) has-match))))
+
+;; ── search-lines-rec : search lines accumulating match indices ──
+;; Returns list of matching 0-based line indices
+(defn search-lines-rec
+  :sig [(line-list : List) (regex : String) (invert : Bool) (idx : i64) (max-count : i64) (found : i64) (acc : List) -> List]
+  :requires [(valid line-list)]
+  :ensures [(valid result)]
+  :body (if (empty? line-list)
+          (reverse acc)
+          (if (if (> max-count 0) (>= found max-count) false)
+            (reverse acc)
+            (let (line : String (head line-list))
+              (if (search-line line regex invert)
+                (search-lines-rec (tail line-list) regex invert (+ idx 1) max-count (+ found 1) (cons idx acc))
+                (search-lines-rec (tail line-list) regex invert (+ idx 1) max-count found acc))))))
+
+;; ── search-file-lines : search all lines, handle -m max-count ──
+;; Returns list of 0-based line indices that matched.
+(defn search-file-lines
+  :sig [(all-lines : List) (regex : String) (invert : Bool) (max-count : i64) -> List]
+  :requires [(valid all-lines) (valid regex)]
+  :ensures [(valid result)]
+  :body (search-lines-rec all-lines regex invert 0 max-count 0 []))
+
+;; ── expand-context-range : given match indices, expand by before/after ──
+;; Returns list of [start end] pairs (0-based, inclusive)
+(defn expand-context-rec
+  :sig [(match-indices : List) (before : i64) (after : i64) (total-lines : i64) (acc : List) -> List]
+  :requires [(valid match-indices)]
+  :ensures [(valid result)]
+  :body (if (empty? match-indices)
+          (reverse acc)
+          (let (idx : i64 (head match-indices))
+            (let (start : i64 (if (< (- idx before) 0) 0 (- idx before)))
+                 (end : i64 (if (> (+ idx after) (- total-lines 1)) (- total-lines 1) (+ idx after)))
+              (expand-context-rec (tail match-indices) before after total-lines
+                (cons (cons start (cons end [])) acc))))))
+
+;; ── merge-ranges-rec : merge overlapping [start end] ranges ──
+(defn merge-ranges-rec
+  :sig [(ranges : List) (current : List) (acc : List) -> List]
+  :requires [(valid ranges)]
+  :ensures [(valid result)]
+  :body (if (empty? ranges)
+          (reverse (cons current acc))
+          (let (next-range : List (head ranges))
+               (cur-start : i64 (head current))
+               (cur-end : i64 (at current 1))
+            (let (next-start : i64 (head next-range))
+                 (next-end : i64 (at next-range 1))
+            ;; Overlapping or adjacent?
+            (if (<= next-start (+ cur-end 1))
+              ;; Merge: extend current range
+              (merge-ranges-rec (tail ranges)
+                (cons cur-start (cons (if (> next-end cur-end) next-end cur-end) []))
+                acc)
+              ;; Gap: push current, start new
+              (merge-ranges-rec (tail ranges) next-range (cons current acc)))))))
+
+;; ── add-context : expand match indices by -B/-A, merge overlapping ──
+;; Returns list of context groups, each a [start end] range.
+(defn add-context
+  :sig [(match-indices : List) (before : i64) (after : i64) (total-lines : i64) -> List]
+  :requires [(valid match-indices)]
+  :ensures [(valid result)]
+  :body (if (empty? match-indices)
+          []
+          (let (expanded : List (expand-context-rec match-indices before after total-lines []))
+            (if (empty? expanded)
+              []
+              (merge-ranges-rec (tail expanded) (head expanded) [])))))
+
+;; ── is-binary : check first bytes for NUL byte ──
+(defn is-binary-rec
+  :sig [(char-list : List) (count : i64) (limit : i64) -> Bool]
+  :requires [(valid char-list)]
+  :ensures [(valid result)]
+  :body (if (empty? char-list)
+          false
+          (if (>= count limit)
+            false
+            (let (c : String (head char-list))
+              (if (= (char-code c) 0)
+                true
+                (is-binary-rec (tail char-list) (+ count 1) limit))))))
+
+(defn is-binary
+  :sig [(content : String) -> Bool]
+  :requires [(valid content)]
+  :ensures [(valid result)]
+  :body (let (check-len : i64 (if (> (length content) 8192) 8192 (length content)))
+          (let (sample : String (substring content 0 check-len))
+            (is-binary-rec (chars sample) 0 check-len))))
+
+;; ── make-match-set : build a map of matching line indices for fast lookup ──
+(defn make-match-set-rec
+  :sig [(indices : List) (acc : _) -> _]
+  :requires [(valid indices)]
+  :ensures [(valid result)]
+  :body (if (empty? indices)
+          acc
+          (make-match-set-rec (tail indices) (map-set acc (str (head indices)) true))))
+
+(defn make-match-set
+  :sig [(indices : List) -> _]
+  :requires [(valid indices)]
+  :ensures [(valid result)]
+  :body (make-match-set-rec indices (map-new)))
+
+;; ── is-match-line : check if a line index is in the match set ──
+(defn is-match-line
+  :sig [(idx : i64) (match-set : _) -> Bool]
+  :requires [(valid match-set)]
+  :ensures [(valid result)]
+  :body (map-get-or match-set (str idx) false))
+
+;; ── search-file : read file, detect binary, search, add context ──
+;; Returns a result map with keys:
+;;   "path" — file path
+;;   "lines" — all lines of the file
+;;   "match-indices" — list of matching line indices
+;;   "context-groups" — list of [start end] ranges
+;;   "match-count" — number of matches
+;;   "is-binary" — whether file is binary
+;;   "match-set" — map of line-idx-string -> true for O(1) lookup
+(defn search-file
+  :sig [(file-path : String) (regex : String) (opts : _) -> _]
+  :requires [(valid file-path) (valid regex)]
+  :ensures [(valid result)]
+  :body (let (content : String (read-file file-path))
+          (if (is-binary content)
+            (map-from ["path" file-path "lines" [] "match-indices" []
+                       "context-groups" [] "match-count" 0 "is-binary" true
+                       "match-set" (map-new)])
+            (let (all-lines : List (lines content))
+                 (invert : Bool (map-get-or opts "invert-match" false))
+                 (max-count : i64 (map-get-or opts "max-count" 0))
+                 (before : i64 (map-get-or opts "before-context" 0))
+                 (after : i64 (map-get-or opts "after-context" 0))
+              (let (match-idxs : List (search-file-lines all-lines regex invert max-count))
+                (let (groups : List (add-context match-idxs before after (length all-lines)))
+                     (mset : _ (make-match-set match-idxs))
+                  (map-from ["path" file-path "lines" all-lines "match-indices" match-idxs
+                             "context-groups" groups "match-count" (length match-idxs)
+                             "is-binary" false "match-set" mset])))))))

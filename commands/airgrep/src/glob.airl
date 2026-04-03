@@ -1,0 +1,111 @@
+;; ── airgrep: Glob Pattern Matching ─────────────────────────────
+;;
+;; Converts glob patterns (*.rs, src/**/*.airl) to regex,
+;; then matches against file paths using regex-match.
+
+;; ── escape-regex-char : escape one regex metacharacter ──
+(defn escape-regex-char
+  :sig [(c : String) -> String]
+  :requires [(valid c)]
+  :ensures [(valid result)]
+  :body (if (= c "\\") "\\\\"
+        (if (= c ".") "\\."
+        (if (= c "^") "\\^"
+        (if (= c "$") "\\$"
+        (if (= c "|") "\\|"
+        (if (= c "(") "\\("
+        (if (= c ")") "\\)"
+        (if (= c "+") "\\+"
+        (if (= c "{") "\\{"
+        (if (= c "}") "\\}"
+        (if (= c "[") "\\["
+        (if (= c "]") "\\]"
+          c)))))))))))))
+
+;; ── escape-regex-chars-rec : recursive helper ──
+(defn escape-regex-chars-rec
+  :sig [(char-list : List) (acc : String) -> String]
+  :requires [(valid char-list)]
+  :ensures [(valid result)]
+  :body (if (empty? char-list)
+          acc
+          (escape-regex-chars-rec
+            (tail char-list)
+            (str acc (escape-regex-char (head char-list))))))
+
+;; ── escape-regex : escape all regex metacharacters in a string ──
+;; Used for -F (fixed-string) mode to treat pattern as literal.
+(defn escape-regex
+  :sig [(s : String) -> String]
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (escape-regex-chars-rec (chars s) ""))
+
+;; ── glob-chars-to-regex : convert glob char list to regex string ──
+;; Handles: * -> [^/]*, ** -> .*, ? -> [^/], [abc] -> [abc] passthrough
+(defn glob-chars-to-regex
+  :sig [(cs : List) (acc : String) -> String]
+  :requires [(valid cs)]
+  :ensures [(valid result)]
+  :body (if (empty? cs)
+          acc
+          (let (c : String (head cs))
+               (rest : List (tail cs))
+            (if (= c "*")
+              ;; Check for **
+              (if (if (not (empty? rest)) (= (head rest) "*") false)
+                ;; ** matches across directories
+                (glob-chars-to-regex (tail rest) (str acc ".*"))
+                ;; Single * matches within one path segment
+                (glob-chars-to-regex rest (str acc "[^/]*")))
+              (if (= c "?")
+                (glob-chars-to-regex rest (str acc "[^/]"))
+                (if (= c "[")
+                  ;; Pass bracket expression through to regex
+                  (let (bracket-result : List (collect-bracket rest ""))
+                       (bracket-content : String (head bracket-result))
+                       (remaining : List (at bracket-result 1))
+                    (glob-chars-to-regex remaining (str acc "[" bracket-content "]")))
+                  ;; Regular character — escape if needed
+                  (glob-chars-to-regex rest (str acc (escape-regex-char c)))))))))
+
+;; ── collect-bracket : gather chars until closing ] ──
+;; Returns a two-element list: [content, remaining-chars]
+(defn collect-bracket
+  :sig [(cs : List) (acc : String) -> List]
+  :requires [(valid cs)]
+  :ensures [(valid result)]
+  :body (if (empty? cs)
+          [acc []]
+          (let (c : String (head cs))
+               (rest : List (tail cs))
+            (if (= c "]")
+              [acc rest]
+              (collect-bracket rest (str acc c))))))
+
+;; ── glob-to-regex : convert a glob pattern to a regex string ──
+;; Anchors the regex to match the full string.
+(defn glob-to-regex
+  :sig [(pattern : String) -> String]
+  :requires [(valid pattern)]
+  :ensures [(valid result)]
+  :body (str "^" (glob-chars-to-regex (chars pattern) "") "$"))
+
+;; ── glob-match : test if a path matches a glob pattern ──
+(defn glob-match
+  :sig [(pattern : String) (path : String) -> Bool]
+  :requires [(valid pattern) (valid path)]
+  :ensures [(valid result)]
+  :body (let (regex : String (glob-to-regex pattern))
+          (not (= (regex-match regex path) nil))))
+
+;; ── glob-match-path : match glob against filename or full path ──
+;; For patterns without /, match against the basename.
+;; For patterns with /, match against the full relative path.
+(defn glob-match-path
+  :sig [(pattern : String) (path : String) -> Bool]
+  :requires [(valid pattern) (valid path)]
+  :ensures [(valid result)]
+  :body (if (contains pattern "/")
+          (glob-match pattern path)
+          (glob-match pattern (path-filename path))))

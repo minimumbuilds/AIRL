@@ -1,0 +1,93 @@
+;; ── airgrep: Recursive Directory Traversal ─────────────────────
+;;
+;; Walks directories recursively, respecting .gitignore rules,
+;; hidden file filtering, glob patterns, and file type filters.
+
+;; ── is-hidden : check if a filename starts with . ──
+(defn is-hidden
+  :sig [(name : String) -> Bool]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body (if (= name "")
+          false
+          (starts-with name ".")))
+
+;; ── should-skip-entry : decide if entry should be skipped ──
+;; opts is a map with keys: "hidden" (bool), "no-ignore" (bool)
+(defn should-skip-entry
+  :sig [(name : String) (rel-path : String) (is-dir : Bool) (rules : List) (opts : _) -> Bool]
+  :requires [(valid name) (valid rel-path)]
+  :ensures [(valid result)]
+  :body (let (show-hidden : Bool (map-get-or opts "hidden" false))
+              (no-ignore : Bool (map-get-or opts "no-ignore" false))
+          ;; Skip hidden files unless --hidden
+          (if (if (not show-hidden) (is-hidden name) false)
+            true
+            ;; Skip ignored files unless --no-ignore
+            (if (if (not no-ignore) (is-ignored rules rel-path is-dir) false)
+              true
+              false))))
+
+;; ── file-passes-filters : check glob and type filters ──
+(defn file-passes-filters
+  :sig [(rel-path : String) (opts : _) -> Bool]
+  :requires [(valid rel-path)]
+  :ensures [(valid result)]
+  :body (let (glob-pat : String (map-get-or opts "glob" ""))
+              (type-name : String (map-get-or opts "type" ""))
+              (type-map : _ (map-get-or opts "type-map" (map-new)))
+          ;; Check glob filter
+          (if (if (not (= glob-pat "")) (not (glob-match-path glob-pat rel-path)) false)
+            false
+            ;; Check type filter
+            (if (if (not (= type-name "")) (not (file-matches-type rel-path type-name type-map)) false)
+              false
+              true))))
+
+;; ── walk-entries-rec : process directory entries ──
+(defn walk-entries-rec
+  :sig [(entries : List) (dir-path : String) (rel-base : String) (rules : List) (opts : _) (depth : i64) (acc : List) -> List]
+  :requires [(valid entries)]
+  :ensures [(valid result)]
+  :body (if (empty? entries)
+          acc
+          (let (name : String (head entries))
+            (let (full-path : String (path-join dir-path name))
+                 (rel-path : String (if (= rel-base "") name (path-join rel-base name)))
+              (let (entry-is-dir : Bool (is-dir? full-path))
+            (if (should-skip-entry name rel-path entry-is-dir rules opts)
+              (walk-entries-rec (tail entries) dir-path rel-base rules opts depth acc)
+              (if entry-is-dir
+                ;; Recurse into directory
+                (let (sub-rules : List (merge-ignore-rules rules full-path))
+                  (let (sub-results : List (walk-dir-rec full-path rel-path sub-rules opts (+ depth 1) []))
+                    (let (new-acc : List (fold (fn [a item] (cons item a)) acc sub-results))
+                      (walk-entries-rec (tail entries) dir-path rel-base rules opts depth new-acc))))
+                ;; File: check filters, add if passes
+                (if (file-passes-filters rel-path opts)
+                  (walk-entries-rec (tail entries) dir-path rel-base rules opts depth (cons full-path acc))
+                  (walk-entries-rec (tail entries) dir-path rel-base rules opts depth acc)))))))))
+
+;; ── walk-dir-rec : recursive walk with depth tracking ──
+(defn walk-dir-rec
+  :sig [(dir-path : String) (rel-base : String) (rules : List) (opts : _) (depth : i64) (acc : List) -> List]
+  :requires [(valid dir-path)]
+  :ensures [(valid result)]
+  :body (let (max-depth : i64 (map-get-or opts "max-depth" 999))
+          (if (> depth max-depth)
+            acc
+            (let (entries : List (read-dir dir-path))
+              (walk-entries-rec entries dir-path rel-base rules opts depth acc)))))
+
+;; ── walk-files : entry point, returns list of file paths matching filters ──
+(defn walk-files
+  :sig [(start-path : String) (opts : _) -> List]
+  :requires [(valid start-path)]
+  :ensures [(valid result)]
+  :body (if (is-dir? start-path)
+          (let (rules : List (load-gitignore start-path))
+            (reverse (walk-dir-rec start-path "" rules opts 0 [])))
+          ;; Single file — check filters
+          (if (file-passes-filters start-path opts)
+            (cons start-path [])
+            [])))

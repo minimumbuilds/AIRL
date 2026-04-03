@@ -1,0 +1,112 @@
+;; ── airgrep: .gitignore Parser ─────────────────────────────────
+;;
+;; Parses .gitignore files and tests paths against ignore rules.
+;; Rules are maps with keys: "pattern", "negated", "dir-only", "anchored"
+;;
+;; NOTE: lists of maps must be built with cons, never [map] literals.
+
+;; ── parse-gitignore-line : parse one gitignore line ──
+;; Returns (Some rule-map) or (None) for comments/blanks.
+(defn parse-gitignore-line
+  :sig [(line : String) -> _]
+  :requires [(valid line)]
+  :ensures [(valid result)]
+  :body (let (trimmed : String (trim line))
+          (if (= trimmed "")
+            (None)
+            (if (starts-with trimmed "#")
+              (None)
+              ;; Check for negation prefix !
+              (let (negated : Bool (starts-with trimmed "!"))
+                (let (pat1 : String (if negated (substring trimmed 1 (length trimmed)) trimmed))
+                  (let (dir-only : Bool (ends-with pat1 "/"))
+                    (let (pat2 : String (if dir-only (substring pat1 0 (- (length pat1) 1)) pat1))
+                      (let (anchored : Bool (contains pat2 "/"))
+                           (pat3 : String (if (starts-with pat2 "/") (substring pat2 1 (length pat2)) pat2))
+                        (Some (map-from ["pattern" pat3 "negated" negated
+                                         "dir-only" dir-only "anchored" anchored])))))))))))
+
+;; ── parse-gitignore-rules-rec : build rule list using cons ──
+(defn parse-gitignore-rules-rec
+  :sig [(line-list : List) (acc : List) -> List]
+  :requires [(valid line-list)]
+  :ensures [(valid result)]
+  :body (if (empty? line-list)
+          (reverse acc)
+          (let (parsed : _ (parse-gitignore-line (head line-list)))
+            (match parsed
+              (Some rule) (parse-gitignore-rules-rec (tail line-list) (cons rule acc))
+              (None) (parse-gitignore-rules-rec (tail line-list) acc)))))
+
+;; ── parse-gitignore : parse file content to list of rules ──
+(defn parse-gitignore
+  :sig [(content : String) -> List]
+  :requires [(valid content)]
+  :ensures [(valid result)]
+  :body (parse-gitignore-rules-rec (lines content) []))
+
+;; ── rule-matches : test if a path matches a single rule ──
+(defn rule-matches
+  :sig [(rule : _) (path : String) (is-dir : Bool) -> Bool]
+  :requires [(valid rule) (valid path)]
+  :ensures [(valid result)]
+  :body (let (pattern : String (map-get rule "pattern"))
+              (dir-only : Bool (map-get rule "dir-only"))
+              (anchored : Bool (map-get rule "anchored"))
+          ;; dir-only rules only match directories
+          (if (if dir-only (not is-dir) false)
+            false
+            (if anchored
+              (glob-match-path pattern path)
+              (glob-match-path pattern path)))))
+
+;; ── is-ignored-rec : check rules in order, last match wins ──
+(defn is-ignored-rec
+  :sig [(rules : List) (path : String) (is-dir : Bool) (ignored : Bool) -> Bool]
+  :requires [(valid rules)]
+  :ensures [(valid result)]
+  :body (if (empty? rules)
+          ignored
+          (let (rule : _ (head rules))
+            (if (rule-matches rule path is-dir)
+              (let (negated : Bool (map-get rule "negated"))
+                (is-ignored-rec (tail rules) path is-dir (not negated)))
+              (is-ignored-rec (tail rules) path is-dir ignored)))))
+
+;; ── is-ignored : test path against all rules (last match wins) ──
+(defn is-ignored
+  :sig [(rules : List) (path : String) (is-dir : Bool) -> Bool]
+  :requires [(valid rules) (valid path)]
+  :ensures [(valid result)]
+  :body (is-ignored-rec rules path is-dir false))
+
+;; ── load-gitignore : read .gitignore from a directory if it exists ──
+(defn load-gitignore
+  :sig [(dir-path : String) -> List]
+  :requires [(valid dir-path)]
+  :ensures [(valid result)]
+  :body (let (gi-path : String (path-join dir-path ".gitignore"))
+          (if (file-exists? gi-path)
+            (parse-gitignore (read-file gi-path))
+            [])))
+
+;; ── merge-ignore-rules : combine parent rules with new directory rules ──
+;; Both lists must be cons-built; we rebuild combined with cons.
+(defn merge-rules-rec
+  :sig [(to-add : List) (acc : List) -> List]
+  :requires [(valid to-add)]
+  :ensures [(valid result)]
+  :body (if (empty? to-add)
+          acc
+          (merge-rules-rec (tail to-add) (cons (head to-add) acc))))
+
+(defn merge-ignore-rules
+  :sig [(parent-rules : List) (dir-path : String) -> List]
+  :requires [(valid parent-rules) (valid dir-path)]
+  :ensures [(valid result)]
+  :body (let (new-rules : List (load-gitignore dir-path))
+          (if (empty? new-rules)
+            parent-rules
+            ;; Reverse parent, prepend new rules reversed, then reverse the whole thing
+            ;; Actually simpler: just fold new-rules onto the end
+            (reverse (merge-rules-rec new-rules (reverse parent-rules))))))

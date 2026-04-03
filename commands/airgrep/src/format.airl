@@ -1,0 +1,188 @@
+;; ── airgrep: Output Formatting ─────────────────────────────────
+;;
+;; ANSI color output and result formatting.
+;; Handles --color, -c (count), -l (files-with-matches), -q (quiet).
+
+;; ── esc : the ESC character for ANSI codes ──
+(defn esc
+  :sig [-> String]
+  :requires [true]
+  :ensures [(valid result)]
+  :body (char-from-code 27))
+
+;; ── ansi : wrap text in ANSI escape code ──
+(defn ansi
+  :sig [(code : String) (text : String) -> String]
+  :requires [(valid code) (valid text)]
+  :ensures [(valid result)]
+  :body (str (esc) "[" code "m" text (esc) "[0m"))
+
+;; ── color-filename : colorize a filename (magenta) ──
+(defn color-filename
+  :sig [(path : String) (use-color : Bool) -> String]
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body (if use-color (ansi "35" path) path))
+
+;; ── color-linenum : colorize a line number (green) ──
+(defn color-linenum
+  :sig [(num : i64) (use-color : Bool) -> String]
+  :requires [(valid num)]
+  :ensures [(valid result)]
+  :body (let (s : String (str num))
+          (if use-color (ansi "32" s) s)))
+
+;; ── color-match : colorize matching text (red bold) ──
+(defn color-match
+  :sig [(text : String) (use-color : Bool) -> String]
+  :requires [(valid text)]
+  :ensures [(valid result)]
+  :body (if use-color (ansi "1;31" text) text))
+
+;; ── color-sep : colorize the separator (cyan) ──
+(defn color-sep
+  :sig [(sep : String) (use-color : Bool) -> String]
+  :requires [(valid sep)]
+  :ensures [(valid result)]
+  :body (if use-color (ansi "36" sep) sep))
+
+;; ── highlight-matches : highlight regex matches in a line ──
+;; Replaces all regex matches with colorized versions.
+(defn highlight-matches
+  :sig [(line : String) (regex : String) (use-color : Bool) -> String]
+  :requires [(valid line) (valid regex)]
+  :ensures [(valid result)]
+  :body (if use-color
+          (let (matches : List (regex-find-all regex line))
+            (if (empty? matches)
+              line
+              ;; Replace each unique match with highlighted version
+              (fold (fn [acc m]
+                      (regex-replace (escape-regex m) acc (color-match m true)))
+                    line matches)))
+          line))
+
+;; ── format-match-line : format one result line ──
+;; Shows "filename:linenum:line" or "linenum:line" depending on multi-file
+(defn format-match-line
+  :sig [(file-path : String) (linenum : i64) (line : String) (regex : String) (use-color : Bool) (multi-file : Bool) (is-match : Bool) -> String]
+  :requires [(valid file-path) (valid line)]
+  :ensures [(valid result)]
+  :body (let (sep-char : String (if is-match ":" "-"))
+              (highlighted : String (if is-match (highlight-matches line regex use-color) line))
+          (let (colored-sep : String (color-sep sep-char use-color))
+          (if multi-file
+            (str (color-filename file-path use-color) colored-sep
+                 (color-linenum linenum use-color) colored-sep highlighted)
+            (str (color-linenum linenum use-color) colored-sep highlighted)))))
+
+;; ── print-context-group : print lines in a context range ──
+(defn print-context-group-rec
+  :sig [(all-lines : List) (start : i64) (end : i64) (cur : i64) (match-set : _) (file-path : String) (regex : String) (use-color : Bool) (multi-file : Bool) -> i64]
+  :requires [(valid all-lines)]
+  :ensures [(valid result)]
+  :body (if (> cur end)
+          0
+          (let (line : String (at all-lines cur))
+               (is-match : Bool (is-match-line cur match-set))
+            (do
+              (print (str (format-match-line file-path (+ cur 1) line regex use-color multi-file is-match) "\n"))
+              (print-context-group-rec all-lines start end (+ cur 1) match-set file-path regex use-color multi-file)))))
+
+;; ── format-context-separator : print -- between context groups ──
+(defn format-context-separator
+  :sig [(use-color : Bool) -> String]
+  :requires [true]
+  :ensures [(valid result)]
+  :body (if use-color (ansi "36" "--") "--"))
+
+;; ── print-file-results : print all results for one file ──
+;; Handles context groups with separators between them.
+(defn print-groups-rec
+  :sig [(groups : List) (group-idx : i64) (all-lines : List) (match-set : _) (file-path : String) (regex : String) (use-color : Bool) (multi-file : Bool) -> i64]
+  :requires [(valid groups)]
+  :ensures [(valid result)]
+  :body (if (empty? groups)
+          0
+          (let (group : List (head groups))
+            (let (start : i64 (head group))
+                 (end : i64 (at group 1))
+            (do
+              ;; Print separator between groups (not before first)
+              (if (> group-idx 0)
+                (print (str (format-context-separator use-color) "\n"))
+                0)
+              (print-context-group-rec all-lines start end start match-set file-path regex use-color multi-file)
+              (print-groups-rec (tail groups) (+ group-idx 1) all-lines match-set file-path regex use-color multi-file))))))
+
+;; ── print-file-heading : print filename heading for grouped output ──
+(defn print-file-heading
+  :sig [(file-path : String) (use-color : Bool) (has-context : Bool) -> i64]
+  :requires [(valid file-path)]
+  :ensures [(valid result)]
+  :body (if has-context
+          (do (print (str (color-filename file-path use-color) "\n")) 0)
+          0))
+
+;; ── print-simple-matches : print matches without context ──
+(defn print-simple-matches-rec
+  :sig [(match-indices : List) (all-lines : List) (file-path : String) (regex : String) (use-color : Bool) (multi-file : Bool) -> i64]
+  :requires [(valid match-indices)]
+  :ensures [(valid result)]
+  :body (if (empty? match-indices)
+          0
+          (let (idx : i64 (head match-indices))
+               (line : String (at all-lines idx))
+            (do
+              (print (str (format-match-line file-path (+ idx 1) line regex use-color multi-file true) "\n"))
+              (print-simple-matches-rec (tail match-indices) all-lines file-path regex use-color multi-file)))))
+
+;; ── print-results : main output driver ──
+;; Handles -c (count only), -l (files with matches), -q (quiet),
+;; and normal output with optional context.
+(defn print-results
+  :sig [(results : List) (regex : String) (opts : _) -> i64]
+  :requires [(valid results) (valid regex)]
+  :ensures [(valid result)]
+  :body (let (count-only : Bool (map-get-or opts "count-only" false))
+              (files-only : Bool (map-get-or opts "files-only" false))
+              (quiet : Bool (map-get-or opts "quiet" false))
+              (use-color : Bool (map-get-or opts "color" false))
+              (multi-file : Bool (> (length results) 1))
+              (has-context : Bool (if (> (map-get-or opts "before-context" 0) 0) true
+                                   (> (map-get-or opts "after-context" 0) 0)))
+          (if quiet
+            ;; Quiet mode: no output
+            0
+            (fold (fn [total r]
+                    (let (file-path : String (map-get r "path"))
+                         (match-count : i64 (map-get r "match-count"))
+                         (is-bin : Bool (map-get r "is-binary"))
+                      (if (= match-count 0)
+                        total
+                        (if count-only
+                          (do
+                            (if multi-file
+                              (print (str (color-filename file-path use-color) (color-sep ":" use-color) match-count "\n"))
+                              (print (str match-count "\n")))
+                            (+ total match-count))
+                          (if files-only
+                            (do (print (str (color-filename file-path use-color) "\n"))
+                                (+ total 1))
+                            (if is-bin
+                              (do (print (str "Binary file " file-path " matches.\n"))
+                                  (+ total match-count))
+                              (do
+                                (if (if multi-file has-context false)
+                                  (print (str (color-filename file-path use-color) "\n"))
+                                  0)
+                                (if has-context
+                                  (print-groups-rec (map-get r "context-groups") 0 (map-get r "lines")
+                                    (map-get r "match-set") file-path regex use-color multi-file)
+                                  (print-simple-matches-rec (map-get r "match-indices") (map-get r "lines")
+                                    file-path regex use-color multi-file))
+                                (if (if multi-file has-context false)
+                                  (print "\n")
+                                  0)
+                                (+ total match-count))))))))
+                  0 results))))
