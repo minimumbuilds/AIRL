@@ -4,6 +4,12 @@ use crate::value::Value;
 /// Write a length-prefixed frame: [u32 BE length][UTF-8 payload].
 pub fn write_frame(writer: &mut dyn Write, payload: &str) -> io::Result<()> {
     let bytes = payload.as_bytes();
+    if bytes.len() > u32::MAX as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("frame payload too large: {} bytes exceeds u32::MAX", bytes.len()),
+        ));
+    }
     let len = bytes.len() as u32;
     writer.write_all(&len.to_be_bytes())?;
     writer.write_all(bytes)?;

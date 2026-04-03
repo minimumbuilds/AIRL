@@ -20,12 +20,16 @@ pub struct ResultMessage {
     pub error: Option<String>,
 }
 
+fn escape_str(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 /// Serialize a task message to an AIRL S-expression string.
 pub fn serialize_task(msg: &TaskMessage) -> String {
     let args_str: Vec<String> = msg.args.iter().map(|v| format!("{}", v)).collect();
     format!(
         r#"(task "{}" :from "{}" :call "{}" :args [{}])"#,
-        msg.id, msg.from, msg.call, args_str.join(" ")
+        escape_str(&msg.id), escape_str(&msg.from), escape_str(&msg.call), args_str.join(" ")
     )
 }
 
@@ -37,13 +41,13 @@ pub fn serialize_result(msg: &ResultMessage) -> String {
             .unwrap_or_else(|| "nil".into());
         format!(
             r#"(result "{}" :status :complete :payload {})"#,
-            msg.id, payload_str
+            escape_str(&msg.id), payload_str
         )
     } else {
         let err_str = msg.error.as_deref().unwrap_or("unknown error");
         format!(
             r#"(result "{}" :status :error :message "{}")"#,
-            msg.id, err_str.replace('"', "\\\"")
+            escape_str(&msg.id), escape_str(err_str)
         )
     }
 }

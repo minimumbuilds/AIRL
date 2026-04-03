@@ -57,7 +57,7 @@ pub fn run_repl() {
         return;
     }
 
-    println!("AIRL v0.2.0 — Type :help for commands, :quit to exit");
+    println!("AIRL v{} — Type :help for commands, :quit to exit", env!("CARGO_PKG_VERSION"));
 
     loop {
         let prompt = if input.is_empty() { "airl> " } else { "...   " };
