@@ -1,0 +1,61 @@
+;; ── airq: Lexer Tests ───────────────────────────────────────
+
+(defn test-assert
+  :sig [(label : String) (actual : _) (expected : _) -> _]
+  :requires [(valid label)]
+  :ensures [(valid result)]
+  :body (if (= actual expected)
+          (print (str "PASS: " label "\n"))
+          (let (dummy : _ (print (str "FAIL: " label " expected=" (json-stringify expected) " actual=" (json-stringify actual) "\n")))
+            (exit 1))))
+
+;; Test 1: Simple dot
+(let (tokens : List (tokenize "."))
+  (let (first : _ (head tokens))
+    (test-assert "dot token" (map-get first "type") "dot")))
+
+;; Test 2: Field access
+(let (tokens : List (tokenize ".foo"))
+  (let (first : _ (head tokens))
+    (let (second : _ (at tokens 1))
+      (test-assert "dot+ident types" (str (map-get first "type") "," (map-get second "type")) "dot,ident"))))
+
+;; Test 3: Pipe
+(let (tokens : List (tokenize ".a | .b"))
+  (test-assert "pipe token count" (length tokens) 6))
+
+;; Test 4: Number literal
+(let (tokens : List (tokenize "42"))
+  (let (first : _ (head tokens))
+    (test-assert "number token" (map-get first "value") 42)))
+
+;; Test 5: String literal
+(let (tokens : List (tokenize "\"hello\""))
+  (let (first : _ (head tokens))
+    (test-assert "string token" (map-get first "value") "hello")))
+
+;; Test 6: Keywords
+(let (tokens : List (tokenize "if then else end"))
+  (test-assert "keyword count" (length tokens) 5))
+
+;; Test 7: Operators
+(let (tokens : List (tokenize "== != < >"))
+  (let (first : _ (head tokens))
+    (test-assert "op ==" (map-get first "value") "==")))
+
+;; Test 8: Variable
+(let (tokens : List (tokenize "$x"))
+  (let (first : _ (head tokens))
+    (test-assert "variable" (map-get first "value") "$x")))
+
+;; Test 9: @format
+(let (tokens : List (tokenize "@base64"))
+  (let (first : _ (head tokens))
+    (test-assert "at format" (map-get first "value") "base64")))
+
+;; Test 10: Boolean/null literals
+(let (tokens : List (tokenize "true false null"))
+  (let (first : _ (head tokens))
+    (test-assert "true literal" (map-get first "value") true)))
+
+(print (str "All lexer tests passed\n"))

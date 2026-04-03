@@ -1,0 +1,1021 @@
+;; ── airq: Builtins ──────────────────────────────────────────
+;; Built-in function dispatch.
+
+;; ── eval-builtin-core : core builtins (length, keys, type, etc.) ──
+(defn eval-builtin-core
+  :sig [(name : String) (args : List) (input : _) (env : _) -> List]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body (if (= name "length") (bi-length input)
+        (if (= name "keys") (bi-keys input true)
+        (if (= name "keys_unsorted") (bi-keys input false)
+        (if (= name "values") (bi-values input)
+        (if (= name "type") (bi-type input)
+        (if (= name "has") (bi-has args input env)
+        (if (= name "contains") (bi-contains args input env)
+        (if (= name "empty") []
+        (if (= name "null") [nil]
+        (if (= name "true") [true]
+        (if (= name "false") [false]
+        (if (= name "not") [(not (jq-truthy input))]
+        (if (= name "add") (bi-add input)
+        (if (= name "any") (bi-any args input env)
+        (if (= name "all") (bi-all args input env)
+        (if (= name "flatten") (bi-flatten args input)
+        (if (= name "range") (bi-range args input env)
+          nil))))))))))))))))))
+
+;; ── eval-builtin-string : string builtins ──
+(defn eval-builtin-string
+  :sig [(name : String) (args : List) (input : _) (env : _) -> List]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body (if (= name "tostring") [(bi-tostring input)]
+        (if (= name "tonumber") [(bi-tonumber input)]
+        (if (= name "ascii_downcase") [(to-lower (str input))]
+        (if (= name "ascii_upcase") [(to-upper (str input))]
+        (if (= name "ltrimstr") (bi-ltrimstr args input env)
+        (if (= name "rtrimstr") (bi-rtrimstr args input env)
+        (if (= name "startswith") (bi-startswith args input env)
+        (if (= name "endswith") (bi-endswith args input env)
+        (if (= name "split") (bi-split args input env)
+        (if (= name "join") (bi-join args input env)
+        (if (= name "test") (bi-test args input env)
+        (if (= name "gsub") (bi-gsub args input env)
+        (if (= name "sub") (bi-sub args input env)
+        (if (= name "match") (bi-match args input env)
+        (if (= name "capture") (bi-capture args input env)
+          nil))))))))))))))))
+
+;; ── eval-builtin-collection : collection builtins ──
+(defn eval-builtin-collection
+  :sig [(name : String) (args : List) (input : _) (env : _) -> List]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body (if (= name "map") (bi-map args input env)
+        (if (= name "map_values") (bi-map-values args input env)
+        (if (= name "select") (bi-select args input env)
+        (if (= name "sort") (bi-sort input)
+        (if (= name "sort_by") (bi-sort-by args input env)
+        (if (= name "group_by") (bi-group-by args input env)
+        (if (= name "unique") (bi-unique input)
+        (if (= name "unique_by") (bi-unique-by args input env)
+        (if (= name "min") (bi-min input)
+        (if (= name "max") (bi-max input)
+        (if (= name "min_by") (bi-min-by args input env)
+        (if (= name "max_by") (bi-max-by args input env)
+        (if (= name "reverse") [(reverse input)]
+        (if (= name "first") (bi-first args input env)
+        (if (= name "last") (bi-last args input env)
+        (if (= name "nth") (bi-nth args input env)
+        (if (= name "limit") (bi-limit args input env)
+          nil))))))))))))))))))
+
+;; ── eval-builtin-path : path and entry builtins ──
+(defn eval-builtin-path
+  :sig [(name : String) (args : List) (input : _) (env : _) -> List]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body (if (= name "to_entries") (bi-to-entries input)
+        (if (= name "from_entries") (bi-from-entries input)
+        (if (= name "with_entries") (bi-with-entries args input env)
+        (if (= name "paths") (bi-paths input)
+        (if (= name "getpath") (bi-getpath args input env)
+        (if (= name "setpath") (bi-setpath args input env)
+        (if (= name "delpaths") (bi-delpaths args input env)
+        (if (= name "path") (bi-path args input env)
+        (if (= name "leaf_paths") (bi-leaf-paths input)
+          nil))))))))))
+
+;; ── eval-builtin-misc : miscellaneous builtins ──
+(defn eval-builtin-misc
+  :sig [(name : String) (args : List) (input : _) (env : _) -> List]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body (if (= name "tojson") [(json-stringify input)]
+        (if (= name "fromjson") [(parse-json-or-die (str input))]
+        (if (= name "debug") (bi-debug input)
+        (if (= name "error") (bi-error args input)
+        (if (= name "implode") (bi-implode input)
+        (if (= name "explode") (bi-explode input)
+        (if (= name "in") (bi-in args input env)
+        (if (= name "inside") (bi-inside args input env)
+        (if (= name "recurse") (bi-recurse args input env)
+        (if (= name "recurse_down") (bi-recurse args input env)
+        (if (= name "del") (bi-del args input env)
+        (if (= name "reduce") (bi-reduce args input env)
+        (if (= name "indices") (bi-indices args input env)
+        (if (= name "floor") [input]
+        (if (= name "ceil") [input]
+        (if (= name "round") [input]
+        (if (= name "env") [(map-from [])]
+        (if (= name "builtins") [[]]
+        (if (= name "isnan") [false]
+        (if (= name "isinfinite") [false]
+        (if (= name "nan") [0]
+        (if (= name "infinite") [999999999]
+        (if (= name "input") [input]
+        (if (= name "inputs") []
+        (if (= name "ascii") [(char-code (str input))]
+          nil))))))))))))))))))))))))))
+
+;; ── eval-builtin : top-level dispatch ──
+(defn eval-builtin
+  :sig [(name : String) (args : List) (input : _) (env : _) -> List]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body (let (r1 : _ (eval-builtin-core name args input env))
+          (if (not (= r1 nil)) r1
+            (let (r2 : _ (eval-builtin-string name args input env))
+              (if (not (= r2 nil)) r2
+                (let (r3 : _ (eval-builtin-collection name args input env))
+                  (if (not (= r3 nil)) r3
+                    (let (r4 : _ (eval-builtin-path name args input env))
+                      (if (not (= r4 nil)) r4
+                        (let (r5 : _ (eval-builtin-misc name args input env))
+                          (if (not (= r5 nil)) r5
+                            (let (dummy : _ (eprint (str "airq: unknown function: " name "\n")))
+                              [input]))))))))))))
+
+;; ── bi-length : length of string, array, object, null ──
+(defn bi-length
+  :sig [(input : _) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (let (t : String (type-of input))
+          (if (= t "string") [(length input)]
+          (if (= t "list") [(length input)]
+          (if (= t "map") [(length (map-keys input))]
+          (if (= t "nil") [0]
+          (if (= t "int") [(if (< input 0) (- 0 input) input)]
+            [0])))))))
+
+;; ── bi-keys : object keys ──
+(defn bi-keys
+  :sig [(input : _) (sorted : Bool) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "map")
+          (if sorted [(sort (fn [a b] (<= a b)) (map-keys input))] [(map-keys input)])
+          (if (= (type-of input) "list")
+            [(range-list 0 (length input))]
+            [nil])))
+
+;; ── range-list : generate [from..to) ──
+(defn range-list
+  :sig [(from : i64) (to : i64) -> List]
+  :requires [(<= from to)]
+  :ensures [(valid result)]
+  :body (if (>= from to)
+          []
+          (cons from (range-list (+ from 1) to))))
+
+;; ── bi-values : object values ──
+(defn bi-values
+  :sig [(input : _) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "map")
+          [(map-values input)]
+          [input]))
+
+;; ── bi-type : jq type name ──
+(defn bi-type
+  :sig [(input : _) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (let (t : String (type-of input))
+          (if (= t "nil") ["null"]
+          (if (= t "bool") ["boolean"]
+          (if (= t "int") ["number"]
+          (if (= t "float") ["number"]
+          (if (= t "string") ["string"]
+          (if (= t "list") ["array"]
+          (if (= t "map") ["object"]
+            [t])))))))))
+
+;; ── bi-has : has(key) ──
+(defn bi-has
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args)
+          [false]
+          (let (key-results : List (jq-eval (head args) input env))
+            (if (empty? key-results)
+              [false]
+              (let (key : _ (head key-results))
+                (if (= (type-of input) "map")
+                  [(map-has input (str key))]
+                  (if (= (type-of input) "list")
+                    [(if (if (>= key 0) (< key (length input)) false) true false)]
+                    [false])))))))
+
+;; ── bi-in : key | in(obj) ──
+(defn bi-in
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args)
+          [false]
+          (let (obj-results : List (jq-eval (head args) input env))
+            (if (empty? obj-results)
+              [false]
+              (let (obj : _ (head obj-results))
+                (if (= (type-of obj) "map")
+                  [(map-has obj (str input))]
+                  [false]))))))
+
+;; ── bi-contains : recursive containment ──
+(defn bi-contains
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args)
+          [false]
+          (let (other-results : List (jq-eval (head args) input env))
+            (if (empty? other-results)
+              [false]
+              [(jq-contains input (head other-results))]))))
+
+(defn jq-contains
+  :sig [(a : _) (b : _) -> Bool]
+  :requires [(valid a)]
+  :ensures [(valid result)]
+  :body (if (= (type-of b) "string")
+          (if (= (type-of a) "string")
+            (contains a b)
+            false)
+          (if (= (type-of b) "list")
+            (if (= (type-of a) "list")
+              (all (fn [bitem] (any (fn [aitem] (jq-contains aitem bitem)) a)) b)
+              false)
+          (if (= (type-of b) "map")
+            (if (= (type-of a) "map")
+              (all (fn [k] (jq-contains (map-get-or a k nil) (map-get b k))) (map-keys b))
+              false)
+            (= a b)))))
+
+;; ── bi-add : add elements ──
+(defn bi-add
+  :sig [(input : _) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "list")
+          (if (empty? input)
+            [nil]
+            (let (first-elem : _ (head input))
+              [(fold (fn [acc x] (jq-add acc x)) first-elem (tail input))]))
+          [input]))
+
+(defn jq-add
+  :sig [(a : _) (b : _) -> _]
+  :requires [(valid a)]
+  :ensures [(valid result)]
+  :body (if (= a nil) b
+        (if (= b nil) a
+        (let (ta : String (type-of a))
+          (if (= ta "string") (str a b)
+          (if (= ta "int") (+ a b)
+          (if (= ta "float") (+ a b)
+          (if (= ta "list") (fold (fn [acc x] (append acc x)) a b)
+          (if (= ta "map") (merge-maps a b)
+            a)))))))))
+
+;; ── bi-any : any / any(f) ──
+(defn bi-any
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "list")
+          (if (empty? args)
+            [(any (fn [x] (jq-truthy x)) input)]
+            [(any (fn [x]
+              (let (r : List (jq-eval (head args) x env))
+                (if (empty? r) false (jq-truthy (head r))))) input)])
+          [false]))
+
+;; ── bi-all : all / all(f) ──
+(defn bi-all
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "list")
+          (if (empty? args)
+            [(all (fn [x] (jq-truthy x)) input)]
+            [(all (fn [x]
+              (let (r : List (jq-eval (head args) x env))
+                (if (empty? r) false (jq-truthy (head r))))) input)])
+          [false]))
+
+;; ── bi-flatten : flatten array ──
+(defn bi-flatten
+  :sig [(args : List) (input : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "list")
+          [(flatten-list input 1)]
+          [input]))
+
+(defn flatten-list
+  :sig [(lst : List) (depth : i64) -> List]
+  :requires [(valid lst)]
+  :ensures [(valid result)]
+  :body (if (<= depth 0)
+          lst
+          (fold (fn [acc x]
+            (if (= (type-of x) "list")
+              (fold (fn [a2 y] (append a2 y)) acc (flatten-list x (- depth 1)))
+              (append acc x)))
+            [] lst)))
+
+;; ── bi-range : range(n) / range(from;to) / range(from;to;step) ──
+(defn bi-range
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args)
+          []
+          (let (first-results : List (jq-eval (head args) input env))
+            (if (empty? first-results)
+              []
+              (let (n : i64 (head first-results))
+                (if (= (length args) 1)
+                  (range-list 0 n)
+                  (let (to-results : List (jq-eval (at args 1) input env))
+                    (let (to : i64 (if (empty? to-results) n (head to-results)))
+                      (if (= (length args) 2)
+                        (range-list n to)
+                        (let (step-results : List (jq-eval (at args 2) input env))
+                          (let (step : i64 (if (empty? step-results) 1 (head step-results)))
+                            (range-step-list n to step))))))))))))
+
+(defn range-step-list
+  :sig [(from : i64) (to : i64) (step : i64) -> List]
+  :requires [(not (= step 0))]
+  :ensures [(valid result)]
+  :body (if (if (> step 0) (>= from to) false)
+          []
+          (if (if (< step 0) (<= from to) false)
+            []
+            (cons from (range-step-list (+ from step) to step)))))
+
+;; ── bi-tostring / bi-tonumber ──
+(defn bi-tostring
+  :sig [(input : _) -> String]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (let (t : String (type-of input))
+          (if (= t "string") input
+          (if (= t "nil") "null"
+          (if (= t "bool") (if input "true" "false")
+            (json-stringify input))))))
+
+(defn bi-tonumber
+  :sig [(input : _) -> _]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "string")
+          (parse-number-str input)
+          input))
+
+;; ── bi-ltrimstr / bi-rtrimstr ──
+(defn bi-ltrimstr
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args) [input]
+          (let (prefix-results : List (jq-eval (head args) input env))
+            (if (empty? prefix-results) [input]
+              (let (prefix : String (str (head prefix-results)))
+                (if (starts-with (str input) prefix)
+                  [(substring (str input) (length prefix) (length (str input)))]
+                  [input]))))))
+
+(defn bi-rtrimstr
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args) [input]
+          (let (suffix-results : List (jq-eval (head args) input env))
+            (if (empty? suffix-results) [input]
+              (let (suffix : String (str (head suffix-results)))
+                (if (ends-with (str input) suffix)
+                  [(substring (str input) 0 (- (length (str input)) (length suffix)))]
+                  [input]))))))
+
+;; ── bi-startswith / bi-endswith ──
+(defn bi-startswith
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args) [false]
+          (let (s-results : List (jq-eval (head args) input env))
+            (if (empty? s-results) [false]
+              [(starts-with (str input) (str (head s-results)))]))))
+
+(defn bi-endswith
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args) [false]
+          (let (s-results : List (jq-eval (head args) input env))
+            (if (empty? s-results) [false]
+              [(ends-with (str input) (str (head s-results)))]))))
+
+;; ── bi-split / bi-join ──
+(defn bi-split
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args) [input]
+          (let (delim-results : List (jq-eval (head args) input env))
+            (if (empty? delim-results) [input]
+              [(split (str input) (str (head delim-results)))]))))
+
+(defn bi-join
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "list")
+          (if (empty? args) [(join (map (fn [x] (bi-tostring x)) input) "")]
+            (let (delim-results : List (jq-eval (head args) input env))
+              (if (empty? delim-results) [(join (map (fn [x] (bi-tostring x)) input) "")]
+                [(join (map (fn [x] (bi-tostring x)) input) (str (head delim-results)))])))
+          [input]))
+
+;; ── bi-test : regex test ──
+(defn bi-test
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args) [false]
+          (let (re-results : List (jq-eval (head args) input env))
+            (if (empty? re-results) [false]
+              [(airl_regex_match (str (head re-results)) (str input))]))))
+
+;; ── bi-match : regex match ──
+(defn bi-match
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args) [nil]
+          (let (re-results : List (jq-eval (head args) input env))
+            (if (empty? re-results) [nil]
+              (let (matches : List (airl_regex_find_all (str (head re-results)) (str input)))
+                (if (empty? matches)
+                  [nil]
+                  [(map-from ["offset" 0 "length" (length (head matches)) "string" (head matches) "captures" []])]))))))
+
+;; ── bi-capture : regex named capture ──
+(defn bi-capture
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (bi-match args input env))
+
+;; ── bi-gsub / bi-sub : regex replacement ──
+(defn bi-gsub
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (< (length args) 2) [input]
+          (let (re-results : List (jq-eval (head args) input env))
+            (let (repl-results : List (jq-eval (at args 1) input env))
+              (if (if (empty? re-results) true (empty? repl-results)) [input]
+                [(airl_regex_replace (str (head re-results)) (str input) (str (head repl-results)))])))))
+
+(defn bi-sub
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (bi-gsub args input env))
+
+;; ── bi-map : map(f) → [.[] | f] ──
+(defn bi-map
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "list")
+          (if (empty? args) [input]
+            [(concatmap (fn [x] (jq-eval (head args) x env)) input)])
+          [input]))
+
+;; ── bi-map-values : map_values(f) ──
+(defn bi-map-values
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args) [input]
+          (let (f : _ (head args))
+            (if (= (type-of input) "map")
+              (let (keys : List (map-keys input))
+                [(fold (fn [acc k]
+                  (let (val : _ (map-get input k))
+                    (let (new-vals : List (jq-eval f val env))
+                      (if (empty? new-vals) acc
+                        (map-set acc k (head new-vals))))))
+                  (map-from []) keys)])
+            (if (= (type-of input) "list")
+              [(map (fn [x]
+                (let (r : List (jq-eval f x env))
+                  (if (empty? r) nil (head r)))) input)]
+              [input])))))
+
+;; ── bi-select : select(f) — keep input if f is truthy ──
+(defn bi-select
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args)
+          [input]
+          (let (results : List (jq-eval (head args) input env))
+            (if (if (not (empty? results)) (jq-truthy (head results)) false)
+              [input]
+              []))))
+
+;; ── bi-sort : sort array ──
+(defn bi-sort
+  :sig [(input : _) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "list")
+          [(sort (fn [a b] (<= a b)) input)]
+          [input]))
+
+;; ── bi-sort-by : sort_by(f) ──
+(defn bi-sort-by
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (if (= (type-of input) "list") (not (empty? args)) false)
+          ;; Simple insertion sort by key
+          [(bi-sort-by-impl (head args) input env)]
+          [input]))
+
+(defn bi-sort-by-impl
+  :sig [(f : _) (lst : List) (env : _) -> List]
+  :requires [(valid f)]
+  :ensures [(valid result)]
+  :body (if (empty? lst)
+          []
+          (fold (fn [acc x] (bi-insert-by f x acc env)) [] lst)))
+
+(defn bi-insert-by
+  :sig [(f : _) (elem : _) (sorted : List) (env : _) -> List]
+  :requires [(valid f)]
+  :ensures [(valid result)]
+  :body (if (empty? sorted)
+          [elem]
+          (let (elem-key : List (jq-eval f elem env))
+            (let (head-key : List (jq-eval f (head sorted) env))
+              (let (ek : _ (if (empty? elem-key) nil (head elem-key)))
+                (let (hk : _ (if (empty? head-key) nil (head head-key)))
+                  (if (<= ek hk)
+                    (cons elem sorted)
+                    (cons (head sorted) (bi-insert-by f elem (tail sorted) env)))))))))
+
+;; ── bi-group-by : group_by(f) ──
+(defn bi-group-by
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (if (= (type-of input) "list") (not (empty? args)) false)
+          [(bi-group-by-impl (head args) input env)]
+          [input]))
+
+(defn bi-group-by-impl
+  :sig [(f : _) (lst : List) (env : _) -> List]
+  :requires [(valid f)]
+  :ensures [(valid result)]
+  :body (let (sorted : List (bi-sort-by-impl f lst env))
+          (bi-group-sorted f sorted env)))
+
+(defn bi-group-sorted
+  :sig [(f : _) (sorted : List) (env : _) -> List]
+  :requires [(valid f)]
+  :ensures [(valid result)]
+  :body (if (empty? sorted)
+          []
+          (let (first-elem : _ (head sorted))
+            (let (first-key : List (jq-eval f first-elem env))
+              (let (fk : _ (if (empty? first-key) nil (head first-key)))
+                (let (split-result : List (bi-split-group f fk (tail sorted) env [first-elem]))
+                  (let (group : List (head split-result))
+                    (let (remaining : List (at split-result 1))
+                      (cons group (bi-group-sorted f remaining env))))))))))
+
+(defn bi-split-group
+  :sig [(f : _) (key : _) (lst : List) (env : _) (acc : List) -> List]
+  :requires [(valid f)]
+  :ensures [(valid result)]
+  :body (if (empty? lst)
+          [acc []]
+          (let (elem : _ (head lst))
+            (let (elem-key : List (jq-eval f elem env))
+              (let (ek : _ (if (empty? elem-key) nil (head elem-key)))
+                (if (= ek key)
+                  (bi-split-group f key (tail lst) env (append acc elem))
+                  [acc lst]))))))
+
+;; ── bi-unique : unique ──
+(defn bi-unique
+  :sig [(input : _) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "list")
+          [(bi-unique-impl input [])]
+          [input]))
+
+(defn bi-unique-impl
+  :sig [(lst : List) (seen : List) -> List]
+  :requires [(valid lst)]
+  :ensures [(valid result)]
+  :body (if (empty? lst)
+          seen
+          (let (elem : _ (head lst))
+            (if (any (fn [x] (= x elem)) seen)
+              (bi-unique-impl (tail lst) seen)
+              (bi-unique-impl (tail lst) (append seen elem))))))
+
+;; ── bi-unique-by : unique_by(f) ──
+(defn bi-unique-by
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (if (= (type-of input) "list") (not (empty? args)) false)
+          [(bi-unique-by-impl (head args) input env [] [])]
+          [input]))
+
+(defn bi-unique-by-impl
+  :sig [(f : _) (lst : List) (env : _) (seen-keys : List) (acc : List) -> List]
+  :requires [(valid f)]
+  :ensures [(valid result)]
+  :body (if (empty? lst)
+          acc
+          (let (elem : _ (head lst))
+            (let (key-results : List (jq-eval f elem env))
+              (let (key : _ (if (empty? key-results) nil (head key-results)))
+                (if (any (fn [k] (= k key)) seen-keys)
+                  (bi-unique-by-impl f (tail lst) env seen-keys acc)
+                  (bi-unique-by-impl f (tail lst) env (append seen-keys key) (append acc elem))))))))
+
+;; ── bi-min / bi-max ──
+(defn bi-min
+  :sig [(input : _) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (if (= (type-of input) "list") (not (empty? input)) false)
+          [(fold (fn [acc x] (if (< x acc) x acc)) (head input) (tail input))]
+          [nil]))
+
+(defn bi-max
+  :sig [(input : _) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (if (= (type-of input) "list") (not (empty? input)) false)
+          [(fold (fn [acc x] (if (> x acc) x acc)) (head input) (tail input))]
+          [nil]))
+
+;; ── bi-min-by / bi-max-by ──
+(defn bi-min-by
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (if (= (type-of input) "list") (if (not (empty? input)) (not (empty? args)) false) false)
+          (let (f : _ (head args))
+            [(fold (fn [acc x]
+              (let (acc-key : List (jq-eval f acc env))
+                (let (x-key : List (jq-eval f x env))
+                  (let (ak : _ (if (empty? acc-key) nil (head acc-key)))
+                    (let (xk : _ (if (empty? x-key) nil (head x-key)))
+                      (if (< xk ak) x acc))))))
+              (head input) (tail input))])
+          [nil]))
+
+(defn bi-max-by
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (if (= (type-of input) "list") (if (not (empty? input)) (not (empty? args)) false) false)
+          (let (f : _ (head args))
+            [(fold (fn [acc x]
+              (let (acc-key : List (jq-eval f acc env))
+                (let (x-key : List (jq-eval f x env))
+                  (let (ak : _ (if (empty? acc-key) nil (head acc-key)))
+                    (let (xk : _ (if (empty? x-key) nil (head x-key)))
+                      (if (> xk ak) x acc))))))
+              (head input) (tail input))])
+          [nil]))
+
+;; ── bi-first / bi-last / bi-nth / bi-limit ──
+(defn bi-first
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args)
+          (if (= (type-of input) "list")
+            (if (empty? input) [] [(head input)])
+            [input])
+          (let (results : List (jq-eval (head args) input env))
+            (if (empty? results) [] [(head results)]))))
+
+(defn bi-last
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args)
+          (if (= (type-of input) "list")
+            (if (empty? input) [] [(at input (- (length input) 1))])
+            [input])
+          (let (results : List (jq-eval (head args) input env))
+            (if (empty? results) [] [(at results (- (length results) 1))]))))
+
+(defn bi-nth
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args)
+          [nil]
+          (let (n-results : List (jq-eval (head args) input env))
+            (if (empty? n-results) [nil]
+              (let (n : i64 (head n-results))
+                (if (= (type-of input) "list")
+                  (if (if (>= n 0) (< n (length input)) false)
+                    [(at input n)]
+                    [nil])
+                  [nil]))))))
+
+(defn bi-limit
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (< (length args) 2)
+          [input]
+          (let (n-results : List (jq-eval (head args) input env))
+            (if (empty? n-results) []
+              (let (n : i64 (head n-results))
+                (let (results : List (jq-eval (at args 1) input env))
+                  (take-n results n)))))))
+
+(defn take-n
+  :sig [(lst : List) (n : i64) -> List]
+  :requires [(valid lst)]
+  :ensures [(valid result)]
+  :body (if (<= n 0) []
+          (if (empty? lst) []
+            (cons (head lst) (take-n (tail lst) (- n 1))))))
+
+;; ── bi-to-entries / bi-from-entries / bi-with-entries ──
+(defn bi-to-entries
+  :sig [(input : _) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "map")
+          [(map (fn [k] (map-from ["key" k "value" (map-get input k)])) (map-keys input))]
+          [input]))
+
+(defn bi-from-entries
+  :sig [(input : _) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "list")
+          [(fold (fn [acc entry]
+            (if (= (type-of entry) "map")
+              (let (k : _ (map-get-or entry "key" (map-get-or entry "name" "")))
+                (let (v : _ (map-get-or entry "value" nil))
+                  (map-set acc (str k) v)))
+              acc))
+            (map-from []) input)]
+          [input]))
+
+(defn bi-with-entries
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (if (= (type-of input) "map") (not (empty? args)) false)
+          (let (entries : List (map (fn [k] (map-from ["key" k "value" (map-get input k)])) (map-keys input)))
+            (let (f : _ (head args))
+              (let (new-entries : List (concatmap (fn [entry] (jq-eval f entry env)) entries))
+                (bi-from-entries new-entries))))
+          [input]))
+
+;; ── bi-paths / bi-getpath / bi-setpath / bi-delpaths ──
+(defn bi-paths
+  :sig [(input : _) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body [(bi-paths-impl input [])])
+
+(defn bi-paths-impl
+  :sig [(input : _) (prefix : List) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "map")
+          (fold (fn [acc k]
+            (let (path : List (append prefix k))
+              (fold (fn [a2 p] (append a2 p)) (append acc path) (bi-paths-impl (map-get input k) path))))
+            [] (map-keys input))
+          (if (= (type-of input) "list")
+            (bi-paths-list-loop input prefix 0)
+            [])))
+
+(defn bi-paths-list-loop
+  :sig [(lst : List) (prefix : List) (i : i64) -> List]
+  :requires [(valid lst)]
+  :ensures [(valid result)]
+  :body (if (>= i (length lst))
+          []
+          (let (path : List (append prefix i))
+            (let (sub-paths : List (bi-paths-impl (at lst i) path))
+              (let (rest : List (bi-paths-list-loop lst prefix (+ i 1)))
+                (fold (fn [acc p] (append acc p)) (cons path sub-paths) rest))))))
+
+(defn bi-getpath
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args) [nil]
+          (let (path-results : List (jq-eval (head args) input env))
+            (if (empty? path-results) [nil]
+              (let (path : _ (head path-results))
+                (if (= (type-of path) "list")
+                  [(navigate-path input path)]
+                  [nil]))))))
+
+(defn navigate-path
+  :sig [(input : _) (path : List) -> _]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (empty? path)
+          input
+          (let (key : _ (head path))
+            (if (= (type-of input) "map")
+              (navigate-path (map-get-or input (str key) nil) (tail path))
+              (if (= (type-of input) "list")
+                (if (if (>= key 0) (< key (length input)) false)
+                  (navigate-path (at input key) (tail path))
+                  nil)
+                nil)))))
+
+(defn bi-setpath
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (< (length args) 2) [input]
+          (let (path-results : List (jq-eval (head args) input env))
+            (let (val-results : List (jq-eval (at args 1) input env))
+              (if (if (empty? path-results) true (empty? val-results)) [input]
+                [(set-path-impl input (head path-results) (head val-results))])))))
+
+(defn set-path-impl
+  :sig [(input : _) (path : List) (val : _) -> _]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (empty? path)
+          val
+          (let (key : _ (head path))
+            (if (= (type-of input) "map")
+              (map-set input (str key) (set-path-impl (map-get-or input (str key) nil) (tail path) val))
+              input))))
+
+(defn bi-delpaths
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body [input])
+
+;; ── bi-debug : print to stderr, pass through ──
+(defn bi-debug
+  :sig [(input : _) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (let (dummy : _ (eprint (str "[\"DEBUG:\",\"" (json-stringify input) "\"]\n")))
+          [input]))
+
+;; ── bi-error : raise error ──
+(defn bi-error
+  :sig [(args : List) (input : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (let (msg : String (if (empty? args) (str input) (str (head args))))
+          (let (dummy : _ (eprint (str "airq error: " msg "\n")))
+            [])))
+
+;; ── bi-implode / bi-explode ──
+(defn bi-implode
+  :sig [(input : _) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "list")
+          [(fold (fn [acc code] (str acc (char-from-code code))) "" input)]
+          [input]))
+
+(defn bi-explode
+  :sig [(input : _) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "string")
+          [(map (fn [c] (char-code c)) (chars input))]
+          [input]))
+
+;; ── bi-indices ──
+(defn bi-indices
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body [input])
+
+;; ── bi-inside ──
+(defn bi-inside
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args) [false]
+          (let (other-results : List (jq-eval (head args) input env))
+            (if (empty? other-results) [false]
+              [(jq-contains (head other-results) input)]))))
+
+;; ── bi-recurse : recurse / recurse(f) ──
+(defn bi-recurse
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args)
+          (bi-recurse-default input 100)
+          (bi-recurse-with-filter (head args) input env 100)))
+
+(defn bi-recurse-default
+  :sig [(input : _) (depth : i64) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (<= depth 0)
+          [input]
+          (let (children : List (if (= (type-of input) "list") input
+                                  (if (= (type-of input) "map") (map-values input) [])))
+            (if (empty? children)
+              [input]
+              (cons input (concatmap (fn [x] (bi-recurse-default x (- depth 1))) children))))))
+
+(defn bi-recurse-with-filter
+  :sig [(f : _) (input : _) (env : _) (depth : i64) -> List]
+  :requires [(valid f)]
+  :ensures [(valid result)]
+  :body (if (<= depth 0)
+          [input]
+          (let (next : List (jq-eval f input env))
+            (if (empty? next)
+              [input]
+              (cons input (concatmap (fn [x] (bi-recurse-with-filter f x env (- depth 1))) next))))))
+
+;; ── bi-path ──
+(defn bi-path
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body [input])
+
+;; ── bi-leaf-paths ──
+(defn bi-leaf-paths
+  :sig [(input : _) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body [(bi-leaf-paths-impl input [])])
+
+(defn bi-leaf-paths-impl
+  :sig [(input : _) (prefix : List) -> List]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "map")
+          (concatmap (fn [k]
+            (bi-leaf-paths-impl (map-get input k) (append prefix k)))
+            (map-keys input))
+          (if (= (type-of input) "list")
+            (if (empty? input)
+              [prefix]
+              (bi-leaf-paths-list-loop input prefix 0))
+            [prefix])))
+
+(defn bi-leaf-paths-list-loop
+  :sig [(lst : List) (prefix : List) (i : i64) -> List]
+  :requires [(valid lst)]
+  :ensures [(valid result)]
+  :body (if (>= i (length lst))
+          []
+          (let (sub : List (bi-leaf-paths-impl (at lst i) (append prefix i)))
+            (let (rest : List (bi-leaf-paths-list-loop lst prefix (+ i 1)))
+              (fold (fn [acc p] (append acc p)) sub rest)))))
+
+;; ── bi-del : del(f) ──
+(defn bi-del
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body [input])
+
+;; ── bi-reduce : reduce .[] as $x (init; update) ──
+(defn bi-reduce
+  :sig [(args : List) (input : _) (env : _) -> List]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body [input])

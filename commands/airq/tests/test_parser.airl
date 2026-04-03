@@ -1,0 +1,52 @@
+;; ── airq: Parser Tests ──────────────────────────────────────
+
+(defn test-assert
+  :sig [(label : String) (actual : _) (expected : _) -> _]
+  :requires [(valid label)]
+  :ensures [(valid result)]
+  :body (if (= actual expected)
+          (print (str "PASS: " label "\n"))
+          (let (dummy : _ (print (str "FAIL: " label " expected=" (json-stringify expected) " actual=" (json-stringify actual) "\n")))
+            (exit 1))))
+
+;; Test 1: Identity
+(let (ast : _ (parse (tokenize ".")))
+  (test-assert "identity" (map-get ast "type") "identity"))
+
+;; Test 2: Field access
+(let (ast : _ (parse (tokenize ".foo")))
+  (test-assert "field type" (map-get ast "type") "field"))
+
+;; Test 3: Pipe
+(let (ast : _ (parse (tokenize ".a | .b")))
+  (test-assert "pipe type" (map-get ast "type") "pipe"))
+
+;; Test 4: Number literal
+(let (ast : _ (parse (tokenize "42")))
+  (test-assert "literal type" (map-get ast "type") "literal"))
+
+;; Test 5: Array construction
+(let (ast : _ (parse (tokenize "[.foo]")))
+  (test-assert "array type" (map-get ast "type") "array"))
+
+;; Test 6: Funcall
+(let (ast : _ (parse (tokenize "length")))
+  (test-assert "funcall type" (map-get ast "type") "funcall"))
+
+;; Test 7: Comparison
+(let (ast : _ (parse (tokenize ".a == 1")))
+  (test-assert "compare type" (map-get ast "type") "compare"))
+
+;; Test 8: If-then-else
+(let (ast : _ (parse (tokenize "if .a then .b else .c end")))
+  (test-assert "if type" (map-get ast "type") "if"))
+
+;; Test 9: Comma (multiple outputs)
+(let (ast : _ (parse (tokenize ".a, .b")))
+  (test-assert "comma type" (map-get ast "type") "comma"))
+
+;; Test 10: Nested field access
+(let (ast : _ (parse (tokenize ".a.b.c")))
+  (test-assert "nested field" (map-get ast "type") "pipe"))
+
+(print (str "All parser tests passed\n"))

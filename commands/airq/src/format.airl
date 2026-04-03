@@ -1,0 +1,80 @@
+;; ── airq: Output Formatting ─────────────────────────────────
+;; Pretty-print, compact, and raw output modes.
+
+;; ── make-indent : create indentation string ──
+(defn make-indent
+  :sig [(depth : i64) (indent-str : String) -> String]
+  :requires [(>= depth 0)]
+  :ensures [(valid result)]
+  :body (if (= depth 0)
+          ""
+          (str indent-str (make-indent (- depth 1) indent-str))))
+
+;; ── pretty-print : indented JSON output ──
+(defn pretty-print
+  :sig [(val : _) (depth : i64) (indent-str : String) (sort-keys : Bool) -> String]
+  :requires [(>= depth 0)]
+  :ensures [(valid result)]
+  :body (let (t : String (type-of val))
+          (if (= t "nil") "null"
+          (if (= t "bool") (if val "true" "false")
+          (if (= t "int") (str val)
+          (if (= t "float") (str val)
+          (if (= t "string") (str "\"" (json-escape val) "\"")
+          (if (= t "list") (pretty-print-list val depth indent-str sort-keys)
+          (if (= t "map") (pretty-print-map val depth indent-str sort-keys)
+            (json-stringify val))))))))))
+
+;; ── pretty-print-list : format array with indentation ──
+(defn pretty-print-list
+  :sig [(lst : List) (depth : i64) (indent-str : String) (sort-keys : Bool) -> String]
+  :requires [(valid lst)]
+  :ensures [(valid result)]
+  :body (if (empty? lst)
+          "[]"
+          (let (inner-indent : String (make-indent (+ depth 1) indent-str))
+            (let (outer-indent : String (make-indent depth indent-str))
+              (let (items : List (map (fn [item]
+                (str inner-indent (pretty-print item (+ depth 1) indent-str sort-keys)))
+                lst))
+                (str "[\n" (join items ",\n") "\n" outer-indent "]"))))))
+
+;; ── pretty-print-map : format object with indentation ──
+(defn pretty-print-map
+  :sig [(m : _) (depth : i64) (indent-str : String) (sort-keys : Bool) -> String]
+  :requires [(valid m)]
+  :ensures [(valid result)]
+  :body (let (keys : List (if sort-keys (sort (fn [a b] (<= a b)) (map-keys m)) (map-keys m)))
+          (if (empty? keys)
+            "{}"
+            (let (inner-indent : String (make-indent (+ depth 1) indent-str))
+              (let (outer-indent : String (make-indent depth indent-str))
+                (let (items : List (map (fn [k]
+                  (str inner-indent "\"" (json-escape k) "\": "
+                    (pretty-print (map-get m k) (+ depth 1) indent-str sort-keys)))
+                  keys))
+                  (str "{\n" (join items ",\n") "\n" outer-indent "}")))))))
+
+;; ── raw-print : for -r, strings without quotes ──
+(defn raw-print
+  :sig [(val : _) -> String]
+  :requires [(valid val)]
+  :ensures [(valid result)]
+  :body (if (= (type-of val) "string")
+          val
+          (json-stringify val)))
+
+;; ── output-value : main dispatcher based on opts ──
+(defn output-value
+  :sig [(val : _) (opts : _) -> String]
+  :requires [(valid val)]
+  :ensures [(valid result)]
+  :body (let (raw : Bool (map-get-or opts "raw-output" false))
+          (let (compact : Bool (map-get-or opts "compact-output" false))
+            (let (sort-keys : Bool (map-get-or opts "sort-keys" false))
+              (let (indent-str : String (map-get-or opts "indent-str" "  "))
+                (if raw
+                  (raw-print val)
+                  (if compact
+                    (json-stringify val)
+                    (pretty-print val 0 indent-str sort-keys))))))))

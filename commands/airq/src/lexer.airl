@@ -1,0 +1,278 @@
+;; ── airq: Lexer ─────────────────────────────────────────────
+;; Tokenizes jq filter expressions into a list of token maps.
+
+;; ── is-whitespace : check if character is whitespace ──
+(defn is-whitespace
+  :sig [(c : String) -> Bool]
+  :requires [(valid c)]
+  :ensures [(valid result)]
+  :body (if (= c " ") true
+        (if (= c "\t") true
+        (if (= c "\n") true
+        (if (= c "\r") true
+          false)))))
+
+;; ── is-digit : check if character is 0-9 ──
+(defn is-digit
+  :sig [(c : String) -> Bool]
+  :requires [(valid c)]
+  :ensures [(valid result)]
+  :body (let (code : i64 (char-code c))
+          (if (and (>= code 48) (<= code 57)) true false)))
+
+;; ── is-alpha : check if character is a-z, A-Z, or _ ──
+(defn is-alpha
+  :sig [(c : String) -> Bool]
+  :requires [(valid c)]
+  :ensures [(valid result)]
+  :body (let (code : i64 (char-code c))
+          (if (and (>= code 97) (<= code 122)) true
+          (if (and (>= code 65) (<= code 90)) true
+          (if (= code 95) true
+            false)))))
+
+;; ── is-alnum : check if character is alphanumeric or _ ──
+(defn is-alnum
+  :sig [(c : String) -> Bool]
+  :requires [(valid c)]
+  :ensures [(valid result)]
+  :body (if (is-alpha c) true (is-digit c)))
+
+;; ── mk-tok : create a simple token ──
+(defn mk-tok
+  :sig [(typ : String) -> _]
+  :requires [(valid typ)]
+  :ensures [(valid result)]
+  :body (map-from ["type" typ]))
+
+;; ── mk-tok-val : create a token with a value ──
+(defn mk-tok-val
+  :sig [(typ : String) (val : _) -> _]
+  :requires [(valid typ)]
+  :ensures [(valid result)]
+  :body (map-from ["type" typ "value" val]))
+
+;; ── classify-keyword : turn identifier into keyword token or ident ──
+(defn classify-keyword
+  :sig [(name : String) -> _]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body (if (= name "and") (mk-tok "and")
+        (if (= name "or") (mk-tok "or")
+        (if (= name "not") (mk-tok "not")
+        (if (= name "if") (mk-tok "if")
+        (if (= name "then") (mk-tok "then")
+        (if (= name "elif") (mk-tok "elif")
+        (if (= name "else") (mk-tok "else")
+        (if (= name "end") (mk-tok "end")
+        (if (= name "def") (mk-tok "def")
+        (if (= name "as") (mk-tok "as")
+        (if (= name "try") (mk-tok "try")
+        (if (= name "catch") (mk-tok "catch")
+        (if (= name "true") (mk-tok-val "literal" true)
+        (if (= name "false") (mk-tok-val "literal" false)
+        (if (= name "null") (mk-tok-val "literal" nil)
+          (mk-tok-val "ident" name)))))))))))))))))
+
+;; ── read-string-escape : read an escape sequence ──
+(defn read-string-escape
+  :sig [(cs : List) -> List]
+  :requires [(valid cs)]
+  :ensures [(valid result)]
+  :body (if (empty? cs)
+          ["" cs]
+          (let (c : String (head cs))
+               (rest : List (tail cs))
+            (if (= c "n") ["\n" rest]
+            (if (= c "t") ["\t" rest]
+            (if (= c "r") ["\r" rest]
+            (if (= c "\\") ["\\" rest]
+            (if (= c "\"") ["\"" rest]
+            (if (= c "/") ["/" rest]
+              [(str "\\" c) rest])))))))))
+
+;; ── read-string-chars : collect characters of a string literal ──
+(defn read-string-chars
+  :sig [(cs : List) (acc : String) -> List]
+  :requires [(valid cs)]
+  :ensures [(valid result)]
+  :body (if (empty? cs)
+          [acc cs]
+          (let (c : String (head cs))
+               (rest : List (tail cs))
+            (if (= c "\"")
+              [acc rest]
+              (if (= c "\\")
+                (let (esc-result : List (read-string-escape rest))
+                     (esc-char : String (head esc-result))
+                     (esc-rest : List (at esc-result 1))
+                  (read-string-chars esc-rest (str acc esc-char)))
+                (read-string-chars rest (str acc c)))))))
+
+;; ── read-number-chars : collect digits (and optional dot) ──
+(defn read-number-chars
+  :sig [(cs : List) (acc : String) (has-dot : Bool) -> List]
+  :requires [(valid cs)]
+  :ensures [(valid result)]
+  :body (if (empty? cs)
+          [acc cs]
+          (let (c : String (head cs))
+               (rest : List (tail cs))
+            (if (is-digit c)
+              (read-number-chars rest (str acc c) has-dot)
+              (if (if (= c ".") (not has-dot) false)
+                (if (if (not (empty? rest)) (is-digit (head rest)) false)
+                  (read-number-chars rest (str acc ".") true)
+                  [acc cs])
+                [acc cs])))))
+
+;; ── parse-number-str : convert number string to int ──
+(defn parse-number-str
+  :sig [(s : String) -> _]
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (let (result : _ (string-to-int s))
+          (match result
+            (Ok v) v
+            _ 0)))
+
+;; ── read-ident-chars : collect identifier characters ──
+(defn read-ident-chars
+  :sig [(cs : List) (acc : String) -> List]
+  :requires [(valid cs)]
+  :ensures [(valid result)]
+  :body (if (empty? cs)
+          [acc cs]
+          (let (c : String (head cs))
+            (if (is-alnum c)
+              (read-ident-chars (tail cs) (str acc c))
+              [acc cs]))))
+
+;; ── skip-ws-chars : skip whitespace in char list ──
+(defn skip-ws-chars
+  :sig [(cs : List) -> List]
+  :requires [(valid cs)]
+  :ensures [(valid result)]
+  :body (if (empty? cs)
+          cs
+          (if (is-whitespace (head cs))
+            (skip-ws-chars (tail cs))
+            cs)))
+
+;; ── skip-line : skip characters until newline ──
+(defn skip-line
+  :sig [(cs : List) -> List]
+  :requires [(valid cs)]
+  :ensures [(valid result)]
+  :body (if (empty? cs)
+          cs
+          (if (= (head cs) "\n")
+            (tail cs)
+            (skip-line (tail cs)))))
+
+;; ── read-op-token : handle operator characters ──
+(defn read-op-token
+  :sig [(c : String) (rest : List) -> List]
+  :requires [(valid c)]
+  :ensures [(valid result)]
+  :body (if (= c "=")
+          (if (if (not (empty? rest)) (= (head rest) "=") false)
+            [(mk-tok-val "op" "==") (tail rest)]
+            [(mk-tok-val "op" "=") rest])
+        (if (= c "!")
+          (if (if (not (empty? rest)) (= (head rest) "=") false)
+            [(mk-tok-val "op" "!=") (tail rest)]
+            [(mk-tok "not") rest])
+        (if (= c "<")
+          (if (if (not (empty? rest)) (= (head rest) "=") false)
+            [(mk-tok-val "op" "<=") (tail rest)]
+            [(mk-tok-val "op" "<") rest])
+        (if (= c ">")
+          (if (if (not (empty? rest)) (= (head rest) "=") false)
+            [(mk-tok-val "op" ">=") (tail rest)]
+            [(mk-tok-val "op" ">") rest])
+        (if (= c "+") [(mk-tok-val "op" "+") rest]
+        (if (= c "*") [(mk-tok-val "op" "*") rest]
+        (if (= c "%") [(mk-tok-val "op" "%") rest]
+          ;; Not an operator we handle here
+          [nil rest]))))))))
+
+;; ── read-token : read one token from char list ──
+(defn read-token
+  :sig [(raw-cs : List) -> List]
+  :requires [(valid raw-cs)]
+  :ensures [(valid result)]
+  :body (let (cs : List (skip-ws-chars raw-cs))
+          (if (empty? cs)
+            [(mk-tok "eof") cs]
+            (let (c : String (head cs))
+                 (rest : List (tail cs))
+              ;; Single-char punctuation
+              (if (= c ".") [(mk-tok "dot") rest]
+              (if (= c "|") [(mk-tok "pipe") rest]
+              (if (= c ",") [(mk-tok "comma") rest]
+              (if (= c ":") [(mk-tok "colon") rest]
+              (if (= c ";") [(mk-tok "semicolon") rest]
+              (if (= c "(") [(mk-tok "lparen") rest]
+              (if (= c ")") [(mk-tok "rparen") rest]
+              (if (= c "[") [(mk-tok "lbracket") rest]
+              (if (= c "]") [(mk-tok "rbracket") rest]
+              (if (= c "{") [(mk-tok "lbrace") rest]
+              (if (= c "}") [(mk-tok "rbrace") rest]
+              (if (= c "?") [(mk-tok "question") rest]
+              ;; @format
+              (if (= c "@")
+                (let (id-result : List (read-ident-chars rest ""))
+                  [(mk-tok-val "at" (head id-result)) (at id-result 1)])
+              ;; $variable
+              (if (= c "$")
+                (let (id-result : List (read-ident-chars rest ""))
+                  [(mk-tok-val "var" (str "$" (head id-result))) (at id-result 1)])
+              ;; String literal
+              (if (= c "\"")
+                (let (sr : List (read-string-chars rest ""))
+                  [(mk-tok-val "string" (head sr)) (at sr 1)])
+              ;; Minus or negative number
+              (if (= c "-")
+                (if (if (not (empty? rest)) (is-digit (head rest)) false)
+                  (let (nr : List (read-number-chars rest "" false))
+                    [(mk-tok-val "number" (parse-number-str (str "-" (head nr)))) (at nr 1)])
+                  [(mk-tok-val "op" "-") rest])
+              ;; Slash or comment
+              (if (= c "/")
+                (if (if (not (empty? rest)) (= (head rest) "/") false)
+                  (read-token (skip-line rest))
+                  [(mk-tok-val "op" "/") rest])
+              ;; Number
+              (if (is-digit c)
+                (let (nr : List (read-number-chars rest (str c) false))
+                  [(mk-tok-val "number" (parse-number-str (head nr))) (at nr 1)])
+              ;; Identifier or keyword
+              (if (is-alpha c)
+                (let (ir : List (read-ident-chars rest (str c)))
+                  [(classify-keyword (head ir)) (at ir 1)])
+              ;; Operators
+              (let (op-result : List (read-op-token c rest))
+                (if (= (head op-result) nil)
+                  ;; Unknown char — skip
+                  (read-token rest)
+                  op-result)))))))))))))))))))))))))
+
+;; ── tokenize-loop : recursive tokenizer loop ──
+(defn tokenize-loop
+  :sig [(cs : List) (acc : List) -> List]
+  :requires [(valid cs)]
+  :ensures [(valid result)]
+  :body (let (result : List (read-token cs))
+          (let (tok : _ (head result))
+            (let (remaining : List (at result 1))
+              (if (= (map-get tok "type") "eof")
+                (reverse (cons tok acc))
+                (tokenize-loop remaining (cons tok acc)))))))
+
+;; ── tokenize : main entry point ──
+(defn tokenize
+  :sig [(input : String) -> List]
+  :requires [(valid input)]
+  :ensures [(not (empty? result))]
+  :body (tokenize-loop (chars input) []))

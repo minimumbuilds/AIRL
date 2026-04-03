@@ -1,0 +1,107 @@
+;; ── airq: Eval Tests ────────────────────────────────────────
+
+(defn test-assert
+  :sig [(label : String) (actual : _) (expected : _) -> _]
+  :requires [(valid label)]
+  :ensures [(valid result)]
+  :body (if (= actual expected)
+          (print (str "PASS: " label "\n"))
+          (let (dummy : _ (print (str "FAIL: " label " expected=" (json-stringify expected) " actual=" (json-stringify actual) "\n")))
+            (exit 1))))
+
+(defn run-jq
+  :sig [(filter-str : String) (input : _) -> List]
+  :requires [(valid filter-str)]
+  :ensures [(valid result)]
+  :body (let (tokens : List (tokenize filter-str))
+          (let (ast : _ (parse tokens))
+            (jq-eval ast input (empty-env nil)))))
+
+(defn run-jq-first
+  :sig [(filter-str : String) (input : _) -> _]
+  :requires [(valid filter-str)]
+  :ensures [(valid result)]
+  :body (let (results : List (run-jq filter-str input))
+          (if (empty? results) nil (head results))))
+
+;; Test 1: Identity
+(test-assert "identity" (run-jq-first "." 42) 42)
+
+;; Test 2: Field access
+(test-assert "field" (run-jq-first ".name" (map-from ["name" "airq"])) "airq")
+
+;; Test 3: Index
+(test-assert "index" (run-jq-first ".[1]" [10 20 30]) 20)
+
+;; Test 4: Iterate produces multiple
+(test-assert "iterate count" (length (run-jq ".[]" [1 2 3])) 3)
+
+;; Test 5: Pipe
+(test-assert "pipe" (run-jq-first ".a | .b" (map-from ["a" (map-from ["b" 42])])) 42)
+
+;; Test 6: Arithmetic
+(test-assert "add" (run-jq-first ". + 1" 5) 6)
+(test-assert "sub" (run-jq-first ". - 1" 5) 4)
+(test-assert "mul" (run-jq-first ". * 2" 5) 10)
+
+;; Test 7: Comparison
+(test-assert "eq true" (run-jq-first ". == 5" 5) true)
+(test-assert "eq false" (run-jq-first ". == 5" 3) false)
+(test-assert "lt" (run-jq-first ". < 5" 3) true)
+(test-assert "gt" (run-jq-first ". > 5" 3) false)
+
+;; Test 8: If-then-else
+(test-assert "if true" (run-jq-first "if . > 3 then \"big\" else \"small\" end" 5) "big")
+(test-assert "if false" (run-jq-first "if . > 3 then \"big\" else \"small\" end" 1) "small")
+
+;; Test 9: Array construction
+(test-assert "array" (run-jq-first "[.[] | . * 2]" [1 2 3]) [2 4 6])
+
+;; Test 10: Builtins
+(test-assert "length list" (run-jq-first "length" [1 2 3]) 3)
+(test-assert "length str" (run-jq-first "length" "hello") 5)
+(test-assert "keys" (run-jq-first "keys" (map-from ["b" 2 "a" 1])) ["a" "b"])
+(test-assert "type string" (run-jq-first "type" "hello") "string")
+(test-assert "type number" (run-jq-first "type" 42) "number")
+(test-assert "type null" (run-jq-first "type" nil) "null")
+(test-assert "type array" (run-jq-first "type" [1 2]) "array")
+(test-assert "type object" (run-jq-first "type" (map-from ["a" 1])) "object")
+
+;; Test 11: select
+(test-assert "select true" (run-jq-first "select(. > 3)" 5) 5)
+(test-assert "select false" (length (run-jq "select(. > 3)" 1)) 0)
+
+;; Test 12: map
+(test-assert "map" (run-jq-first "map(. * 2)" [1 2 3]) [2 4 6])
+
+;; Test 13: not
+(test-assert "not true" (run-jq-first "not" true) false)
+(test-assert "not false" (run-jq-first "not" false) true)
+
+;; Test 14: sort
+(test-assert "sort" (run-jq-first "sort" [3 1 2]) [1 2 3])
+
+;; Test 15: String ops
+(test-assert "ascii_downcase" (run-jq-first "ascii_downcase" "HELLO") "hello")
+(test-assert "split" (run-jq-first "split(\",\")" "a,b,c") ["a" "b" "c"])
+
+;; Test 16: to_entries/from_entries
+(let (entries : _ (run-jq-first "to_entries" (map-from ["a" 1])))
+  (let (entry : _ (head entries))
+    (test-assert "to_entries key" (map-get entry "key") "a")))
+
+;; Test 17: range
+(test-assert "range" (run-jq "range(3)" nil) [0 1 2])
+
+;; Test 18: add
+(test-assert "add nums" (run-jq-first "add" [1 2 3]) 6)
+(test-assert "add strings" (run-jq-first "add" ["a" "b" "c"]) "abc")
+
+;; Test 19: empty
+(test-assert "empty" (length (run-jq "empty" nil)) 0)
+
+;; Test 20: has
+(test-assert "has true" (run-jq-first "has(\"a\")" (map-from ["a" 1])) true)
+(test-assert "has false" (run-jq-first "has(\"b\")" (map-from ["a" 1])) false)
+
+(print (str "All eval tests passed\n"))

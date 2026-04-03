@@ -1,0 +1,114 @@
+;; ── airq: CLI ───────────────────────────────────────────────
+;; CairLI app definition and dispatch logic.
+
+;; ── build-app : create CairLI app with all flags ──
+(defn build-app
+  :sig [(dummy : _) -> _]
+  :requires [true]
+  :ensures [(valid result)]
+  :body (let (app : _ (cairli-app (map-from ["name" "airq" "version" "0.1.0" "description" "jq-compatible JSON processor"])))
+          (let (app : _ (cairli-add-positional app (map-from ["name" "filter" "help" "jq filter expression" "required" false "default" "."])))
+            (let (app : _ (cairli-add-flag app (map-from ["name" "raw-output" "short" "r" "type" "bool" "help" "Output raw strings"])))
+              (let (app : _ (cairli-add-flag app (map-from ["name" "raw-input" "short" "R" "type" "bool" "help" "Read input as raw text lines"])))
+                (let (app : _ (cairli-add-flag app (map-from ["name" "null-input" "short" "n" "type" "bool" "help" "Use null as input"])))
+                  (let (app : _ (cairli-add-flag app (map-from ["name" "compact-output" "short" "c" "type" "bool" "help" "Compact output"])))
+                    (let (app : _ (cairli-add-flag app (map-from ["name" "slurp" "short" "s" "type" "bool" "help" "Slurp all inputs into array"])))
+                      (let (app : _ (cairli-add-flag app (map-from ["name" "sort-keys" "short" "S" "type" "bool" "help" "Sort object keys"])))
+                        (let (app : _ (cairli-add-flag app (map-from ["name" "tab" "type" "bool" "help" "Use tab indentation"])))
+                          (let (app : _ (cairli-add-flag app (map-from ["name" "indent" "type" "int" "default" "2" "help" "Indentation width"])))
+                            (let (app : _ (cairli-add-flag app (map-from ["name" "exit-status" "short" "e" "type" "bool" "help" "Exit code reflects output"])))
+                              (let (app : _ (cairli-add-flag app (map-from ["name" "join-output" "short" "j" "type" "bool" "help" "No newline after output"])))
+                                app)))))))))))))
+
+;; ── build-opts : convert parsed CairLI context to opts Map ──
+(defn build-opts
+  :sig [(ctx : _) -> _]
+  :requires [(valid ctx)]
+  :ensures [(valid result)]
+  :body (let (indent-n : i64 (cairli-flag ctx "indent"))
+          (let (use-tab : Bool (cairli-flag ctx "tab"))
+            (let (indent-str : String (if use-tab "\t" (make-indent indent-n " ")))
+              (map-from ["raw-output" (cairli-flag ctx "raw-output")
+                         "raw-input" (cairli-flag ctx "raw-input")
+                         "null-input" (cairli-flag ctx "null-input")
+                         "compact-output" (cairli-flag ctx "compact-output")
+                         "slurp" (cairli-flag ctx "slurp")
+                         "sort-keys" (cairli-flag ctx "sort-keys")
+                         "exit-status" (cairli-flag ctx "exit-status")
+                         "join-output" (cairli-flag ctx "join-output")
+                         "indent-str" indent-str])))))
+
+;; ── output-results : print each result on its own line ──
+(defn output-results
+  :sig [(results : List) (opts : _) (join-out : Bool) -> i64]
+  :requires [(valid results)]
+  :ensures [(valid result)]
+  :body (if (empty? results)
+          1
+          (let (dummy : _ (fold (fn [acc val]
+            (let (out : String (output-value val opts))
+              (if join-out
+                (print out)
+                (print (str out "\n")))))
+            nil results))
+            0)))
+
+;; ── run-and-output : evaluate filter and print results ──
+(defn run-and-output
+  :sig [(filter-ast : _) (input : _) (env : _) (opts : _) -> i64]
+  :requires [(valid filter-ast)]
+  :ensures [(valid result)]
+  :body (let (results : List (jq-eval filter-ast input env))
+          (let (join-out : Bool (map-get-or opts "join-output" false))
+            (output-results results opts join-out))))
+
+;; ── process-single : parse JSON, evaluate filter, output results ──
+(defn process-single
+  :sig [(json-input : String) (filter-ast : _) (opts : _) (env : _) -> i64]
+  :requires [(valid json-input)]
+  :ensures [(valid result)]
+  :body (let (input : _ (parse-json-or-die json-input))
+          (run-and-output filter-ast input env opts)))
+
+;; ── process-raw-lines : -R mode, treat each line as a string ──
+(defn process-raw-lines
+  :sig [(raw-input : String) (filter-ast : _) (opts : _) (env : _) -> i64]
+  :requires [(valid raw-input)]
+  :ensures [(valid result)]
+  :body (let (input-lines : List (lines raw-input))
+          (let (join-out : Bool (map-get-or opts "join-output" false))
+            (fold (fn [code line]
+              (let (results : List (jq-eval filter-ast line env))
+                (output-results results opts join-out)))
+              0 input-lines))))
+
+;; ── dispatch-input : handle stdin reading based on mode ──
+(defn dispatch-input
+  :sig [(filter-ast : _) (opts : _) (env : _) -> i64]
+  :requires [(valid filter-ast)]
+  :ensures [(valid result)]
+  :body (if (map-get-or opts "null-input" false)
+          (run-and-output filter-ast nil env opts)
+          (let (raw : String (match (read-stdin) (Ok v) v _ ""))
+            (if (map-get-or opts "raw-input" false)
+              (process-raw-lines raw filter-ast opts env)
+              (if (map-get-or opts "slurp" false)
+                (let (input-lines : List (filter (fn [l] (not (= (trim l) ""))) (lines raw)))
+                  (let (parsed : List (map (fn [l] (parse-json-or-die l)) input-lines))
+                    (run-and-output filter-ast parsed env opts)))
+                (process-single (trim raw) filter-ast opts env))))))
+
+;; ── dispatch : main dispatch logic ──
+(defn dispatch
+  :sig [(ctx : _) -> _]
+  :requires [(valid ctx)]
+  :ensures [(valid result)]
+  :body (let (filter-str : String (cairli-positional ctx "filter"))
+          (let (opts : _ (build-opts ctx))
+            (let (tokens : List (tokenize filter-str))
+              (let (filter-ast : _ (parse tokens))
+                (let (env : _ (empty-env nil))
+                  (let (code : i64 (dispatch-input filter-ast opts env))
+                    (if (map-get-or opts "exit-status" false)
+                      (exit code)
+                      nil))))))))

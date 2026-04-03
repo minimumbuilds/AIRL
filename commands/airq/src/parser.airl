@@ -1,0 +1,478 @@
+;; ── airq: Parser ────────────────────────────────────────────
+;; Recursive descent parser: token list → AST (nested Maps).
+;; Each parse function returns [AST remaining-tokens].
+
+;; ── tok-type : get type of current token ──
+(defn tok-type
+  :sig [(tokens : List) -> String]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (map-get (head tokens) "type"))
+
+;; ── tok-val : get value of current token ──
+(defn tok-val
+  :sig [(tokens : List) -> _]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (map-get-or (head tokens) "value" nil))
+
+;; ── advance : drop first token ──
+(defn advance
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (tail tokens))
+
+;; ── expect : consume a token of given type or error ──
+(defn expect
+  :sig [(tokens : List) (expected : String) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (if (= (tok-type tokens) expected)
+          (advance tokens)
+          (let (dummy : _ (eprint (str "airq parse error: expected " expected " got " (tok-type tokens) "\n")))
+            (exit 2))))
+
+;; ── parse-dot-bracket : parse .[0], .[], .[2:5] ──
+(defn parse-dot-bracket
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (let (tt : String (tok-type tokens))
+          (if (= tt "rbracket")
+            [(map-from ["type" "iterate"]) (advance tokens)]
+          (if (= tt "number")
+            (let (idx : _ (tok-val tokens))
+                 (rest : List (advance tokens))
+              (if (= (tok-type rest) "colon")
+                (let (rest2 : List (advance rest))
+                  (if (= (tok-type rest2) "number")
+                    (let (to-val : _ (tok-val rest2))
+                      [(map-from ["type" "slice" "from" idx "to" to-val]) (expect (advance rest2) "rbracket")])
+                    [(map-from ["type" "slice" "from" idx "to" nil]) (expect rest2 "rbracket")]))
+                [(map-from ["type" "index" "value" idx]) (expect rest "rbracket")]))
+          (if (= tt "string")
+            (let (key : String (tok-val tokens))
+              [(map-from ["type" "field" "name" key]) (expect (advance tokens) "rbracket")])
+            ;; General expression in brackets — parse after pipe is defined
+            [(map-from ["type" "iterate"]) (expect tokens "rbracket")])))))
+
+;; ── parse-funcall-args : parse function arguments f(a; b; c) ──
+(defn parse-funcall-args
+  :sig [(name : String) (tokens : List) -> List]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body (if (= (tok-type tokens) "rparen")
+          [(map-from ["type" "funcall" "name" name "args" []]) (advance tokens)]
+          (let (first-result : List (parse-pipe tokens))
+               (first-arg : _ (head first-result))
+               (rest : List (at first-result 1))
+            (parse-funcall-rest name [first-arg] rest))))
+
+;; ── parse-funcall-rest : collect remaining semicolon-separated args ──
+(defn parse-funcall-rest
+  :sig [(name : String) (args : List) (tokens : List) -> List]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body (if (= (tok-type tokens) "rparen")
+          [(map-from ["type" "funcall" "name" name "args" args]) (advance tokens)]
+          (if (= (tok-type tokens) "semicolon")
+            (let (next-result : List (parse-pipe (advance tokens)))
+                 (next-arg : _ (head next-result))
+                 (rest : List (at next-result 1))
+              (parse-funcall-rest name (append args next-arg) rest))
+            [(map-from ["type" "funcall" "name" name "args" args]) tokens])))
+
+;; ── parse-object : parse {key: value, ...} ──
+(defn parse-object
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (if (= (tok-type tokens) "rbrace")
+          [(map-from ["type" "object" "pairs" []]) (advance tokens)]
+          (parse-object-pairs tokens [])))
+
+;; ── parse-object-key : parse a key in object construction ──
+(defn parse-object-key
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (let (tt : String (tok-type tokens))
+          (if (= tt "ident")
+            [(map-from ["type" "string" "value" (tok-val tokens)]) (advance tokens)]
+          (if (= tt "string")
+            [(map-from ["type" "string" "value" (tok-val tokens)]) (advance tokens)]
+            (parse-pipe tokens)))))
+
+;; ── parse-object-pairs : collect key-value pairs ──
+(defn parse-object-pairs
+  :sig [(tokens : List) (pairs : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (let (key-result : List (parse-object-key tokens))
+             (key-ast : _ (head key-result))
+             (rest : List (at key-result 1))
+             (rest2 : List (expect rest "colon"))
+             (val-result : List (parse-or rest2))
+             (val-ast : _ (head val-result))
+             (rest3 : List (at val-result 1))
+             (pair : _ (map-from ["key" key-ast "value" val-ast]))
+             (new-pairs : List (append pairs pair))
+          (if (= (tok-type rest3) "comma")
+            (parse-object-pairs (advance rest3) new-pairs)
+            [(map-from ["type" "object" "pairs" new-pairs]) (expect rest3 "rbrace")])))
+
+;; ── parse-if-expr : parse if COND then THEN (elif|else) end ──
+(defn parse-if-expr
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (let (cond-result : List (parse-pipe tokens))
+             (cond-ast : _ (head cond-result))
+             (rest : List (expect (at cond-result 1) "then"))
+             (then-result : List (parse-pipe rest))
+             (then-ast : _ (head then-result))
+             (rest2 : List (at then-result 1))
+             (tt : String (tok-type rest2))
+          (if (= tt "elif")
+            (let (elif-result : List (parse-if-expr (advance rest2)))
+              [(map-from ["type" "if" "cond" cond-ast "then" then-ast "else" (head elif-result)]) (at elif-result 1)])
+          (if (= tt "else")
+            (let (else-result : List (parse-pipe (advance rest2)))
+                 (else-ast : _ (head else-result))
+                 (rest3 : List (expect (at else-result 1) "end"))
+              [(map-from ["type" "if" "cond" cond-ast "then" then-ast "else" else-ast]) rest3])
+            [(map-from ["type" "if" "cond" cond-ast "then" then-ast "else" (map-from ["type" "identity"])]) (expect rest2 "end")]))))
+
+;; ── parse-try-expr : parse try EXPR (catch EXPR)? ──
+(defn parse-try-expr
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (let (expr-result : List (parse-postfix tokens))
+             (expr-ast : _ (head expr-result))
+             (rest : List (at expr-result 1))
+          (if (if (not (empty? rest)) (= (tok-type rest) "catch") false)
+            (let (catch-result : List (parse-postfix (advance rest)))
+              [(map-from ["type" "try" "expr" expr-ast "catch" (head catch-result)]) (at catch-result 1)])
+            [(map-from ["type" "try" "expr" expr-ast "catch" (map-from ["type" "funcall" "name" "empty" "args" []])]) rest])))
+
+;; ── parse-def-expr : parse def NAME(params): BODY; REST ──
+(defn parse-def-expr
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (let (name : String (tok-val tokens))
+             (rest : List (advance tokens))
+          (if (= (tok-type rest) "lparen")
+            (let (params-result : List (parse-def-params (advance rest)))
+                 (params : List (head params-result))
+                 (rest2 : List (at params-result 1))
+                 (rest3 : List (expect rest2 "colon"))
+                 (body-result : List (parse-pipe rest3))
+                 (body-ast : _ (head body-result))
+                 (rest4 : List (expect (at body-result 1) "semicolon"))
+                 (next-result : List (parse-pipe rest4))
+              [(map-from ["type" "def" "name" name "params" params "body" body-ast "next" (head next-result)]) (at next-result 1)])
+            (let (rest2 : List (expect rest "colon"))
+                 (body-result : List (parse-pipe rest2))
+                 (body-ast : _ (head body-result))
+                 (rest3 : List (expect (at body-result 1) "semicolon"))
+                 (next-result : List (parse-pipe rest3))
+              [(map-from ["type" "def" "name" name "params" [] "body" body-ast "next" (head next-result)]) (at next-result 1)]))))
+
+;; ── parse-def-params : parse f(a; b; c) parameter names ──
+(defn parse-def-params
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (if (= (tok-type tokens) "rparen")
+          [[] (advance tokens)]
+          (let (name : String (tok-val tokens))
+               (rest : List (advance tokens))
+            (if (= (tok-type rest) "semicolon")
+              (let (more : List (parse-def-params (advance rest)))
+                [(cons name (head more)) (at more 1)])
+              (if (= (tok-type rest) "rparen")
+                [[name] (advance rest)]
+                [[name] rest])))))
+
+;; ── parse-primary-dot : handle dot token ──
+(defn parse-primary-dot
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (let (rest : List (advance tokens))
+          (if (empty? rest)
+            [(map-from ["type" "identity"]) rest]
+            (let (ntt : String (tok-type rest))
+              (if (= ntt "ident")
+                [(map-from ["type" "field" "name" (tok-val rest)]) (advance rest)]
+              (if (= ntt "lbracket")
+                (parse-dot-bracket (advance rest))
+              (if (= ntt "string")
+                [(map-from ["type" "field" "name" (tok-val rest)]) (advance rest)]
+                [(map-from ["type" "identity"]) rest])))))))
+
+;; ── parse-primary-group2 : handle lbrace/if/try/def/at/not/minus/ident ──
+(defn parse-primary-group2
+  :sig [(tt : String) (tokens : List) -> List]
+  :requires [(valid tt)]
+  :ensures [(valid result)]
+  :body (if (= tt "lbrace")
+          (parse-object (advance tokens))
+        (if (= tt "if")
+          (parse-if-expr (advance tokens))
+        (if (= tt "try")
+          (parse-try-expr (advance tokens))
+        (if (= tt "def")
+          (parse-def-expr (advance tokens))
+        (if (= tt "at")
+          [(map-from ["type" "format" "name" (tok-val tokens)]) (advance tokens)]
+        (if (= tt "not")
+          ;; Standalone 'not' = negate identity
+          [(map-from ["type" "not" "expr" (map-from ["type" "identity"])]) (advance tokens)]
+        (if (if (= tt "op") (= (tok-val tokens) "-") false)
+          (let (inner : List (parse-primary (advance tokens)))
+            [(map-from ["type" "arith" "op" "-" "left" (map-from ["type" "literal" "value" 0]) "right" (head inner)]) (at inner 1)])
+        (if (= tt "ident")
+          (let (name : String (tok-val tokens))
+               (rest : List (advance tokens))
+            (if (if (not (empty? rest)) (= (tok-type rest) "lparen") false)
+              (parse-funcall-args name (advance rest))
+              [(map-from ["type" "funcall" "name" name "args" []]) rest]))
+          (let (dummy : _ (eprint (str "airq parse error: unexpected " tt "\n")))
+            (exit 2)))))))))))
+
+;; ── parse-primary : parse primary expressions ──
+(defn parse-primary
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (let (tt : String (tok-type tokens))
+          (if (= tt "dot")
+            (parse-primary-dot tokens)
+          (if (= tt "number")
+            [(map-from ["type" "literal" "value" (tok-val tokens)]) (advance tokens)]
+          (if (= tt "string")
+            [(map-from ["type" "string" "value" (tok-val tokens)]) (advance tokens)]
+          (if (= tt "literal")
+            [(map-from ["type" "literal" "value" (tok-val tokens)]) (advance tokens)]
+          (if (= tt "var")
+            [(map-from ["type" "var" "name" (tok-val tokens)]) (advance tokens)]
+          (if (= tt "lparen")
+            (let (inner : List (parse-pipe (advance tokens)))
+                 (ast : _ (head inner))
+                 (rest : List (at inner 1))
+              [(map-from ["type" "paren" "expr" ast]) (expect rest "rparen")])
+          (if (= tt "lbracket")
+            (let (rest : List (advance tokens))
+              (if (= (tok-type rest) "rbracket")
+                [(map-from ["type" "array" "expr" (map-from ["type" "identity"])]) (advance rest)]
+                (let (inner : List (parse-pipe rest))
+                     (ast : _ (head inner))
+                     (rest2 : List (at inner 1))
+                  [(map-from ["type" "array" "expr" ast]) (expect rest2 "rbracket")])))
+            (parse-primary-group2 tt tokens))))))))))
+
+;; ── parse-postfix-loop : consume postfix operators ──
+(defn parse-postfix-loop
+  :sig [(ast : _) (tokens : List) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (if (empty? tokens)
+          [ast tokens]
+          (let (tt : String (tok-type tokens))
+            (if (= tt "dot")
+              (let (rest : List (advance tokens))
+                (if (if (not (empty? rest)) (= (tok-type rest) "ident") false)
+                  (parse-postfix-loop
+                    (map-from ["type" "pipe" "left" ast "right" (map-from ["type" "field" "name" (tok-val rest)])])
+                    (advance rest))
+                (if (if (not (empty? rest)) (= (tok-type rest) "string") false)
+                  (parse-postfix-loop
+                    (map-from ["type" "pipe" "left" ast "right" (map-from ["type" "field" "name" (tok-val rest)])])
+                    (advance rest))
+                (if (if (not (empty? rest)) (= (tok-type rest) "lbracket") false)
+                  (let (bracket-result : List (parse-dot-bracket (advance rest)))
+                    (parse-postfix-loop
+                      (map-from ["type" "pipe" "left" ast "right" (head bracket-result)])
+                      (at bracket-result 1)))
+                  [ast tokens]))))
+            (if (= tt "lbracket")
+              (let (rest : List (advance tokens))
+                (if (= (tok-type rest) "rbracket")
+                  (parse-postfix-loop
+                    (map-from ["type" "pipe" "left" ast "right" (map-from ["type" "iterate"])])
+                    (advance rest))
+                (if (= (tok-type rest) "number")
+                  (let (idx : _ (tok-val rest))
+                       (rest2 : List (advance rest))
+                    (if (= (tok-type rest2) "colon")
+                      (let (rest3 : List (advance rest2))
+                        (if (= (tok-type rest3) "number")
+                          (let (to-val : _ (tok-val rest3))
+                            (parse-postfix-loop
+                              (map-from ["type" "pipe" "left" ast "right" (map-from ["type" "slice" "from" idx "to" to-val])])
+                              (expect (advance rest3) "rbracket")))
+                          (parse-postfix-loop
+                            (map-from ["type" "pipe" "left" ast "right" (map-from ["type" "slice" "from" idx "to" nil])])
+                            (expect rest3 "rbracket"))))
+                      (parse-postfix-loop
+                        (map-from ["type" "pipe" "left" ast "right" (map-from ["type" "index" "value" idx])])
+                        (expect rest2 "rbracket"))))
+                  ;; General expr in brackets
+                  (let (inner : List (parse-pipe rest))
+                    (parse-postfix-loop
+                      (map-from ["type" "pipe" "left" ast "right" (map-from ["type" "index-expr" "expr" (head inner)])])
+                      (expect (at inner 1) "rbracket"))))))
+            (if (= tt "question")
+              (parse-postfix-loop
+                (map-from ["type" "try" "expr" ast "catch" (map-from ["type" "funcall" "name" "empty" "args" []])])
+                (advance tokens))
+            (if (= tt "as")
+              (let (rest : List (advance tokens))
+                (if (= (tok-type rest) "var")
+                  (let (var-name : String (tok-val rest))
+                       (rest2 : List (expect (advance rest) "pipe"))
+                       (body-result : List (parse-pipe rest2))
+                    [(map-from ["type" "binding" "expr" ast "var" var-name "body" (head body-result)]) (at body-result 1)])
+                  [ast tokens]))
+              [ast tokens])))))))
+
+;; ── parse-postfix : parse postfix operators ──
+(defn parse-postfix
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (let (result : List (parse-primary tokens))
+          (parse-postfix-loop (head result) (at result 1))))
+
+;; ── parse-arith-loop : left-to-right arithmetic ──
+(defn parse-arith-loop
+  :sig [(left : _) (tokens : List) -> List]
+  :requires [(valid left)]
+  :ensures [(valid result)]
+  :body (if (empty? tokens)
+          [left tokens]
+          (if (if (= (tok-type tokens) "op")
+                (let (op : String (tok-val tokens))
+                  (if (= op "+") true
+                  (if (= op "-") true
+                  (if (= op "*") true
+                  (if (= op "/") true
+                  (if (= op "%") true false))))))
+                false)
+            (let (op : String (tok-val tokens))
+                 (right-result : List (parse-postfix (advance tokens)))
+              (parse-arith-loop
+                (map-from ["type" "arith" "op" op "left" left "right" (head right-result)])
+                (at right-result 1)))
+            [left tokens])))
+
+;; ── parse-arith : parse arithmetic ──
+(defn parse-arith
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (let (result : List (parse-postfix tokens))
+          (parse-arith-loop (head result) (at result 1))))
+
+;; ── is-comparison-op : check if current token is a comparison ──
+(defn is-comparison-op
+  :sig [(tokens : List) -> Bool]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (if (= (tok-type tokens) "op")
+          (let (op : String (tok-val tokens))
+            (if (= op "==") true
+            (if (= op "!=") true
+            (if (= op "<") true
+            (if (= op ">") true
+            (if (= op "<=") true
+            (if (= op ">=") true false)))))))
+          false))
+
+;; ── parse-compare : parse comparison operators ──
+(defn parse-compare
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (let (result : List (parse-arith tokens))
+             (left : _ (head result))
+             (rest : List (at result 1))
+          (if (if (not (empty? rest)) (is-comparison-op rest) false)
+            (let (op : String (tok-val rest))
+                 (right-result : List (parse-arith (advance rest)))
+              [(map-from ["type" "compare" "op" op "left" left "right" (head right-result)]) (at right-result 1)])
+            [left rest])))
+
+;; ── parse-not-expr : parse 'not' (treated as identity negation) ──
+(defn parse-not-expr
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (if (= (tok-type tokens) "not")
+          ;; In jq, 'not' is a postfix filter. When seen here, treat as negating identity.
+          [(map-from ["type" "not" "expr" (map-from ["type" "identity"])]) (advance tokens)]
+          (parse-compare tokens)))
+
+;; ── parse-and : parse 'and' expressions ──
+(defn parse-and
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (let (result : List (parse-not-expr tokens))
+             (left : _ (head result))
+             (rest : List (at result 1))
+          (if (if (not (empty? rest)) (= (tok-type rest) "and") false)
+            (let (right-result : List (parse-and (advance rest)))
+              [(map-from ["type" "and" "left" left "right" (head right-result)]) (at right-result 1)])
+            [left rest])))
+
+;; ── parse-or : parse 'or' expressions ──
+(defn parse-or
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (let (result : List (parse-and tokens))
+             (left : _ (head result))
+             (rest : List (at result 1))
+          (if (if (not (empty? rest)) (= (tok-type rest) "or") false)
+            (let (right-result : List (parse-or (advance rest)))
+              [(map-from ["type" "or" "left" left "right" (head right-result)]) (at right-result 1)])
+            [left rest])))
+
+;; ── parse-comma : parse comma expressions ──
+(defn parse-comma
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (let (result : List (parse-or tokens))
+             (left : _ (head result))
+             (rest : List (at result 1))
+          (if (if (not (empty? rest)) (= (tok-type rest) "comma") false)
+            (let (right-result : List (parse-comma (advance rest)))
+              [(map-from ["type" "comma" "left" left "right" (head right-result)]) (at right-result 1)])
+            [left rest])))
+
+;; ── parse-pipe : parse pipe expressions (lowest precedence) ──
+(defn parse-pipe
+  :sig [(tokens : List) -> List]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (let (result : List (parse-comma tokens))
+             (left : _ (head result))
+             (rest : List (at result 1))
+          (if (if (not (empty? rest)) (= (tok-type rest) "pipe") false)
+            (let (right-result : List (parse-pipe (advance rest)))
+              [(map-from ["type" "pipe" "left" left "right" (head right-result)]) (at right-result 1)])
+            [left rest])))
+
+;; ── parse : main entry point ──
+(defn parse
+  :sig [(tokens : List) -> _]
+  :requires [(not (empty? tokens))]
+  :ensures [(valid result)]
+  :body (let (result : List (parse-pipe tokens))
+          (head result)))

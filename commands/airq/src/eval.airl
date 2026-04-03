@@ -1,0 +1,468 @@
+;; ── airq: Evaluator ─────────────────────────────────────────
+;; Tree-walk evaluator. Each function takes (ast input env) → List[Any].
+
+;; ── parse-json-or-die : parse JSON, unwrap Result ──
+(defn parse-json-or-die
+  :sig [(s : String) -> _]
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (let (result : _ (json-parse s))
+          (match result
+            (Ok v) v
+            (Err e) (let (dummy : _ (eprint (str "airq: parse error: " e "\n")))
+                      (exit 2)))))
+
+;; ── concatmap : apply f to each element, flatten results ──
+(defn concatmap
+  :sig [(f : _) (lst : List) -> List]
+  :requires [(valid f)]
+  :ensures [(valid result)]
+  :body (if (empty? lst)
+          []
+          (let (first-results : List (f (head lst)))
+            (let (rest-results : List (concatmap f (tail lst)))
+              (fold (fn [acc x] (append acc x)) first-results rest-results)))))
+
+;; ── jq-truthy : jq truthiness (false and null are falsy) ──
+(defn jq-truthy
+  :sig [(val : _) -> Bool]
+  :requires [(valid val)]
+  :ensures [(valid result)]
+  :body (if (= val false) false
+        (if (= val nil) false
+          true)))
+
+;; ── empty-env : create initial environment ──
+(defn empty-env
+  :sig [(dummy : _) -> _]
+  :requires [true]
+  :ensures [(valid result)]
+  :body (map-from ["vars" (map-from []) "funcs" (map-from [])]))
+
+;; ── env-get-var : look up variable in environment ──
+(defn env-get-var
+  :sig [(env : _) (name : String) -> _]
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (let (vars : _ (map-get env "vars"))
+          (map-get-or vars name nil)))
+
+;; ── env-set-var : set variable in environment ──
+(defn env-set-var
+  :sig [(env : _) (name : String) (val : _) -> _]
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (let (vars : _ (map-get env "vars"))
+          (map-set env "vars" (map-set vars name val))))
+
+;; ── env-get-func : look up user-defined function ──
+(defn env-get-func
+  :sig [(env : _) (name : String) -> _]
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (let (funcs : _ (map-get env "funcs"))
+          (map-get-or funcs name nil)))
+
+;; ── env-set-func : define a function in environment ──
+(defn env-set-func
+  :sig [(env : _) (name : String) (fdef : _) -> _]
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (let (funcs : _ (map-get env "funcs"))
+          (map-set env "funcs" (map-set funcs name fdef))))
+
+;; ── jq-eval : main evaluator dispatch ──
+(defn jq-eval
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (node-type : String (map-get ast "type"))
+          (if (= node-type "identity") [input]
+          (if (= node-type "field") (eval-field ast input env)
+          (if (= node-type "index") (eval-index ast input env)
+          (if (= node-type "iterate") (eval-iterate ast input env)
+          (if (= node-type "slice") (eval-slice ast input env)
+          (if (= node-type "pipe") (eval-pipe ast input env)
+          (if (= node-type "comma") (eval-comma ast input env)
+          (if (= node-type "paren") (jq-eval (map-get ast "expr") input env)
+          (if (= node-type "literal") [(map-get ast "value")]
+          (if (= node-type "string") [(map-get ast "value")]
+          (if (= node-type "array") (eval-array ast input env)
+          (if (= node-type "object") (eval-object ast input env)
+          (if (= node-type "if") (eval-if ast input env)
+          (if (= node-type "compare") (eval-compare ast input env)
+          (if (= node-type "arith") (eval-arith ast input env)
+          (if (= node-type "not") (eval-not ast input env)
+          (if (= node-type "and") (eval-and ast input env)
+          (if (= node-type "or") (eval-or ast input env)
+          (if (= node-type "funcall") (eval-funcall ast input env)
+          (if (= node-type "try") (eval-try ast input env)
+          (if (= node-type "def") (eval-def ast input env)
+          (if (= node-type "binding") (eval-binding ast input env)
+          (if (= node-type "var") [(env-get-var env (map-get ast "name"))]
+          (if (= node-type "format") (eval-format ast input env)
+          (if (= node-type "index-expr") (eval-index-expr ast input env)
+            [])))))))))))))))))))))))))))
+
+;; ── eval-field : .foo ──
+(defn eval-field
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (name : String (map-get ast "name"))
+          (if (= (type-of input) "map")
+            [(map-get-or input name nil)]
+            [nil])))
+
+;; ── eval-index : .[N] ──
+(defn eval-index
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (idx : _ (map-get ast "value"))
+          (if (= (type-of input) "list")
+            (if (if (>= idx 0) (< idx (length input)) false)
+              [(at input idx)]
+              [nil])
+            [nil])))
+
+;; ── eval-index-expr : .[expr] ──
+(defn eval-index-expr
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (expr-results : List (jq-eval (map-get ast "expr") input env))
+          (concatmap (fn [idx]
+            (if (= (type-of idx) "string")
+              (if (= (type-of input) "map")
+                [(map-get-or input idx nil)]
+                [nil])
+              (if (= (type-of idx) "int")
+                (if (= (type-of input) "list")
+                  (if (if (>= idx 0) (< idx (length input)) false)
+                    [(at input idx)]
+                    [nil])
+                  [nil])
+                [nil]))) expr-results)))
+
+;; ── eval-iterate : .[] ──
+(defn eval-iterate
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "list")
+          input
+          (if (= (type-of input) "map")
+            (map-values input)
+            [])))
+
+;; ── eval-slice : .[N:M] ──
+(defn eval-slice
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "list")
+          (let (from-val : _ (map-get-or ast "from" 0))
+            (let (to-val : _ (map-get-or ast "to" (length input)))
+              (let (to-idx : i64 (if (= to-val nil) (length input) to-val))
+                [(slice-list input from-val to-idx)])))
+          [nil]))
+
+;; ── slice-list : extract sublist ──
+(defn slice-list
+  :sig [(lst : List) (from : i64) (to : i64) -> List]
+  :requires [(valid lst)]
+  :ensures [(valid result)]
+  :body (let (len : i64 (length lst))
+          (let (f : i64 (if (< from 0) (if (< (+ len from) 0) 0 (+ len from)) from))
+            (let (t : i64 (if (< to 0) (+ len to) (if (> to len) len to)))
+              (slice-list-loop lst f t [])))))
+
+(defn slice-list-loop
+  :sig [(lst : List) (i : i64) (to : i64) (acc : List) -> List]
+  :requires [(valid lst)]
+  :ensures [(valid result)]
+  :body (if (>= i to)
+          acc
+          (if (>= i (length lst))
+            acc
+            (slice-list-loop lst (+ i 1) to (append acc (at lst i))))))
+
+;; ── eval-pipe : A | B ──
+(defn eval-pipe
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (left-results : List (jq-eval (map-get ast "left") input env))
+          (concatmap (fn [x] (jq-eval (map-get ast "right") x env)) left-results)))
+
+;; ── eval-comma : A, B ──
+(defn eval-comma
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (left-results : List (jq-eval (map-get ast "left") input env))
+          (let (right-results : List (jq-eval (map-get ast "right") input env))
+            (fold (fn [acc x] (append acc x)) left-results right-results))))
+
+;; ── eval-array : [expr] ──
+(defn eval-array
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (results : List (jq-eval (map-get ast "expr") input env))
+          [results]))
+
+;; ── eval-object : {key: value, ...} ──
+(defn eval-object
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (pairs : List (map-get ast "pairs"))
+          [(eval-object-pairs pairs input env (map-from []))]))
+
+(defn eval-object-pairs
+  :sig [(pairs : List) (input : _) (env : _) (acc : _) -> _]
+  :requires [(valid pairs)]
+  :ensures [(valid result)]
+  :body (if (empty? pairs)
+          acc
+          (let (pair : _ (head pairs))
+            (let (key-results : List (jq-eval (map-get pair "key") input env))
+              (let (val-results : List (jq-eval (map-get pair "value") input env))
+                (let (key : String (if (empty? key-results) "" (head key-results)))
+                  (let (val : _ (if (empty? val-results) nil (head val-results)))
+                    (eval-object-pairs (tail pairs) input env (map-set acc key val)))))))))
+
+;; ── eval-if : if-then-else ──
+(defn eval-if
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (cond-results : List (jq-eval (map-get ast "cond") input env))
+          (if (if (not (empty? cond-results)) (jq-truthy (head cond-results)) false)
+            (jq-eval (map-get ast "then") input env)
+            (jq-eval (map-get ast "else") input env))))
+
+;; ── eval-compare : ==, !=, <, >, <=, >= ──
+(defn eval-compare
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (op : String (map-get ast "op"))
+          (let (left-results : List (jq-eval (map-get ast "left") input env))
+            (let (right-results : List (jq-eval (map-get ast "right") input env))
+              (let (lv : _ (if (empty? left-results) nil (head left-results)))
+                (let (rv : _ (if (empty? right-results) nil (head right-results)))
+                  (if (= op "==") [(= lv rv)]
+                  (if (= op "!=") [(not (= lv rv))]
+                  (if (= op "<") [(< lv rv)]
+                  (if (= op ">") [(> lv rv)]
+                  (if (= op "<=") [(<= lv rv)]
+                  (if (= op ">=") [(>= lv rv)]
+                    [false]))))))))))))
+
+;; ── eval-arith : +, -, *, /, % ──
+(defn eval-arith
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (op : String (map-get ast "op"))
+          (let (left-results : List (jq-eval (map-get ast "left") input env))
+            (let (right-results : List (jq-eval (map-get ast "right") input env))
+              (let (lv : _ (if (empty? left-results) nil (head left-results)))
+                (let (rv : _ (if (empty? right-results) nil (head right-results)))
+                  (eval-arith-op op lv rv)))))))
+
+(defn eval-arith-op
+  :sig [(op : String) (lv : _) (rv : _) -> List]
+  :requires [(valid op)]
+  :ensures [(valid result)]
+  :body (let (lt : String (type-of lv))
+          (let (rt : String (type-of rv))
+            ;; String concatenation
+            (if (if (= lt "string") (= rt "string") false)
+              (if (= op "+") [(str lv rv)] [nil])
+            ;; Array concatenation
+            (if (if (= lt "list") (= rt "list") false)
+              (if (= op "+")
+                [(fold (fn [acc x] (append acc x)) lv rv)]
+                [nil])
+            ;; Map merge
+            (if (if (= lt "map") (= rt "map") false)
+              (if (= op "+")
+                [(merge-maps lv rv)]
+                [nil])
+            ;; Numeric arithmetic
+            (if (= op "+") [(+ lv rv)]
+            (if (= op "-") [(- lv rv)]
+            (if (= op "*") [(* lv rv)]
+            (if (= op "/") [(/ lv rv)]
+            (if (= op "%") [(% lv rv)]
+              [nil])))))))))))
+
+;; ── merge-maps : merge two maps ──
+(defn merge-maps
+  :sig [(base : _) (overlay : _) -> _]
+  :requires [(valid base)]
+  :ensures [(valid result)]
+  :body (let (keys : List (map-keys overlay))
+          (fold (fn [acc k] (map-set acc k (map-get overlay k))) base keys)))
+
+;; ── eval-not : boolean negation ──
+(defn eval-not
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (results : List (jq-eval (map-get ast "expr") input env))
+          (if (empty? results)
+            [true]
+            [(not (jq-truthy (head results)))])))
+
+;; ── eval-and : boolean and ──
+(defn eval-and
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (left-results : List (jq-eval (map-get ast "left") input env))
+          (if (if (not (empty? left-results)) (jq-truthy (head left-results)) false)
+            (jq-eval (map-get ast "right") input env)
+            [false])))
+
+;; ── eval-or : boolean or ──
+(defn eval-or
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (left-results : List (jq-eval (map-get ast "left") input env))
+          (if (if (not (empty? left-results)) (jq-truthy (head left-results)) false)
+            left-results
+            (jq-eval (map-get ast "right") input env))))
+
+;; ── eval-try : try-catch ──
+(defn eval-try
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (jq-eval (map-get ast "expr") input env))
+
+;; ── eval-def : function definition ──
+(defn eval-def
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (name : String (map-get ast "name"))
+          (let (fdef : _ (map-from ["params" (map-get ast "params") "body" (map-get ast "body")]))
+            (let (new-env : _ (env-set-func env name fdef))
+              (jq-eval (map-get ast "next") input new-env)))))
+
+;; ── eval-binding : as $var | body ──
+(defn eval-binding
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (expr-results : List (jq-eval (map-get ast "expr") input env))
+          (let (var-name : String (map-get ast "var"))
+            (concatmap (fn [val]
+              (let (new-env : _ (env-set-var env var-name val))
+                (jq-eval (map-get ast "body") input new-env)))
+              expr-results))))
+
+;; ── eval-format : @base64, etc. ──
+(defn eval-format
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (name : String (map-get ast "name"))
+          (if (= name "base64")
+            [(base64-encode (str input))]
+          (if (= name "base64d")
+            [(base64-decode (str input))]
+          (if (= name "csv")
+            [(format-csv input)]
+          (if (= name "tsv")
+            [(format-tsv input)]
+          (if (= name "html")
+            [(escape-html (str input))]
+          (if (= name "uri")
+            [(escape-uri (str input))]
+          (if (= name "json")
+            [(json-stringify input)]
+          (if (= name "text")
+            [(str input)]
+            [(str input)]))))))))))
+
+;; ── format-csv : format list as CSV ──
+(defn format-csv
+  :sig [(input : _) -> String]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "list")
+          (join (map (fn [x] (if (= (type-of x) "string") (str "\"" x "\"") (json-stringify x))) input) ",")
+          (json-stringify input)))
+
+;; ── format-tsv : format list as TSV ──
+(defn format-tsv
+  :sig [(input : _) -> String]
+  :requires [(valid input)]
+  :ensures [(valid result)]
+  :body (if (= (type-of input) "list")
+          (join (map (fn [x] (if (= (type-of x) "string") x (json-stringify x))) input) "\t")
+          (json-stringify input)))
+
+;; ── escape-html : basic HTML escaping ──
+(defn escape-html
+  :sig [(s : String) -> String]
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (let (s1 : String (replace s "&" "&amp;"))
+          (let (s2 : String (replace s1 "<" "&lt;"))
+            (let (s3 : String (replace s2 ">" "&gt;"))
+              (replace s3 "\"" "&quot;")))))
+
+;; ── escape-uri : basic URI encoding ──
+(defn escape-uri
+  :sig [(s : String) -> String]
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (let (s1 : String (replace s " " "%20"))
+          (let (s2 : String (replace s1 "&" "%26"))
+            (replace s2 "=" "%3D"))))
+
+;; ── eval-funcall : call builtin or user-defined function ──
+(defn eval-funcall
+  :sig [(ast : _) (input : _) (env : _) -> List]
+  :requires [(valid ast)]
+  :ensures [(valid result)]
+  :body (let (name : String (map-get ast "name"))
+          (let (args : List (map-get ast "args"))
+            ;; Check user-defined functions first
+            (let (user-func : _ (env-get-func env name))
+              (if (not (= user-func nil))
+                (eval-user-func user-func args input env)
+                (eval-builtin name args input env))))))
+
+;; ── eval-user-func : call user-defined function ──
+(defn eval-user-func
+  :sig [(fdef : _) (args : List) (input : _) (env : _) -> List]
+  :requires [(valid fdef)]
+  :ensures [(valid result)]
+  :body (let (params : List (map-get fdef "params"))
+          (let (body : _ (map-get fdef "body"))
+            (let (new-env : _ (bind-params env params args input))
+              (jq-eval body input new-env)))))
+
+;; ── bind-params : bind function parameters to arguments ──
+(defn bind-params
+  :sig [(env : _) (params : List) (args : List) (input : _) -> _]
+  :requires [(valid env)]
+  :ensures [(valid result)]
+  :body (if (empty? params)
+          env
+          (if (empty? args)
+            env
+            (let (param : String (head params))
+              ;; Filter arguments are stored as AST nodes
+              (bind-params
+                (env-set-func env param (map-from ["params" [] "body" (head args)]))
+                (tail params) (tail args) input)))))

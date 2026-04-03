@@ -1,0 +1,6 @@
+;; ── airq: Main Entry Point ──────────────────────────────────
+;; Top-level expressions — this is the entry point (no defn main).
+
+(let (app : _ (build-app nil))
+  (let (ctx : _ (cairli-run-or-die app (get-args)))
+    (dispatch ctx)))
