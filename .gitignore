@@ -18,6 +18,22 @@ cross-build/target/
 *.dylib
 a.out
 aot_fib
+g3.working
+g3v0.8.0
 .z3-trace
 commands/*/build/
 servers/*/mynameisairl
+
+# Logs
+*.log
+!tla/*.log
+
+# Editor/OS junk
+*.swp
+*.swo
+*.bak
+*.tmp
+*.pyc
+__pycache__/
+.DS_Store
+Thumbs.db
