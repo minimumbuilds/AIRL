@@ -398,6 +398,31 @@ pub extern "C" fn airl_append_file(_path: *mut RtValue, _content: *mut RtValue) 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// exec-file
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
+#[no_mangle]
+pub extern "C" fn airl_exec_file(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("exec-file: expected string path"),
+        }
+    };
+    match std::process::Command::new(&path_str).status() {
+        Ok(status) => rt_int(status.code().unwrap_or(-1) as i64),
+        Err(e) => crate::error::rt_error(&format!("exec-file: {}: {}", path_str, e)),
+    }
+}
+
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_exec_file(_path: *mut RtValue) -> *mut RtValue {
+    crate::error::rt_error("exec-file: not yet supported on AIRLOS")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // delete-file (not supported on AIRLOS MVP)
 // ─────────────────────────────────────────────────────────────────────────────
 

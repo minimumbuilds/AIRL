@@ -1,0 +1,5 @@
+FROM ubuntu:24.04
+COPY mynameisairl /usr/local/bin/mynameisairl
+COPY mcp-stdio-wrapper.sh /usr/local/bin/mcp-stdio-wrapper.sh
+COPY AIRL-LLM-Guide.md /data/AIRL-LLM-Guide.md
+ENTRYPOINT ["/usr/local/bin/mcp-stdio-wrapper.sh"]

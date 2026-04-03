@@ -1,0 +1,16 @@
+;; patch-json-result.airl — Wrap json-parse to return Result type
+;;
+;; The stdlib json-parse returns raw values, but the former C builtin
+;; returned Result (Ok value) / (Err msg). AirTraffic's jsonrpc-parse-message
+;; pattern-matches on Ok/Err. This wrapper restores the Result convention.
+;; Compiled before json.airl so first-def-wins applies.
+
+(defn json-parse
+  :sig [(s : String) -> Result]
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (let (src : Bytes (bytes-from-string s))
+             (len : i64 (length src))
+    (if (= len 0)
+      (Err "empty input")
+      (Ok (at (json-parse-value src 0 len) 0)))))
