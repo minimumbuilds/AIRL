@@ -1,10 +1,10 @@
-# AIRL Reference Guide (v1.1.0)
+# AIRL Reference Guide (v0.11.0)
 
 > A complete reference for writing AIRL (AI Intermediate Representation Language) programs.
 > AIRL is an S-expression language designed for AI systems, featuring mandatory contracts,
 > linear ownership, tensor operations, and multi-agent orchestration.
 >
-> **v1.1.0** introduced the stdlib migration: ~150 functions remain as compiler intrinsics
+> **v0.11.0** introduced the stdlib migration: ~150 functions remain as compiler intrinsics
 > (always available), while 73 functions moved to the pure-AIRL standard library (auto-loaded
 > from `stdlib/`). New features: `extern-c` declarations and byte-array intrinsics.
 
@@ -311,7 +311,7 @@ Unwrap an `(Ok val)` to `val`, or propagate `(Err ...)` as a runtime error:
 
 ## 6. Intrinsics (Always Available)
 
-As of v1.1.0, AIRL has ~150 **compiler intrinsics** — built into the runtime as `extern "C"` functions, always available without any imports. These include arithmetic, comparison, logic, type conversion, collections (core), string (core), float math, byte encoding, TCP, compression, regex, concurrency, and tensors.
+As of v0.11.0, AIRL has ~150 **compiler intrinsics** — built into the runtime as `extern "C"` functions, always available without any imports. These include arithmetic, comparison, logic, type conversion, collections (core), string (core), float math, byte encoding, TCP, compression, regex, concurrency, and tensors.
 
 An additional 73 functions live in the **standard library** (`stdlib/`), written in pure AIRL and auto-loaded as a prelude. These include string helpers, JSON, base64, crypto (SHA-256, HMAC, PBKDF2), file I/O, directory I/O, system functions, paths, and extended map/set/collection operations. See sections 11–15 for stdlib documentation.
 
@@ -465,7 +465,7 @@ All float math builtins operate on `f64` values. Integer arguments are promoted 
 
 ### JSON (stdlib — auto-loaded from `stdlib/json.airl`)
 
-JSON functions were compiler builtins prior to v1.1.0 and are now implemented in pure AIRL. Auto-loaded in the prelude.
+JSON functions were compiler builtins prior to v0.11.0 and are now implemented in pure AIRL. Auto-loaded in the prelude.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -476,7 +476,7 @@ JSON functions were compiler builtins prior to v1.1.0 and are now implemented in
 
 ### File I/O (stdlib — auto-loaded from `stdlib/io.airl`)
 
-These functions were compiler builtins prior to v1.1.0 and are now implemented in pure AIRL. Auto-loaded in the prelude.
+These functions were compiler builtins prior to v0.11.0 and are now implemented in pure AIRL. Auto-loaded in the prelude.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -495,7 +495,7 @@ These functions were compiler builtins prior to v1.1.0 and are now implemented i
 
 ### Path (stdlib — auto-loaded from `stdlib/path.airl`)
 
-Path functions were compiler builtins prior to v1.1.0 and are now implemented in pure AIRL. Auto-loaded in the prelude.
+Path functions were compiler builtins prior to v0.11.0 and are now implemented in pure AIRL. Auto-loaded in the prelude.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -516,7 +516,7 @@ Path functions were compiler builtins prior to v1.1.0 and are now implemented in
 
 ### Crypto (stdlib — auto-loaded from `stdlib/sha256.airl`, `stdlib/hmac.airl`, `stdlib/pbkdf2.airl`, `stdlib/base64.airl`)
 
-These functions were compiler builtins prior to v1.1.0 and are now implemented in pure AIRL. They are auto-loaded in the prelude — no imports needed.
+These functions were compiler builtins prior to v0.11.0 and are now implemented in pure AIRL. They are auto-loaded in the prelude — no imports needed.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -536,7 +536,7 @@ These functions were compiler builtins prior to v1.1.0 and are now implemented i
 | `base64-decode-bytes` | `(base64-decode-bytes s)` → IntList | Decode base64 string to IntList |
 | `random-bytes` | `(random-bytes n)` → List | List of n random byte values (0-255) — intrinsic |
 
-### Byte-Array Intrinsics (v1.1.0)
+### Byte-Array Intrinsics (v0.11.0)
 
 Low-level byte-array operations for mutable, fixed-size byte buffers. These complement the IntList-based byte functions.
 
@@ -691,7 +691,7 @@ All tensors are f32 internally. Shapes are specified as bracket lists of integer
 
 ---
 
-## 6a. `extern-c` Declarations (v1.1.0)
+## 6a. `extern-c` Declarations (v0.11.0)
 
 AIRL can call C functions directly using the `extern-c` syntax. This is how the stdlib implements functions that need low-level runtime support:
 
@@ -1007,7 +1007,7 @@ AIRL currently has no test runner, no `deftest` form, and no test discovery.
 
 AIRL's standard library is written in pure AIRL and auto-loaded as a prelude before user code. No imports needed — all stdlib functions are always available.
 
-As of v1.1.0, the stdlib has **13 modules** across `stdlib/`: `collections.airl`, `math.airl`, `result.airl`, `string.airl`, `map.airl`, `set.airl`, `json.airl`, `base64.airl`, `sha256.airl`, `hmac.airl`, `pbkdf2.airl`, `io.airl`, `path.airl`. The prelude (`stdlib/prelude.airl`) loads all modules automatically.
+As of v0.11.0, the stdlib has **13 modules** across `stdlib/`: `collections.airl`, `math.airl`, `result.airl`, `string.airl`, `map.airl`, `set.airl`, `json.airl`, `base64.airl`, `sha256.airl`, `hmac.airl`, `pbkdf2.airl`, `io.airl`, `path.airl`. The prelude (`stdlib/prelude.airl`) loads all modules automatically.
 
 The collections module provides 18 core list-processing functions:
 
@@ -1168,7 +1168,7 @@ Combinators for working with `Result` values (`(Ok v)` / `(Err e)`) without verb
 
 ## 14. Standard Library (String)
 
-String manipulation functions. As of v1.1.0, all string functions (character access, search, transformation, split/join, and helpers) are implemented in pure AIRL in `stdlib/string.airl`. Auto-loaded in the prelude.
+String manipulation functions. As of v0.11.0, all string functions (character access, search, transformation, split/join, and helpers) are implemented in pure AIRL in `stdlib/string.airl`. Auto-loaded in the prelude.
 
 ### Character Access
 
