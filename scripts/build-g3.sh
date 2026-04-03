@@ -9,6 +9,11 @@
 #   bash scripts/build-g3.sh --use <path>  # switch g3 symlink to a cached build
 set -euo pipefail
 
+# Ensure AIRL_STDLIB is set — g3 needs it to find prelude.airl
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+AIRL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+export AIRL_STDLIB="${AIRL_STDLIB:-$AIRL_ROOT/stdlib}"
+
 BUILDS_DIR="builds"
 mkdir -p "$BUILDS_DIR"
 
