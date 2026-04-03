@@ -1,4 +1,7 @@
-use std::fmt::Write;
+#[cfg(target_os = "airlos")]
+use crate::nostd_prelude::*;
+
+use core::fmt::Write;
 use crate::error::rt_error;
 use crate::value::{rt_bool, rt_int, rt_list, rt_str, RtData, RtValue};
 

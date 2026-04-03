@@ -1,8 +1,13 @@
+#[cfg(target_os = "airlos")]
+use crate::nostd_prelude::*;
+
 use crate::value::{rt_bool, rt_int, rt_nil, rt_str, rt_unit, rt_variant, RtData, RtValue};
 #[cfg(not(target_os = "airlos"))]
 use std::io::Write;
+#[cfg(not(target_os = "airlos"))]
 use core::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(not(target_os = "airlos"))]
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -195,10 +200,10 @@ pub extern "C" fn airl_eprintln(v: *mut RtValue) -> *mut RtValue {
 #[no_mangle]
 pub extern "C" fn airl_eprintln(v: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*v };
-    let s = format!("{}\n", match &val.data {
-        RtData::Str(s) => s.as_str(),
-        _ => &format!("{}", val),
-    });
+    let s = match &val.data {
+        RtData::Str(s) => format!("{}\n", s),
+        _ => format!("{}\n", val),
+    };
     crate::airlos::vga_print(&s);
     rt_nil()
 }
@@ -290,8 +295,23 @@ pub extern "C" fn airl_write_file(path: *mut RtValue, content: *mut RtValue) -> 
 
 #[cfg(target_os = "airlos")]
 #[no_mangle]
-pub extern "C" fn airl_write_file(_path: *mut RtValue, _content: *mut RtValue) -> *mut RtValue {
-    crate::error::rt_error("write-file: not supported on AIRLOS")
+pub extern "C" fn airl_write_file(path: *mut RtValue, content: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("write-file: expected string path"),
+        }
+    };
+    let content_str = unsafe {
+        match &(*content).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("write-file: expected string content"),
+        }
+    };
+    match crate::airlos::write_file(&path_str, content_str.as_bytes()) {
+        Ok(()) => rt_bool(true),
+        Err(msg) => crate::error::rt_error(&format!("write-file: {}: {}", path_str, msg)),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -353,8 +373,17 @@ pub extern "C" fn airl_delete_file(path: *mut RtValue) -> *mut RtValue {
 
 #[cfg(target_os = "airlos")]
 #[no_mangle]
-pub extern "C" fn airl_delete_file(_path: *mut RtValue) -> *mut RtValue {
-    crate::error::rt_error("delete-file: not supported on AIRLOS")
+pub extern "C" fn airl_delete_file(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("delete-file: expected string path"),
+        }
+    };
+    match crate::airlos::delete_file(&path_str) {
+        Ok(()) => rt_bool(true),
+        Err(msg) => crate::error::rt_error(&format!("delete-file: {}: {}", path_str, msg)),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -411,9 +440,14 @@ pub extern "C" fn airl_read_dir(path: *mut RtValue) -> *mut RtValue {
 
 #[cfg(target_os = "airlos")]
 #[no_mangle]
-pub extern "C" fn airl_read_dir(_path: *mut RtValue) -> *mut RtValue {
-    // AIRLOS ramdisk is flat — list all files regardless of path argument
-    let mut names = crate::airlos::list_files();
+pub extern "C" fn airl_read_dir(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("read-dir: expected string path"),
+        }
+    };
+    let mut names = crate::airlos::read_dir(&path_str);
     names.sort();
     let items: Vec<*mut RtValue> = names.into_iter().map(|n| rt_str(n)).collect();
     crate::value::rt_list(items)
@@ -440,8 +474,17 @@ pub extern "C" fn airl_create_dir(path: *mut RtValue) -> *mut RtValue {
 
 #[cfg(target_os = "airlos")]
 #[no_mangle]
-pub extern "C" fn airl_create_dir(_path: *mut RtValue) -> *mut RtValue {
-    crate::error::rt_error("create-dir: not supported on AIRLOS")
+pub extern "C" fn airl_create_dir(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("create-dir: expected string path"),
+        }
+    };
+    match crate::airlos::create_dir(&path_str) {
+        Ok(()) => rt_bool(true),
+        Err(msg) => crate::error::rt_error(&format!("create-dir: {}: {}", path_str, msg)),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -472,10 +515,9 @@ pub extern "C" fn airl_file_size(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("file-size: expected string path"),
         }
     };
-    // Read the file to determine its size
-    match crate::airlos::read_file(&path_str) {
-        Ok(bytes) => rt_int(bytes.len() as i64),
-        Err(msg) => crate::error::rt_error(&format!("file-size: {}: {}", path_str, msg)),
+    match crate::airlos::file_size(&path_str) {
+        Some(size) => rt_int(size as i64),
+        None => crate::error::rt_error(&format!("file-size: {}: file not found", path_str)),
     }
 }
 
@@ -497,9 +539,14 @@ pub extern "C" fn airl_is_dir(path: *mut RtValue) -> *mut RtValue {
 
 #[cfg(target_os = "airlos")]
 #[no_mangle]
-pub extern "C" fn airl_is_dir(_path: *mut RtValue) -> *mut RtValue {
-    // AIRLOS ramdisk has no directories
-    rt_bool(false)
+pub extern "C" fn airl_is_dir(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("is-dir: expected string path"),
+        }
+    };
+    rt_bool(crate::airlos::is_dir(&path_str))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

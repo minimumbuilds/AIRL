@@ -293,8 +293,18 @@ fn vfs_sendrecv(msg: &[u8], recv_buf: &mut [u8]) -> i32 {
     ipc_sendrecv(fs, msg, recv_buf)
 }
 
+/// Resolve special paths. AIRLOS has no per-process CWD, so "." maps to "/".
+fn resolve_path(path: &str) -> &str {
+    if path == "." || path.is_empty() {
+        "/"
+    } else {
+        path
+    }
+}
+
 /// Open a file via the VFS. Returns the handle_id or negative error.
 fn vfs_open(path: &str, flags: u32) -> i32 {
+    let path = resolve_path(path);
     let path_bytes = path.as_bytes();
     let path_len = path_bytes.len().min(VFS_CHUNK_SIZE);
     let msg_len = 12 + path_len;
@@ -413,6 +423,7 @@ pub fn write_file(path: &str, content: &[u8]) -> Result<(), &'static str> {
 
 /// Send FS_STAT for a path. Returns (file_type, size) or None on error.
 fn vfs_stat(path: &str) -> Option<(u32, u32)> {
+    let path = resolve_path(path);
     let path_bytes = path.as_bytes();
     let path_len = path_bytes.len().min(VFS_CHUNK_SIZE);
     let msg_len = 8 + path_len;

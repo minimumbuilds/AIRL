@@ -1,3 +1,5 @@
+[workspace]
+
 [package]
 name = "airl-rt"
 version = "0.8.0"

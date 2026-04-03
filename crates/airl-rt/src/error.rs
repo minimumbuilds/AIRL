@@ -1,3 +1,7 @@
+#[cfg(target_os = "airlos")]
+#[allow(unused_imports)]
+use crate::nostd_prelude::*;
+
 #[cfg(not(target_os = "airlos"))]
 use std::process;
 
@@ -6,8 +10,8 @@ use std::process;
 #[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_runtime_error(msg: *const u8, len: usize) -> ! {
-    let slice = unsafe { std::slice::from_raw_parts(msg, len) };
-    let s = std::str::from_utf8(slice).unwrap_or("<invalid utf8>");
+    let slice = unsafe { core::slice::from_raw_parts(msg, len) };
+    let s = core::str::from_utf8(slice).unwrap_or("<invalid utf8>");
     eprintln!("Runtime error: {}", s);
     process::exit(1);
 }

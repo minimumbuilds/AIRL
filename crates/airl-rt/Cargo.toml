@@ -16,15 +16,19 @@ default = []
 airlos = []
 
 [dependencies]
+
+# Pure-Rust math (floor, ceil, sqrt, sin, cos…) for no_std targets
+[target.'cfg(target_os = "airlos")'.dependencies]
+libm = "0.2"
+
+# All external crates require std — exclude on airlos
+[target.'cfg(not(target_os = "airlos"))'.dependencies]
 sha2 = "0.10"
 hmac = "0.12"
 base64 = "0.22"
 hex = "0.4"
 crc32c = "0.6"
 pbkdf2 = "0.12"
-
-# These crates require std and OS support — exclude on airlos
-[target.'cfg(not(target_os = "airlos"))'.dependencies]
 rand = "0.8"
 regex = "1"
 flate2 = "1"

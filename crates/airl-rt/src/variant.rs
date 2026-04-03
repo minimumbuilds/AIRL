@@ -1,3 +1,7 @@
+#[cfg(target_os = "airlos")]
+#[allow(unused_imports)]
+use crate::nostd_prelude::*;
+
 use crate::error::rt_error;
 use crate::memory::airl_value_retain;
 use crate::value::{rt_variant, RtData, RtValue};
@@ -24,7 +28,7 @@ pub extern "C" fn airl_match_tag(val: *mut RtValue, expected_tag: *mut RtValue) 
             airl_value_retain(*inner);
             *inner
         }
-        RtData::Variant { .. } => std::ptr::null_mut(),
+        RtData::Variant { .. } => core::ptr::null_mut(),
         _ => rt_error("airl_match_tag: not a Variant"),
     }
 }

@@ -1,4 +1,10 @@
+#[cfg(target_os = "airlos")]
+use crate::nostd_prelude::*;
+
+#[cfg(not(target_os = "airlos"))]
 use std::collections::HashMap;
+#[cfg(target_os = "airlos")]
+use alloc::collections::BTreeMap as HashMap;
 
 use crate::error::rt_error;
 use crate::memory::{airl_value_retain, airl_value_release};
@@ -129,7 +135,7 @@ pub extern "C" fn airl_map_set(
     // rc > 1: clone as before (existing logic, unchanged)
     match &v.data {
         RtData::Map(map) => {
-            let mut new_map: HashMap<String, *mut RtValue> = HashMap::with_capacity(map.len() + 1);
+            let mut new_map: HashMap<String, *mut RtValue> = HashMap::new();
             for (existing_key, &existing_val) in map {
                 airl_value_retain(existing_val);
                 new_map.insert(existing_key.clone(), existing_val);
@@ -191,7 +197,7 @@ pub extern "C" fn airl_map_remove(m: *mut RtValue, key: *mut RtValue) -> *mut Rt
     // rc > 1: clone without the removed key (existing logic, unchanged)
     match &v.data {
         RtData::Map(map) => {
-            let mut new_map: HashMap<String, *mut RtValue> = HashMap::with_capacity(map.len());
+            let mut new_map: HashMap<String, *mut RtValue> = HashMap::new();
             for (existing_key, &existing_val) in map {
                 if existing_key.as_str() == k {
                     continue;

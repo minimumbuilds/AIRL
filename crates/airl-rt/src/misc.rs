@@ -1,5 +1,12 @@
+#[cfg(target_os = "airlos")]
+use crate::nostd_prelude::*;
+
+#[cfg(not(target_os = "airlos"))]
 use std::collections::HashMap;
-use std::fmt::Write;
+#[cfg(target_os = "airlos")]
+use alloc::collections::BTreeMap as HashMap;
+
+use core::fmt::Write;
 use crate::value::{rt_bool, rt_bytes, rt_float, rt_int, rt_list, rt_map, rt_nil, rt_str, rt_variant, RtData, RtValue};
 
 fn ok_variant(inner: *mut RtValue) -> *mut RtValue {
@@ -391,6 +398,7 @@ pub extern "C" fn airl_enumerate(list: *mut RtValue) -> *mut RtValue {
 
 // ── Path operations ──
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_path_join(parts: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*parts };
@@ -407,6 +415,30 @@ pub extern "C" fn airl_path_join(parts: *mut RtValue) -> *mut RtValue {
     }
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_path_join(parts: *mut RtValue) -> *mut RtValue {
+    // Simple string-based path join for AIRLOS (no std::path)
+    let val = unsafe { &*parts };
+    if let RtData::List { .. } = &val.data {
+        let slice = crate::list::list_items(&val.data);
+        let mut result = alloc::string::String::new();
+        for &item in slice {
+            let s = unsafe { &*item };
+            if let RtData::Str(p) = &s.data {
+                if !result.is_empty() && !result.ends_with('/') {
+                    result.push('/');
+                }
+                result.push_str(p);
+            }
+        }
+        rt_str(result)
+    } else {
+        rt_str(alloc::string::String::new())
+    }
+}
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_path_parent(path: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*path };
@@ -418,6 +450,22 @@ pub extern "C" fn airl_path_parent(path: *mut RtValue) -> *mut RtValue {
     }
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_path_parent(path: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*path };
+    if let RtData::Str(s) = &val.data {
+        match s.rfind('/') {
+            Some(0) => rt_str("/".into()),
+            Some(i) => rt_str(s[..i].into()),
+            None => rt_str(alloc::string::String::new()),
+        }
+    } else {
+        rt_str(alloc::string::String::new())
+    }
+}
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_path_filename(path: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*path };
@@ -429,6 +477,21 @@ pub extern "C" fn airl_path_filename(path: *mut RtValue) -> *mut RtValue {
     }
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_path_filename(path: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*path };
+    if let RtData::Str(s) = &val.data {
+        match s.rfind('/') {
+            Some(i) => rt_str(s[i+1..].into()),
+            None => rt_str(s.clone()),
+        }
+    } else {
+        rt_str(alloc::string::String::new())
+    }
+}
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_path_extension(path: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*path };
@@ -440,11 +503,42 @@ pub extern "C" fn airl_path_extension(path: *mut RtValue) -> *mut RtValue {
     }
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_path_extension(path: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*path };
+    if let RtData::Str(s) = &val.data {
+        // Get filename, then find last '.'
+        let fname = match s.rfind('/') {
+            Some(i) => &s[i+1..],
+            None => s.as_str(),
+        };
+        match fname.rfind('.') {
+            Some(i) if i > 0 => rt_str(fname[i+1..].into()),
+            _ => rt_str(alloc::string::String::new()),
+        }
+    } else {
+        rt_str(alloc::string::String::new())
+    }
+}
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_is_absolute(path: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*path };
     if let RtData::Str(s) = &val.data {
         rt_bool(std::path::Path::new(s).is_absolute())
+    } else {
+        rt_bool(false)
+    }
+}
+
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_is_absolute(path: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*path };
+    if let RtData::Str(s) = &val.data {
+        rt_bool(s.starts_with('/'))
     } else {
         rt_bool(false)
     }
@@ -531,7 +625,10 @@ pub extern "C" fn airl_regex_split(_pat: *mut RtValue, s: *mut RtValue) -> *mut 
 }
 
 // ── Crypto ──
+// All crypto functions require external crates (sha2, hmac, base64, hex, etc.)
+// which are not available on AIRLOS. Gate everything with cfg.
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_sha256(s: *mut RtValue) -> *mut RtValue {
     use sha2::{Digest, Sha256};
@@ -540,6 +637,7 @@ pub extern "C" fn airl_sha256(s: *mut RtValue) -> *mut RtValue {
     rt_str(hex::encode(hash))
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_hmac_sha256(key: *mut RtValue, msg: *mut RtValue) -> *mut RtValue {
     use hmac::{Hmac, Mac};
@@ -551,6 +649,7 @@ pub extern "C" fn airl_hmac_sha256(key: *mut RtValue, msg: *mut RtValue) -> *mut
     rt_str(hex::encode(mac.finalize().into_bytes()))
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_base64_encode(s: *mut RtValue) -> *mut RtValue {
     use base64::Engine;
@@ -558,6 +657,7 @@ pub extern "C" fn airl_base64_encode(s: *mut RtValue) -> *mut RtValue {
     rt_str(base64::engine::general_purpose::STANDARD.encode(input.as_bytes()))
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_base64_decode(s: *mut RtValue) -> *mut RtValue {
     use base64::Engine;
@@ -587,6 +687,7 @@ pub extern "C" fn airl_random_bytes(_n: *mut RtValue) -> *mut RtValue {
 
 // ── Crypto (byte-oriented) ──
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_sha512(s: *mut RtValue) -> *mut RtValue {
     use sha2::{Digest, Sha512};
@@ -595,6 +696,7 @@ pub extern "C" fn airl_sha512(s: *mut RtValue) -> *mut RtValue {
     rt_str(hex::encode(hash))
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_hmac_sha512(key: *mut RtValue, msg: *mut RtValue) -> *mut RtValue {
     use hmac::{Hmac, Mac};
@@ -606,6 +708,7 @@ pub extern "C" fn airl_hmac_sha512(key: *mut RtValue, msg: *mut RtValue) -> *mut
     rt_str(hex::encode(mac.finalize().into_bytes()))
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_sha256_bytes(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
@@ -614,6 +717,7 @@ pub extern "C" fn airl_sha256_bytes(data: *mut RtValue) -> *mut RtValue {
     rt_bytes(hash.to_vec())
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_sha512_bytes(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
@@ -622,6 +726,7 @@ pub extern "C" fn airl_sha512_bytes(data: *mut RtValue) -> *mut RtValue {
     rt_bytes(hash.to_vec())
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_hmac_sha256_bytes(key: *mut RtValue, data: *mut RtValue) -> *mut RtValue {
     use hmac::{Hmac, Mac};
@@ -632,6 +737,7 @@ pub extern "C" fn airl_hmac_sha256_bytes(key: *mut RtValue, data: *mut RtValue) 
     rt_bytes(mac.finalize().into_bytes().to_vec())
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_hmac_sha512_bytes(key: *mut RtValue, data: *mut RtValue) -> *mut RtValue {
     use hmac::{Hmac, Mac};
@@ -642,6 +748,7 @@ pub extern "C" fn airl_hmac_sha512_bytes(key: *mut RtValue, data: *mut RtValue) 
     rt_bytes(mac.finalize().into_bytes().to_vec())
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_pbkdf2_sha256(password: *mut RtValue, salt: *mut RtValue, iterations: *mut RtValue, key_len: *mut RtValue) -> *mut RtValue {
     let pw = match unsafe { &(*password).data } { RtData::Str(s) => s.as_str(), _ => return rt_bytes(vec![]) };
@@ -653,6 +760,7 @@ pub extern "C" fn airl_pbkdf2_sha256(password: *mut RtValue, salt: *mut RtValue,
     rt_bytes(derived)
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_pbkdf2_sha512(password: *mut RtValue, salt: *mut RtValue, iterations: *mut RtValue, key_len: *mut RtValue) -> *mut RtValue {
     let pw = match unsafe { &(*password).data } { RtData::Str(s) => s.as_str(), _ => return rt_bytes(vec![]) };
@@ -664,6 +772,7 @@ pub extern "C" fn airl_pbkdf2_sha512(password: *mut RtValue, salt: *mut RtValue,
     rt_bytes(derived)
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_base64_decode_bytes(data: *mut RtValue) -> *mut RtValue {
     use base64::Engine;
@@ -674,6 +783,7 @@ pub extern "C" fn airl_base64_decode_bytes(data: *mut RtValue) -> *mut RtValue {
     }
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_base64_encode_bytes(data: *mut RtValue) -> *mut RtValue {
     use base64::Engine;
@@ -728,7 +838,7 @@ pub extern "C" fn airl_int_to_string(n: *mut RtValue) -> *mut RtValue {
 #[no_mangle]
 pub extern "C" fn airl_float_to_string(n: *mut RtValue) -> *mut RtValue {
     let val = match unsafe { &(*n).data } { RtData::Float(f) => *f, _ => 0.0 };
-    let s = if val.fract() == 0.0 && val.is_finite() { format!("{:.1}", val) } else { format!("{}", val) };
+    let s = if val == (val as i64 as f64) && val.is_finite() { format!("{:.1}", val) } else { format!("{}", val) };
     rt_str(s)
 }
 
@@ -1426,11 +1536,21 @@ unsafe fn borrow_bytes<'a>(val: *mut RtValue) -> &'a [u8] {
 /// # Safety
 /// The caller must ensure `val` is a valid, non-null pointer to an RtValue
 /// that remains alive and unmutated for the lifetime `'a`.
+#[cfg(not(target_os = "airlos"))]
 unsafe fn borrow_or_extract<'a>(val: *mut RtValue) -> std::borrow::Cow<'a, [u8]> {
     match &(*val).data {
         RtData::Bytes(v) => std::borrow::Cow::Borrowed(v.as_slice()),
         RtData::List { .. } => std::borrow::Cow::Owned(extract_bytes(val)),
         _ => std::borrow::Cow::Borrowed(&[]),
+    }
+}
+
+#[cfg(target_os = "airlos")]
+unsafe fn borrow_or_extract<'a>(val: *mut RtValue) -> alloc::borrow::Cow<'a, [u8]> {
+    match &(*val).data {
+        RtData::Bytes(v) => alloc::borrow::Cow::Borrowed(v.as_slice()),
+        RtData::List { .. } => alloc::borrow::Cow::Owned(extract_bytes(val)),
+        _ => alloc::borrow::Cow::Borrowed(&[]),
     }
 }
 
@@ -1503,7 +1623,11 @@ pub extern "C" fn airl_bytes_concat_all(parts: *mut RtValue) -> *mut RtValue {
     };
     // Single extraction pass: borrow or extract each part once, measure total
     let mut total = 0usize;
-    let borrowed: Vec<std::borrow::Cow<[u8]>> = part_lists.iter().map(|&p| {
+    #[cfg(not(target_os = "airlos"))]
+    type ByteCow<'a> = std::borrow::Cow<'a, [u8]>;
+    #[cfg(target_os = "airlos")]
+    type ByteCow<'a> = alloc::borrow::Cow<'a, [u8]>;
+    let borrowed: Vec<ByteCow<'_>> = part_lists.iter().map(|&p| {
         let cow = unsafe { borrow_or_extract(p) };
         total += cow.len();
         cow
@@ -1525,6 +1649,7 @@ pub extern "C" fn airl_bytes_slice(buf: *mut RtValue, offset: *mut RtValue, len:
     rt_bytes(bytes[off..off+slen].to_vec())
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_crc32c(buf: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(buf) };

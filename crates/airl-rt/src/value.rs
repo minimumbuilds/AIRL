@@ -1,5 +1,12 @@
+#[cfg(target_os = "airlos")]
+use crate::nostd_prelude::*;
+
+#[cfg(not(target_os = "airlos"))]
 use std::collections::HashMap;
-use std::fmt;
+#[cfg(target_os = "airlos")]
+use alloc::collections::BTreeMap as HashMap;
+
+use core::fmt;
 
 use crate::error::rt_error;
 
@@ -101,7 +108,7 @@ impl SendableRtValue {
     /// The caller becomes responsible for calling `airl_value_release`.
     pub fn into_raw(self) -> *mut RtValue {
         let ptr = self.0;
-        std::mem::forget(self); // prevent Drop from releasing
+        core::mem::forget(self); // prevent Drop from releasing
         ptr
     }
 }
@@ -192,14 +199,14 @@ pub extern "C" fn airl_unit() -> *mut RtValue {
 
 #[no_mangle]
 pub extern "C" fn airl_str(ptr: *const u8, len: usize) -> *mut RtValue {
-    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
-    let s = std::str::from_utf8(slice).unwrap_or_else(|_| rt_error("airl_str: invalid utf8"));
+    let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
+    let s = core::str::from_utf8(slice).unwrap_or_else(|_| rt_error("airl_str: invalid utf8"));
     rt_str(s.to_string())
 }
 
 #[no_mangle]
 pub extern "C" fn airl_bytes_new(ptr: *const u8, len: usize) -> *mut RtValue {
-    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
     rt_bytes(slice.to_vec())
 }
 
@@ -338,7 +345,7 @@ impl fmt::Display for RtValue {
             RtData::Unit => write!(f, "()"),
             RtData::Int(v) => write!(f, "{}", v),
             RtData::Float(v) => {
-                if v.fract() == 0.0 && v.is_finite() {
+                if *v == (*v as i64 as f64) && v.is_finite() {
                     write!(f, "{:.1}", v)
                 } else {
                     write!(f, "{}", v)
@@ -706,7 +713,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "SendableRtValue::new called with null")]
     fn test_sendable_null_panics() {
-        let _sv = SendableRtValue::new(std::ptr::null_mut());
+        let _sv = SendableRtValue::new(core::ptr::null_mut());
     }
 
     #[test]
