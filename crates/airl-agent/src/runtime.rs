@@ -67,7 +67,7 @@ impl AgentRuntime {
 
     /// Record a task as pending.
     pub fn track_pending(&mut self, task_id: String) {
-        self.pending.insert(task_id, TaskStatus::Complete);
+        self.pending.insert(task_id, TaskStatus::Pending);
     }
 
     /// Mark a pending task as completed with the given result.
@@ -181,7 +181,48 @@ fn compile_expr(expr: &airl_syntax::ast::Expr) -> IRNode {
             IRNode::Variant(name.clone(), vec![IRNode::List(items)])
         }
 
-        ExprKind::Forall(..) | ExprKind::Exists(..) => IRNode::Nil,
+        ExprKind::Forall(..) | ExprKind::Exists(..) => {
+            let is_forall = matches!(&expr.kind, ExprKind::Forall(..));
+
+            let (param, where_clause, body) = match &expr.kind {
+                ExprKind::Forall(p, w, b) | ExprKind::Exists(p, w, b) => (p, w, b),
+                _ => unreachable!(),
+            };
+
+            let var_name = param.name.clone();
+            let acc_name = "__quant_acc".to_string();
+
+            let upper_bound = match where_clause {
+                Some(w) => extract_upper_bound(w, &var_name).unwrap_or_else(|| compile_expr(w)),
+                None => IRNode::Int(10000),
+            };
+
+            let compiled_body = compile_expr(body);
+
+            let fold_body = if is_forall {
+                IRNode::If(
+                    Box::new(IRNode::Call("not".to_string(), vec![IRNode::Load(acc_name.clone())])),
+                    Box::new(IRNode::Bool(false)),
+                    Box::new(compiled_body),
+                )
+            } else {
+                IRNode::If(
+                    Box::new(IRNode::Load(acc_name.clone())),
+                    Box::new(IRNode::Bool(true)),
+                    Box::new(compiled_body),
+                )
+            };
+
+            let callback = IRNode::Lambda(
+                vec![acc_name.clone(), var_name.clone()],
+                Box::new(fold_body),
+            );
+
+            let init = if is_forall { IRNode::Bool(true) } else { IRNode::Bool(false) };
+            let range_expr = IRNode::Call("range".to_string(), vec![IRNode::Int(0), upper_bound]);
+
+            IRNode::Call("fold".to_string(), vec![callback, init, range_expr])
+        }
     }
 }
 
@@ -205,11 +246,37 @@ fn compile_pattern(pat: &airl_syntax::ast::Pattern) -> IRPattern {
     }
 }
 
+/// Extract upper bound from a where clause of the form `(< var N)` or `(<= var N)`.
+fn extract_upper_bound(where_expr: &airl_syntax::ast::Expr, var_name: &str) -> Option<IRNode> {
+    if let ExprKind::FnCall(callee, args) = &where_expr.kind {
+        if let ExprKind::SymbolRef(op) = &callee.kind {
+            if args.len() == 2 {
+                if let ExprKind::SymbolRef(ref name) = &args[0].kind {
+                    if name == var_name {
+                        if op == "<" {
+                            return Some(compile_expr(&args[1]));
+                        } else if op == "<=" {
+                            return Some(IRNode::Call("+".to_string(), vec![
+                                compile_expr(&args[1]),
+                                IRNode::Int(1),
+                            ]));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn compile_top_level(top: &airl_syntax::ast::TopLevel) -> IRNode {
     match top {
         airl_syntax::ast::TopLevel::Defn(f) => {
             let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
             IRNode::Func(f.name.clone(), param_names, Box::new(compile_expr(&f.body)))
+        }
+        airl_syntax::ast::TopLevel::Define(d) => {
+            IRNode::Func(d.name.clone(), d.params.clone(), Box::new(compile_expr(&d.body)))
         }
         airl_syntax::ast::TopLevel::Expr(e) => compile_expr(e),
         _ => IRNode::Nil,
@@ -222,6 +289,8 @@ fn create_stdlib_vm() -> BytecodeVm {
     const RESULT_SOURCE: &str = include_str!("../../../stdlib/result.airl");
     const STRING_SOURCE: &str = include_str!("../../../stdlib/string.airl");
     const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
+    const SET_SOURCE: &str = include_str!("../../../stdlib/set.airl");
+    const IO_SOURCE: &str = include_str!("../../../stdlib/io.airl");
 
     let mut vm = BytecodeVm::new();
     for (src, name) in &[
@@ -230,6 +299,8 @@ fn create_stdlib_vm() -> BytecodeVm {
         (RESULT_SOURCE, "result"),
         (STRING_SOURCE, "string"),
         (MAP_SOURCE, "map"),
+        (SET_SOURCE, "set"),
+        (IO_SOURCE, "io"),
     ] {
         load_source_into_vm(&mut vm, src, name)
             .unwrap_or_else(|e| panic!("stdlib {} load failed: {}", name, e));

@@ -77,9 +77,18 @@ fn cmd_run(args: &[String]) {
             None => { eprintln!("No input file specified"); std::process::exit(1); }
         };
 
+        fn temp_bin_path() -> std::path::PathBuf {
+            use std::time::SystemTime;
+            let ts = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            std::env::temp_dir().join(format!("airl_run_{}_{}", std::process::id(), ts))
+        }
+
         // If --load is used, compile all preloads + main to a temp binary, execute, clean up.
         if !preloads.is_empty() {
-            let temp_bin = std::env::temp_dir().join(format!("airl_run_{}", std::process::id()));
+            let temp_bin = temp_bin_path();
             let temp_str = temp_bin.to_string_lossy().to_string();
 
             let mut compile_args: Vec<String> = preloads.clone();
@@ -104,12 +113,17 @@ fn cmd_run(args: &[String]) {
             }
         }
 
+        // Read source once for import detection and compilation
+        let source = std::fs::read_to_string(&main).unwrap_or_else(|e| {
+            eprintln!("error: cannot read {}: {}", main, e);
+            std::process::exit(1);
+        });
+
         // Check if file uses imports — compile via import-aware AOT path
-        let source_check = std::fs::read_to_string(&main).unwrap_or_default();
-        if source_check.contains("(import ") {
+        if source.contains("(import ") {
             use airl_driver::pipeline::compile_to_object_with_imports;
 
-            let temp_bin = std::env::temp_dir().join(format!("airl_run_{}", std::process::id()));
+            let temp_bin = temp_bin_path();
             let temp_str = temp_bin.to_string_lossy().to_string();
 
             let obj_bytes = match compile_to_object_with_imports(&main, None) {
@@ -137,8 +151,8 @@ fn cmd_run(args: &[String]) {
             }
         }
 
-        // No preloads: compile to temp binary, execute, clean up
-        let temp_bin = std::env::temp_dir().join(format!("airl_run_{}", std::process::id()));
+        // No preloads, no imports: compile to temp binary, execute, clean up
+        let temp_bin = temp_bin_path();
         let temp_str = temp_bin.to_string_lossy().to_string();
 
         let mut compile_args: Vec<String> = vec![main];
@@ -595,7 +609,7 @@ fn print_pipeline_error(err: &PipelineError, path: &str) {
 
 fn print_usage() {
     println!(
-        "airl 0.6.1 — The AIRL Language
+        "airl {} — The AIRL Language
 
 Usage: airl <command> [args]
 
@@ -608,6 +622,7 @@ Commands:
   fmt <file>       Pretty-print an AIRL source file
 
 Options:
-  --version, -V  Show version"
+  --version, -V  Show version",
+        env!("CARGO_PKG_VERSION")
     );
 }

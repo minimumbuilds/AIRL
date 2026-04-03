@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use airl_syntax::*;
 use airl_syntax::parser;
 use airl_syntax::ast::{Expr, ExprKind, Pattern, PatternKind, LitPattern};
@@ -6,6 +7,7 @@ use airl_runtime::value::Value;
 use airl_runtime::error::RuntimeError;
 use airl_runtime::ir::*;
 use airl_runtime::bytecode_compiler::BytecodeCompiler;
+use airl_runtime::bytecode::BytecodeFunc;
 use airl_runtime::bytecode_vm::BytecodeVm;
 use airl_types::checker::TypeChecker;
 use airl_types::linearity::LinearityChecker;
@@ -141,19 +143,9 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
     bc_compiler.set_ownership_map(ownership_map);
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
 
-    // Create VM, load stdlib, execute
+    // Create VM, load cached stdlib, execute
     let mut vm = BytecodeVm::new();
-    for (src, name) in &[
-        (COLLECTIONS_SOURCE, "collections"),
-        (MATH_SOURCE, "math"),
-        (RESULT_SOURCE, "result"),
-        (STRING_SOURCE, "string"),
-        (MAP_SOURCE, "map"),
-        (SET_SOURCE, "set"),
-        (IO_SOURCE, "io"),
-    ] {
-        compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
-    }
+    load_cached_stdlib(&mut vm)?;
 
     for func in funcs {
         vm.load_function(func);
@@ -201,18 +193,8 @@ pub fn run_file_with_preloads(path: &str, preloads: &[String]) -> Result<Value, 
 
     let mut vm = BytecodeVm::new();
 
-    // Load stdlib
-    for (src, name) in &[
-        (COLLECTIONS_SOURCE, "collections"),
-        (MATH_SOURCE, "math"),
-        (RESULT_SOURCE, "result"),
-        (STRING_SOURCE, "string"),
-        (MAP_SOURCE, "map"),
-        (SET_SOURCE, "set"),
-        (IO_SOURCE, "io"),
-    ] {
-        compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
-    }
+    // Load cached stdlib
+    load_cached_stdlib(&mut vm)?;
 
     // Load each preloaded module
     for preload_path in preloads {
@@ -278,9 +260,14 @@ pub fn check_source(source: &str) -> Result<(), PipelineError> {
     }
     if lin_checker.has_errors() {
         let lin_diags = lin_checker.drain_diagnostics();
+        let mut msgs = Vec::new();
         for d in lin_diags.errors() {
+            msgs.push(d.message.clone());
             eprintln!("linearity error: {}", d.message);
         }
+        return Err(PipelineError::Runtime(RuntimeError::Custom(
+            msgs.join("; ")
+        )));
     }
 
     // Z3 contract verification
@@ -587,6 +574,55 @@ fn compile_tops_with_contracts(
     (ir_nodes, contracts, metadata)
 }
 
+/// Cached stdlib functions: parsed and compiled once, cloned into each new VM.
+static STDLIB_CACHE: OnceLock<Vec<(Vec<BytecodeFunc>, BytecodeFunc)>> = OnceLock::new();
+
+fn compile_stdlib_all() -> Result<Vec<(Vec<BytecodeFunc>, BytecodeFunc)>, PipelineError> {
+    let stdlib_modules: &[(&str, &str)] = &[
+        (COLLECTIONS_SOURCE, "collections"),
+        (MATH_SOURCE, "math"),
+        (RESULT_SOURCE, "result"),
+        (STRING_SOURCE, "string"),
+        (MAP_SOURCE, "map"),
+        (SET_SOURCE, "set"),
+        (IO_SOURCE, "io"),
+    ];
+    let mut result = Vec::new();
+    for (src, name) in stdlib_modules {
+        let mut lexer = Lexer::new(src);
+        let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
+        let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
+        let mut diags = Diagnostics::new();
+        let mut tops = Vec::new();
+        for sexpr in &sexprs {
+            match parser::parse_top_level(sexpr, &mut diags) {
+                Ok(top) => tops.push(top),
+                Err(d) => return Err(PipelineError::Io(format!("{} parse error: {}", name, d.message))),
+            }
+        }
+        let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
+        let mut bc_compiler = BytecodeCompiler::with_prefix(name);
+        let (funcs, main_func) = bc_compiler.compile_program(&ir_nodes);
+        result.push((funcs, main_func));
+    }
+    Ok(result)
+}
+
+/// Load pre-compiled stdlib functions into a VM, executing each module's init.
+fn load_cached_stdlib(vm: &mut BytecodeVm) -> Result<(), PipelineError> {
+    let cached = STDLIB_CACHE.get_or_init(|| {
+        compile_stdlib_all().expect("stdlib compilation failed")
+    });
+    for (funcs, main_func) in cached {
+        for func in funcs {
+            vm.load_function(func.clone());
+        }
+        vm.load_function(main_func.clone());
+        vm.exec_main().map_err(|e| PipelineError::Runtime(e))?;
+    }
+    Ok(())
+}
+
 fn compile_and_load_stdlib_bytecode(vm: &mut BytecodeVm, source: &str, name: &str) -> Result<(), PipelineError> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
@@ -632,18 +668,8 @@ pub fn run_file_with_imports(entry_path: &str) -> Result<Value, PipelineError> {
 
     let mut vm = BytecodeVm::new();
 
-    // Load stdlib
-    for (src, name) in &[
-        (COLLECTIONS_SOURCE, "collections"),
-        (MATH_SOURCE, "math"),
-        (RESULT_SOURCE, "result"),
-        (STRING_SOURCE, "string"),
-        (MAP_SOURCE, "map"),
-        (SET_SOURCE, "set"),
-        (IO_SOURCE, "io"),
-    ] {
-        compile_and_load_stdlib_bytecode(&mut vm, src, name)?;
-    }
+    // Load cached stdlib
+    load_cached_stdlib(&mut vm)?;
 
     let entry_canonical = std::fs::canonicalize(entry_path)
         .map_err(|e| PipelineError::Io(e.to_string()))?;
@@ -914,18 +940,7 @@ pub fn format_diagnostic_with_source(diag: &Diagnostic, source: &str, filename: 
 
 /// Load stdlib into a bytecode VM for use by the REPL.
 pub fn compile_and_load_stdlib_bytecode_repl(vm: &mut BytecodeVm) -> Result<(), PipelineError> {
-    for (src, name) in &[
-        (COLLECTIONS_SOURCE, "collections"),
-        (MATH_SOURCE, "math"),
-        (RESULT_SOURCE, "result"),
-        (STRING_SOURCE, "string"),
-        (MAP_SOURCE, "map"),
-        (SET_SOURCE, "set"),
-        (IO_SOURCE, "io"),
-    ] {
-        compile_and_load_stdlib_bytecode(vm, src, name)?;
-    }
-    Ok(())
+    load_cached_stdlib(vm)
 }
 
 /// Compile AIRL source and run it in an existing bytecode VM (for incremental REPL use).

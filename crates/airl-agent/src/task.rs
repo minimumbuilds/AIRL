@@ -11,6 +11,7 @@ pub struct TaskResult {
 /// Status of a completed task.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TaskStatus {
+    Pending,
     Complete,
     Error(String),
     Timeout,
