@@ -1235,7 +1235,7 @@ impl BytecodeAot {
                         call_sig.returns.push(AbiParam::new(types::I64));
                         let callee_id = self
                             .module
-                            .declare_function(&aot_symbol_name(callee_name), Linkage::Export, &call_sig)
+                            .declare_function(&aot_symbol_name(callee_name), Linkage::Local, &call_sig)
                             .map_err(|e| format!("call declare: {}", e))?;
                         call_targets.insert(callee_name.clone(), callee_id);
                     }
@@ -1998,7 +1998,7 @@ impl BytecodeAot {
                             call_sig.returns.push(AbiParam::new(types::I64));
                             let callee_id = self
                                 .module
-                                .declare_function(&aot_symbol_name(callee_name), Linkage::Export, &call_sig)
+                                .declare_function(&aot_symbol_name(callee_name), Linkage::Local, &call_sig)
                                 .map_err(|e| format!("call declare (eligible): {}", e))?;
                             call_targets.insert(callee_name.clone(), callee_id);
                         } else if all_functions.contains_key(callee_name.as_str())
@@ -2011,7 +2011,7 @@ impl BytecodeAot {
                             call_sig.returns.push(AbiParam::new(self.ptr));
                             let callee_id = self
                                 .module
-                                .declare_function(&aot_symbol_name(callee_name), Linkage::Export, &call_sig)
+                                .declare_function(&aot_symbol_name(callee_name), Linkage::Local, &call_sig)
                                 .map_err(|e| format!("call declare: {}", e))?;
                             call_targets.insert(callee_name.clone(), callee_id);
                         } else {
@@ -2030,7 +2030,7 @@ impl BytecodeAot {
                             call_sig.returns.push(AbiParam::new(self.ptr));
                             let callee_id = self
                                 .module
-                                .declare_function(&aot_symbol_name(callee_name), Linkage::Export, &call_sig)
+                                .declare_function(&aot_symbol_name(callee_name), Linkage::Local, &call_sig)
                                 .map_err(|e| format!("call declare: {}", e))?;
                             call_targets.insert(callee_name.clone(), callee_id);
                         }
