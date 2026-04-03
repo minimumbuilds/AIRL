@@ -1,12 +1,39 @@
 // crates/airl-runtime/src/bytecode_compiler.rs
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use crate::ir::*;
 use crate::value::Value;
 use crate::bytecode::*;
 
+/// Hashable wrapper for constant pool deduplication.
+#[derive(Clone, Debug)]
+struct ConstantKey(Value);
+
+impl PartialEq for ConstantKey {
+    fn eq(&self, other: &Self) -> bool { self.0 == other.0 }
+}
+impl Eq for ConstantKey {}
+
+impl Hash for ConstantKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(&self.0).hash(state);
+        match &self.0 {
+            Value::Int(n) => n.hash(state),
+            Value::Float(f) => f.to_bits().hash(state),
+            Value::Bool(b) => b.hash(state),
+            Value::Str(s) => s.hash(state),
+            Value::Nil | Value::Unit => {}
+            Value::BuiltinFn(s) | Value::IRFuncRef(s) => s.hash(state),
+            // For complex types, fall back to a fixed hash (dedup still works via Eq).
+            _ => 0u8.hash(state),
+        }
+    }
+}
+
 pub struct BytecodeCompiler {
     instructions: Vec<Instruction>,
     constants: Vec<Value>,
+    constant_index: HashMap<ConstantKey, u16>, // O(1) constant deduplication
     locals: HashMap<String, u16>,       // variable name → register slot
     next_reg: u16,
     max_reg: u16,
@@ -16,7 +43,7 @@ pub struct BytecodeCompiler {
     /// Maps function names to per-parameter ownership flags (true = Own, needs move tracking).
     ownership_map: HashMap<String, Vec<bool>>,
     /// Registers that have been marked as moved (need CheckNotMoved on subsequent loads).
-    moved_regs: std::collections::HashSet<u16>,
+    moved_regs: HashSet<u16>,
 }
 
 impl BytecodeCompiler {
@@ -24,6 +51,7 @@ impl BytecodeCompiler {
         BytecodeCompiler {
             instructions: Vec::new(),
             constants: Vec::new(),
+            constant_index: HashMap::new(),
             locals: HashMap::new(),
             next_reg: 0,
             max_reg: 0,
@@ -31,7 +59,7 @@ impl BytecodeCompiler {
             lambda_prefix: String::new(),
             compiled_lambdas: Vec::new(),
             ownership_map: HashMap::new(),
-            moved_regs: std::collections::HashSet::new(),
+            moved_regs: HashSet::new(),
         }
     }
 
@@ -64,85 +92,80 @@ impl BytecodeCompiler {
     }
 
     fn add_constant(&mut self, val: Value) -> u16 {
-        // Reuse existing constant if identical
-        for (i, c) in self.constants.iter().enumerate() {
-            if c == &val {
-                return i as u16;
-            }
+        let key = ConstantKey(val.clone());
+        if let Some(&idx) = self.constant_index.get(&key) {
+            return idx;
         }
         let idx = self.constants.len() as u16;
+        self.constant_index.insert(key, idx);
         self.constants.push(val);
         idx
     }
 
     /// Collect free variables referenced in an IR node that are not bound locally.
-    fn free_vars(node: &IRNode, bound: &std::collections::HashSet<String>, out: &mut Vec<String>) {
+    fn free_vars(node: &IRNode, bound: &HashSet<String>, out: &mut Vec<String>, out_set: &mut HashSet<String>) {
         match node {
             IRNode::Load(name) => {
-                if !bound.contains(name) && !out.contains(name) {
+                if !bound.contains(name) && out_set.insert(name.clone()) {
                     out.push(name.clone());
                 }
             }
             IRNode::Int(_) | IRNode::Float(_) | IRNode::Str(_) | IRNode::Bool(_) | IRNode::Nil => {}
             IRNode::If(c, t, e) => {
-                Self::free_vars(c, bound, out);
-                Self::free_vars(t, bound, out);
-                Self::free_vars(e, bound, out);
+                Self::free_vars(c, bound, out, out_set);
+                Self::free_vars(t, bound, out, out_set);
+                Self::free_vars(e, bound, out, out_set);
             }
             IRNode::Do(exprs) => {
-                for expr in exprs { Self::free_vars(expr, bound, out); }
+                for expr in exprs { Self::free_vars(expr, bound, out, out_set); }
             }
             IRNode::Let(bindings, body) => {
                 let mut inner_bound = bound.clone();
                 for b in bindings {
-                    Self::free_vars(&b.expr, &inner_bound, out);
+                    Self::free_vars(&b.expr, &inner_bound, out, out_set);
                     inner_bound.insert(b.name.clone());
                 }
-                Self::free_vars(body, &inner_bound, out);
+                Self::free_vars(body, &inner_bound, out, out_set);
             }
             IRNode::Call(name, args) => {
-                // The call target may be a variable holding a function value
-                // (e.g., a parameter like `transform` in map-map-values).
-                // Treat it as a potential free variable — the lambda compiler
-                // will filter to only names actually in locals.
-                if !bound.contains(name) && !out.contains(name) {
+                if !bound.contains(name) && out_set.insert(name.clone()) {
                     out.push(name.clone());
                 }
-                for arg in args { Self::free_vars(arg, bound, out); }
+                for arg in args { Self::free_vars(arg, bound, out, out_set); }
             }
             IRNode::CallExpr(callee, args) => {
-                Self::free_vars(callee, bound, out);
-                for arg in args { Self::free_vars(arg, bound, out); }
+                Self::free_vars(callee, bound, out, out_set);
+                for arg in args { Self::free_vars(arg, bound, out, out_set); }
             }
             IRNode::Lambda(params, body) => {
                 let mut inner_bound = bound.clone();
                 for p in params { inner_bound.insert(p.clone()); }
-                Self::free_vars(body, &inner_bound, out);
+                Self::free_vars(body, &inner_bound, out, out_set);
             }
             IRNode::List(items) => {
-                for item in items { Self::free_vars(item, bound, out); }
+                for item in items { Self::free_vars(item, bound, out, out_set); }
             }
             IRNode::Variant(_, args) => {
-                for arg in args { Self::free_vars(arg, bound, out); }
+                for arg in args { Self::free_vars(arg, bound, out, out_set); }
             }
             IRNode::Match(scrutinee, arms) => {
-                Self::free_vars(scrutinee, bound, out);
+                Self::free_vars(scrutinee, bound, out, out_set);
                 for arm in arms {
                     let mut inner_bound = bound.clone();
                     Self::collect_pattern_bindings(&arm.pattern, &mut inner_bound);
-                    Self::free_vars(&arm.body, &inner_bound, out);
+                    Self::free_vars(&arm.body, &inner_bound, out, out_set);
                 }
             }
-            IRNode::Try(expr) => Self::free_vars(expr, bound, out),
+            IRNode::Try(expr) => Self::free_vars(expr, bound, out, out_set),
             IRNode::Func(_, params, body) => {
                 let mut inner_bound = bound.clone();
                 for p in params { inner_bound.insert(p.clone()); }
-                Self::free_vars(body, &inner_bound, out);
+                Self::free_vars(body, &inner_bound, out, out_set);
             }
         }
     }
 
-    fn collect_pattern_bindings(pat: &IRPattern, bound: &mut std::collections::HashSet<String>) {
+    fn collect_pattern_bindings(pat: &IRPattern, bound: &mut HashSet<String>) {
         match pat {
             IRPattern::Bind(name) => { bound.insert(name.clone()); }
             IRPattern::Variant(_, sub) => {
@@ -555,10 +578,11 @@ impl BytecodeCompiler {
                 self.lambda_counter += 1;
 
                 // Only capture variables actually referenced in the lambda body (free variables).
-                let mut param_set = std::collections::HashSet::new();
+                let mut param_set = HashSet::new();
                 for p in params { param_set.insert(p.clone()); }
                 let mut free = Vec::new();
-                Self::free_vars(body, &param_set, &mut free);
+                let mut free_set = HashSet::new();
+                Self::free_vars(body, &param_set, &mut free, &mut free_set);
 
                 // Filter to only variables that are in our current locals
                 let captured_names: Vec<(String, u16)> = free.iter()

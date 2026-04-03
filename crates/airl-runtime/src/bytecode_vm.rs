@@ -335,6 +335,9 @@ fn dispatch_channel_recv_timeout(args: &[*mut RtValue]) -> *mut RtValue {
         },
         _ => return rt_variant("Err".into(), rt_str("channel-recv-timeout: requires 2 arguments".into())),
     };
+    if timeout_ms < 0 {
+        return rt_variant("Err".into(), rt_str("channel-recv-timeout: timeout must be non-negative".into()));
+    }
     let rx = channel_receivers().lock().expect("channel lock poisoned").remove(&rx_id);
     match rx {
         Some(rx) => {
@@ -1102,27 +1105,33 @@ impl BytecodeVm {
     /// Main VM loop. Returns *mut RtValue with rc >= 1 (caller must release).
     fn run_rt_with_min_depth(&mut self, min_depth: usize) -> Result<*mut RtValue, RuntimeError> {
         loop {
-            let (func_name, ip, func_len) = {
+            // Single HashMap lookup per iteration: fetch instruction or detect end-of-function.
+            // Avoids the previous pattern of cloning func_name + 2-3 separate lookups.
+            let (func_name, instr_or_end) = {
                 let frame = self.call_stack.last().expect("internal: call stack empty");
-                (frame.func_name.clone(), frame.ip, {
-                    self.functions.get(&frame.func_name).expect("internal: function not in map").instructions.len()
-                })
+                let func = self.functions.get(&frame.func_name).expect("internal: function not in map");
+                if frame.ip < func.instructions.len() {
+                    (frame.func_name.clone(), Some(func.instructions[frame.ip]))
+                } else {
+                    (frame.func_name.clone(), None)
+                }
             };
 
-            if ip >= func_len {
-                let return_reg = self.call_stack.last().expect("internal: call stack empty").return_reg;
-                let mut frame = self.call_stack.pop().expect("internal: call stack empty");
-                release_registers(&mut frame.registers);
-                self.recursion_depth = self.recursion_depth.saturating_sub(1);
-                if self.call_stack.len() <= min_depth {
-                    return Ok(rt_nil());
+            let instr = match instr_or_end {
+                None => {
+                    let return_reg = self.call_stack.last().expect("internal: call stack empty").return_reg;
+                    let mut frame = self.call_stack.pop().expect("internal: call stack empty");
+                    release_registers(&mut frame.registers);
+                    self.recursion_depth = self.recursion_depth.saturating_sub(1);
+                    if self.call_stack.len() <= min_depth {
+                        return Ok(rt_nil());
+                    }
+                    let caller = self.call_stack.last_mut().expect("internal: call stack empty");
+                    reg_set(&mut caller.registers, return_reg as usize, rt_nil());
+                    continue;
                 }
-                let caller = self.call_stack.last_mut().expect("internal: call stack empty");
-                reg_set(&mut caller.registers, return_reg as usize, rt_nil());
-                continue;
-            }
-
-            let instr = self.functions.get(&func_name).expect("internal: function not in map").instructions[ip];
+                Some(i) => i,
+            };
             self.call_stack.last_mut().expect("internal: call stack empty").ip += 1;
 
             match instr.op {
@@ -1217,6 +1226,7 @@ impl BytecodeVm {
                     };
                     let (va, vb) = unsafe { (rt_ref(a), rt_ref(b)) };
                     let result = match (va.data(), vb.data()) {
+                        (RtData::Int(_), RtData::Int(0)) => return Err(RuntimeError::DivisionByZero),
                         (RtData::Int(x), RtData::Int(y)) => rt_int(x % y),
                         _ => return Err(RuntimeError::TypeError("mod: incompatible types".into())),
                     };
@@ -1658,7 +1668,7 @@ impl BytecodeVm {
                 Op::Move => { regs[instr.dst as usize] = regs[instr.a as usize].clone(); }
                 Op::Add => {
                     regs[instr.dst as usize] = match (&regs[instr.a as usize], &regs[instr.b as usize]) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x + y),
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_add(*y)),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
                         (Value::Str(x), Value::Str(y)) => {
                             let mut s = String::with_capacity(x.len() + y.len());
@@ -1671,14 +1681,14 @@ impl BytecodeVm {
                 }
                 Op::Sub => {
                     regs[instr.dst as usize] = match (&regs[instr.a as usize], &regs[instr.b as usize]) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x - y),
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_sub(*y)),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x - y),
                         _ => return Err(RuntimeError::TypeError("sub: incompatible types".into())),
                     };
                 }
                 Op::Mul => {
                     regs[instr.dst as usize] = match (&regs[instr.a as usize], &regs[instr.b as usize]) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x * y),
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_mul(*y)),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
                         _ => return Err(RuntimeError::TypeError("mul: incompatible types".into())),
                     };
@@ -1693,7 +1703,8 @@ impl BytecodeVm {
                 }
                 Op::Mod => {
                     regs[instr.dst as usize] = match (&regs[instr.a as usize], &regs[instr.b as usize]) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x % y),
+                        (Value::Int(_), Value::Int(0)) => return Err(RuntimeError::DivisionByZero),
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_rem(*y)),
                         _ => return Err(RuntimeError::TypeError("mod: incompatible types".into())),
                     };
                 }
