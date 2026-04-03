@@ -9,3 +9,15 @@ tla/tla2tools.jar
 tla/states/
 tla/*_TTrace_*.tla
 cross-build/target/
+
+# Build artifacts and binaries
+*.a
+*.o
+*.so
+*.elf
+*.dylib
+a.out
+aot_fib
+.z3-trace
+commands/*/build/
+servers/*/mynameisairl
