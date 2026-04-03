@@ -183,6 +183,14 @@ fn parse_let_expr(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Resul
     }
 
     let body = parse_expr(&items[i], diags)?;
+    i += 1;
+    if i < items.len() {
+        let extra = items.len() - i;
+        diags.add(Diagnostic::warning(
+            format!("let has {} extra expression(s) after body that will be ignored", extra),
+            items[i].span(),
+        ));
+    }
     Ok(Expr {
         kind: ExprKind::Let(bindings, Box::new(body)),
         span,
@@ -227,6 +235,13 @@ fn parse_lambda_expr(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Re
     }
     let params = parse_lambda_params(&items[0], diags)?;
     let body = parse_expr(&items[1], diags)?;
+    if items.len() > 2 {
+        let extra = items.len() - 2;
+        diags.add(Diagnostic::warning(
+            format!("fn has {} extra expression(s) after body that will be ignored", extra),
+            items[2].span(),
+        ));
+    }
     Ok(Expr {
         kind: ExprKind::Lambda(params, Box::new(body)),
         span,
@@ -663,7 +678,10 @@ fn parse_defn(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Fn
                     priority = Some(parse_priority(&items[i])?);
                 }
                 _ => {
-                    // Unknown keyword, skip
+                    diags.add(Diagnostic::warning(
+                        format!("unknown keyword :{} in defn", kw),
+                        items[i].span(),
+                    ));
                 }
             }
         }
@@ -939,7 +957,12 @@ fn parse_module(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<
                     }
                     execute_on = Some(parse_exec_target(&items[i])?);
                 }
-                _ => {}
+                _ => {
+                    diags.add(Diagnostic::warning(
+                        format!("unknown keyword :{} in module", kw),
+                        items[i].span(),
+                    ));
+                }
             }
         } else {
             // Not a keyword — must be a body form
@@ -1081,7 +1104,12 @@ fn parse_task(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Ta
                     if i >= items.len() { return Err(Diagnostic::error("expected expr after :on-timeout", span)); }
                     on_timeout = Some(parse_expr(&items[i], diags)?);
                 }
-                _ => {}
+                _ => {
+                    diags.add(Diagnostic::warning(
+                        format!("unknown keyword :{} in task", kw),
+                        items[i].span(),
+                    ));
+                }
             }
         }
         i += 1;

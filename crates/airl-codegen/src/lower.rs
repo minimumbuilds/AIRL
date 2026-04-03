@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use airl_syntax::ast::*;
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
-use cranelift_codegen::ir::{self, types, BlockArg, InstBuilder, Value as CrValue};
+use cranelift_codegen::ir::{self, types, BlockArg, InstBuilder, TrapCode, Value as CrValue};
 use cranelift_frontend::{FunctionBuilder, Variable};
 
 use crate::types::*;
@@ -147,8 +147,22 @@ impl<'a, 'b: 'a> Lowerer<'a, 'b> {
                 "+" => self.builder.ins().iadd(lhs, rhs),
                 "-" => self.builder.ins().isub(lhs, rhs),
                 "*" => self.builder.ins().imul(lhs, rhs),
-                "/" => self.builder.ins().sdiv(lhs, rhs),
-                "%" => self.builder.ins().srem(lhs, rhs),
+                "/" | "%" => {
+                    // Guard: trap on division by zero
+                    self.builder.ins().trapz(rhs, TrapCode::INTEGER_DIVISION_BY_ZERO);
+                    // Guard: trap on i64::MIN / -1 (signed overflow)
+                    let min_val = self.builder.ins().iconst(lty, i64::MIN);
+                    let neg_one = self.builder.ins().iconst(lty, -1i64);
+                    let is_min = self.builder.ins().icmp(IntCC::Equal, lhs, min_val);
+                    let is_neg_one = self.builder.ins().icmp(IntCC::Equal, rhs, neg_one);
+                    let is_overflow = self.builder.ins().band(is_min, is_neg_one);
+                    self.builder.ins().trapnz(is_overflow, TrapCode::INTEGER_OVERFLOW);
+                    if op == "/" {
+                        self.builder.ins().sdiv(lhs, rhs)
+                    } else {
+                        self.builder.ins().srem(lhs, rhs)
+                    }
+                }
                 _ => unreachable!(),
             }
         };
@@ -284,11 +298,24 @@ impl<'a, 'b: 'a> Lowerer<'a, 'b> {
         bindings: &[LetBinding],
         body: &Expr,
     ) -> Result<(CrValue, ir::Type), LowerError> {
+        // Save any shadowed bindings so we can restore them after the body.
+        let mut saved: Vec<(String, Option<(Variable, ir::Type)>)> = Vec::new();
         for binding in bindings {
             let (val, ty) = self.lower_expr(&binding.value)?;
+            let old = self.variables.remove(&binding.name);
+            saved.push((binding.name.clone(), old));
             self.define_variable(&binding.name, val, ty);
         }
-        self.lower_expr(body)
+        let result = self.lower_expr(body);
+        // Restore previous bindings.
+        for (name, old_val) in saved.into_iter().rev() {
+            if let Some(old) = old_val {
+                self.variables.insert(name, old);
+            } else {
+                self.variables.remove(&name);
+            }
+        }
+        result
     }
 
     fn lower_do(&mut self, exprs: &[Expr]) -> Result<(CrValue, ir::Type), LowerError> {

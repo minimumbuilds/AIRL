@@ -37,8 +37,8 @@ impl TypeChecker {
                 },
             );
         }
-        // Comparison: (< a b), (> a b), (<= a b), (>= a b), (== a b), (!= a b)
-        for op in &["<", ">", "<=", ">=", "==", "!="] {
+        // Comparison: (< a b), (> a b), (<= a b), (>= a b), (= a b), (!= a b)
+        for op in &["<", ">", "<=", ">=", "=", "!="] {
             self.env.bind(
                 op.to_string(),
                 Ty::Func {

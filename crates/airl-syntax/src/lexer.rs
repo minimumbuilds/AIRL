@@ -2,6 +2,9 @@ use crate::span::Span;
 use crate::token::{Token, TokenKind};
 use crate::diagnostic::Diagnostic;
 
+const MAX_TOKEN_COUNT: usize = 10_000_000;
+const MAX_STRING_LENGTH: usize = 10_000_000;
+
 pub struct Lexer<'src> {
     source: &'src [u8],
     pos: usize,
@@ -27,7 +30,14 @@ impl<'src> Lexer<'src> {
                 tokens.push(tok);
                 break;
             }
+            let tok_span = tok.span;
             tokens.push(tok);
+            if tokens.len() >= MAX_TOKEN_COUNT {
+                return Err(Diagnostic::error(
+                    format!("token limit exceeded ({})", MAX_TOKEN_COUNT),
+                    tok_span,
+                ));
+            }
         }
         Ok(tokens)
     }
@@ -81,6 +91,12 @@ impl<'src> Lexer<'src> {
             if self.pos >= self.source.len() {
                 return Err(Diagnostic::error(
                     "unterminated string literal",
+                    Span::new(start, self.pos, start_line, start_col),
+                ));
+            }
+            if value.len() >= MAX_STRING_LENGTH {
+                return Err(Diagnostic::error(
+                    format!("string literal exceeds maximum length ({})", MAX_STRING_LENGTH),
                     Span::new(start, self.pos, start_line, start_col),
                 ));
             }
