@@ -50,11 +50,17 @@ pub extern "C" fn airl_substring(
         _ => rt_error("substring: first argument must be a Str"),
     };
     let start_idx = match &startv.data {
-        RtData::Int(n) => *n as usize,
+        RtData::Int(n) => {
+            if *n < 0 { rt_error(&format!("substring: start index {} is negative", n)); }
+            *n as usize
+        }
         _ => rt_error("substring: second argument must be an Int"),
     };
     let end_idx = match &endv.data {
-        RtData::Int(n) => *n as usize,
+        RtData::Int(n) => {
+            if *n < 0 { rt_error(&format!("substring: end index {} is negative", n)); }
+            *n as usize
+        }
         _ => rt_error("substring: third argument must be an Int"),
     };
     if end_idx < start_idx {

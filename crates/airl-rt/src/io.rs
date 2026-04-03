@@ -33,7 +33,7 @@ fn sandbox_root() -> &'static Option<PathBuf> {
 /// Validate that `path` is under the sandbox root (if configured).
 /// Returns the canonicalized PathBuf on success, or an error message on violation.
 /// When AIRL_SANDBOX_ROOT is not set, returns Ok(PathBuf::from(path)) for backward compat.
-fn sandbox_check(path: &str) -> Result<PathBuf, String> {
+pub(crate) fn sandbox_check(path: &str) -> Result<PathBuf, String> {
     match sandbox_root() {
         None => Ok(PathBuf::from(path)),
         Some(root) => {

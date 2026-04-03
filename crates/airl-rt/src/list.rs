@@ -232,7 +232,10 @@ pub extern "C" fn airl_set_at(list: *mut RtValue, idx: *mut RtValue, val: *mut R
     let v = unsafe { &*list };
     let iv = unsafe { &*idx };
     let i = match &iv.data {
-        RtData::Int(n) => *n as usize,
+        RtData::Int(n) => {
+            if *n < 0 { rt_error(&format!("set-at: index {} is negative", n)); }
+            *n as usize
+        }
         _ => rt_error("set-at: index must be Int"),
     };
     match &v.data {
