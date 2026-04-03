@@ -22,7 +22,7 @@ AIRL is a typed, contract-verified programming language for inter-agent communic
 
 **[Project Analysis — Milestones, Strengths & Differentiators](docs/PROJECT-ANALYSIS.md)**
 
-## Self-Hosted Compiler (v1.1.0)
+## Self-Hosted Compiler (v0.11.0)
 
 **AIRL compiles itself.** The G3 compiler is written entirely in AIRL and produces native x86-64 and ARM64 binaries:
 
@@ -170,7 +170,7 @@ Every existing programming language optimizes for human readability. AIRL optimi
 - Pattern matching with exhaustiveness checking
 - First-class functions and closures
 - Thread-per-task concurrency with message-passing channels
-- **13 stdlib modules** — collections, math, result, string, map, set, json, base64, sha256, hmac, pbkdf2, io, path — auto-loaded as prelude. 73 functions migrated from Rust builtins to pure AIRL in v1.1.0
+- **13 stdlib modules** — collections, math, result, string, map, set, json, base64, sha256, hmac, pbkdf2, io, path — auto-loaded as prelude. 73 functions migrated from Rust builtins to pure AIRL in v0.11.0
 - **~150 compiler intrinsics** — arithmetic, comparison, logic, float math, bytes, TCP, compression, regex, concurrency, tensors
 - **`extern-c` declarations** — call C functions from AIRL for low-level runtime access
 
@@ -342,7 +342,7 @@ cargo run --release --features aot -- run examples/01-hello-world/hello_world.ai
 
 ## Project Stats
 
-- **Self-hosted compiler** — AIRL compiles itself to native binaries (since v0.6.0, current v1.1.0)
+- **Self-hosted compiler** — AIRL compiles itself to native binaries (since v0.6.0, current v0.11.0)
 - **68 AOT tests** — all pass through both the Rust-hosted and self-compiled pipelines
 - **~478 Rust tests** across 10 crates
 - **Cross-platform** — Linux x86-64 and macOS ARM64

@@ -1,4 +1,4 @@
-# AIRL Reference Header (v1.1.0)
+# AIRL Reference Header (v0.11.0)
 
 ## TRAPS
 
@@ -36,7 +36,7 @@
 (match EXPR PAT1 BODY1 PAT2 BODY2 ...)   ;; flat pairs
 (fn [p1 p2 ...] BODY)                    ;; lambda, no type annotations
 (try EXPR)                               ;; unwrap Ok or propagate Err as runtime error
-(extern-c "c_name" [PARAMS -> RET])      ;; declare C function callable from AIRL (v1.1.0)
+(extern-c "c_name" [PARAMS -> RET])      ;; declare C function callable from AIRL (v0.11.0)
 ```
 
 ### Types
@@ -68,7 +68,7 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 
 ## SIGS
 
-> **v1.1.0 split:** Functions marked **(intrinsic)** are compiled into the runtime. Functions marked **(stdlib)** are pure AIRL, auto-loaded from `stdlib/`. Both are always available — no imports needed.
+> **v0.11.0 split:** Functions marked **(intrinsic)** are compiled into the runtime. Functions marked **(stdlib)** are pure AIRL, auto-loaded from `stdlib/`. Both are always available — no imports needed.
 
 ### Arithmetic (2-arg, same type, no mixed int/float) — intrinsic
 ```
@@ -161,7 +161,7 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (is-nan? x) (is-infinite? x) -> Bool
 ```
 
-### String (stdlib — `stdlib/string.airl`, was builtins pre-v1.1.0)
+### String (stdlib — `stdlib/string.airl`, was builtins pre-v0.11.0)
 ```
 (str a b ...) -> Str            ; VARIADIC concat, auto-coerces all types. Preferred over nested +
 (char-at s i) -> Str            ; single char, Unicode-safe, errors on OOB
@@ -357,7 +357,7 @@ Compile with: `g3 -- aireql-util.airl aireql-transport.airl aireql.airl aireql-s
 (channel-close handle) -> Bool                      ; close sender or receiver
 ```
 
-### Byte-Array Intrinsics (v1.1.0) — intrinsic
+### Byte-Array Intrinsics (v0.11.0) — intrinsic
 ```
 (bytes-alloc n) -> ByteArray             ; allocate zero-filled byte array
 (bytes-get buf index) -> Int             ; read byte at index (0-255)
