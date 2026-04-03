@@ -986,6 +986,8 @@ fn parse_module(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<
 
 /// Parse a version like `0.1.0` which the lexer produces as Float(0.1) Symbol(".0")
 /// or potentially as a symbol "0.1.0" depending on how the lexer handles it.
+// TODO: lex version strings as a dedicated VersionLit token kind to avoid
+// float formatting issues (e.g., 0.10 → "0.1" loses the minor component).
 fn parse_version(items: &[SExpr], i: &mut usize) -> Result<Version, Diagnostic> {
     let span = items[*i].span();
 

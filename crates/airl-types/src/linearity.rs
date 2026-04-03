@@ -3,6 +3,14 @@ use airl_syntax::ast::*;
 use crate::ty::{Ty, is_copy, PrimTy};
 use std::collections::HashMap;
 
+/// Snapshot of linearity checker state for branch checking.
+#[derive(Debug, Clone)]
+pub struct LinearitySnapshot {
+    shadow: HashMap<String, (OwnershipState, usize)>,
+    depth: usize,
+    scope_bindings_len: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorrowKind {
     Immutable,
@@ -19,8 +27,12 @@ pub enum OwnershipState {
 
 /// Tracks ownership and borrowing state for bindings, enforcing linearity rules.
 pub struct LinearityChecker {
-    /// Maps binding names to their ownership state (scoped stack).
-    states: Vec<HashMap<String, OwnershipState>>,
+    /// Current scope depth (0 = global).
+    depth: usize,
+    /// Flat shadow index: name -> (state, depth at which it was bound).
+    shadow: HashMap<String, (OwnershipState, usize)>,
+    /// Per-depth list of (name, Option<previous_entry>) for rollback on pop.
+    scope_bindings: Vec<Vec<(String, Option<(OwnershipState, usize)>)>>,
     /// Registry of known function parameter ownerships for call-site analysis.
     fn_ownerships: HashMap<String, Vec<Ownership>>,
     diags: Diagnostics,
@@ -29,7 +41,9 @@ pub struct LinearityChecker {
 impl LinearityChecker {
     pub fn new() -> Self {
         Self {
-            states: vec![HashMap::new()],
+            depth: 0,
+            shadow: HashMap::new(),
+            scope_bindings: vec![Vec::new()],
             fn_ownerships: HashMap::new(),
             diags: Diagnostics::new(),
         }
@@ -37,8 +51,9 @@ impl LinearityChecker {
 
     /// Introduce a new owned binding in the current scope.
     pub fn introduce(&mut self, name: String) {
-        if let Some(scope) = self.states.last_mut() {
-            scope.insert(name, OwnershipState::Owned);
+        let prev = self.shadow.insert(name.clone(), (OwnershipState::Owned, self.depth));
+        if let Some(bindings) = self.scope_bindings.last_mut() {
+            bindings.push((name, prev));
         }
     }
 
@@ -358,26 +373,23 @@ impl LinearityChecker {
     /// If a binding is Moved in one branch but Owned in another, emit an error.
     fn merge_branch_states(
         &mut self,
-        state_a: &[HashMap<String, OwnershipState>],
-        state_b: &[HashMap<String, OwnershipState>],
+        state_a: &LinearitySnapshot,
+        state_b: &LinearitySnapshot,
         span: Span,
     ) {
-        // Compare each scope level
-        let len = state_a.len().min(state_b.len());
-        for i in 0..len {
-            for (name, state_in_a) in &state_a[i] {
-                if let Some(state_in_b) = state_b[i].get(name) {
-                    let a_moved = matches!(state_in_a, OwnershipState::Moved { .. });
-                    let b_moved = matches!(state_in_b, OwnershipState::Moved { .. });
-                    if a_moved != b_moved {
-                        self.diags.add(Diagnostic::error(
-                            format!(
-                                "branches disagree on ownership of `{}`: moved in one branch but not the other",
-                                name
-                            ),
-                            span,
-                        ));
-                    }
+        // Compare all bindings in the flat shadow index
+        for (name, (state_in_a, _)) in &state_a.shadow {
+            if let Some((state_in_b, _)) = state_b.shadow.get(name) {
+                let a_moved = matches!(state_in_a, OwnershipState::Moved { .. });
+                let b_moved = matches!(state_in_b, OwnershipState::Moved { .. });
+                if a_moved != b_moved {
+                    self.diags.add(Diagnostic::error(
+                        format!(
+                            "branches disagree on ownership of `{}`: moved in one branch but not the other",
+                            name
+                        ),
+                        span,
+                    ));
                 }
             }
         }
@@ -409,41 +421,49 @@ impl LinearityChecker {
     }
 
     fn lookup_state(&self, name: &str) -> Option<OwnershipState> {
-        for scope in self.states.iter().rev() {
-            if let Some(s) = scope.get(name) {
-                return Some(s.clone());
-            }
-        }
-        None
+        self.shadow.get(name).map(|(s, _)| s.clone())
     }
 
     fn set_state(&mut self, name: &str, state: OwnershipState) {
-        for scope in self.states.iter_mut().rev() {
-            if scope.contains_key(name) {
-                scope.insert(name.to_string(), state);
-                return;
-            }
+        if let Some(entry) = self.shadow.get_mut(name) {
+            entry.0 = state;
         }
     }
 
     pub fn push_scope(&mut self) {
-        self.states.push(HashMap::new());
+        self.depth += 1;
+        self.scope_bindings.push(Vec::new());
     }
 
     pub fn pop_scope(&mut self) {
-        if self.states.len() > 1 {
-            self.states.pop();
+        if self.depth == 0 {
+            return;
         }
+        if let Some(bindings) = self.scope_bindings.pop() {
+            for (name, prev) in bindings.into_iter().rev() {
+                match prev {
+                    Some(entry) => { self.shadow.insert(name, entry); }
+                    None => { self.shadow.remove(&name); }
+                }
+            }
+        }
+        self.depth -= 1;
     }
 
     /// Snapshot current state for branch checking.
-    pub fn snapshot(&self) -> Vec<HashMap<String, OwnershipState>> {
-        self.states.clone()
+    pub fn snapshot(&self) -> LinearitySnapshot {
+        LinearitySnapshot {
+            shadow: self.shadow.clone(),
+            depth: self.depth,
+            scope_bindings_len: self.scope_bindings.len(),
+        }
     }
 
     /// Restore state from a snapshot.
-    pub fn restore(&mut self, snap: Vec<HashMap<String, OwnershipState>>) {
-        self.states = snap;
+    pub fn restore(&mut self, snap: LinearitySnapshot) {
+        self.shadow = snap.shadow;
+        self.depth = snap.depth;
+        self.scope_bindings.truncate(snap.scope_bindings_len);
     }
 
     /// Consume the checker and return accumulated diagnostics.

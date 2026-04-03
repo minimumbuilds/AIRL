@@ -217,10 +217,19 @@ impl MlirTensorJit {
         compiled.call_transpose("tensor_transpose", input, out, rows, cols)
     }
 
+    /// Maximum number of cached compiled kernels before eviction.
+    const MAX_CACHE_SIZE: usize = 256;
+
     /// Compile and cache a kernel if not already present.
     fn ensure_compiled(&mut self, key: &CacheKey) -> Result<(), String> {
         if self.cache.contains_key(key) {
             return Ok(());
+        }
+
+        // Evict entire cache when it exceeds the size limit.
+        // A full LRU would be more precise but this is simple and bounded.
+        if self.cache.len() >= Self::MAX_CACHE_SIZE {
+            self.cache.clear();
         }
 
         let mut module = self.mlir_ctx.new_module();
