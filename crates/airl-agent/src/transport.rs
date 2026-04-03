@@ -43,11 +43,19 @@ pub fn write_frame(writer: &mut dyn Write, payload: &str) -> io::Result<()> {
     writer.flush()
 }
 
+const MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
+
 /// Read a length-prefixed frame and return the UTF-8 payload.
 pub fn read_frame(reader: &mut dyn Read) -> io::Result<String> {
     let mut len_buf = [0u8; 4];
     reader.read_exact(&mut len_buf)?;
     let len = u32::from_be_bytes(len_buf) as usize;
+    if len > MAX_FRAME_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("frame size {} exceeds {} byte limit", len, MAX_FRAME_SIZE),
+        ));
+    }
     let mut buf = vec![0u8; len];
     reader.read_exact(&mut buf)?;
     String::from_utf8(buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))

@@ -265,7 +265,11 @@ pub extern "C" fn airl_read_lines(path: *mut RtValue) -> *mut RtValue {
         RtData::Str(s) => s.as_str(),
         _ => return rt_list(vec![]),
     };
-    match std::fs::read_to_string(p) {
+    let checked = match crate::io::sandbox_check(p) {
+        Ok(p) => p,
+        Err(msg) => crate::error::rt_error(&format!("read-lines: {}", msg)),
+    };
+    match std::fs::read_to_string(&checked) {
         Ok(content) => {
             let items: Vec<*mut RtValue> = content.lines().map(|l| rt_str(l.to_string())).collect();
             rt_list(items)
@@ -295,6 +299,9 @@ pub extern "C" fn airl_range(start: *mut RtValue, end: *mut RtValue) -> *mut RtV
     let s = match unsafe { &(*start).data } { RtData::Int(n) => *n, _ => return rt_list(vec![]) };
     let e = match unsafe { &(*end).data } { RtData::Int(n) => *n, _ => return rt_list(vec![]) };
     if s >= e { return rt_list(vec![]); }
+    if (e - s) > 10_000_000 {
+        rt_error(&format!("range: size {} exceeds 10,000,000 element limit", e - s));
+    }
     let items: Vec<*mut RtValue> = (s..e).map(|i| rt_int(i)).collect();
     rt_list(items)
 }
@@ -522,7 +529,8 @@ pub extern "C" fn airl_hmac_sha256(key: *mut RtValue, msg: *mut RtValue) -> *mut
     use sha2::Sha256;
     let k = match unsafe { &(*key).data } { RtData::Str(s) => s.as_bytes().to_vec(), _ => vec![] };
     let m = match unsafe { &(*msg).data } { RtData::Str(s) => s.as_bytes().to_vec(), _ => vec![] };
-    let mut mac = Hmac::<Sha256>::new_from_slice(&k).unwrap();
+    let mut mac = Hmac::<Sha256>::new_from_slice(&k)
+        .unwrap_or_else(|e| rt_error(&format!("hmac-sha256: {e}")));
     mac.update(&m);
     rt_str(hex::encode(mac.finalize().into_bytes()))
 }
@@ -546,7 +554,12 @@ pub extern "C" fn airl_base64_decode(s: *mut RtValue) -> *mut RtValue {
 
 #[no_mangle]
 pub extern "C" fn airl_random_bytes(n: *mut RtValue) -> *mut RtValue {
-    let count = match unsafe { &(*n).data } { RtData::Int(n) => *n as usize, _ => 0 };
+    let raw = match unsafe { &(*n).data } { RtData::Int(n) => *n, _ => 0 };
+    if raw < 0 { rt_error("random-bytes: count must be non-negative"); }
+    let count = raw as usize;
+    if count > 256 * 1024 * 1024 {
+        rt_error(&format!("random-bytes: count {} exceeds 256 MiB limit", count));
+    }
     use rand::RngCore;
     let mut buf = vec![0u8; count];
     rand::thread_rng().fill_bytes(&mut buf);
@@ -570,7 +583,8 @@ pub extern "C" fn airl_hmac_sha512(key: *mut RtValue, msg: *mut RtValue) -> *mut
     use sha2::Sha512;
     let k = match unsafe { &(*key).data } { RtData::Str(s) => s.as_bytes().to_vec(), _ => vec![] };
     let m = match unsafe { &(*msg).data } { RtData::Str(s) => s.as_bytes().to_vec(), _ => vec![] };
-    let mut mac = Hmac::<Sha512>::new_from_slice(&k).unwrap();
+    let mut mac = Hmac::<Sha512>::new_from_slice(&k)
+        .unwrap_or_else(|e| rt_error(&format!("hmac-sha512: {e}")));
     mac.update(&m);
     rt_str(hex::encode(mac.finalize().into_bytes()))
 }
@@ -596,7 +610,8 @@ pub extern "C" fn airl_hmac_sha256_bytes(key: *mut RtValue, data: *mut RtValue) 
     use hmac::{Hmac, Mac};
     let k = unsafe { borrow_or_extract(key) };
     let d = unsafe { borrow_or_extract(data) };
-    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(&k).unwrap();
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(&k)
+        .unwrap_or_else(|e| rt_error(&format!("hmac-sha256-bytes: {e}")));
     mac.update(&d);
     rt_bytes(mac.finalize().into_bytes().to_vec())
 }
@@ -606,7 +621,8 @@ pub extern "C" fn airl_hmac_sha512_bytes(key: *mut RtValue, data: *mut RtValue) 
     use hmac::{Hmac, Mac};
     let k = unsafe { borrow_or_extract(key) };
     let d = unsafe { borrow_or_extract(data) };
-    let mut mac = Hmac::<sha2::Sha512>::new_from_slice(&k).unwrap();
+    let mut mac = Hmac::<sha2::Sha512>::new_from_slice(&k)
+        .unwrap_or_else(|e| rt_error(&format!("hmac-sha512-bytes: {e}")));
     mac.update(&d);
     rt_bytes(mac.finalize().into_bytes().to_vec())
 }
@@ -676,14 +692,14 @@ pub extern "C" fn airl_bitwise_or(a: *mut RtValue, b: *mut RtValue) -> *mut RtVa
 pub extern "C" fn airl_bitwise_shr(a: *mut RtValue, n: *mut RtValue) -> *mut RtValue {
     let va = match unsafe { &(*a).data } { RtData::Int(n) => *n, _ => 0 };
     let vn = match unsafe { &(*n).data } { RtData::Int(n) => *n, _ => 0 };
-    rt_int(((va as u64) >> (vn as u64)) as i64)
+    rt_int(((va as u64) >> ((vn as u64) & 63)) as i64)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_bitwise_shl(a: *mut RtValue, n: *mut RtValue) -> *mut RtValue {
     let va = match unsafe { &(*a).data } { RtData::Int(n) => *n, _ => 0 };
     let vn = match unsafe { &(*n).data } { RtData::Int(n) => *n, _ => 0 };
-    rt_int(((va as u64) << (vn as u64)) as i64)
+    rt_int(((va as u64) << ((vn as u64) & 63)) as i64)
 }
 
 // ── Type conversions ──
@@ -1318,6 +1334,7 @@ pub extern "C" fn airl_bytes_new_empty() -> *mut RtValue {
 /// Allocate a zero-filled byte array of the given size.
 #[no_mangle]
 pub extern "C" fn airl_bytes_alloc(n: *mut RtValue) -> *mut RtValue {
+    const MAX_ALLOC: usize = 256 * 1024 * 1024;
     let size = match unsafe { &(*n).data } {
         RtData::Int(n) => {
             if *n < 0 { rt_error("bytes-alloc: size must be non-negative"); }
@@ -1325,6 +1342,9 @@ pub extern "C" fn airl_bytes_alloc(n: *mut RtValue) -> *mut RtValue {
         }
         _ => rt_error("bytes-alloc: argument must be an Int"),
     };
+    if size > MAX_ALLOC {
+        rt_error(&format!("bytes-alloc: size {} exceeds 256 MiB limit", size));
+    }
     rt_bytes(vec![0u8; size])
 }
 
@@ -1549,8 +1569,10 @@ pub extern "C" fn airl_gzip_compress(data: *mut RtValue) -> *mut RtValue {
     use flate2::write::GzEncoder;
     use flate2::Compression;
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    std::io::Write::write_all(&mut encoder, &bytes).unwrap();
-    let compressed = encoder.finish().unwrap();
+    std::io::Write::write_all(&mut encoder, &bytes)
+        .unwrap_or_else(|e| rt_error(&format!("gzip-compress: {e}")));
+    let compressed = encoder.finish()
+        .unwrap_or_else(|e| rt_error(&format!("gzip-compress: {e}")));
     rt_bytes(compressed)
 }
 
@@ -1558,23 +1580,38 @@ pub extern "C" fn airl_gzip_compress(data: *mut RtValue) -> *mut RtValue {
 pub extern "C" fn airl_gzip_decompress(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
     use flate2::read::GzDecoder;
+    const MAX_DECOMPRESS_SIZE: usize = 256 * 1024 * 1024;
     let mut decoder = GzDecoder::new(&*bytes);
     let mut decompressed = Vec::new();
-    std::io::Read::read_to_end(&mut decoder, &mut decompressed).unwrap();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = std::io::Read::read(&mut decoder, &mut chunk)
+            .unwrap_or_else(|e| rt_error(&format!("gzip-decompress: {e}")));
+        if n == 0 { break; }
+        decompressed.extend_from_slice(&chunk[..n]);
+        if decompressed.len() > MAX_DECOMPRESS_SIZE {
+            rt_error("gzip-decompress: output exceeds 256 MiB limit");
+        }
+    }
     rt_bytes(decompressed)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_snappy_compress(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
-    let compressed = snap::raw::Encoder::new().compress_vec(&bytes).unwrap();
+    let compressed = snap::raw::Encoder::new().compress_vec(&bytes)
+        .unwrap_or_else(|e| rt_error(&format!("snappy-compress: {e}")));
     rt_bytes(compressed)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_snappy_decompress(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
-    let decompressed = snap::raw::Decoder::new().decompress_vec(&bytes).unwrap();
+    let decompressed = snap::raw::Decoder::new().decompress_vec(&bytes)
+        .unwrap_or_else(|e| rt_error(&format!("snappy-decompress: {e}")));
+    if decompressed.len() > 256 * 1024 * 1024 {
+        rt_error("snappy-decompress: output exceeds 256 MiB limit");
+    }
     rt_bytes(decompressed)
 }
 
@@ -1588,21 +1625,30 @@ pub extern "C" fn airl_lz4_compress(data: *mut RtValue) -> *mut RtValue {
 #[no_mangle]
 pub extern "C" fn airl_lz4_decompress(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
-    let decompressed = lz4_flex::decompress_size_prepended(&bytes).unwrap();
+    let decompressed = lz4_flex::decompress_size_prepended(&bytes)
+        .unwrap_or_else(|e| rt_error(&format!("lz4-decompress: {e}")));
+    if decompressed.len() > 256 * 1024 * 1024 {
+        rt_error("lz4-decompress: output exceeds 256 MiB limit");
+    }
     rt_bytes(decompressed)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_zstd_compress(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
-    let compressed = zstd::encode_all(&*bytes, 3).unwrap();
+    let compressed = zstd::encode_all(&*bytes, 3)
+        .unwrap_or_else(|e| rt_error(&format!("zstd-compress: {e}")));
     rt_bytes(compressed)
 }
 
 #[no_mangle]
 pub extern "C" fn airl_zstd_decompress(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
-    let decompressed = zstd::decode_all(&*bytes).unwrap();
+    let decompressed = zstd::decode_all(&*bytes)
+        .unwrap_or_else(|e| rt_error(&format!("zstd-decompress: {e}")));
+    if decompressed.len() > 256 * 1024 * 1024 {
+        rt_error("zstd-decompress: output exceeds 256 MiB limit");
+    }
     rt_bytes(decompressed)
 }
 

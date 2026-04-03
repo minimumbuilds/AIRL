@@ -41,6 +41,7 @@ pub extern "C" fn airl_div(a: *mut RtValue, b: *mut RtValue) -> *mut RtValue {
     let vb = unsafe { &*b };
     match (&va.data, &vb.data) {
         (RtData::Int(_), RtData::Int(0)) => rt_error("division by zero"),
+        (RtData::Int(x), RtData::Int(y)) if *x == i64::MIN && *y == -1 => rt_error("division overflow"),
         (RtData::Int(x), RtData::Int(y)) => rt_int(x / y),
         (RtData::Float(x), RtData::Float(y)) => rt_float(x / y),
         _ => rt_error("airl_div: type mismatch"),
@@ -53,6 +54,7 @@ pub extern "C" fn airl_mod(a: *mut RtValue, b: *mut RtValue) -> *mut RtValue {
     let vb = unsafe { &*b };
     match (&va.data, &vb.data) {
         (RtData::Int(_), RtData::Int(0)) => rt_error("modulo by zero"),
+        (RtData::Int(x), RtData::Int(y)) if *x == i64::MIN && *y == -1 => rt_error("modulo overflow"),
         (RtData::Int(x), RtData::Int(y)) => rt_int(x % y),
         _ => rt_error("airl_mod: type mismatch"),
     }
