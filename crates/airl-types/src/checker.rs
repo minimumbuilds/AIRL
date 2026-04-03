@@ -65,9 +65,15 @@ impl TypeChecker {
             },
         );
 
-        // Collection builtins — registered as TypeVar for polymorphic dispatch
+        // Typed collection builtins — polymorphic via TypeVar parameters.
+        // These use TypeVar("T") / TypeVar("U") as stand-ins for parametric types.
+        // The checker treats TypeVar("_") as a wildcard, so calls to these builtins
+        // get proper arity checking while remaining polymorphic.
+        self.register_typed_builtins();
+
+        // Remaining collection builtins — registered as TypeVar for polymorphic dispatch
         for name in &[
-            "length", "at", "append", "head", "tail", "empty?", "cons",
+            "length", "at", "append",
             "print", "type-of", "shape", "valid",
             "tensor.zeros", "tensor.ones", "tensor.rand", "tensor.identity",
             "tensor.add", "tensor.mul", "tensor.matmul", "tensor.reshape",
@@ -84,8 +90,8 @@ impl TypeChecker {
             // Agent builtins
             "await", "parallel", "broadcast", "retry", "escalate", "any-agent",
             "send-async",
-            // Stdlib: collections (prelude.airl)
-            "map", "filter", "fold", "reverse", "concat", "zip", "flatten",
+            // Stdlib: collections (prelude.airl) — map, filter, fold have typed signatures above
+            "reverse", "concat", "zip", "flatten",
             "range", "take", "drop", "any", "all", "find", "sort", "merge",
             // Stdlib: math (math.airl)
             "abs", "min", "max", "clamp", "sign", "even?", "odd?",
@@ -105,8 +111,8 @@ impl TypeChecker {
             "append-file", "delete-file", "delete-dir", "rename-file",
             "read-dir", "create-dir", "file-size", "is-dir?",
             "at-or", "set-at", "list-contains?",
-            // System builtins
-            "str", "int-to-string", "float-to-string", "string-to-int", "string-to-float",
+            // System builtins — `str` has a typed signature above
+            "int-to-string", "float-to-string", "string-to-int", "string-to-float",
             "char-code", "char-from-code",
             // Float math
             "sqrt", "sin", "cos", "tan", "log", "exp",
@@ -130,6 +136,80 @@ impl TypeChecker {
         ] {
             self.env.bind(name.to_string(), Ty::TypeVar("builtin".to_string()));
         }
+    }
+
+    /// Register properly-typed signatures for the most-used builtins.
+    ///
+    /// Uses `TypeVar("_")` as the wildcard (compatible with anything in
+    /// `types_compatible`), so these signatures enforce arity and structural
+    /// shape while remaining polymorphic.
+    fn register_typed_builtins(&mut self) {
+        let t = Ty::TypeVar("_".to_string());
+        let list_t = Ty::Named {
+            name: "List".to_string(),
+            args: vec![TyArg::Type(t.clone())],
+        };
+
+        // head : List[T] -> T
+        self.env.bind("head".to_string(), Ty::Func {
+            params: vec![list_t.clone()],
+            ret: Box::new(t.clone()),
+        });
+
+        // tail : List[T] -> List[T]
+        self.env.bind("tail".to_string(), Ty::Func {
+            params: vec![list_t.clone()],
+            ret: Box::new(list_t.clone()),
+        });
+
+        // cons : T -> List[T] -> List[T]
+        self.env.bind("cons".to_string(), Ty::Func {
+            params: vec![t.clone(), list_t.clone()],
+            ret: Box::new(list_t.clone()),
+        });
+
+        // empty? : List[T] -> Bool
+        self.env.bind("empty?".to_string(), Ty::Func {
+            params: vec![list_t.clone()],
+            ret: Box::new(Ty::Prim(PrimTy::Bool)),
+        });
+
+        // map : (T -> U) -> List[T] -> List[U]
+        // Using wildcards for T and U since we don't have full HM inference.
+        let fn_t_u = Ty::Func {
+            params: vec![t.clone()],
+            ret: Box::new(t.clone()),
+        };
+        self.env.bind("map".to_string(), Ty::Func {
+            params: vec![fn_t_u, list_t.clone()],
+            ret: Box::new(list_t.clone()),
+        });
+
+        // filter : (T -> Bool) -> List[T] -> List[T]
+        let fn_t_bool = Ty::Func {
+            params: vec![t.clone()],
+            ret: Box::new(Ty::Prim(PrimTy::Bool)),
+        };
+        self.env.bind("filter".to_string(), Ty::Func {
+            params: vec![fn_t_bool, list_t.clone()],
+            ret: Box::new(list_t.clone()),
+        });
+
+        // fold : (U -> T -> U) -> U -> List[T] -> U
+        let fn_u_t_u = Ty::Func {
+            params: vec![t.clone(), t.clone()],
+            ret: Box::new(t.clone()),
+        };
+        self.env.bind("fold".to_string(), Ty::Func {
+            params: vec![fn_u_t_u, t.clone(), list_t.clone()],
+            ret: Box::new(t.clone()),
+        });
+
+        // str : T -> String  (polymorphic — accepts anything)
+        self.env.bind("str".to_string(), Ty::Func {
+            params: vec![t.clone()],
+            ret: Box::new(Ty::Prim(PrimTy::Str)),
+        });
     }
 
     // ── Type resolution ──────────────────────────────────
@@ -487,7 +567,10 @@ impl TypeChecker {
             ast::ExprKind::ListLit(items) => {
                 // All items must have the same type
                 if items.is_empty() {
-                    return Ok(Ty::Unit);
+                    return Ok(Ty::Named {
+                        name: "List".to_string(),
+                        args: vec![TyArg::Type(Ty::TypeVar("_".to_string()))],
+                    });
                 }
                 let first_ty = self.check_expr(&items[0])?;
                 for item in &items[1..] {
@@ -503,7 +586,10 @@ impl TypeChecker {
                         return Err(());
                     }
                 }
-                Ok(first_ty)
+                Ok(Ty::Named {
+                    name: "List".to_string(),
+                    args: vec![TyArg::Type(first_ty)],
+                })
             }
 
             ast::ExprKind::Forall(_, _, _) | ast::ExprKind::Exists(_, _, _) => {
@@ -527,13 +613,28 @@ impl TypeChecker {
                 // for now — just accept them.
                 Ok(())
             }
-            ast::PatternKind::Variant(_name, sub_pats) => {
-                // For variant patterns, bind sub-patterns.
-                // In a full checker we'd look up the variant fields,
-                // but for now we bind each sub-pattern to the scrutinee type.
-                for sub in sub_pats {
-                    // Bind sub-pattern variables generically
-                    self.check_pattern_binding(sub)?;
+            ast::PatternKind::Variant(name, sub_pats) => {
+                // Look up variant field types from the scrutinee's sum definition.
+                let field_types = self.lookup_variant_fields(scrut_ty, name);
+                if let Some(fields) = field_types {
+                    if sub_pats.len() != fields.len() {
+                        self.diags.add(Diagnostic::error(
+                            format!(
+                                "variant `{}` has {} fields, but pattern has {} sub-patterns",
+                                name, fields.len(), sub_pats.len()
+                            ),
+                            pattern.span,
+                        ));
+                        return Err(());
+                    }
+                    for (sub, field_ty) in sub_pats.iter().zip(fields.iter()) {
+                        self.check_pattern(sub, field_ty)?;
+                    }
+                } else {
+                    // Variant not found in type — fall back to untyped binding
+                    for sub in sub_pats {
+                        self.check_pattern_binding(sub)?;
+                    }
                 }
                 Ok(())
             }
@@ -613,6 +714,20 @@ impl TypeChecker {
             param_tys.push(ty);
         }
         let declared_ret = self.resolve_type(&f.return_type)?;
+
+        // Pre-bind the function name so recursive calls can resolve.
+        // Use the declared return type if available, otherwise a fresh type variable.
+        let preliminary_ret = if declared_ret == Ty::TypeVar("_".to_string()) {
+            Ty::TypeVar(format!("__ret_{}", f.name))
+        } else {
+            declared_ret.clone()
+        };
+        let preliminary_fn_ty = Ty::Func {
+            params: param_tys.clone(),
+            ret: Box::new(preliminary_ret),
+        };
+        self.env.bind(f.name.clone(), preliminary_fn_ty);
+
         let body_ty = self.check_expr(&f.body)?;
         // Check body_ty is assignable to declared_ret
         self.check_assignable(&body_ty, &declared_ret, f.body.span)?;
@@ -630,30 +745,45 @@ impl TypeChecker {
         let param_names: Vec<String> = td.type_params.iter().map(|p| p.name.clone()).collect();
         let ty = match &td.body {
             ast::TypeDefBody::Sum(variants) => {
-                let ty_variants: Vec<TyVariant> = variants
-                    .iter()
-                    .map(|v| {
-                        let fields = v
-                            .fields
-                            .iter()
-                            .map(|f| self.resolve_type(f).unwrap_or(Ty::TypeVar("?".into())))
-                            .collect();
-                        TyVariant {
-                            name: v.name.clone(),
-                            fields,
+                let mut ty_variants = Vec::new();
+                for v in variants {
+                    let mut fields = Vec::new();
+                    for f in &v.fields {
+                        match self.resolve_type(f) {
+                            Ok(ty) => fields.push(ty),
+                            Err(()) => {
+                                self.diags.add(Diagnostic::error(
+                                    format!("unresolved type in variant `{}`", v.name),
+                                    Span::dummy(),
+                                ));
+                                return Err(());
+                            }
                         }
-                    })
-                    .collect();
+                    }
+                    ty_variants.push(TyVariant {
+                        name: v.name.clone(),
+                        fields,
+                    });
+                }
                 Ty::Sum(ty_variants)
             }
             ast::TypeDefBody::Product(fields) => {
-                let ty_fields: Vec<TyField> = fields
-                    .iter()
-                    .map(|f| TyField {
-                        name: f.name.clone(),
-                        ty: self.resolve_type(&f.ty).unwrap_or(Ty::TypeVar("?".into())),
-                    })
-                    .collect();
+                let mut ty_fields = Vec::new();
+                for f in fields {
+                    match self.resolve_type(&f.ty) {
+                        Ok(ty) => ty_fields.push(TyField {
+                            name: f.name.clone(),
+                            ty,
+                        }),
+                        Err(()) => {
+                            self.diags.add(Diagnostic::error(
+                                format!("unresolved type in field `{}`", f.name),
+                                Span::dummy(),
+                            ));
+                            return Err(());
+                        }
+                    }
+                }
                 Ty::Product(ty_fields)
             }
             ast::TypeDefBody::Alias(ast_ty) => self.resolve_type(ast_ty)?,
@@ -667,6 +797,18 @@ impl TypeChecker {
     /// Check that `actual` is assignable to `expected`.
     fn check_assignable(&mut self, actual: &Ty, expected: &Ty, span: Span) -> Result<(), ()> {
         if self.types_compatible(actual, expected) {
+            // Emit a warning for narrowing numeric coercions
+            if let (Ty::Prim(a), Ty::Prim(b)) = (actual, expected) {
+                if a != b && !Self::can_widen(*a, *b) {
+                    self.diags.add(Diagnostic::warning(
+                        format!(
+                            "implicit narrowing coercion from {} to {} — consider an explicit cast",
+                            a, b
+                        ),
+                        span,
+                    ));
+                }
+            }
             Ok(())
         } else {
             self.diags.add(Diagnostic::error(
@@ -685,8 +827,11 @@ impl TypeChecker {
         {
             return true;
         }
-        // Never is compatible with anything (bottom type)
-        if matches!(actual, Ty::Never) || matches!(expected, Ty::Never) {
+        // Never is compatible with any expected type (bottom type) — but not the reverse.
+        // `actual == Never` means "this expression never returns", which is safe to use
+        // wherever any type is expected. The reverse (`expected == Never`) is unsound:
+        // it would let any value satisfy a "never returns" contract.
+        if matches!(actual, Ty::Never) {
             return true;
         }
         match (actual, expected) {
@@ -694,8 +839,9 @@ impl TypeChecker {
                 if a == b {
                     return true;
                 }
-                // Allow numeric coercion: any integer literal type is compatible
-                // with any other integer type, same for floats
+                // Allow widening coercions freely. Narrowing coercions are also
+                // accepted here (for compatibility), but check_assignable emits
+                // a warning for them.
                 (a.is_integer() && b.is_integer()) || (a.is_float() && b.is_float())
             }
             (Ty::Unit, Ty::Unit) => true,
@@ -737,6 +883,53 @@ impl TypeChecker {
             }
             (Ty::TypeVar(a), Ty::TypeVar(b)) => a == b,
             _ => actual == expected,
+        }
+    }
+
+    // ── Pattern helpers ───────────────────────────────────
+
+    /// Look up field types for a variant name from the scrutinee type.
+    /// Returns `Some(field_types)` if the scrutinee is a Sum type containing the variant.
+    fn lookup_variant_fields(&self, scrut_ty: &Ty, variant_name: &str) -> Option<Vec<Ty>> {
+        match scrut_ty {
+            Ty::Sum(variants) => {
+                for v in variants {
+                    if v.name == variant_name {
+                        return Some(v.fields.clone());
+                    }
+                }
+                None
+            }
+            Ty::Named { name, .. } => {
+                // Look up the registered type definition to get the sum variants
+                if let Some(reg) = self.env.lookup_type(name) {
+                    self.lookup_variant_fields(&reg.ty.clone(), variant_name)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    // ── Numeric widening ─────────────────────────────────
+
+    /// Returns true if `from` can be implicitly widened to `to`.
+    /// Only allows promotions that never lose precision or range.
+    fn can_widen(from: PrimTy, to: PrimTy) -> bool {
+        use PrimTy::*;
+        match (from, to) {
+            // Signed integer widening: i8 → i16 → i32 → i64
+            (I8, I16) | (I8, I32) | (I8, I64) => true,
+            (I16, I32) | (I16, I64) => true,
+            (I32, I64) => true,
+            // Unsigned integer widening: u8 → u16 → u32 → u64
+            (U8, U16) | (U8, U32) | (U8, U64) => true,
+            (U16, U32) | (U16, U64) => true,
+            (U32, U64) => true,
+            // Float widening: f32 → f64
+            (F32, F64) => true,
+            _ => false,
         }
     }
 
