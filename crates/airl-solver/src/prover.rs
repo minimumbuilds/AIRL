@@ -318,6 +318,62 @@ mod tests {
     }
 
     #[test]
+    fn prove_parameter_relationship() {
+        // :ensures [(>= (* a a) 0)] — no `result` reference, exercises real Z3 SAT/UNSAT.
+        // a² >= 0 is always true for integers, so Z3 should prove it.
+        let def = make_fn("square_nonneg",
+            vec![("a", "i32")], "i32",
+            vec![],
+            vec![call(">=", vec![call("*", vec![sym("a"), sym("a")]), int(0)])],
+        );
+        let prover = Z3Prover::new();
+        let verification = prover.verify_function(&def);
+        assert_eq!(verification.ensures_results.len(), 1);
+        assert!(
+            matches!(&verification.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for a²≥0, got: {:?}",
+            verification,
+        );
+    }
+
+    #[test]
+    fn disprove_false_parameter_relationship() {
+        // :ensures [(> a 0)] — no preconditions, so a could be negative. Z3 should disprove.
+        let def = make_fn("always_positive",
+            vec![("a", "i32")], "i32",
+            vec![],
+            vec![call(">", vec![sym("a"), int(0)])],
+        );
+        let prover = Z3Prover::new();
+        let verification = prover.verify_function(&def);
+        assert_eq!(verification.ensures_results.len(), 1);
+        assert!(
+            matches!(&verification.ensures_results[0].1, VerifyResult::Disproven { .. }),
+            "expected Disproven for unconstrained a>0, got: {:?}",
+            verification,
+        );
+    }
+
+    #[test]
+    fn prove_requires_implies_ensures() {
+        // :requires [(>= a 0)]
+        // :ensures [(>= a 0)] — tautology given the precondition, no `result` reference.
+        let def = make_fn("passthrough",
+            vec![("a", "i32")], "i32",
+            vec![call(">=", vec![sym("a"), int(0)])],
+            vec![call(">=", vec![sym("a"), int(0)])],
+        );
+        let prover = Z3Prover::new();
+        let verification = prover.verify_function(&def);
+        assert_eq!(verification.ensures_results.len(), 1);
+        assert!(
+            matches!(&verification.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for requires-implies-ensures tautology, got: {:?}",
+            verification,
+        );
+    }
+
+    #[test]
     fn unknown_for_string_params() {
         let def = make_fn("greet",
             vec![("name", "String")], "String",

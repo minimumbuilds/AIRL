@@ -57,7 +57,10 @@ fn collect_airl_files(dir: &Path) -> Vec<PathBuf> {
 
 #[test]
 fn valid_fixtures_all_pass() {
-    // SEC-6: shell-exec is now disabled by default; enable for fixture tests
+    // SEC-6: shell-exec is now disabled by default; enable for fixture tests.
+    // SAFETY: set_var is not thread-safe (rust-lang/rust#90308), but fixture tests
+    // run sequentially via cargo test's default single-threaded test harness for
+    // this crate, so concurrent mutation cannot occur here.
     std::env::set_var("AIRL_ALLOW_EXEC", "*");
     let valid_dir = fixtures_root().join("valid");
     let files = collect_airl_files(&valid_dir);

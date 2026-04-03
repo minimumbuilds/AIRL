@@ -45,9 +45,9 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 WORKDIR /airl
 COPY . .
 
-# Build with JIT + MLIR support (Z3/solver takes ~5-15 min on first build)
-RUN cargo build --release --features jit,mlir -p airl-driver
+# Build with MLIR support (Z3/solver takes ~5-15 min on first build)
+RUN cargo build --release --features mlir -p airl-driver
 
 # Default: run the AIRL REPL
-ENTRYPOINT ["cargo", "run", "--release", "--features", "jit,mlir", "--"]
+ENTRYPOINT ["cargo", "run", "--release", "--features", "mlir", "--"]
 CMD ["repl"]

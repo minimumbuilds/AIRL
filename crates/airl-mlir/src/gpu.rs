@@ -120,6 +120,8 @@ impl GpuContext {
     }
 
     fn nvrtc_opts() -> CompileOptions {
+        // TODO: query the GPU's compute capability at runtime via cuDeviceGetAttribute
+        // instead of hardcoding. compute_86 targets Ampere (RTX 3xxx / A-series).
         CompileOptions {
             arch: Some("compute_86"),
             ..Default::default()
