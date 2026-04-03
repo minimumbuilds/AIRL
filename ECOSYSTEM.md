@@ -29,7 +29,7 @@ The compiler and runtime. 10-crate Rust workspace + self-hosted bootstrap compil
 
 **Stdlib:** 13 modules -- collections, math, result, string, map, set, json, base64, sha256, hmac, pbkdf2, io, path. 73 functions migrated from Rust builtins to pure AIRL in v0.11.0.
 
-**Stats:** 31K Rust LOC, 27K AIRL LOC, 443 commits, 575 unit tests, 58 AOT tests.
+**Stats:** 33K Rust LOC, 38K AIRL LOC, 520 commits, 157 unit tests, 74 AOT tests.
 
 **Execution modes:**
 - `airl run` -- AOT compile to temp binary, execute, clean up
@@ -49,8 +49,8 @@ Full Kafka client implementing the binary TCP protocol from scratch. 13 Kafka AP
 | | |
 |---|---|
 | **Location** | `../AIRL_castle` |
-| **Size** | 4,186 LOC (33 modules), 23 tests, 20 examples |
-| **Commits** | 50 |
+| **Size** | 8,811 LOC (33 modules), 23 tests, 20 examples |
+| **Commits** | 78 |
 | **Status** | Functional. Production-quality protocol implementation. |
 | **Depends on** | 41 runtime builtins (bytes, crypto, compression, bitwise) |
 
@@ -61,8 +61,8 @@ Full-featured Kafka command-line client implementing the binary wire protocol ov
 | | |
 |---|---|
 | **Location** | `../airl_kafka_cli` |
-| **Size** | 2,563 LOC (10 modules), 1,258 LOC tests (335+ assertions) |
-| **Commits** | 6 |
+| **Size** | 4,219 LOC (10 modules), 1,258 LOC tests (335+ assertions) |
+| **Commits** | 11 |
 | **Status** | Functional. Complete CLI with produce, consume, admin, and group operations. |
 
 ### AIReqL -- HTTP Client
@@ -72,8 +72,8 @@ HTTP client library built from raw TCP. Requests-like API with sessions, cookies
 | | |
 |---|---|
 | **Location** | `../AIReqL` |
-| **Size** | 678 LOC (4 modules), 930 LOC tests |
-| **Commits** | 17 |
+| **Size** | 1,618 LOC (4 modules), 930 LOC tests |
+| **Commits** | 22 |
 | **Status** | Functional. Stage 2 (sessions/auth) complete. Stage 3 (redirects, retries) planned. |
 
 ### Airline -- Async Framework
@@ -83,8 +83,8 @@ Seastar-inspired share-nothing async framework. One reactor per CPU core, future
 | | |
 |---|---|
 | **Location** | `../airline` |
-| **Size** | 733 LOC (7 modules), 484 LOC tests |
-| **Commits** | 20 |
+| **Size** | 1,217 LOC (7 modules), 484 LOC tests |
+| **Commits** | 25 |
 | **Status** | Functional. Core async + work stealing complete. Async TCP working. |
 
 ### CairLI -- CLI Argument Parser
@@ -94,8 +94,8 @@ CLI argument parsing framework with builder-pattern API. Flags (bool, string, in
 | | |
 |---|---|
 | **Location** | `../CairLI` |
-| **Size** | 707 LOC, 1,465 LOC tests |
-| **Commits** | 3 |
+| **Size** | 2,197 LOC, 1,465 LOC tests |
+| **Commits** | 8 |
 | **Status** | Stable (v0.2.0). Feature-complete for current needs. |
 
 ### airtools (airlint) -- Static Analysis Linter
@@ -106,7 +106,7 @@ Self-hosted linter for AIRL code. Imports the bootstrap compiler's lexer/parser 
 |---|---|
 | **Location** | `../airtools` |
 | **Size** | 2,005 LOC (10 modules + LSP server) |
-| **Commits** | 1 |
+| **Commits** | 5 |
 | **Status** | Functional. 14 rules implemented, LSP server scaffold complete. |
 
 ### AIRLchart -- Code Visualization
@@ -116,8 +116,8 @@ Generates Graphviz DOT call graphs and type dependency diagrams from AIRL source
 | | |
 |---|---|
 | **Location** | `../AIRLchart` |
-| **Size** | 770 LOC (38 functions) |
-| **Commits** | N/A (not yet under git) |
+| **Size** | 1,313 LOC (38 functions) |
+| **Commits** | 10 |
 | **Status** | Functional. Produces DOT/SVG output for AIRL codebases. |
 | **Output** | Graphviz DOT (convertible to SVG/PNG/PDF) |
 
@@ -128,8 +128,8 @@ HTTP/1.1 server library with routing, middleware pipeline, and TLS support. Buil
 | | |
 |---|---|
 | **Location** | `../airlhttp` |
-| **Size** | 1,330 LOC (9 modules) |
-| **Commits** | 2 |
+| **Size** | 2,230 LOC (9 modules) |
+| **Commits** | 3 |
 | **Status** | Functional. Phase 1 complete (server, router, middleware, TLS). |
 
 ### AirTraffic -- MCP Server Framework
@@ -139,8 +139,8 @@ Model Context Protocol (MCP) server framework for AIRL. Enables building MCP-com
 | | |
 |---|---|
 | **Location** | `../AirTraffic` |
-| **Size** | 936 LOC (4 modules + workflow server) |
-| **Commits** | 3 |
+| **Size** | 1,358 LOC (4 modules + workflow server) |
+| **Commits** | 5 |
 | **Status** | Functional. Tool and prompt support merged to main. |
 
 ### mynameisAIRL -- MCP Prompt Server
@@ -150,8 +150,8 @@ MCP prompt server that serves AIRL-LLM-Guide.md to LLMs as a `teach_airl` prompt
 | | |
 |---|---|
 | **Location** | `servers/mynameisairl` (inside AIRL repo) |
-| **Size** | 57 LOC |
-| **Commits** | 1 |
+| **Size** | 79 LOC |
+| **Commits** | 2 |
 | **Status** | Functional. Native and Docker builds. |
 
 ---
@@ -165,8 +165,8 @@ Package manager and ecosystem tooling for AIRL. Subcommands: build, test, docs (
 | | |
 |---|---|
 | **Location** | `../airlDelivery` |
-| **Size** | 2,724 LOC |
-| **Commits** | 8 |
+| **Size** | 4,196 LOC |
+| **Commits** | 9 |
 | **Status** | Functional. Build, test, and docs subcommands implemented. |
 
 ### airtest -- Test Runner
@@ -176,8 +176,8 @@ Test discovery, compilation, execution, and JSON reporting for AIRL projects. Di
 | | |
 |---|---|
 | **Location** | `../airtest` |
-| **Size** | ~200 LOC |
-| **Commits** | 2 |
+| **Size** | 891 LOC |
+| **Commits** | 3 |
 | **Status** | Functional. Discovery, compilation, execution, JSON output. |
 
 ---
@@ -192,7 +192,7 @@ Measures how well language models generate AIRL code. 100 tasks across 4 difficu
 |---|---|
 | **Location** | `../AIRL_bench` |
 | **Size** | 847 LOC harness, 100 task specifications |
-| **Commits** | 21 |
+| **Commits** | 27 |
 | **Key results** | qwen3-coder: 100/100 (100%). AIRL is 2.7x more token-efficient than Python. |
 
 **Progression:** 44% (no guide) -> 68% (+ guide) -> 80% (+ few-shot) -> 100% (v0.6.0+ stdlib improvements).
@@ -221,8 +221,8 @@ Benchmarks AIRL_castle's Kafka producer against Confluent's librdkafka (Python w
 |---|---|
 | **Location** | `../AIRLOS` |
 | **Language** | C (freestanding, gnu99), x86 assembly |
-| **Size** | ~6,100 LOC kernel + drivers + user-space (excluding vendored lwIP) |
-| **Commits** | 55+ |
+| **Size** | ~26,700 LOC kernel + drivers + user-space (excluding vendored lwIP) |
+| **Commits** | 150 |
 | **Status** | Functional prototype. Security hardening complete (Spec 00 fixed). 19 design specs. CI via GitHub Actions. |
 
 ### airshell -- Interactive Shell
@@ -233,7 +233,7 @@ Interactive shell targeting AIRLOS. REPL with command parsing, built-in commands
 |---|---|
 | **Location** | `../airshell` |
 | **Size** | 1,926 LOC |
-| **Commits** | 4 |
+| **Commits** | 5 |
 | **Status** | Functional. Linux and AIRLOS targets. |
 
 ---
@@ -242,24 +242,24 @@ Interactive shell targeting AIRLOS. REPL with command parsing, built-in commands
 
 | Project | Language | LOC | Commits | Status |
 |---------|----------|-----|---------|--------|
-| AIRL | Rust + AIRL | 58,759 | 443 | v0.11.0, self-hosted |
-| AIRL_castle | AIRL | 7,100 | 50 | Functional |
-| AIRLOS | C + asm | 6,100 | 55+ | Prototype |
-| AirLift | AIRL | 2,563 | 6 | Functional |
-| airlDelivery | AIRL | 2,724 | 8 | Functional |
-| airtools | AIRL | 2,005 | 1 | Functional |
-| airshell | AIRL | 1,926 | 4 | Functional |
-| airlhttp | AIRL | 1,330 | 2 | Functional |
-| AirTraffic | AIRL | 936 | 3 | Functional |
-| AIRL_bench | AIRL | 847 | 21 | Functional |
-| AIRLchart | AIRL | 770 | — | Functional |
-| kafka_sdk_bench | AIRL + Python | 750 | — | Functional |
-| airline | AIRL | 733 | 20 | Functional |
-| CairLI | AIRL | 707 | 3 | Stable (v0.2.0) |
-| AIReqL | AIRL | 678 | 17 | Functional |
-| airtest | AIRL | 200 | 2 | Functional |
-| mynameisAIRL | AIRL | 57 | 1 | Functional |
-| **Total** | | **~88,185** | **636+** | |
+| AIRL | Rust + AIRL | 71,086 | 520 | v0.11.0, self-hosted |
+| AIRLOS | C + asm | 26,700 | 150 | Prototype |
+| AIRL_castle | AIRL | 8,811 | 78 | Functional |
+| airlDelivery | AIRL | 4,196 | 9 | Functional |
+| AirLift | AIRL | 4,219 | 11 | Functional |
+| airlhttp | AIRL | 2,230 | 3 | Functional |
+| CairLI | AIRL | 2,197 | 8 | Stable (v0.2.0) |
+| airtools | AIRL | 2,005 | 5 | Functional |
+| airshell | AIRL | 1,926 | 5 | Functional |
+| AIReqL | AIRL | 1,618 | 22 | Functional |
+| AirTraffic | AIRL | 1,358 | 5 | Functional |
+| AIRLchart | AIRL | 1,313 | 10 | Functional |
+| kafka_sdk_bench | AIRL + Python | 1,281 | 3 | Functional |
+| airline | AIRL | 1,217 | 25 | Functional |
+| airtest | AIRL | 891 | 3 | Functional |
+| AIRL_bench | AIRL | 847 | 27 | Functional |
+| mynameisAIRL | AIRL | 79 | 2 | Functional |
+| **Total** | | **~131,974** | **886** | |
 
 ## Building
 
