@@ -82,23 +82,7 @@ fn check_exec(command: &str) -> Result<(), *mut RtValue> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SEC-7: Env var allowlist via AIRL_ALLOW_ENV env var
-// ─────────────────────────────────────────────────────────────────────────────
 
-fn env_allowlist() -> &'static Option<Vec<String>> {
-    static ALLOWLIST: OnceLock<Option<Vec<String>>> = OnceLock::new();
-    ALLOWLIST.get_or_init(|| {
-        match std::env::var("AIRL_ALLOW_ENV") {
-            Ok(val) if !val.is_empty() => {
-                Some(val.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect())
-            }
-            _ => None,
-        }
-    })
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SEC-9: TCP recv size limit (256 MB)
