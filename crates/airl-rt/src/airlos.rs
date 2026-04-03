@@ -74,12 +74,15 @@ use core::arch::asm;
 // ── Syscall numbers ──
 
 pub const SYS_EXIT: u32 = 0;
+pub const SYS_YIELD: u32 = 2;
 pub const SYS_SEND: u32 = 3;
 pub const SYS_RECV: u32 = 4;
 pub const SYS_LOOKUP_SERVICE: u32 = 21;
 pub const SYS_GET_TICKS: u32 = 30;
 pub const SYS_READ_FILE: u32 = 32;
+pub const SYS_WAIT: u32 = 35;
 pub const SYS_LIST_FILES: u32 = 36;
+pub const SYS_EXEC_BUF: u32 = 41;
 
 // ── Raw syscall wrappers ──
 
@@ -658,4 +661,29 @@ pub fn keyboard_read_line() -> Option<String> {
         }
     }
     Some(line)
+}
+
+/// Execute an ELF binary from the VFS and wait for it to exit.
+/// Returns the child's exit code, or -1 on failure.
+pub fn exec_and_wait(path: &str) -> i32 {
+    // 1. Read the ELF file from VFS (falls back to ramdisk)
+    let data = match read_file(path) {
+        Ok(d) => d,
+        Err(_) => return -1,
+    };
+    if data.is_empty() {
+        return -1;
+    }
+
+    // 2. Call SYS_EXEC_BUF to create child task
+    let child_id = unsafe {
+        syscall2(SYS_EXEC_BUF, data.as_ptr() as u32, data.len() as u32)
+    };
+    if child_id <= 0 {
+        return -1;
+    }
+
+    // 3. Wait for child to exit via SYS_WAIT (blocks until child exits)
+    let exit_code = unsafe { syscall1(SYS_WAIT, child_id as u32) };
+    exit_code
 }
