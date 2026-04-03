@@ -79,6 +79,7 @@ dependencies = [
  "hex",
  "hmac",
  "libc",
+ "libm",
  "lz4_flex",
  "mimalloc",
  "pbkdf2",

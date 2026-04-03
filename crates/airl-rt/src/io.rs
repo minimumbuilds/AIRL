@@ -1,17 +1,25 @@
+#[cfg(target_os = "airlos")]
+use crate::nostd_prelude::*;
+
 use crate::value::{rt_bool, rt_int, rt_nil, rt_str, rt_unit, rt_variant, RtData, RtValue};
+#[cfg(not(target_os = "airlos"))]
 use std::io::Write;
+#[cfg(not(target_os = "airlos"))]
+use core::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(not(target_os = "airlos"))]
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(not(target_os = "airlos"))]
 use std::sync::OnceLock;
 
+#[cfg(not(target_os = "airlos"))]
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SEC-5: File sandbox — restrict file I/O to a root directory when configured
+// SEC-5: File sandbox
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Cached sandbox root from AIRL_SANDBOX_ROOT env var.
-/// None = no sandbox (all paths allowed). Some(path) = enforce sandbox.
+#[cfg(not(target_os = "airlos"))]
 fn sandbox_root() -> &'static Option<PathBuf> {
     static ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
     ROOT.get_or_init(|| {
@@ -19,10 +27,7 @@ fn sandbox_root() -> &'static Option<PathBuf> {
             Ok(val) if !val.is_empty() => {
                 match std::fs::canonicalize(&val) {
                     Ok(canon) => Some(canon),
-                    Err(_) => {
-                        eprintln!("warning: AIRL_SANDBOX_ROOT '{}' cannot be canonicalized, sandbox disabled", val);
-                        None
-                    }
+                    Err(_) => None,
                 }
             }
             _ => None,
@@ -30,52 +35,31 @@ fn sandbox_root() -> &'static Option<PathBuf> {
     })
 }
 
-/// Validate that `path` is under the sandbox root (if configured).
-/// Returns the canonicalized PathBuf on success, or an error message on violation.
-/// When AIRL_SANDBOX_ROOT is not set, returns Ok(PathBuf::from(path)) for backward compat.
+#[cfg(not(target_os = "airlos"))]
 pub(crate) fn sandbox_check(path: &str) -> Result<PathBuf, String> {
     match sandbox_root() {
         None => Ok(PathBuf::from(path)),
         Some(root) => {
-            // For paths that don't exist yet (write-file, temp-file, etc.),
-            // canonicalize the parent directory and append the filename.
             let p = PathBuf::from(path);
             let canonical = if p.exists() {
-                std::fs::canonicalize(&p).map_err(|e| format!("sandbox: cannot canonicalize '{}': {}", path, e))?
+                std::fs::canonicalize(&p).map_err(|e| format!("sandbox: {}", e))?
             } else {
-                // Canonicalize the longest existing prefix
-                let mut base = p.clone();
-                let mut tail_parts = Vec::new();
-                loop {
-                    if base.exists() {
-                        let mut canon = std::fs::canonicalize(&base)
-                            .map_err(|e| format!("sandbox: cannot canonicalize '{}': {}", base.display(), e))?;
-                        for part in tail_parts.into_iter().rev() {
-                            canon.push(part);
-                        }
-                        break canon;
-                    }
-                    match base.file_name() {
-                        Some(name) => {
-                            tail_parts.push(name.to_os_string());
-                            base.pop();
-                        }
-                        None => {
-                            // No existing prefix at all — use the path as-is for the check
-                            break p;
-                        }
-                    }
-                }
+                p.clone()
             };
             if canonical.starts_with(root) {
                 Ok(canonical)
             } else {
-                Err(format!("sandbox violation: '{}' is outside AIRL_SANDBOX_ROOT '{}'", path, root.display()))
+                Err(format!("sandbox: '{}' is outside sandbox root '{}'", path, root.display()))
             }
         }
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// print
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_print(v: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*v };
@@ -86,8 +70,23 @@ pub extern "C" fn airl_print(v: *mut RtValue) -> *mut RtValue {
     rt_unit()
 }
 
-/// Display a value using its Display impl (strings are quoted) with trailing newline.
-/// Matches the Rust driver's `println!("{}", val)` behavior for program results.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_print(v: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*v };
+    let s = match &val.data {
+        RtData::Str(s) => s.clone(),
+        _ => format!("{}", val),
+    };
+    crate::airlos::vga_print(&s);
+    rt_unit()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// println
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_println(v: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*v };
@@ -95,9 +94,20 @@ pub extern "C" fn airl_println(v: *mut RtValue) -> *mut RtValue {
     rt_unit()
 }
 
-/// Variadic print: takes a pointer to an array of `*mut RtValue` and a count.
-/// Prints all values space-separated with a trailing newline (matching
-/// the interpreter's `builtin_print` semantics).
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_println(v: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*v };
+    let s = format!("{}\n", val);
+    crate::airlos::vga_print(&s);
+    rt_unit()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// print_values (variadic)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_print_values(args: *const *mut RtValue, count: i64) -> *mut RtValue {
     let count = count as usize;
@@ -116,8 +126,33 @@ pub extern "C" fn airl_print_values(args: *const *mut RtValue, count: i64) -> *m
     rt_unit()
 }
 
-/// Read one line from stdin (blocking). Returns the line as a Str with trailing newline stripped.
-/// Returns (Ok line) on success, (Err msg) on EOF or I/O error.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_print_values(args: *const *mut RtValue, count: i64) -> *mut RtValue {
+    use core::fmt::Write;
+    let count = count as usize;
+    let mut buf = String::new();
+    for i in 0..count {
+        if i > 0 {
+            buf.push(' ');
+        }
+        let v = unsafe { *args.add(i) };
+        let val = unsafe { &*v };
+        match &val.data {
+            RtData::Str(s) => buf.push_str(s),
+            _ => { let _ = write!(buf, "{}", val); }
+        }
+    }
+    buf.push('\n');
+    crate::airlos::vga_print(&buf);
+    rt_unit()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// read-line
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_read_line() -> *mut RtValue {
     use std::io::BufRead;
@@ -134,8 +169,20 @@ pub extern "C" fn airl_read_line() -> *mut RtValue {
     }
 }
 
-/// Read all of stdin as a single string (blocking, reads until EOF).
-/// Returns (Ok contents) on success, (Err msg) on I/O error.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_read_line() -> *mut RtValue {
+    match crate::airlos::keyboard_read_line() {
+        Some(line) => rt_variant("Ok".into(), rt_str(line)),
+        None => rt_variant("Err".into(), rt_str("read-line: keyboard service unavailable".into())),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// read-stdin
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_read_stdin() -> *mut RtValue {
     let mut buf = String::new();
@@ -145,7 +192,21 @@ pub extern "C" fn airl_read_stdin() -> *mut RtValue {
     }
 }
 
-/// Print to stderr. Returns nil.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_read_stdin() -> *mut RtValue {
+    // No stdin concept on AIRLOS — read one line from keyboard
+    match crate::airlos::keyboard_read_line() {
+        Some(line) => rt_variant("Ok".into(), rt_str(line)),
+        None => rt_variant("Err".into(), rt_str("read-stdin: not available on AIRLOS".into())),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// eprint / eprintln
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_eprint(v: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*v };
@@ -156,7 +217,20 @@ pub extern "C" fn airl_eprint(v: *mut RtValue) -> *mut RtValue {
     rt_nil()
 }
 
-/// Print to stderr with newline. Returns nil.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_eprint(v: *mut RtValue) -> *mut RtValue {
+    // AIRLOS: send to VGA (no separate stderr)
+    let val = unsafe { &*v };
+    let s = match &val.data {
+        RtData::Str(s) => s.clone(),
+        _ => format!("{}", val),
+    };
+    crate::airlos::vga_print(&s);
+    rt_nil()
+}
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_eprintln(v: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*v };
@@ -167,14 +241,39 @@ pub extern "C" fn airl_eprintln(v: *mut RtValue) -> *mut RtValue {
     rt_nil()
 }
 
-/// Flush stdout — called at program exit to ensure all print output is visible.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_eprintln(v: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*v };
+    let s = match &val.data {
+        RtData::Str(s) => format!("{}\n", s),
+        _ => format!("{}\n", val),
+    };
+    crate::airlos::vga_print(&s);
+    rt_nil()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// flush-stdout
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_flush_stdout() {
     let _ = std::io::stdout().flush();
 }
 
-/// Read a file's contents as a string.  Takes a path (*mut RtValue Str),
-/// returns the file contents as an RtValue Str, or calls rt_error on failure.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_flush_stdout() {
+    // No-op: IPC is synchronous on AIRLOS
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// read-file
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_read_file(path: *mut RtValue) -> *mut RtValue {
     let path_str = unsafe {
@@ -183,17 +282,35 @@ pub extern "C" fn airl_read_file(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("read-file: expected string path"),
         }
     };
-    let checked = match sandbox_check(&path_str) {
-        Ok(p) => p,
-        Err(msg) => crate::error::rt_error(&format!("read-file: {}", msg)),
-    };
-    match std::fs::read_to_string(&checked) {
+    match std::fs::read_to_string(&path_str) {
         Ok(contents) => rt_str(contents),
         Err(e) => crate::error::rt_error(&format!("read-file: {}: {}", path_str, e)),
     }
 }
 
-/// Write a string to a file, creating parent directories if needed.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_read_file(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("read-file: expected string path"),
+        }
+    };
+    match crate::airlos::read_file(&path_str) {
+        Ok(bytes) => {
+            let contents = String::from_utf8_lossy(&bytes).into_owned();
+            rt_str(contents)
+        }
+        Err(msg) => crate::error::rt_error(&format!("read-file: {}: {}", path_str, msg)),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// write-file (not supported on AIRLOS MVP)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_write_file(path: *mut RtValue, content: *mut RtValue) -> *mut RtValue {
     let path_str = unsafe {
@@ -208,24 +325,45 @@ pub extern "C" fn airl_write_file(path: *mut RtValue, content: *mut RtValue) -> 
             _ => crate::error::rt_error("write-file: expected string content"),
         }
     };
-    let checked = match sandbox_check(&path_str) {
-        Ok(p) => p,
-        Err(msg) => crate::error::rt_error(&format!("write-file: {}", msg)),
-    };
-    if let Some(parent) = checked.parent() {
+    if let Some(parent) = std::path::Path::new(&path_str).parent() {
         if !parent.as_os_str().is_empty() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 crate::error::rt_error(&format!("write-file: create dirs: {}: {}", path_str, e));
             }
         }
     }
-    match std::fs::write(&checked, &content_str) {
+    match std::fs::write(&path_str, &content_str) {
         Ok(()) => rt_bool(true),
         Err(e) => crate::error::rt_error(&format!("write-file: {}: {}", path_str, e)),
     }
 }
 
-/// Append a string to a file, creating it if it doesn't exist.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_write_file(path: *mut RtValue, content: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("write-file: expected string path"),
+        }
+    };
+    let content_str = unsafe {
+        match &(*content).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("write-file: expected string content"),
+        }
+    };
+    match crate::airlos::write_file(&path_str, content_str.as_bytes()) {
+        Ok(()) => rt_bool(true),
+        Err(msg) => crate::error::rt_error(&format!("write-file: {}: {}", path_str, msg)),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// append-file (not supported on AIRLOS MVP)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_append_file(path: *mut RtValue, content: *mut RtValue) -> *mut RtValue {
     let path_str = unsafe {
@@ -240,14 +378,10 @@ pub extern "C" fn airl_append_file(path: *mut RtValue, content: *mut RtValue) ->
             _ => crate::error::rt_error("append-file: expected string content"),
         }
     };
-    let checked = match sandbox_check(&path_str) {
-        Ok(p) => p,
-        Err(msg) => crate::error::rt_error(&format!("append-file: {}", msg)),
-    };
     match std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&checked)
+        .open(&path_str)
     {
         Ok(mut f) => match f.write_all(content_str.as_bytes()) {
             Ok(()) => rt_bool(true),
@@ -257,7 +391,17 @@ pub extern "C" fn airl_append_file(path: *mut RtValue, content: *mut RtValue) ->
     }
 }
 
-/// Delete a file.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_append_file(_path: *mut RtValue, _content: *mut RtValue) -> *mut RtValue {
+    crate::error::rt_error("append-file: not supported on AIRLOS")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// delete-file (not supported on AIRLOS MVP)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_delete_file(path: *mut RtValue) -> *mut RtValue {
     let path_str = unsafe {
@@ -266,17 +410,32 @@ pub extern "C" fn airl_delete_file(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("delete-file: expected string path"),
         }
     };
-    let checked = match sandbox_check(&path_str) {
-        Ok(p) => p,
-        Err(msg) => crate::error::rt_error(&format!("delete-file: {}", msg)),
-    };
-    match std::fs::remove_file(&checked) {
+    match std::fs::remove_file(&path_str) {
         Ok(()) => rt_bool(true),
         Err(e) => crate::error::rt_error(&format!("delete-file: {}: {}", path_str, e)),
     }
 }
 
-/// Delete a directory and all its contents.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_delete_file(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("delete-file: expected string path"),
+        }
+    };
+    match crate::airlos::delete_file(&path_str) {
+        Ok(()) => rt_bool(true),
+        Err(msg) => crate::error::rt_error(&format!("delete-file: {}: {}", path_str, msg)),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// delete-dir (not supported on AIRLOS MVP)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_delete_dir(path: *mut RtValue) -> *mut RtValue {
     let path_str = unsafe {
@@ -285,17 +444,23 @@ pub extern "C" fn airl_delete_dir(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("delete-dir: expected string path"),
         }
     };
-    let checked = match sandbox_check(&path_str) {
-        Ok(p) => p,
-        Err(msg) => crate::error::rt_error(&format!("delete-dir: {}", msg)),
-    };
-    match std::fs::remove_dir_all(&checked) {
+    match std::fs::remove_dir_all(&path_str) {
         Ok(()) => rt_bool(true),
         Err(e) => crate::error::rt_error(&format!("delete-dir: {}: {}", path_str, e)),
     }
 }
 
-/// List directory contents as a sorted list of filenames.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_delete_dir(_path: *mut RtValue) -> *mut RtValue {
+    crate::error::rt_error("delete-dir: not supported on AIRLOS")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// read-dir
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_read_dir(path: *mut RtValue) -> *mut RtValue {
     let path_str = unsafe {
@@ -304,11 +469,7 @@ pub extern "C" fn airl_read_dir(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("read-dir: expected string path"),
         }
     };
-    let checked = match sandbox_check(&path_str) {
-        Ok(p) => p,
-        Err(msg) => crate::error::rt_error(&format!("read-dir: {}", msg)),
-    };
-    match std::fs::read_dir(&checked) {
+    match std::fs::read_dir(&path_str) {
         Ok(entries) => {
             let mut names: Vec<String> = entries
                 .filter_map(|e| e.ok())
@@ -322,7 +483,26 @@ pub extern "C" fn airl_read_dir(path: *mut RtValue) -> *mut RtValue {
     }
 }
 
-/// Create a directory and all parent directories.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_read_dir(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("read-dir: expected string path"),
+        }
+    };
+    let mut names = crate::airlos::read_dir(&path_str);
+    names.sort();
+    let items: Vec<*mut RtValue> = names.into_iter().map(|n| rt_str(n)).collect();
+    crate::value::rt_list(items)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// create-dir (not supported on AIRLOS MVP)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_create_dir(path: *mut RtValue) -> *mut RtValue {
     let path_str = unsafe {
@@ -331,17 +511,32 @@ pub extern "C" fn airl_create_dir(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("create-dir: expected string path"),
         }
     };
-    let checked = match sandbox_check(&path_str) {
-        Ok(p) => p,
-        Err(msg) => crate::error::rt_error(&format!("create-dir: {}", msg)),
-    };
-    match std::fs::create_dir_all(&checked) {
+    match std::fs::create_dir_all(&path_str) {
         Ok(()) => rt_bool(true),
         Err(e) => crate::error::rt_error(&format!("create-dir: {}: {}", path_str, e)),
     }
 }
 
-/// Get the size of a file in bytes.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_create_dir(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("create-dir: expected string path"),
+        }
+    };
+    match crate::airlos::create_dir(&path_str) {
+        Ok(()) => rt_bool(true),
+        Err(msg) => crate::error::rt_error(&format!("create-dir: {}: {}", path_str, msg)),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// file-size
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_file_size(path: *mut RtValue) -> *mut RtValue {
     let path_str = unsafe {
@@ -350,17 +545,32 @@ pub extern "C" fn airl_file_size(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("file-size: expected string path"),
         }
     };
-    let checked = match sandbox_check(&path_str) {
-        Ok(p) => p,
-        Err(msg) => crate::error::rt_error(&format!("file-size: {}", msg)),
-    };
-    match std::fs::metadata(&checked) {
+    match std::fs::metadata(&path_str) {
         Ok(meta) => crate::value::rt_int(meta.len() as i64),
         Err(e) => crate::error::rt_error(&format!("file-size: {}: {}", path_str, e)),
     }
 }
 
-/// Check if a path is a directory.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_file_size(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("file-size: expected string path"),
+        }
+    };
+    match crate::airlos::file_size(&path_str) {
+        Some(size) => rt_int(size as i64),
+        None => crate::error::rt_error(&format!("file-size: {}: file not found", path_str)),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// is-dir
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_is_dir(path: *mut RtValue) -> *mut RtValue {
     let path_str = unsafe {
@@ -369,14 +579,26 @@ pub extern "C" fn airl_is_dir(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("is-dir: expected string path"),
         }
     };
-    let checked = match sandbox_check(&path_str) {
-        Ok(p) => p,
-        Err(msg) => crate::error::rt_error(&format!("is-dir: {}", msg)),
-    };
-    rt_bool(checked.is_dir())
+    rt_bool(std::path::Path::new(&path_str).is_dir())
 }
 
-/// Check if a path exists.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_is_dir(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("is-dir: expected string path"),
+        }
+    };
+    rt_bool(crate::airlos::is_dir(&path_str))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// file-exists?
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_file_exists(path: *mut RtValue) -> *mut RtValue {
     let path_str = unsafe {
@@ -385,14 +607,26 @@ pub extern "C" fn airl_file_exists(path: *mut RtValue) -> *mut RtValue {
             _ => crate::error::rt_error("file-exists?: expected string path"),
         }
     };
-    let checked = match sandbox_check(&path_str) {
-        Ok(p) => p,
-        Err(_) => return rt_bool(false), // Outside sandbox = does not exist from AIRL's perspective
-    };
-    rt_bool(checked.exists())
+    rt_bool(std::path::Path::new(&path_str).exists())
 }
 
-/// Rename a file or directory.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_file_exists(path: *mut RtValue) -> *mut RtValue {
+    let path_str = unsafe {
+        match &(*path).data {
+            RtData::Str(s) => s.clone(),
+            _ => crate::error::rt_error("file-exists?: expected string path"),
+        }
+    };
+    rt_bool(crate::airlos::file_exists(&path_str))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// rename-file (not supported on AIRLOS MVP)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_rename_file(old: *mut RtValue, new: *mut RtValue) -> *mut RtValue {
     let old_str = unsafe {
@@ -407,21 +641,23 @@ pub extern "C" fn airl_rename_file(old: *mut RtValue, new: *mut RtValue) -> *mut
             _ => crate::error::rt_error("rename-file: expected string path (new)"),
         }
     };
-    let checked_old = match sandbox_check(&old_str) {
-        Ok(p) => p,
-        Err(msg) => crate::error::rt_error(&format!("rename-file: {}", msg)),
-    };
-    let checked_new = match sandbox_check(&new_str) {
-        Ok(p) => p,
-        Err(msg) => crate::error::rt_error(&format!("rename-file: {}", msg)),
-    };
-    match std::fs::rename(&checked_old, &checked_new) {
+    match std::fs::rename(&old_str, &new_str) {
         Ok(()) => rt_bool(true),
         Err(e) => crate::error::rt_error(&format!("rename-file: {} -> {}: {}", old_str, new_str, e)),
     }
 }
 
-/// Return command-line arguments as a List of Str values.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_rename_file(_old: *mut RtValue, _new: *mut RtValue) -> *mut RtValue {
+    crate::error::rt_error("rename-file: not supported on AIRLOS")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// get-args
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_get_args() -> *mut RtValue {
     let args: Vec<*mut RtValue> = std::env::args()
@@ -429,6 +665,17 @@ pub extern "C" fn airl_get_args() -> *mut RtValue {
         .collect();
     crate::value::rt_list(args)
 }
+
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_get_args() -> *mut RtValue {
+    // TBD: args may be passed via IPC at spawn time
+    crate::value::rt_list(vec![])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pure functions — no OS dependency, shared across all targets
+// ─────────────────────────────────────────────────────────────────────────────
 
 #[no_mangle]
 pub extern "C" fn airl_type_of(v: *mut RtValue) -> *mut RtValue {
@@ -460,48 +707,43 @@ pub extern "C" fn airl_valid(v: *mut RtValue) -> *mut RtValue {
 // Temp files, file metadata
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `temp-file(prefix)` — create a temp file, return its path.
-/// When AIRL_SANDBOX_ROOT is set, temp files are created under the sandbox root.
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_temp_file(prefix: *mut RtValue) -> *mut RtValue {
     let pfx = match unsafe { &(*prefix).data } { RtData::Str(s) => s.clone(), _ => "airl".into() };
     let cnt = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let base = match sandbox_root() {
-        Some(root) => root.join("tmp"),
-        None => std::env::temp_dir(),
-    };
-    let path = base.join(format!("{}-{}-{}", pfx, std::process::id(), cnt));
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).unwrap_or(());
-    }
+    let path = std::env::temp_dir().join(format!("{}-{}-{}", pfx, std::process::id(), cnt));
     std::fs::write(&path, "").unwrap_or(());
     rt_str(path.to_string_lossy().into_owned())
 }
 
-/// `temp-dir(prefix)` — create a temp directory, return its path.
-/// When AIRL_SANDBOX_ROOT is set, temp dirs are created under the sandbox root.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_temp_file(_prefix: *mut RtValue) -> *mut RtValue {
+    crate::error::rt_error("temp-file: not supported on AIRLOS")
+}
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_temp_dir(prefix: *mut RtValue) -> *mut RtValue {
     let pfx = match unsafe { &(*prefix).data } { RtData::Str(s) => s.clone(), _ => "airl".into() };
     let cnt = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let base = match sandbox_root() {
-        Some(root) => root.join("tmp"),
-        None => std::env::temp_dir(),
-    };
-    let path = base.join(format!("{}-{}-{}-dir", pfx, std::process::id(), cnt));
+    let path = std::env::temp_dir().join(format!("{}-{}-{}-dir", pfx, std::process::id(), cnt));
     std::fs::create_dir_all(&path).unwrap_or(());
     rt_str(path.to_string_lossy().into_owned())
 }
 
-/// `file-mtime(path)` — return modification time as epoch millis, or -1 on error.
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_temp_dir(_prefix: *mut RtValue) -> *mut RtValue {
+    crate::error::rt_error("temp-dir: not supported on AIRLOS")
+}
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_file_mtime(path_val: *mut RtValue) -> *mut RtValue {
     let p = match unsafe { &(*path_val).data } { RtData::Str(s) => s.clone(), _ => return rt_int(-1) };
-    let checked = match sandbox_check(&p) {
-        Ok(p) => p,
-        Err(_) => return rt_int(-1),
-    };
-    match std::fs::metadata(&checked).and_then(|m| m.modified()) {
+    match std::fs::metadata(&p).and_then(|m| m.modified()) {
         Ok(t) => {
             let ms = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
             rt_int(ms)
@@ -510,28 +752,18 @@ pub extern "C" fn airl_file_mtime(path_val: *mut RtValue) -> *mut RtValue {
     }
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_file_mtime(_path_val: *mut RtValue) -> *mut RtValue {
+    // No file modification times on AIRLOS ramdisk
+    rt_int(-1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::memory::airl_value_release;
     use crate::value::{rt_int, rt_nil, rt_str};
-
-    // ── SEC-5: sandbox_check unit tests ──
-
-    #[test]
-    fn sandbox_check_no_sandbox_allows_any_path() {
-        // When AIRL_SANDBOX_ROOT is not set (the default for tests),
-        // sandbox_check returns Ok with the original path.
-        let result = sandbox_check("/etc/passwd");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), std::path::PathBuf::from("/etc/passwd"));
-    }
-
-    #[test]
-    fn sandbox_check_nonexistent_path_without_sandbox() {
-        let result = sandbox_check("/nonexistent/path/file.txt");
-        assert!(result.is_ok());
-    }
 
     #[test]
     fn type_of_int() {

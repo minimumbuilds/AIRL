@@ -8,3 +8,4 @@ tests/aot/cache/
 tla/tla2tools.jar
 tla/states/
 tla/*_TTrace_*.tla
+cross-build/target/

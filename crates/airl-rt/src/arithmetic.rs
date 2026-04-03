@@ -1,3 +1,7 @@
+#[cfg(target_os = "airlos")]
+#[allow(unused_imports)]
+use crate::nostd_prelude::*;
+
 use crate::error::rt_error;
 use crate::value::{rt_float, rt_int, rt_str, RtData, RtValue};
 

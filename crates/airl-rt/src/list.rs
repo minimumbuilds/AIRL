@@ -1,3 +1,5 @@
+#[cfg(target_os = "airlos")]
+use crate::nostd_prelude::*;
 use core::sync::atomic::Ordering;
 
 use crate::error::rt_error;
@@ -96,7 +98,7 @@ pub extern "C" fn airl_list_new(items: *const *mut RtValue, count: usize) -> *mu
     if count == 0 {
         return rt_list(Vec::new());
     }
-    let slice = unsafe { std::slice::from_raw_parts(items, count) };
+    let slice = unsafe { core::slice::from_raw_parts(items, count) };
     let mut vec = Vec::with_capacity(count);
     for &item in slice {
         airl_value_retain(item);
@@ -700,8 +702,8 @@ mod tests {
         };
         unsafe {
             let runtime = rt_list(vec![]);
-            let runtime_disc = std::mem::discriminant(&(*runtime).data);
-            let manual_disc = std::mem::discriminant(&manual);
+            let runtime_disc = core::mem::discriminant(&(*runtime).data);
+            let manual_disc = core::mem::discriminant(&manual);
             assert_eq!(
                 runtime_disc, manual_disc,
                 "RtData::List discriminant must be stable for AOT tag consistency"

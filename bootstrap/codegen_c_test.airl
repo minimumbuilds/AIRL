@@ -1696,9 +1696,10 @@
           (if (= name "read-file") "airl_read_file"
             (if (= name "write-file") "airl_write_file"
               (if (= name "file-exists?") "airl_file_exists"
-                (if (= name "get-args") "airl_get_args"
-                  (if (= name "int-to-string") "airl_int_to_string"
-                    nil)))))))))
+                (if (= name "exec-file") "airl_exec_file"
+                  (if (= name "get-args") "airl_get_args"
+                    (if (= name "int-to-string") "airl_int_to_string"
+                      nil))))))))))
 
 ;; ── C string escaping ─────────────────────────────────────
 

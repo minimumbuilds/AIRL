@@ -117,6 +117,7 @@ pub struct RuntimeImports {
     pub read_file:   FuncId,
     pub write_file:  FuncId,
     pub file_exists: FuncId,
+    pub exec_file:   FuncId,
     pub append_file: FuncId,
     pub delete_file: FuncId,
     pub delete_dir:  FuncId,
@@ -617,6 +618,7 @@ impl BytecodeAot {
         let read_file   = declare_import(m, "airl_read_file",   s1.clone());
         let write_file  = declare_import(m, "airl_write_file",  s2.clone());
         let file_exists = declare_import(m, "airl_file_exists", s1.clone());
+        let exec_file   = declare_import(m, "airl_exec_file",   s1.clone());
         let append_file = declare_import(m, "airl_append_file", s2.clone());
         let delete_file = declare_import(m, "airl_delete_file", s1.clone());
         let delete_dir  = declare_import(m, "airl_delete_dir",  s1.clone());
@@ -792,7 +794,7 @@ impl BytecodeAot {
             char_upper, char_lower, string_ci_eq,
             map_new, map_get, map_set, map_has,
             map_remove, map_keys,
-            read_file, write_file, file_exists,
+            read_file, write_file, file_exists, exec_file,
             append_file, delete_file, delete_dir, rename_file,
             read_dir, create_dir, file_size, is_dir,
             temp_file, temp_dir, file_mtime,
@@ -895,6 +897,7 @@ impl BytecodeAot {
         m.insert("read-file".into(),   rt.read_file);
         m.insert("write-file".into(),  rt.write_file);
         m.insert("file-exists?".into(),rt.file_exists);
+        m.insert("exec-file".into(),  rt.exec_file);
         m.insert("append-file".into(), rt.append_file);
         m.insert("delete-file".into(), rt.delete_file);
         m.insert("delete-dir".into(),  rt.delete_dir);

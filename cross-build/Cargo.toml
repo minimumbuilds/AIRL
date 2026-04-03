@@ -1,0 +1,16 @@
+[workspace]
+
+[package]
+name = "airl-rt"
+version = "0.8.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib"]
+
+[lints.rust.unexpected_cfgs]
+level = "allow"
+check-cfg = ['cfg(target_os, values("airlos"))']
+
+[dependencies]
+libm = "0.2"

@@ -1,4 +1,10 @@
+#[cfg(target_os = "airlos")]
+use crate::nostd_prelude::*;
+
+#[cfg(not(target_os = "airlos"))]
 use std::collections::HashMap;
+#[cfg(target_os = "airlos")]
+use alloc::collections::BTreeMap as HashMap;
 use core::sync::atomic::Ordering;
 
 use crate::value::{rt_bool, rt_bytes, rt_float, rt_int, rt_nil, rt_str, rt_unit, rt_variant, RtData, RtValue};
@@ -87,7 +93,7 @@ unsafe fn free_value(ptr: *mut RtValue) {
 #[no_mangle]
 pub extern "C" fn airl_value_clone(ptr: *mut RtValue) -> *mut RtValue {
     if ptr.is_null() {
-        return std::ptr::null_mut();
+        return core::ptr::null_mut();
     }
     unsafe {
         match &(*ptr).data {
@@ -159,8 +165,8 @@ mod tests {
     #[test]
     fn test_release_null_safe() {
         // Should not panic
-        airl_value_release(std::ptr::null_mut());
-        airl_value_retain(std::ptr::null_mut());
+        airl_value_release(core::ptr::null_mut());
+        airl_value_retain(core::ptr::null_mut());
     }
 
     #[test]

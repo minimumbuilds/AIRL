@@ -1,5 +1,16 @@
+#[cfg(target_os = "airlos")]
+use crate::nostd_prelude::*;
+
+#[cfg(not(target_os = "airlos"))]
 use std::collections::HashMap;
+#[cfg(target_os = "airlos")]
+use alloc::collections::BTreeMap as HashMap;
+
+#[cfg(not(target_os = "airlos"))]
 use std::fmt::Write;
+#[cfg(target_os = "airlos")]
+use core::fmt::Write;
+#[cfg(not(target_os = "airlos"))]
 use std::sync::OnceLock;
 use crate::error::rt_error;
 use crate::memory::airl_value_retain;
@@ -154,6 +165,7 @@ pub extern "C" fn airl_format_variadic(args: *const *mut RtValue, count: i64) ->
 
 // ── assert ──
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_assert(cond: *mut RtValue, msg: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*cond };
@@ -176,8 +188,31 @@ pub extern "C" fn airl_assert(cond: *mut RtValue, msg: *mut RtValue) -> *mut RtV
     rt_bool(true)
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_assert(cond: *mut RtValue, msg: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*cond };
+    let truthy = match &val.data {
+        RtData::Bool(b) => *b,
+        RtData::Int(n) => *n != 0,
+        RtData::Nil => false,
+        _ => true,
+    };
+    if !truthy {
+        let msg_val = unsafe { &*msg };
+        let text = match &msg_val.data {
+            RtData::Str(s) => format!("Assertion failed: {}\n", s),
+            _ => "Assertion failed\n".to_string(),
+        };
+        crate::airlos::vga_print(&text);
+        crate::airlos::exit(1);
+    }
+    rt_bool(true)
+}
+
 // ── panic ──
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_panic(msg: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*msg };
@@ -190,8 +225,21 @@ pub extern "C" fn airl_panic(msg: *mut RtValue) -> *mut RtValue {
     std::process::exit(1);
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_panic(msg: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*msg };
+    let text = match &val.data {
+        RtData::Str(s) => format!("panic: {}\n", s),
+        _ => "panic\n".to_string(),
+    };
+    crate::airlos::vga_print(&text);
+    crate::airlos::exit(1);
+}
+
 // ── exit ──
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_exit(code: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*code };
@@ -204,14 +252,40 @@ pub extern "C" fn airl_exit(code: *mut RtValue) -> *mut RtValue {
     std::process::exit(c);
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_exit(code: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*code };
+    let c = match &val.data {
+        RtData::Int(n) => *n as i32,
+        _ => 1,
+    };
+    crate::airlos::exit(c);
+}
+
 // ── sleep ──
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_sleep(ms: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*ms };
     if let RtData::Int(millis) = &val.data {
         if *millis > 0 {
             std::thread::sleep(std::time::Duration::from_millis(*millis as u64));
+        }
+    }
+    rt_nil()
+}
+
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_sleep(ms: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*ms };
+    if let RtData::Int(millis) = &val.data {
+        if *millis > 0 {
+            // Yield loop with SYS_GET_TICKS
+            let target = crate::airlos::get_ticks() + *millis as u64;
+            while crate::airlos::get_ticks() < target {}
         }
     }
     rt_nil()
@@ -259,6 +333,7 @@ pub extern "C" fn airl_format_time(ms_val: *mut RtValue, fmt_val: *mut RtValue) 
 
 // ── read-lines ──
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_read_lines(path: *mut RtValue) -> *mut RtValue {
     let p = match unsafe { &(*path).data } {
@@ -271,6 +346,23 @@ pub extern "C" fn airl_read_lines(path: *mut RtValue) -> *mut RtValue {
     };
     match std::fs::read_to_string(&checked) {
         Ok(content) => {
+            let items: Vec<*mut RtValue> = content.lines().map(|l| rt_str(l.to_string())).collect();
+            rt_list(items)
+        }
+        Err(_) => rt_list(vec![]),
+    }
+}
+
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_read_lines(path: *mut RtValue) -> *mut RtValue {
+    let p = match unsafe { &(*path).data } {
+        RtData::Str(s) => s.as_str(),
+        _ => return rt_list(vec![]),
+    };
+    match crate::airlos::read_file(p) {
+        Ok(bytes) => {
+            let content = String::from_utf8_lossy(&bytes);
             let items: Vec<*mut RtValue> = content.lines().map(|l| rt_str(l.to_string())).collect();
             rt_list(items)
         }
@@ -402,6 +494,7 @@ pub extern "C" fn airl_enumerate(list: *mut RtValue) -> *mut RtValue {
 
 // ── Path operations ──
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_path_join(parts: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*parts };
@@ -418,6 +511,30 @@ pub extern "C" fn airl_path_join(parts: *mut RtValue) -> *mut RtValue {
     }
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_path_join(parts: *mut RtValue) -> *mut RtValue {
+    // Simple string-based path join for AIRLOS (no std::path)
+    let val = unsafe { &*parts };
+    if let RtData::List { .. } = &val.data {
+        let slice = crate::list::list_items(&val.data);
+        let mut result = alloc::string::String::new();
+        for &item in slice {
+            let s = unsafe { &*item };
+            if let RtData::Str(p) = &s.data {
+                if !result.is_empty() && !result.ends_with('/') {
+                    result.push('/');
+                }
+                result.push_str(p);
+            }
+        }
+        rt_str(result)
+    } else {
+        rt_str(alloc::string::String::new())
+    }
+}
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_path_parent(path: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*path };
@@ -429,6 +546,22 @@ pub extern "C" fn airl_path_parent(path: *mut RtValue) -> *mut RtValue {
     }
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_path_parent(path: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*path };
+    if let RtData::Str(s) = &val.data {
+        match s.rfind('/') {
+            Some(0) => rt_str("/".into()),
+            Some(i) => rt_str(s[..i].into()),
+            None => rt_str(alloc::string::String::new()),
+        }
+    } else {
+        rt_str(alloc::string::String::new())
+    }
+}
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_path_filename(path: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*path };
@@ -440,6 +573,21 @@ pub extern "C" fn airl_path_filename(path: *mut RtValue) -> *mut RtValue {
     }
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_path_filename(path: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*path };
+    if let RtData::Str(s) = &val.data {
+        match s.rfind('/') {
+            Some(i) => rt_str(s[i+1..].into()),
+            None => rt_str(s.clone()),
+        }
+    } else {
+        rt_str(alloc::string::String::new())
+    }
+}
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_path_extension(path: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*path };
@@ -451,6 +599,26 @@ pub extern "C" fn airl_path_extension(path: *mut RtValue) -> *mut RtValue {
     }
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_path_extension(path: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*path };
+    if let RtData::Str(s) = &val.data {
+        // Get filename, then find last '.'
+        let fname = match s.rfind('/') {
+            Some(i) => &s[i+1..],
+            None => s.as_str(),
+        };
+        match fname.rfind('.') {
+            Some(i) if i > 0 => rt_str(fname[i+1..].into()),
+            _ => rt_str(alloc::string::String::new()),
+        }
+    } else {
+        rt_str(alloc::string::String::new())
+    }
+}
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_is_absolute(path: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*path };
@@ -461,8 +629,20 @@ pub extern "C" fn airl_is_absolute(path: *mut RtValue) -> *mut RtValue {
     }
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_is_absolute(path: *mut RtValue) -> *mut RtValue {
+    let val = unsafe { &*path };
+    if let RtData::Str(s) = &val.data {
+        rt_bool(s.starts_with('/'))
+    } else {
+        rt_bool(false)
+    }
+}
+
 // ── Regex ──
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_regex_match(pat: *mut RtValue, s: *mut RtValue) -> *mut RtValue {
     let pattern = match unsafe { &(*pat).data } { RtData::Str(s) => s.as_str(), _ => return rt_nil() };
@@ -476,6 +656,13 @@ pub extern "C" fn airl_regex_match(pat: *mut RtValue, s: *mut RtValue) -> *mut R
     }
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_regex_match(_pat: *mut RtValue, _s: *mut RtValue) -> *mut RtValue {
+    rt_nil() // regex not available on AIRLOS
+}
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_regex_find_all(pat: *mut RtValue, s: *mut RtValue) -> *mut RtValue {
     let pattern = match unsafe { &(*pat).data } { RtData::Str(s) => s.as_str(), _ => return rt_list(vec![]) };
@@ -489,6 +676,13 @@ pub extern "C" fn airl_regex_find_all(pat: *mut RtValue, s: *mut RtValue) -> *mu
     }
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_regex_find_all(_pat: *mut RtValue, _s: *mut RtValue) -> *mut RtValue {
+    rt_list(vec![])
+}
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_regex_replace(pat: *mut RtValue, s: *mut RtValue, replacement: *mut RtValue) -> *mut RtValue {
     let pattern = match unsafe { &(*pat).data } { RtData::Str(s) => s.as_str(), _ => return crate::memory::airl_value_clone(s) };
@@ -500,6 +694,13 @@ pub extern "C" fn airl_regex_replace(pat: *mut RtValue, s: *mut RtValue, replace
     }
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_regex_replace(_pat: *mut RtValue, s: *mut RtValue, _replacement: *mut RtValue) -> *mut RtValue {
+    crate::memory::airl_value_clone(s) // return input unchanged
+}
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_regex_split(pat: *mut RtValue, s: *mut RtValue) -> *mut RtValue {
     let pattern = match unsafe { &(*pat).data } { RtData::Str(s) => s.as_str(), _ => return rt_list(vec![]) };
@@ -513,8 +714,17 @@ pub extern "C" fn airl_regex_split(pat: *mut RtValue, s: *mut RtValue) -> *mut R
     }
 }
 
-// ── Crypto ──
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_regex_split(_pat: *mut RtValue, s: *mut RtValue) -> *mut RtValue {
+    rt_list(vec![crate::memory::airl_value_clone(s)])
+}
 
+// ── Crypto ──
+// All crypto functions require external crates (sha2, hmac, base64, hex, etc.)
+// which are not available on AIRLOS. Gate everything with cfg.
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_sha256(s: *mut RtValue) -> *mut RtValue {
     use sha2::{Digest, Sha256};
@@ -523,6 +733,7 @@ pub extern "C" fn airl_sha256(s: *mut RtValue) -> *mut RtValue {
     rt_str(hex::encode(hash))
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_hmac_sha256(key: *mut RtValue, msg: *mut RtValue) -> *mut RtValue {
     use hmac::{Hmac, Mac};
@@ -535,6 +746,7 @@ pub extern "C" fn airl_hmac_sha256(key: *mut RtValue, msg: *mut RtValue) -> *mut
     rt_str(hex::encode(mac.finalize().into_bytes()))
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_base64_encode(s: *mut RtValue) -> *mut RtValue {
     use base64::Engine;
@@ -542,6 +754,7 @@ pub extern "C" fn airl_base64_encode(s: *mut RtValue) -> *mut RtValue {
     rt_str(base64::engine::general_purpose::STANDARD.encode(input.as_bytes()))
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_base64_decode(s: *mut RtValue) -> *mut RtValue {
     use base64::Engine;
@@ -552,6 +765,7 @@ pub extern "C" fn airl_base64_decode(s: *mut RtValue) -> *mut RtValue {
     }
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_random_bytes(n: *mut RtValue) -> *mut RtValue {
     let raw = match unsafe { &(*n).data } { RtData::Int(n) => *n, _ => 0 };
@@ -567,8 +781,15 @@ pub extern "C" fn airl_random_bytes(n: *mut RtValue) -> *mut RtValue {
     rt_str(hex)
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_random_bytes(_n: *mut RtValue) -> *mut RtValue {
+    err_variant("random-bytes: not available on AIRLOS")
+}
+
 // ── Crypto (byte-oriented) ──
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_sha512(s: *mut RtValue) -> *mut RtValue {
     use sha2::{Digest, Sha512};
@@ -577,6 +798,7 @@ pub extern "C" fn airl_sha512(s: *mut RtValue) -> *mut RtValue {
     rt_str(hex::encode(hash))
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_hmac_sha512(key: *mut RtValue, msg: *mut RtValue) -> *mut RtValue {
     use hmac::{Hmac, Mac};
@@ -589,6 +811,7 @@ pub extern "C" fn airl_hmac_sha512(key: *mut RtValue, msg: *mut RtValue) -> *mut
     rt_str(hex::encode(mac.finalize().into_bytes()))
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_sha256_bytes(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
@@ -597,6 +820,7 @@ pub extern "C" fn airl_sha256_bytes(data: *mut RtValue) -> *mut RtValue {
     rt_bytes(hash.to_vec())
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_sha512_bytes(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
@@ -605,6 +829,7 @@ pub extern "C" fn airl_sha512_bytes(data: *mut RtValue) -> *mut RtValue {
     rt_bytes(hash.to_vec())
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_hmac_sha256_bytes(key: *mut RtValue, data: *mut RtValue) -> *mut RtValue {
     use hmac::{Hmac, Mac};
@@ -616,6 +841,7 @@ pub extern "C" fn airl_hmac_sha256_bytes(key: *mut RtValue, data: *mut RtValue) 
     rt_bytes(mac.finalize().into_bytes().to_vec())
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_hmac_sha512_bytes(key: *mut RtValue, data: *mut RtValue) -> *mut RtValue {
     use hmac::{Hmac, Mac};
@@ -627,6 +853,7 @@ pub extern "C" fn airl_hmac_sha512_bytes(key: *mut RtValue, data: *mut RtValue) 
     rt_bytes(mac.finalize().into_bytes().to_vec())
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_pbkdf2_sha256(password: *mut RtValue, salt: *mut RtValue, iterations: *mut RtValue, key_len: *mut RtValue) -> *mut RtValue {
     let pw = match unsafe { &(*password).data } { RtData::Str(s) => s.as_str(), _ => return rt_bytes(vec![]) };
@@ -638,6 +865,7 @@ pub extern "C" fn airl_pbkdf2_sha256(password: *mut RtValue, salt: *mut RtValue,
     rt_bytes(derived)
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_pbkdf2_sha512(password: *mut RtValue, salt: *mut RtValue, iterations: *mut RtValue, key_len: *mut RtValue) -> *mut RtValue {
     let pw = match unsafe { &(*password).data } { RtData::Str(s) => s.as_str(), _ => return rt_bytes(vec![]) };
@@ -649,6 +877,7 @@ pub extern "C" fn airl_pbkdf2_sha512(password: *mut RtValue, salt: *mut RtValue,
     rt_bytes(derived)
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_base64_decode_bytes(data: *mut RtValue) -> *mut RtValue {
     use base64::Engine;
@@ -659,6 +888,7 @@ pub extern "C" fn airl_base64_decode_bytes(data: *mut RtValue) -> *mut RtValue {
     }
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_base64_encode_bytes(data: *mut RtValue) -> *mut RtValue {
     use base64::Engine;
@@ -713,7 +943,7 @@ pub extern "C" fn airl_int_to_string(n: *mut RtValue) -> *mut RtValue {
 #[no_mangle]
 pub extern "C" fn airl_float_to_string(n: *mut RtValue) -> *mut RtValue {
     let val = match unsafe { &(*n).data } { RtData::Float(f) => *f, _ => 0.0 };
-    let s = if val.fract() == 0.0 && val.is_finite() { format!("{:.1}", val) } else { format!("{}", val) };
+    let s = if val == (val as i64 as f64) && val.is_finite() { format!("{:.1}", val) } else { format!("{}", val) };
     rt_str(s)
 }
 
@@ -728,11 +958,19 @@ pub extern "C" fn airl_string_to_int(s: *mut RtValue) -> *mut RtValue {
 
 // ── System ──
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_cpu_count() -> *mut RtValue {
     rt_int(std::thread::available_parallelism().map(|n| n.get() as i64).unwrap_or(1))
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_cpu_count() -> *mut RtValue {
+    rt_int(1) // AIRLOS is single-core
+}
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_time_now() -> *mut RtValue {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -740,6 +978,13 @@ pub extern "C" fn airl_time_now() -> *mut RtValue {
     rt_int(ms)
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_time_now() -> *mut RtValue {
+    rt_int(crate::airlos::get_ticks() as i64)
+}
+
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_getenv(name: *mut RtValue) -> *mut RtValue {
     let key = match unsafe { &(*name).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("not a string") };
@@ -755,8 +1000,15 @@ pub extern "C" fn airl_getenv(name: *mut RtValue) -> *mut RtValue {
     }
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_getenv(_name: *mut RtValue) -> *mut RtValue {
+    err_variant("getenv: not available on AIRLOS")
+}
+
+#[cfg(not(target_os = "airlos"))]
 fn extract_cmd_args(cmd: *mut RtValue, args_list: *mut RtValue) -> Result<(String, Vec<String>), *mut RtValue> {
-    let command = match unsafe { &(*cmd).data } { RtData::Str(s) => s.clone(), _ => return Err(err_variant("shell-exec: command not a string")) };
+    let command = match unsafe { &(*cmd).data } { RtData::Str(s) => s.clone(), _ => return Err(err_variant("shell-exec: not a string")) };
     let mut cmd_args = Vec::new();
     if let RtData::List { .. } = unsafe { &(*args_list).data } {
         for &item in crate::list::list_items(unsafe { &(*args_list).data }) {
@@ -766,6 +1018,7 @@ fn extract_cmd_args(cmd: *mut RtValue, args_list: *mut RtValue) -> Result<(Strin
     Ok((command, cmd_args))
 }
 
+#[cfg(not(target_os = "airlos"))]
 fn output_to_map(output: std::process::Output) -> *mut RtValue {
     let mut m = HashMap::new();
     m.insert("stdout".to_string(), rt_str(String::from_utf8_lossy(&output.stdout).into_owned()));
@@ -774,27 +1027,33 @@ fn output_to_map(output: std::process::Output) -> *mut RtValue {
     ok_variant(rt_map(m))
 }
 
-// NOTE: Uses Command::new().args() — safe execFile-style, no shell interpolation
-// SEC-6: Gated by AIRL_ALLOW_EXEC env var
+// SEC-6: Gated by AIRL_ALLOW_EXEC env var. Uses Command::new().args() (safe, no shell).
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_shell_exec(cmd: *mut RtValue, args_list: *mut RtValue) -> *mut RtValue {
     let (command, cmd_args) = match extract_cmd_args(cmd, args_list) { Ok(v) => v, Err(e) => return e };
     if let Err(e) = check_exec(&command) { return e; }
     match std::process::Command::new(&command).args(&cmd_args).output() {
         Ok(output) => output_to_map(output),
-        Err(e) => err_variant(&format!("shell-exec: {}", e)),
+        Err(e) => err_variant(&format!("exec: {}", e)),
     }
 }
 
-// NOTE: Uses Command::new().args().stdin(piped) — safe execFile-style, no shell interpolation
-// SEC-6: Gated by AIRL_ALLOW_EXEC env var
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_shell_exec(_cmd: *mut RtValue, _args_list: *mut RtValue) -> *mut RtValue {
+    err_variant("exec: not supported on AIRLOS")
+}
+
+// SEC-6: Gated by AIRL_ALLOW_EXEC env var. Uses Command::new().args() (safe, no shell).
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_shell_exec_with_stdin(cmd: *mut RtValue, args_list: *mut RtValue, stdin_data: *mut RtValue) -> *mut RtValue {
     let (command, cmd_args) = match extract_cmd_args(cmd, args_list) { Ok(v) => v, Err(e) => return e };
     if let Err(e) = check_exec(&command) { return e; }
     let stdin_str = match unsafe { &(*stdin_data).data } {
         RtData::Str(s) => s.clone(),
-        _ => return err_variant("shell-exec-with-stdin: stdin not a string"),
+        _ => return err_variant("exec-with-stdin: stdin not a string"),
     };
     let mut child = match std::process::Command::new(&command)
         .args(&cmd_args)
@@ -804,7 +1063,7 @@ pub extern "C" fn airl_shell_exec_with_stdin(cmd: *mut RtValue, args_list: *mut 
         .spawn()
     {
         Ok(c) => c,
-        Err(e) => return err_variant(&format!("shell-exec-with-stdin: {}", e)),
+        Err(e) => return err_variant(&format!("exec-with-stdin: {}", e)),
     };
     if let Some(mut stdin) = child.stdin.take() {
         use std::io::Write;
@@ -812,8 +1071,14 @@ pub extern "C" fn airl_shell_exec_with_stdin(cmd: *mut RtValue, args_list: *mut 
     }
     match child.wait_with_output() {
         Ok(output) => output_to_map(output),
-        Err(e) => err_variant(&format!("shell-exec-with-stdin: {}", e)),
+        Err(e) => err_variant(&format!("exec-with-stdin: {}", e)),
     }
+}
+
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_shell_exec_with_stdin(_cmd: *mut RtValue, _args_list: *mut RtValue, _stdin_data: *mut RtValue) -> *mut RtValue {
+    err_variant("exec-with-stdin: not supported on AIRLOS")
 }
 
 // ── Radix Parsing ──
@@ -850,12 +1115,19 @@ pub extern "C" fn airl_int_to_string_radix(n: *mut RtValue, base: *mut RtValue) 
 
 // ── System Utilities ──
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_get_cwd() -> *mut RtValue {
     match std::env::current_dir() {
         Ok(p) => rt_str(p.to_string_lossy().into_owned()),
         Err(e) => rt_str(format!("<cwd-error: {}>", e)),
     }
+}
+
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_get_cwd() -> *mut RtValue {
+    rt_str("/".to_string())
 }
 
 // ── JSON ──
@@ -1042,24 +1314,31 @@ pub extern "C" fn airl_json_stringify(val: *mut RtValue) -> *mut RtValue {
     rt_str(to_json(v))
 }
 
-// ── TCP sockets ──
-
+// ── TCP sockets, TLS, compression ──
+// These features require OS networking and external crates not available on AIRLOS.
+// The entire block below is gated with cfg(not(target_os = "airlos")).
+#[cfg(not(target_os = "airlos"))]
 use std::net::TcpStream;
+#[cfg(not(target_os = "airlos"))]
 use std::sync::atomic::{AtomicI64, Ordering};
+#[cfg(not(target_os = "airlos"))]
 use std::io::{Read, Write as IoWrite};
 
+#[cfg(not(target_os = "airlos"))]
 enum RtTcpHandle {
     Plain(TcpStream),
     Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
     TlsServer(Box<rustls::StreamOwned<rustls::ServerConnection, TcpStream>>),
 }
 
+#[cfg(not(target_os = "airlos"))]
 impl Read for RtTcpHandle {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self { RtTcpHandle::Plain(s) => s.read(buf), RtTcpHandle::Tls(s) => s.read(buf), RtTcpHandle::TlsServer(s) => s.read(buf) }
     }
 }
 
+#[cfg(not(target_os = "airlos"))]
 impl IoWrite for RtTcpHandle {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self { RtTcpHandle::Plain(s) => s.write(buf), RtTcpHandle::Tls(s) => s.write(buf), RtTcpHandle::TlsServer(s) => s.write(buf) }
@@ -1069,6 +1348,7 @@ impl IoWrite for RtTcpHandle {
     }
 }
 
+#[cfg(not(target_os = "airlos"))]
 impl RtTcpHandle {
     fn set_timeout(&self, timeout: Option<std::time::Duration>) -> std::io::Result<()> {
         let stream = match self { RtTcpHandle::Plain(s) => s, RtTcpHandle::Tls(s) => s.get_ref(), RtTcpHandle::TlsServer(s) => s.get_ref() };
@@ -1078,8 +1358,10 @@ impl RtTcpHandle {
     }
 }
 
+#[cfg(not(target_os = "airlos"))]
 static NEXT_TCP_HANDLE: AtomicI64 = AtomicI64::new(1);
 
+#[cfg(not(target_os = "airlos"))]
 fn tcp_handles() -> &'static std::sync::Mutex<std::collections::HashMap<i64, RtTcpHandle>> {
     use std::sync::{Mutex, OnceLock};
     static HANDLES: OnceLock<Mutex<std::collections::HashMap<i64, RtTcpHandle>>> = OnceLock::new();
@@ -1088,8 +1370,10 @@ fn tcp_handles() -> &'static std::sync::Mutex<std::collections::HashMap<i64, RtT
 
 // ── TCP server (listen/accept) ──────────────────────────────────────────
 
+#[cfg(not(target_os = "airlos"))]
 static NEXT_LISTENER_HANDLE: AtomicI64 = AtomicI64::new(1);
 
+#[cfg(not(target_os = "airlos"))]
 fn tcp_listeners() -> &'static std::sync::Mutex<std::collections::HashMap<i64, std::net::TcpListener>> {
     use std::sync::{Mutex, OnceLock};
     static LISTENERS: OnceLock<Mutex<std::collections::HashMap<i64, std::net::TcpListener>>> = OnceLock::new();
@@ -1097,6 +1381,7 @@ fn tcp_listeners() -> &'static std::sync::Mutex<std::collections::HashMap<i64, s
 }
 
 /// Bind a TCP server socket. Returns Result[handle, error].
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_tcp_listen(port: *mut RtValue, backlog: *mut RtValue) -> *mut RtValue {
     let p = match unsafe { &(*port).data } { RtData::Int(n) => *n as u16, _ => return err_variant("tcp-listen: port must be int") };
@@ -1113,6 +1398,7 @@ pub extern "C" fn airl_tcp_listen(port: *mut RtValue, backlog: *mut RtValue) -> 
 
 /// Accept a connection on a listening socket. Blocking. Returns Result[conn-handle, error].
 /// The returned handle is a regular TCP connection handle (same as tcp-connect returns).
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_tcp_accept(listener_handle: *mut RtValue) -> *mut RtValue {
     let lh = match unsafe { &(*listener_handle).data } { RtData::Int(n) => *n, _ => return err_variant("tcp-accept: handle must be int") };
@@ -1140,6 +1426,7 @@ pub extern "C" fn airl_tcp_accept(listener_handle: *mut RtValue) -> *mut RtValue
     }
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_tcp_connect(host: *mut RtValue, port: *mut RtValue) -> *mut RtValue {
     let h = match unsafe { &(*host).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("host must be string") };
@@ -1158,12 +1445,14 @@ pub extern "C" fn airl_tcp_connect(host: *mut RtValue, port: *mut RtValue) -> *m
     }
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_tcp_close(handle: *mut RtValue) -> *mut RtValue {
     let h = match unsafe { &(*handle).data } { RtData::Int(n) => *n, _ => return err_variant("handle must be int") };
     match tcp_handles().lock().unwrap().remove(&h) { Some(_) => ok_variant(rt_nil()), None => err_variant("invalid handle") }
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_tcp_send(handle: *mut RtValue, data: *mut RtValue) -> *mut RtValue {
     let h = match unsafe { &(*handle).data } { RtData::Int(n) => *n, _ => return err_variant("handle must be int") };
@@ -1188,6 +1477,7 @@ pub extern "C" fn airl_tcp_send(handle: *mut RtValue, data: *mut RtValue) -> *mu
     }
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_tcp_recv(handle: *mut RtValue, max_bytes: *mut RtValue) -> *mut RtValue {
     let h = match unsafe { &(*handle).data } { RtData::Int(n) => *n, _ => return err_variant("handle must be int") };
@@ -1211,6 +1501,7 @@ pub extern "C" fn airl_tcp_recv(handle: *mut RtValue, max_bytes: *mut RtValue) -
     }
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_tcp_recv_exact(handle: *mut RtValue, count: *mut RtValue) -> *mut RtValue {
     let h = match unsafe { &(*handle).data } { RtData::Int(n) => *n, _ => return err_variant("handle must be int") };
@@ -1234,6 +1525,7 @@ pub extern "C" fn airl_tcp_recv_exact(handle: *mut RtValue, count: *mut RtValue)
     }
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_tcp_set_timeout(handle: *mut RtValue, ms: *mut RtValue) -> *mut RtValue {
     let h = match unsafe { &(*handle).data } { RtData::Int(n) => *n, _ => return err_variant("handle must be int") };
@@ -1246,6 +1538,7 @@ pub extern "C" fn airl_tcp_set_timeout(handle: *mut RtValue, ms: *mut RtValue) -
     }
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_tcp_connect_tls(host: *mut RtValue, port: *mut RtValue, ca_path: *mut RtValue, cert_path: *mut RtValue, key_path: *mut RtValue) -> *mut RtValue {
     let h = match unsafe { &(*host).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("host must be string") };
@@ -1294,6 +1587,7 @@ pub extern "C" fn airl_tcp_connect_tls(host: *mut RtValue, port: *mut RtValue, c
 
 /// Upgrade an already-accepted plain TCP handle to server-side TLS.
 /// Signature: (conn-handle : i64, cert-path : String, key-path : String) -> Result[i64, String]
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_tcp_accept_tls(
     conn_handle: *mut RtValue,
@@ -1480,11 +1774,21 @@ unsafe fn borrow_bytes<'a>(val: *mut RtValue) -> &'a [u8] {
 /// # Safety
 /// The caller must ensure `val` is a valid, non-null pointer to an RtValue
 /// that remains alive and unmutated for the lifetime `'a`.
+#[cfg(not(target_os = "airlos"))]
 unsafe fn borrow_or_extract<'a>(val: *mut RtValue) -> std::borrow::Cow<'a, [u8]> {
     match &(*val).data {
         RtData::Bytes(v) => std::borrow::Cow::Borrowed(v.as_slice()),
         RtData::List { .. } => std::borrow::Cow::Owned(extract_bytes(val)),
         _ => std::borrow::Cow::Borrowed(&[]),
+    }
+}
+
+#[cfg(target_os = "airlos")]
+unsafe fn borrow_or_extract<'a>(val: *mut RtValue) -> alloc::borrow::Cow<'a, [u8]> {
+    match &(*val).data {
+        RtData::Bytes(v) => alloc::borrow::Cow::Borrowed(v.as_slice()),
+        RtData::List { .. } => alloc::borrow::Cow::Owned(extract_bytes(val)),
+        _ => alloc::borrow::Cow::Borrowed(&[]),
     }
 }
 
@@ -1557,7 +1861,11 @@ pub extern "C" fn airl_bytes_concat_all(parts: *mut RtValue) -> *mut RtValue {
     };
     // Single extraction pass: borrow or extract each part once, measure total
     let mut total = 0usize;
-    let borrowed: Vec<std::borrow::Cow<[u8]>> = part_lists.iter().map(|&p| {
+    #[cfg(not(target_os = "airlos"))]
+    type ByteCow<'a> = std::borrow::Cow<'a, [u8]>;
+    #[cfg(target_os = "airlos")]
+    type ByteCow<'a> = alloc::borrow::Cow<'a, [u8]>;
+    let borrowed: Vec<ByteCow<'_>> = part_lists.iter().map(|&p| {
         let cow = unsafe { borrow_or_extract(p) };
         total += cow.len();
         cow
@@ -1579,6 +1887,7 @@ pub extern "C" fn airl_bytes_slice(buf: *mut RtValue, offset: *mut RtValue, len:
     rt_bytes(bytes[off..off+slen].to_vec())
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_crc32c(buf: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(buf) };
@@ -1587,6 +1896,7 @@ pub extern "C" fn airl_crc32c(buf: *mut RtValue) -> *mut RtValue {
 
 // ── Compression builtins ─────────────────────────────────────────────────────
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_gzip_compress(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
@@ -1600,6 +1910,7 @@ pub extern "C" fn airl_gzip_compress(data: *mut RtValue) -> *mut RtValue {
     rt_bytes(compressed)
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_gzip_decompress(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
@@ -1620,6 +1931,7 @@ pub extern "C" fn airl_gzip_decompress(data: *mut RtValue) -> *mut RtValue {
     rt_bytes(decompressed)
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_snappy_compress(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
@@ -1628,6 +1940,7 @@ pub extern "C" fn airl_snappy_compress(data: *mut RtValue) -> *mut RtValue {
     rt_bytes(compressed)
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_snappy_decompress(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
@@ -1639,6 +1952,7 @@ pub extern "C" fn airl_snappy_decompress(data: *mut RtValue) -> *mut RtValue {
     rt_bytes(decompressed)
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_lz4_compress(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
@@ -1646,6 +1960,7 @@ pub extern "C" fn airl_lz4_compress(data: *mut RtValue) -> *mut RtValue {
     rt_bytes(compressed)
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_lz4_decompress(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
@@ -1657,6 +1972,7 @@ pub extern "C" fn airl_lz4_decompress(data: *mut RtValue) -> *mut RtValue {
     rt_bytes(decompressed)
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_zstd_compress(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };
@@ -1665,6 +1981,7 @@ pub extern "C" fn airl_zstd_compress(data: *mut RtValue) -> *mut RtValue {
     rt_bytes(compressed)
 }
 
+#[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_zstd_decompress(data: *mut RtValue) -> *mut RtValue {
     let bytes = unsafe { borrow_or_extract(data) };

@@ -1,3 +1,6 @@
+#[cfg(target_os = "airlos")]
+use crate::nostd_prelude::*;
+
 use crate::error::rt_error;
 use crate::memory::airl_value_retain;
 use crate::value::{RtData, RtValue, TAG_CLOSURE};
@@ -12,7 +15,7 @@ pub extern "C" fn airl_make_closure(
 ) -> *mut RtValue {
     let mut cap_vec: Vec<*mut RtValue> = Vec::with_capacity(capture_count);
     if capture_count > 0 {
-        let slice = unsafe { std::slice::from_raw_parts(captures, capture_count) };
+        let slice = unsafe { core::slice::from_raw_parts(captures, capture_count) };
         for &cap in slice {
             airl_value_retain(cap);
             cap_vec.push(cap);
@@ -38,7 +41,7 @@ pub extern "C" fn airl_call_closure(
     };
 
     let arg_slice = if argc > 0 {
-        unsafe { std::slice::from_raw_parts(args, argc) }
+        unsafe { core::slice::from_raw_parts(args, argc) }
     } else {
         &[]
     };
@@ -54,17 +57,17 @@ pub extern "C" fn airl_call_closure(
     unsafe {
         match total {
             0 => {
-                let f: extern "C" fn() -> *mut RtValue = std::mem::transmute(func_ptr);
+                let f: extern "C" fn() -> *mut RtValue = core::mem::transmute(func_ptr);
                 f()
             }
             1 => {
                 let f: extern "C" fn(*mut RtValue) -> *mut RtValue =
-                    std::mem::transmute(func_ptr);
+                    core::mem::transmute(func_ptr);
                 f(params[0])
             }
             2 => {
                 let f: extern "C" fn(*mut RtValue, *mut RtValue) -> *mut RtValue =
-                    std::mem::transmute(func_ptr);
+                    core::mem::transmute(func_ptr);
                 f(params[0], params[1])
             }
             3 => {
@@ -72,7 +75,7 @@ pub extern "C" fn airl_call_closure(
                     *mut RtValue,
                     *mut RtValue,
                     *mut RtValue,
-                ) -> *mut RtValue = std::mem::transmute(func_ptr);
+                ) -> *mut RtValue = core::mem::transmute(func_ptr);
                 f(params[0], params[1], params[2])
             }
             4 => {
@@ -81,7 +84,7 @@ pub extern "C" fn airl_call_closure(
                     *mut RtValue,
                     *mut RtValue,
                     *mut RtValue,
-                ) -> *mut RtValue = std::mem::transmute(func_ptr);
+                ) -> *mut RtValue = core::mem::transmute(func_ptr);
                 f(params[0], params[1], params[2], params[3])
             }
             5 => {
@@ -91,7 +94,7 @@ pub extern "C" fn airl_call_closure(
                     *mut RtValue,
                     *mut RtValue,
                     *mut RtValue,
-                ) -> *mut RtValue = std::mem::transmute(func_ptr);
+                ) -> *mut RtValue = core::mem::transmute(func_ptr);
                 f(params[0], params[1], params[2], params[3], params[4])
             }
             6 => {
@@ -102,7 +105,7 @@ pub extern "C" fn airl_call_closure(
                     *mut RtValue,
                     *mut RtValue,
                     *mut RtValue,
-                ) -> *mut RtValue = std::mem::transmute(func_ptr);
+                ) -> *mut RtValue = core::mem::transmute(func_ptr);
                 f(params[0], params[1], params[2], params[3], params[4], params[5])
             }
             7 => {
@@ -114,7 +117,7 @@ pub extern "C" fn airl_call_closure(
                     *mut RtValue,
                     *mut RtValue,
                     *mut RtValue,
-                ) -> *mut RtValue = std::mem::transmute(func_ptr);
+                ) -> *mut RtValue = core::mem::transmute(func_ptr);
                 f(params[0], params[1], params[2], params[3], params[4], params[5], params[6])
             }
             8 => {
@@ -127,7 +130,7 @@ pub extern "C" fn airl_call_closure(
                     *mut RtValue,
                     *mut RtValue,
                     *mut RtValue,
-                ) -> *mut RtValue = std::mem::transmute(func_ptr);
+                ) -> *mut RtValue = core::mem::transmute(func_ptr);
                 f(
                     params[0], params[1], params[2], params[3], params[4], params[5], params[6],
                     params[7],
@@ -148,7 +151,7 @@ mod tests {
     #[test]
     fn make_closure_no_captures() {
         unsafe {
-            let closure = airl_make_closure(std::ptr::null(), std::ptr::null(), 0);
+            let closure = airl_make_closure(core::ptr::null(), core::ptr::null(), 0);
             assert!(!closure.is_null());
             assert_eq!((*closure).tag, TAG_CLOSURE);
             match &(*closure).data {
@@ -168,7 +171,7 @@ mod tests {
             assert_eq!((*cap).rc.load(Ordering::Relaxed), 1);
 
             let caps: *const *mut RtValue = &cap as *const *mut RtValue;
-            let closure = airl_make_closure(std::ptr::null(), caps, 1);
+            let closure = airl_make_closure(core::ptr::null(), caps, 1);
 
             // Capture was retained — rc should be 2
             assert_eq!((*cap).rc.load(Ordering::Relaxed), 2);
