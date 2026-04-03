@@ -1198,7 +1198,7 @@ impl BytecodeAot {
         // ── 2. Declare function in object module ─────────────────────────
         let func_id = self
             .module
-            .declare_function(&aot_symbol_name(&func.name), Linkage::Local, &sig)
+            .declare_function(&aot_symbol_name(&func.name), Linkage::Export, &sig)
             .map_err(|e| format!("declare: {}", e))?;
         self.compiled_funcs.insert(func.name.clone(), func_id);
         self.eligible_funcs.insert(func.name.clone());
@@ -1235,7 +1235,7 @@ impl BytecodeAot {
                         call_sig.returns.push(AbiParam::new(types::I64));
                         let callee_id = self
                             .module
-                            .declare_function(&aot_symbol_name(callee_name), Linkage::Local, &call_sig)
+                            .declare_function(&aot_symbol_name(callee_name), Linkage::Export, &call_sig)
                             .map_err(|e| format!("call declare: {}", e))?;
                         call_targets.insert(callee_name.clone(), callee_id);
                     }
@@ -1957,7 +1957,7 @@ impl BytecodeAot {
         // ── 2. Declare function in object module ─────────────────────────
         let func_id = self
             .module
-            .declare_function(&aot_symbol_name(&func.name), Linkage::Local, &sig)
+            .declare_function(&aot_symbol_name(&func.name), Linkage::Export, &sig)
             .map_err(|e| format!("declare: {}", e))?;
         // NOTE: insert into compiled_funcs BEFORE body compilation so that
         // self-recursive calls and emit_entry_point can find the function.
@@ -1998,7 +1998,7 @@ impl BytecodeAot {
                             call_sig.returns.push(AbiParam::new(types::I64));
                             let callee_id = self
                                 .module
-                                .declare_function(&aot_symbol_name(callee_name), Linkage::Local, &call_sig)
+                                .declare_function(&aot_symbol_name(callee_name), Linkage::Export, &call_sig)
                                 .map_err(|e| format!("call declare (eligible): {}", e))?;
                             call_targets.insert(callee_name.clone(), callee_id);
                         } else if all_functions.contains_key(callee_name.as_str())
@@ -2011,7 +2011,7 @@ impl BytecodeAot {
                             call_sig.returns.push(AbiParam::new(self.ptr));
                             let callee_id = self
                                 .module
-                                .declare_function(&aot_symbol_name(callee_name), Linkage::Local, &call_sig)
+                                .declare_function(&aot_symbol_name(callee_name), Linkage::Export, &call_sig)
                                 .map_err(|e| format!("call declare: {}", e))?;
                             call_targets.insert(callee_name.clone(), callee_id);
                         } else {
@@ -2030,7 +2030,7 @@ impl BytecodeAot {
                             call_sig.returns.push(AbiParam::new(self.ptr));
                             let callee_id = self
                                 .module
-                                .declare_function(&aot_symbol_name(callee_name), Linkage::Local, &call_sig)
+                                .declare_function(&aot_symbol_name(callee_name), Linkage::Export, &call_sig)
                                 .map_err(|e| format!("call declare: {}", e))?;
                             call_targets.insert(callee_name.clone(), callee_id);
                         }
