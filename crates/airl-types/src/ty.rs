@@ -1,3 +1,4 @@
+// TODO: type Symbol = SymbolId (u32 index into intern table) for O(1) comparisons
 pub type Symbol = String;
 
 #[derive(Debug, Clone, PartialEq)]

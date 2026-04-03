@@ -282,10 +282,10 @@ pub extern "C" fn airl_concat_lists(a: *mut RtValue, b: *mut RtValue) -> *mut Rt
     let b_val = unsafe { &*b };
     let mut items = Vec::new();
     if let RtData::List { .. } = &a_val.data {
-        for &item in crate::list::list_items(&a_val.data) { items.push(crate::memory::airl_value_clone(item)); }
+        for &item in crate::list::list_items(&a_val.data) { crate::memory::airl_value_retain(item); items.push(item); }
     }
     if let RtData::List { .. } = &b_val.data {
-        for &item in crate::list::list_items(&b_val.data) { items.push(crate::memory::airl_value_clone(item)); }
+        for &item in crate::list::list_items(&b_val.data) { crate::memory::airl_value_retain(item); items.push(item); }
     }
     rt_list(items)
 }
@@ -304,7 +304,7 @@ pub extern "C" fn airl_reverse_list(list: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*list };
     if let RtData::List { .. } = &val.data {
         let slice = crate::list::list_items(&val.data);
-        let reversed: Vec<*mut RtValue> = slice.iter().rev().map(|i| crate::memory::airl_value_clone(*i)).collect();
+        let reversed: Vec<*mut RtValue> = slice.iter().rev().map(|&i| { crate::memory::airl_value_retain(i); i }).collect();
         rt_list(reversed)
     } else {
         rt_list(vec![])
@@ -318,7 +318,7 @@ pub extern "C" fn airl_take(n_val: *mut RtValue, list: *mut RtValue) -> *mut RtV
     if let RtData::List { .. } = &val.data {
         let slice = crate::list::list_items(&val.data);
         let take_n = n.min(slice.len());
-        let taken: Vec<*mut RtValue> = slice[..take_n].iter().map(|i| crate::memory::airl_value_clone(*i)).collect();
+        let taken: Vec<*mut RtValue> = slice[..take_n].iter().map(|&i| { crate::memory::airl_value_retain(i); i }).collect();
         rt_list(taken)
     } else {
         rt_list(vec![])
@@ -332,7 +332,7 @@ pub extern "C" fn airl_drop(n_val: *mut RtValue, list: *mut RtValue) -> *mut RtV
     if let RtData::List { .. } = &val.data {
         let slice = crate::list::list_items(&val.data);
         if n >= slice.len() { return rt_list(vec![]); }
-        let dropped: Vec<*mut RtValue> = slice[n..].iter().map(|i| crate::memory::airl_value_clone(*i)).collect();
+        let dropped: Vec<*mut RtValue> = slice[n..].iter().map(|&i| { crate::memory::airl_value_retain(i); i }).collect();
         rt_list(dropped)
     } else {
         rt_list(vec![])
@@ -348,10 +348,9 @@ pub extern "C" fn airl_zip(a: *mut RtValue, b: *mut RtValue) -> *mut RtValue {
         let b_slice = crate::list::list_items(&b_val.data);
         let len = a_slice.len().min(b_slice.len());
         let items: Vec<*mut RtValue> = (0..len).map(|i| {
-            rt_list(vec![
-                crate::memory::airl_value_clone(a_slice[i]),
-                crate::memory::airl_value_clone(b_slice[i]),
-            ])
+            crate::memory::airl_value_retain(a_slice[i]);
+            crate::memory::airl_value_retain(b_slice[i]);
+            rt_list(vec![a_slice[i], b_slice[i]])
         }).collect();
         rt_list(items)
     } else {
@@ -368,9 +367,9 @@ pub extern "C" fn airl_flatten(list: *mut RtValue) -> *mut RtValue {
         for &item in slice {
             let sub = unsafe { &*item };
             if let RtData::List { .. } = &sub.data {
-                for &si in crate::list::list_items(&sub.data) { result.push(crate::memory::airl_value_clone(si)); }
+                for &si in crate::list::list_items(&sub.data) { crate::memory::airl_value_retain(si); result.push(si); }
             } else {
-                result.push(crate::memory::airl_value_clone(item));
+                crate::memory::airl_value_retain(item); result.push(item);
             }
         }
         rt_list(result)
@@ -384,8 +383,9 @@ pub extern "C" fn airl_enumerate(list: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*list };
     if let RtData::List { .. } = &val.data {
         let slice = crate::list::list_items(&val.data);
-        let result: Vec<*mut RtValue> = slice.iter().enumerate().map(|(i, item)| {
-            rt_list(vec![rt_int(i as i64), crate::memory::airl_value_clone(*item)])
+        let result: Vec<*mut RtValue> = slice.iter().enumerate().map(|(i, &item)| {
+            crate::memory::airl_value_retain(item);
+            rt_list(vec![rt_int(i as i64), item])
         }).collect();
         rt_list(result)
     } else {
@@ -844,23 +844,27 @@ pub extern "C" fn airl_get_cwd() -> *mut RtValue {
 
 // ── JSON ──
 
+/// Maximum JSON parsing recursion depth to prevent stack overflow.
+const JSON_MAX_DEPTH: usize = 128;
+
 #[no_mangle]
 pub extern "C" fn airl_json_parse(text: *mut RtValue) -> *mut RtValue {
     let input = match unsafe { &(*text).data } { RtData::Str(s) => s.as_str(), _ => return err_variant("json-parse: not a string") };
-    match parse_json_value(input.trim()) {
+    match parse_json_value(input.trim(), 0) {
         Some((val, _)) => ok_variant(val),
         None => err_variant(&format!("json-parse: invalid JSON: {}", input)),
     }
 }
 
 /// Minimal recursive-descent JSON parser returning (*mut RtValue, remaining_input).
-fn parse_json_value(input: &str) -> Option<(*mut RtValue, &str)> {
+fn parse_json_value(input: &str, depth: usize) -> Option<(*mut RtValue, &str)> {
+    if depth > JSON_MAX_DEPTH { return None; }
     let s = input.trim_start();
     if s.is_empty() { return None; }
     match s.as_bytes()[0] {
         b'"' => parse_json_string(s),
-        b'{' => parse_json_object(s),
-        b'[' => parse_json_array(s),
+        b'{' => parse_json_object(s, depth),
+        b'[' => parse_json_array(s, depth),
         b't' if s.starts_with("true") => Some((rt_bool(true), &s[4..])),
         b'f' if s.starts_with("false") => Some((rt_bool(false), &s[5..])),
         b'n' if s.starts_with("null") => Some((rt_nil(), &s[4..])),
@@ -926,12 +930,12 @@ fn parse_json_number(s: &str) -> Option<(*mut RtValue, &str)> {
     }
 }
 
-fn parse_json_array(s: &str) -> Option<(*mut RtValue, &str)> {
+fn parse_json_array(s: &str, depth: usize) -> Option<(*mut RtValue, &str)> {
     let mut rest = s[1..].trim_start(); // skip '['
     let mut items: Vec<*mut RtValue> = Vec::new();
     if rest.starts_with(']') { return Some((rt_list(items), &rest[1..])); }
     loop {
-        let (val, r) = parse_json_value(rest)?;
+        let (val, r) = parse_json_value(rest, depth + 1)?;
         items.push(val);
         rest = r.trim_start();
         if rest.starts_with(',') { rest = rest[1..].trim_start(); }
@@ -940,7 +944,7 @@ fn parse_json_array(s: &str) -> Option<(*mut RtValue, &str)> {
     }
 }
 
-fn parse_json_object(s: &str) -> Option<(*mut RtValue, &str)> {
+fn parse_json_object(s: &str, depth: usize) -> Option<(*mut RtValue, &str)> {
     let mut rest = s[1..].trim_start(); // skip '{'
     let mut map: HashMap<String, *mut RtValue> = HashMap::new();
     if rest.starts_with('}') { return Some((rt_map(map), &rest[1..])); }
@@ -952,7 +956,7 @@ fn parse_json_object(s: &str) -> Option<(*mut RtValue, &str)> {
         rest = r.trim_start();
         if !rest.starts_with(':') { return None; }
         rest = rest[1..].trim_start();
-        let (val, r) = parse_json_value(rest)?;
+        let (val, r) = parse_json_value(rest, depth + 1)?;
         map.insert(key, val);
         rest = r.trim_start();
         if rest.starts_with(',') { rest = rest[1..].trim_start(); }
@@ -961,11 +965,31 @@ fn parse_json_object(s: &str) -> Option<(*mut RtValue, &str)> {
     }
 }
 
+fn escape_json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 #[no_mangle]
 pub extern "C" fn airl_json_stringify(val: *mut RtValue) -> *mut RtValue {
     fn to_json(v: &RtValue) -> String {
         match &v.data {
-            RtData::Str(s) => format!("\"{}\"", s),
+            RtData::Str(s) => escape_json_string(s),
             RtData::Int(n) => n.to_string(),
             RtData::Float(f) => f.to_string(),
             RtData::Bool(b) => (if *b { "true" } else { "false" }).to_string(),
@@ -983,7 +1007,7 @@ pub extern "C" fn airl_json_stringify(val: *mut RtValue) -> *mut RtValue {
                 keys.sort();
                 let parts: Vec<String> = keys.iter().map(|k| {
                     let val = unsafe { &*m[*k] };
-                    format!("\"{}\":{}", k, to_json(val))
+                    format!("{}:{}", escape_json_string(k), to_json(val))
                 }).collect();
                 format!("{{{}}}", parts.join(","))
             }

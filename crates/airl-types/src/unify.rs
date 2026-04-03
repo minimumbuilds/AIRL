@@ -21,11 +21,12 @@ pub fn unify_dim(a: &DimExpr, b: &DimExpr, subst: &mut DimSubst) -> Result<(), S
             if let DimExpr::Var(w) = other {
                 if v == w { return Ok(()); }
             }
-            // Occurs check
-            if occurs(v, other) {
-                return Err(format!("circular dimension: {} occurs in {:?}", v, other));
+            // Apply substitutions to other before occurs check to detect indirect cycles
+            let other_substituted = apply_subst(other, subst);
+            if occurs(v, &other_substituted) {
+                return Err(format!("circular dimension: {} occurs in {:?}", v, other_substituted));
             }
-            subst.insert(v.clone(), other.clone());
+            subst.insert(v.clone(), other_substituted);
             Ok(())
         }
         // BinOp — try structural match

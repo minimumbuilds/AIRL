@@ -1,6 +1,6 @@
 use crate::value::{RtData, RtValue, TAG_INT};
 use crate::value::{rt_str as rt_str_alloc, rt_variant, rt_bool as rt_bool_alloc};
-use crate::list::airl_list_new as airl_list_new_raw;
+use crate::value::rt_list;
 use crate::closure::airl_call_closure;
 use crate::memory::airl_value_retain;
 use std::collections::{HashMap, HashSet};
@@ -145,8 +145,7 @@ pub extern "C" fn airl_channel_new() -> *mut RtValue {
     let rx_id = NEXT_CHANNEL_HANDLE.fetch_add(1, Ordering::SeqCst);
     channel_senders().lock().unwrap().insert(tx_id, tx);
     channel_receivers().lock().unwrap().insert(rx_id, Arc::new(Mutex::new(rx)));
-    let items = vec![rt_int(tx_id), rt_int(rx_id)];
-    airl_list_new_raw(items.as_ptr(), items.len())
+    rt_list(vec![rt_int(tx_id), rt_int(rx_id)])
 }
 
 /// Send a value on a channel. Returns Result[Bool, Str].
@@ -220,6 +219,10 @@ pub extern "C" fn airl_channel_recv_timeout(rx_handle: *mut RtValue, timeout_ms:
         Some(n) => n,
         None => return rt_err("channel-recv-timeout: timeout must be Int"),
     };
+
+    if ms < 0 {
+        return rt_err("channel-recv-timeout: timeout must be non-negative");
+    }
 
     if closed_handles().lock().unwrap().contains(&rx_id) {
         return rt_err("channel-recv-timeout: channel closed");

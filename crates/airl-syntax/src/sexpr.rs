@@ -131,6 +131,9 @@ fn parse_list(
     }
 }
 
+// TODO: take tokens by value (Vec<Token> + swap) to move strings into atoms
+// instead of cloning at the token→sexpr boundary. Parser should also consume
+// SExprs by value to avoid the second clone at sexpr→ast.
 fn token_to_atom(token: &Token) -> Result<Atom, Diagnostic> {
     let kind = match &token.kind {
         TokenKind::Integer(v) => AtomKind::Integer(*v),

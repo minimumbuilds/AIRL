@@ -91,12 +91,11 @@ impl TensorValue {
         }
         let mut data = vec![0.0; m * n];
         for i in 0..m {
-            for j in 0..n {
-                let mut sum = 0.0;
-                for p in 0..k1 {
-                    sum += self.data[i * k1 + p] * other.data[p * n + j];
+            for p in 0..k1 {
+                let a_ip = self.data[i * k1 + p];
+                for j in 0..n {
+                    data[i * n + j] += a_ip * other.data[p * n + j];
                 }
-                data[i * n + j] = sum;
             }
         }
         Ok(TensorValue { dtype: self.dtype, shape: vec![m, n], data })
