@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-g3:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: g3-linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: g3-linux-arm64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: g3-macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: g3-windows-x86_64.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build host binary
+        run: cargo build --release --features aot
+
+      - name: Compile g3 (Unix)
+        if: runner.os != 'Windows'
+        env:
+          AIRL_STDLIB: ${{ github.workspace }}/stdlib
+        run: |
+          cargo run --release --features aot -- run \
+            --load bootstrap/lexer.airl \
+            --load bootstrap/parser.airl \
+            --load bootstrap/bc_compiler.airl \
+            bootstrap/g3_compiler.airl -- \
+            bootstrap/lexer.airl \
+            bootstrap/parser.airl \
+            bootstrap/bc_compiler.airl \
+            bootstrap/g3_compiler.airl \
+            -o ${{ matrix.artifact }}
+
+      - name: Compile g3 (Windows)
+        if: runner.os == 'Windows'
+        env:
+          AIRL_STDLIB: ${{ github.workspace }}\stdlib
+        run: |
+          cargo run --release --features aot -- run `
+            --load bootstrap/lexer.airl `
+            --load bootstrap/parser.airl `
+            --load bootstrap/bc_compiler.airl `
+            bootstrap/g3_compiler.airl -- `
+            bootstrap/lexer.airl `
+            bootstrap/parser.airl `
+            bootstrap/bc_compiler.airl `
+            bootstrap/g3_compiler.airl `
+            -o ${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    needs: build-g3
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            g3-linux-x86_64/g3-linux-x86_64
+            g3-linux-arm64/g3-linux-arm64
+            g3-macos-arm64/g3-macos-arm64
+            g3-windows-x86_64.exe/g3-windows-x86_64.exe
