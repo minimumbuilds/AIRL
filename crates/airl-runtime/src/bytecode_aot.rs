@@ -891,10 +891,22 @@ impl BytecodeAot {
         // map-from, map-get-or, map-values, map-size
         // deregistered — AIRL stdlib equivalents in map.airl take over
 
-        // File I/O, Directory I/O (read-file, write-file, file-exists?, append-file,
-        // delete-file, delete-dir, rename-file, read-dir, create-dir, file-size,
-        // is-dir?, temp-file, temp-dir, file-mtime, get-args)
-        // deregistered — AIRL stdlib equivalents in io.airl take over
+        // File I/O, Directory I/O — OS-level builtins (cannot be pure AIRL)
+        m.insert("read-file".into(),   rt.read_file);
+        m.insert("write-file".into(),  rt.write_file);
+        m.insert("file-exists?".into(),rt.file_exists);
+        m.insert("append-file".into(), rt.append_file);
+        m.insert("delete-file".into(), rt.delete_file);
+        m.insert("delete-dir".into(),  rt.delete_dir);
+        m.insert("rename-file".into(), rt.rename_file);
+        m.insert("read-dir".into(),    rt.read_dir);
+        m.insert("create-dir".into(),  rt.create_dir);
+        m.insert("file-size".into(),   rt.file_size);
+        m.insert("is-dir?".into(),     rt.is_dir);
+        m.insert("temp-file".into(),   rt.temp_file);
+        m.insert("temp-dir".into(),    rt.temp_dir);
+        m.insert("file-mtime".into(),  rt.file_mtime);
+        m.insert("get-args".into(),    rt.get_args);
         m.insert("run-bytecode".into(), rt.run_bytecode);
         m.insert("compile-to-executable".into(), rt.compile_to_exe);
         m.insert("compile-bytecode-to-executable".into(), rt.compile_bc_to_exe);
@@ -925,8 +937,11 @@ impl BytecodeAot {
         m.insert("is-nan?".into(),      rt.is_nan);
         m.insert("is-infinite?".into(), rt.is_infinite);
 
-        // System (cpu-count, time-now), Environment (getenv)
-        // deregistered — AIRL stdlib equivalents in io.airl take over
+        // System — OS-level builtins (cannot be pure AIRL)
+        m.insert("cpu-count".into(),  rt.cpu_count);
+        m.insert("time-now".into(),   rt.time_now);
+        m.insert("getenv".into(),     rt.getenv);
+        m.insert("get-cwd".into(),    rt.get_cwd);
 
         // json-parse, json-stringify
         // deregistered — AIRL stdlib equivalents in json.airl take over
@@ -936,14 +951,16 @@ impl BytecodeAot {
         m.insert("shell-exec-with-stdin".into(), rt.shell_exec_with_stdin);
         m.insert("parse-int-radix".into(),    rt.parse_int_radix);
         m.insert("int-to-string-radix".into(), rt.int_to_string_radix);
-        // get-cwd deregistered — AIRL stdlib equivalent in io.airl takes over
 
         // Misc builtins
         m.insert("char-count".into(),    rt.char_count);
         m.insert("assert".into(),        rt.assert_fn);
         m.insert("panic".into(),         rt.panic_fn);
-        // exit, sleep, format-time, read-lines
-        // deregistered — AIRL stdlib equivalents in io.airl take over
+        // OS-level builtins (cannot be pure AIRL)
+        m.insert("exit".into(),        rt.exit_fn);
+        m.insert("sleep".into(),       rt.sleep_fn);
+        m.insert("format-time".into(), rt.format_time);
+        m.insert("read-lines".into(),  rt.read_lines);
         // concat, range, reverse, take, drop, zip, flatten, enumerate
         // deregistered — AIRL stdlib equivalents in prelude.airl take over
         // path-join, path-parent, path-filename, path-extension, is-absolute?

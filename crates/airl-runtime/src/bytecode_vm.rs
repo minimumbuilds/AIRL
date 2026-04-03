@@ -555,9 +555,33 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         // map-from, map-get-or, map-values, map-size
         // deregistered — AIRL stdlib equivalents in map.airl take over
 
-        // File I/O, Directory I/O, Stream I/O (read-line, read-lines, read-stdin),
-        // System (get-args, getenv, exit, sleep, time-now, cpu-count, format-time, get-cwd)
-        // deregistered — AIRL stdlib equivalents in io.airl take over
+        // File I/O — OS-level builtins (cannot be pure AIRL)
+        "read-file" => airl_rt::io::airl_read_file(a0!()),
+        "write-file" => airl_rt::io::airl_write_file(a0!(), a1!()),
+        "file-exists?" => airl_rt::io::airl_file_exists(a0!()),
+        "append-file" => airl_rt::io::airl_append_file(a0!(), a1!()),
+        "delete-file" => airl_rt::io::airl_delete_file(a0!()),
+        "delete-dir" => airl_rt::io::airl_delete_dir(a0!()),
+        "rename-file" => airl_rt::io::airl_rename_file(a0!(), a1!()),
+        "read-dir" => airl_rt::io::airl_read_dir(a0!()),
+        "create-dir" => airl_rt::io::airl_create_dir(a0!()),
+        "file-size" => airl_rt::io::airl_file_size(a0!()),
+        "is-dir?" => airl_rt::io::airl_is_dir(a0!()),
+        "temp-file" => airl_rt::io::airl_temp_file(a0!()),
+        "temp-dir" => airl_rt::io::airl_temp_dir(a0!()),
+        "file-mtime" => airl_rt::io::airl_file_mtime(a0!()),
+        "read-line" => airl_rt::io::airl_read_line(),
+        "read-lines" => airl_rt::misc::airl_read_lines(a0!()),
+        "read-stdin" => airl_rt::io::airl_read_stdin(),
+        // System — OS-level builtins (cannot be pure AIRL)
+        "get-args" => airl_rt::io::airl_get_args(),
+        "getenv" => airl_rt::misc::airl_getenv(a0!()),
+        "exit" => airl_rt::misc::airl_exit(a0!()),
+        "sleep" => airl_rt::misc::airl_sleep(a0!()),
+        "time-now" => airl_rt::misc::airl_time_now(),
+        "cpu-count" => airl_rt::misc::airl_cpu_count(),
+        "format-time" => airl_rt::misc::airl_format_time(a0!(), a1!()),
+        "get-cwd" => airl_rt::misc::airl_get_cwd(),
 
         // Utility
         "type-of" => airl_rt::io::airl_type_of(a0!()),
@@ -570,16 +594,12 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "string-to-float" => airl_rt::string::airl_string_to_float(a0!()),
         "panic" => airl_rt::misc::airl_panic(a0!()),
         "assert" => airl_rt::misc::airl_assert(a0!(), a1!()),
-        // cpu-count, time-now, sleep, format-time, getenv
-        // deregistered — AIRL stdlib equivalents in io.airl take over
         // json-parse, json-stringify
         // deregistered — AIRL stdlib equivalents in json.airl take over
         "shell-exec" => airl_rt::misc::airl_shell_exec(a0!(), a1!()),
         "shell-exec-with-stdin" => airl_rt::misc::airl_shell_exec_with_stdin(a0!(), a1!(), a2!()),
-        // exit deregistered — AIRL stdlib equivalent in io.airl takes over
         "parse-int-radix" => airl_rt::misc::airl_parse_int_radix(a0!(), a1!()),
         "int-to-string-radix" => airl_rt::misc::airl_int_to_string_radix(a0!(), a1!()),
-        // get-cwd deregistered — AIRL stdlib equivalent in io.airl takes over
 
         // Float math
         "sqrt" => airl_rt::math::airl_sqrt(a0!()),
