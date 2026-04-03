@@ -3221,11 +3221,11 @@ const EMBEDDED_RT_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libairl_
 /// Generate a unique temp file path for the runtime library.
 /// Uses PID and timestamp to avoid predictable paths (SEC-14: TOCTOU mitigation).
 fn unique_rt_temp_path() -> std::path::PathBuf {
-    let nanos = std::time::SystemTime::now()
+    let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_nanos();
-    std::env::temp_dir().join(format!("libairl_rt_{}_{}.a", std::process::id(), nanos))
+        .as_millis() as u64;
+    std::env::temp_dir().join(format!("libairl_rt_{}_{}.a", std::process::id(), millis))
 }
 
 /// Extract the embedded compressed runtime to a temp file. Returns the path, or None if not embedded.
