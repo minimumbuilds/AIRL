@@ -50,6 +50,9 @@ fn validate_linker_script_env(default: &str) -> Result<String, RuntimeError> {
 /// Convert a Value::Int to u16, for register/index fields.
 fn value_to_u16(val: &Value, field: &str) -> Result<u16, RuntimeError> {
     match val {
+        Value::Int(n) if *n < 0 || *n > u16::MAX as i64 => {
+            Err(type_err(&format!("{}: value {} out of u16 range", field, n)))
+        }
         Value::Int(n) => Ok(*n as u16),
         _ => Err(type_err(&format!("{}: expected Int, got {:?}", field, val))),
     }
@@ -122,6 +125,13 @@ fn value_to_instruction(val: &Value) -> Result<Instruction, RuntimeError> {
                     "instruction: expected 4 elements, got {}",
                     ints.len()
                 )));
+            }
+            for (i, &v) in ints[..4].iter().enumerate() {
+                if v < 0 || v > u16::MAX as i64 {
+                    return Err(type_err(&format!(
+                        "instruction field {}: value {} out of u16 range", i, v
+                    )));
+                }
             }
             let op  = int_to_op(ints[0] as u16)?;
             let dst = ints[1] as u16;
