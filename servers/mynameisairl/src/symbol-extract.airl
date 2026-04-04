@@ -1,0 +1,335 @@
+;; symbol-extract.airl — Extract symbol metadata from AIRL top-level forms
+;;
+;; Parses defn, define, deftype, extern-c, and top-level let forms
+;; into symbol Maps with full metadata (sig, intent, contracts, body hash, calls).
+
+;; ─── extract-symbols-from-file ───────────────────────────────────────
+;; Extract all symbols from a file's source content.
+;; Returns a list of symbol Maps.
+(defn extract-symbols-from-file
+  :sig [(path : String) (content : String) -> List]
+  :intent "Extract all symbol definitions from an AIRL source file"
+  :requires [(valid path) (valid content)]
+  :ensures [(valid result)]
+  :body (let (forms : List (sexpr-split-toplevel content))
+    (fold (fn [acc form-entry]
+      (let (form : String (map-get form-entry "form"))
+           (line : i64 (map-get form-entry "line"))
+           (end-line : i64 (map-get form-entry "end-line"))
+        (let (keyword : String (sexpr-first-token form))
+          (if (= keyword "defn")
+            (append acc (extract-defn form path line end-line))
+            (if (= keyword "define")
+              (append acc (extract-define form path line end-line))
+              (if (= keyword "deftype")
+                (append acc (extract-deftype form path line end-line))
+                (if (= keyword "extern-c")
+                  (append acc (extract-extern-c form path line end-line))
+                  (if (= keyword "let")
+                    (append acc (extract-top-let form path line end-line))
+                    acc))))))))
+      [] forms)))
+
+;; ─── extract-defn ────────────────────────────────────────────────────
+;; Extract a defn form into a symbol Map.
+(defn extract-defn
+  :sig [(form : String) (file : String) (line : i64) (end-line : i64) -> Map]
+  :intent "Parse a defn form and extract all metadata into a symbol map"
+  :requires [(valid form) (valid file)]
+  :ensures [(valid result)]
+  :body (let (tokens : List (sexpr-tokenize form))
+             (name : String (sexpr-second-token form))
+    (let (sig-text : String (extract-section-text tokens ":sig"))
+         (intent-text : String (extract-section-text tokens ":intent"))
+         (requires-text : String (extract-section-text tokens ":requires"))
+         (ensures-text : String (extract-section-text tokens ":ensures"))
+         (body-text : String (extract-section-text tokens ":body"))
+      (let (calls : List (extract-calls-from-tokens tokens))
+           (body-hash : String (if (= body-text "") "" (sha256 body-text)))
+        (map-from
+          ["id" (str file "::" name "#function")
+           "file" file
+           "name" name
+           "kind" "function"
+           "sig" sig-text
+           "intent" (strip-quotes intent-text)
+           "requires" requires-text
+           "ensures" ensures-text
+           "ownership" (extract-ownership-from-sig sig-text)
+           "line" line
+           "end-line" end-line
+           "body-hash" body-hash
+           "calls" calls])))))
+
+;; ─── extract-define ──────────────────────────────────────────────────
+;; Extract a define form into a symbol Map.
+(defn extract-define
+  :sig [(form : String) (file : String) (line : i64) (end-line : i64) -> Map]
+  :intent "Parse a define form and extract metadata"
+  :requires [(valid form) (valid file)]
+  :ensures [(valid result)]
+  :body (let (tokens : List (sexpr-tokenize form))
+             (name : String (sexpr-second-token form))
+    (let (params : List (extract-define-params tokens))
+         (calls : List (extract-calls-from-tokens tokens))
+         (body-hash : String (sha256 form))
+      (map-from
+        ["id" (str file "::" name "#define")
+         "file" file
+         "name" name
+         "kind" "define"
+         "sig" (str "[" (join params " ") "]")
+         "intent" ""
+         "requires" ""
+         "ensures" ""
+         "ownership" ""
+         "line" line
+         "end-line" end-line
+         "body-hash" body-hash
+         "calls" calls]))))
+
+;; ─── extract-deftype ─────────────────────────────────────────────────
+;; Extract a deftype form into a symbol Map.
+(defn extract-deftype
+  :sig [(form : String) (file : String) (line : i64) (end-line : i64) -> Map]
+  :intent "Parse a deftype form and extract type information"
+  :requires [(valid form) (valid file)]
+  :ensures [(valid result)]
+  :body (let (tokens : List (sexpr-tokenize form))
+             (name : String (sexpr-second-token form))
+    (let (body-text : String (extract-section-text tokens ":body"))
+      (map-from
+        ["id" (str file "::" name "#type")
+         "file" file
+         "name" name
+         "kind" "type"
+         "sig" ""
+         "intent" ""
+         "requires" ""
+         "ensures" ""
+         "ownership" ""
+         "line" line
+         "end-line" end-line
+         "body-hash" (sha256 form)
+         "calls" []]))))
+
+;; ─── extract-extern-c ────────────────────────────────────────────────
+;; Extract an extern-c form into a symbol Map.
+(defn extract-extern-c
+  :sig [(form : String) (file : String) (line : i64) (end-line : i64) -> Map]
+  :intent "Parse an extern-c declaration and extract metadata"
+  :requires [(valid form) (valid file)]
+  :ensures [(valid result)]
+  :body (let (tokens : List (sexpr-tokenize form))
+    (let (c-name : String (if (< (length tokens) 3) "" (strip-quotes (at tokens 2))))
+      (let (sig-text : String (extract-bracket-text tokens 3))
+        (map-from
+          ["id" (str file "::" c-name "#extern-c")
+           "file" file
+           "name" c-name
+           "kind" "extern-c"
+           "sig" sig-text
+           "intent" ""
+           "requires" ""
+           "ensures" ""
+           "ownership" ""
+           "line" line
+           "end-line" end-line
+           "body-hash" ""
+           "calls" []])))))
+
+;; ─── extract-top-let ─────────────────────────────────────────────────
+;; Extract a top-level let binding as a constant symbol.
+(defn extract-top-let
+  :sig [(form : String) (file : String) (line : i64) (end-line : i64) -> Map]
+  :intent "Parse a top-level let binding as a constant definition"
+  :requires [(valid form) (valid file)]
+  :ensures [(valid result)]
+  :body (let (tokens : List (sexpr-tokenize form))
+    ;; (let (name : Type value) body) — name is at index 2
+    (let (name : String (if (< (length tokens) 3) "" (at tokens 2)))
+      (let (type-text : String (if (< (length tokens) 5) "" (at tokens 4)))
+        (map-from
+          ["id" (str file "::" name "#constant")
+           "file" file
+           "name" name
+           "kind" "constant"
+           "sig" type-text
+           "intent" ""
+           "requires" ""
+           "ensures" ""
+           "ownership" ""
+           "line" line
+           "end-line" end-line
+           "body-hash" (sha256 form)
+           "calls" []])))))
+
+;; ─── extract-section-text ────────────────────────────────────────────
+;; Find a keyword like :sig, :body, etc. in tokens and return the text
+;; of the following balanced expression.
+(defn extract-section-text
+  :sig [(tokens : List) (keyword : String) -> String]
+  :intent "Extract the text of a section after a keyword in token list"
+  :requires [(valid tokens) (valid keyword)]
+  :ensures [(valid result)]
+  :body (let (idx : Any (find-token-index tokens keyword 0))
+    (if (= idx nil)
+      ""
+      (extract-balanced-at tokens (+ idx 1)))))
+
+;; ─── find-token-index ────────────────────────────────────────────────
+;; Find the index of a token in a list, starting from a given position.
+(defn find-token-index
+  :sig [(tokens : List) (target : String) (start : i64) -> Any]
+  :intent "Find index of target token starting from position"
+  :requires [(valid tokens) (valid target) (>= start 0)]
+  :ensures [(valid result)]
+  :body (if (>= start (length tokens))
+    nil
+    (if (= (at tokens start) target)
+      start
+      (find-token-index tokens target (+ start 1)))))
+
+;; ─── extract-balanced-at ─────────────────────────────────────────────
+;; Starting at index, extract a balanced expression (brackets or parens)
+;; and return it as a joined string.
+(defn extract-balanced-at
+  :sig [(tokens : List) (start : i64) -> String]
+  :intent "Extract balanced sub-expression starting at index"
+  :requires [(valid tokens) (>= start 0)]
+  :ensures [(valid result)]
+  :body (if (>= start (length tokens))
+    ""
+    (let (first-tok : String (at tokens start))
+      (if (or (= first-tok "[") (= first-tok "("))
+        ;; Balanced grouping
+        (let (result : Map (collect-balanced tokens start 0 []))
+          (join (map-get result "collected") " "))
+        ;; Single token (e.g., a string literal for :intent)
+        first-tok))))
+
+;; ─── collect-balanced ────────────────────────────────────────────────
+;; Collect tokens for a balanced bracket/paren expression.
+(defn collect-balanced
+  :sig [(tokens : List) (pos : i64) (depth : i64) (acc : List) -> Map]
+  :intent "Collect tokens from a balanced expression"
+  :requires [(valid tokens) (>= pos 0) (>= depth 0)]
+  :ensures [(valid result)]
+  :body (if (>= pos (length tokens))
+    (map-from ["collected" acc "end" pos])
+    (let (tok : String (at tokens pos))
+      (if (or (= tok "(") (= tok "["))
+        (collect-balanced tokens (+ pos 1) (+ depth 1) (append acc tok))
+        (if (or (= tok ")") (= tok "]"))
+          (if (= depth 1)
+            ;; Closing the outermost group
+            (map-from ["collected" (append acc tok) "end" (+ pos 1)])
+            (collect-balanced tokens (+ pos 1) (- depth 1) (append acc tok)))
+          (collect-balanced tokens (+ pos 1) depth (append acc tok)))))))
+
+;; ─── extract-bracket-text ────────────────────────────────────────────
+;; Extract a [...] expression starting at or after position.
+(defn extract-bracket-text
+  :sig [(tokens : List) (start : i64) -> String]
+  :intent "Extract bracket expression starting at position"
+  :requires [(valid tokens) (>= start 0)]
+  :ensures [(valid result)]
+  :body (let (idx : Any (find-token-index tokens "[" start))
+    (if (= idx nil)
+      ""
+      (extract-balanced-at tokens idx))))
+
+;; ─── extract-define-params ───────────────────────────────────────────
+;; Extract parameter names from a define form: (define name (p1 p2) body)
+(defn extract-define-params
+  :sig [(tokens : List) -> List]
+  :intent "Extract parameter names from a define form"
+  :requires [(valid tokens)]
+  :ensures [(valid result)]
+  :body (let (paren-idx : Any (find-token-index tokens "(" 2))
+    (if (= paren-idx nil)
+      []
+      (let (result : Map (collect-balanced tokens paren-idx 0 []))
+           (collected : List (map-get result "collected"))
+        ;; Filter out ( and ) tokens
+        (filter (fn [t] (not (or (= t "(") (= t ")")))) collected)))))
+
+;; ─── extract-calls-from-tokens ───────────────────────────────────────
+;; Extract function call names from tokens.
+;; A call is identified as a symbol immediately after "(".
+(defn extract-calls-from-tokens
+  :sig [(tokens : List) -> List]
+  :intent "Extract function names called in the body"
+  :requires [(valid tokens)]
+  :ensures [(valid result)]
+  :body (let (pairs : List (extract-call-pairs tokens 0 []))
+    ;; Deduplicate
+    (fold (fn [acc name]
+      (if (list-contains? acc name) acc (append acc name)))
+      [] pairs)))
+
+;; ─── extract-call-pairs ──────────────────────────────────────────────
+;; Walk tokens finding ( followed by a symbol name.
+(defn extract-call-pairs
+  :sig [(tokens : List) (pos : i64) (acc : List) -> List]
+  :intent "Collect symbols that appear after open-parens"
+  :requires [(valid tokens) (>= pos 0)]
+  :ensures [(valid result)]
+  :body (if (>= (+ pos 1) (length tokens))
+    acc
+    (let (tok : String (at tokens pos))
+         (next : String (at tokens (+ pos 1)))
+      (if (= tok "(")
+        (if (is-call-target next)
+          (extract-call-pairs tokens (+ pos 1) (append acc next))
+          (extract-call-pairs tokens (+ pos 1) acc))
+        (extract-call-pairs tokens (+ pos 1) acc)))))
+
+;; ─── is-call-target ──────────────────────────────────────────────────
+;; Check if a token looks like a function call target (not a keyword,
+;; paren, bracket, string literal, or number).
+(defn is-call-target
+  :sig [(tok : String) -> Bool]
+  :intent "Check if token is a plausible function name"
+  :requires [(valid tok)]
+  :ensures [(valid result)]
+  :body (if (= tok "") false
+    (if (= tok "(") false
+      (if (= tok ")") false
+        (if (= tok "[") false
+          (if (= tok "]") false
+            (if (starts-with tok ":") false
+              (if (starts-with tok "\"") false
+                (let (first-ch : i64 (char-code tok))
+                  ;; Not a number (0-9 = 48-57)
+                  (if (and (>= first-ch 48) (<= first-ch 57))
+                    false
+                    true))))))))))
+
+;; ─── strip-quotes ────────────────────────────────────────────────────
+;; Remove surrounding double quotes from a string token.
+(defn strip-quotes
+  :sig [(s : String) -> String]
+  :intent "Remove surrounding quotes from a string literal token"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (if (= s "") ""
+    (if (starts-with s "\"")
+      (let (len : i64 (length s))
+        (if (> len 2)
+          (substring s 1 (- len 1))
+          ""))
+      s)))
+
+;; ─── extract-ownership-from-sig ──────────────────────────────────────
+;; Extract ownership annotations (own, ref, mut, copy) from a sig string.
+(defn extract-ownership-from-sig
+  :sig [(sig-text : String) -> String]
+  :intent "Extract ownership annotations from signature text"
+  :requires [(valid sig-text)]
+  :ensures [(valid result)]
+  :body (if (= sig-text "") ""
+    (let (toks : List (words sig-text))
+      (join (filter (fn [w]
+        (or (= w "own") (or (= w "ref") (or (= w "mut") (= w "copy")))))
+        toks) " "))))

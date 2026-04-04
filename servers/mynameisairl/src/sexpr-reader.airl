@@ -1,0 +1,210 @@
+;; sexpr-reader.airl — S-expression tokenizer and top-level form splitter
+;;
+;; Splits AIRL source into top-level (...) forms, tracking line numbers.
+;; Handles: ;; comments (skip to EOL), "strings" (don't count parens inside),
+;; nested parens, and line counting.
+
+;; ─── sexpr-split-toplevel ────────────────────────────────────────────
+(defn sexpr-split-toplevel
+  :sig [(source : String) -> List]
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body (let (char-list : List (chars source))
+    (let (state : Map (fold (fn [s c] (sexpr-walk-char s c))
+      (map-from ["depth" 0 "in-string" false "in-comment" false
+                 "escape" false "current-line" 1
+                 "form-start-line" 0 "form-chars" [] "forms" []])
+      char-list))
+      (map-get state "forms"))))
+
+;; ─── sexpr-make-state ────────────────────────────────────────────────
+(defn sexpr-make-state
+  :sig [(depth : i64) (in-str : Any) (in-cmt : Any) (esc : Any) (line : i64) (start : i64) (fch : List) (forms : List) -> Map]
+  :ensures [(valid result)]
+  :body (map-from ["depth" depth "in-string" in-str "in-comment" in-cmt
+                   "escape" esc "current-line" line
+                   "form-start-line" start "form-chars" fch "forms" forms]))
+
+;; ─── sexpr-handle-newline ────────────────────────────────────────────
+(defn sexpr-handle-newline
+  :sig [(depth : i64) (in-str : Any) (in-cmt : Any) (cur-line : i64) (start-line : i64) (fchars : List) (forms : List) -> Map]
+  :ensures [(valid result)]
+  :body (let (new-line : i64 (+ cur-line 1))
+    (if (> depth 0)
+      (sexpr-make-state depth (if (= in-cmt true) false in-str) false false new-line start-line (append fchars "\n") forms)
+      (sexpr-make-state 0 false false false new-line 0 [] forms))))
+
+;; ─── sexpr-handle-in-string ──────────────────────────────────────────
+(defn sexpr-handle-in-string
+  :sig [(ch : String) (depth : i64) (esc : Any) (cur-line : i64) (start-line : i64) (fchars : List) (forms : List) -> Map]
+  :ensures [(valid result)]
+  :body (if (= esc true)
+    (sexpr-make-state depth true false false cur-line start-line (append fchars ch) forms)
+    (if (= ch "\\")
+      (sexpr-make-state depth true false true cur-line start-line (append fchars ch) forms)
+      (if (= ch "\"")
+        (sexpr-make-state depth false false false cur-line start-line (append fchars ch) forms)
+        (sexpr-make-state depth true false false cur-line start-line (append fchars ch) forms)))))
+
+;; ─── sexpr-handle-close-paren ────────────────────────────────────────
+(defn sexpr-handle-close-paren
+  :sig [(depth : i64) (cur-line : i64) (start-line : i64) (fchars : List) (forms : List) -> Map]
+  :ensures [(valid result)]
+  :body (if (<= depth 0)
+    (sexpr-make-state 0 false false false cur-line 0 [] forms)
+    (if (= depth 1)
+      (let (form-text : String (join (append fchars ")") ""))
+        (let (entry : Map (map-from ["form" form-text "line" start-line "end-line" cur-line]))
+          (sexpr-make-state 0 false false false cur-line 0 [] (append forms entry))))
+      (sexpr-make-state (- depth 1) false false false cur-line start-line (append fchars ")") forms))))
+
+;; ─── sexpr-handle-normal ─────────────────────────────────────────────
+(defn sexpr-handle-normal
+  :sig [(state : Map) (ch : String) (depth : i64) (cur-line : i64) (start-line : i64) (fchars : List) (forms : List) -> Map]
+  :ensures [(valid result)]
+  :body (if (= ch ";")
+    (if (> depth 0)
+      (sexpr-make-state depth false true false cur-line start-line (append fchars ch) forms)
+      (sexpr-make-state 0 false true false cur-line 0 [] forms))
+    (if (= ch "\"")
+      (if (> depth 0)
+        (sexpr-make-state depth true false false cur-line start-line (append fchars ch) forms)
+        state)
+      (if (= ch "(")
+        (if (= depth 0)
+          (sexpr-make-state 1 false false false cur-line cur-line ["("] forms)
+          (sexpr-make-state (+ depth 1) false false false cur-line start-line (append fchars "(") forms))
+        (if (= ch ")")
+          (sexpr-handle-close-paren depth cur-line start-line fchars forms)
+          (if (> depth 0)
+            (sexpr-make-state depth false false false cur-line start-line (append fchars ch) forms)
+            state))))))
+
+;; ─── sexpr-walk-char ─────────────────────────────────────────────────
+(defn sexpr-walk-char
+  :sig [(state : Map) (ch : String) -> Map]
+  :requires [(valid state) (valid ch)]
+  :ensures [(valid result)]
+  :body (let (depth : i64 (map-get state "depth"))
+             (in-str : Any (map-get state "in-string"))
+             (in-cmt : Any (map-get state "in-comment"))
+             (esc : Any (map-get state "escape"))
+             (cur-line : i64 (map-get state "current-line"))
+             (start-line : i64 (map-get state "form-start-line"))
+             (fchars : List (map-get state "form-chars"))
+             (forms : List (map-get state "forms"))
+    (if (= ch "\n")
+      (sexpr-handle-newline depth in-str in-cmt cur-line start-line fchars forms)
+      (if (= in-cmt true)
+        (if (> depth 0)
+          (sexpr-make-state depth in-str true false cur-line start-line (append fchars ch) forms)
+          state)
+        (if (= in-str true)
+          (sexpr-handle-in-string ch depth esc cur-line start-line fchars forms)
+          (sexpr-handle-normal state ch depth cur-line start-line fchars forms))))))
+
+;; ─── sexpr-tokenize ──────────────────────────────────────────────────
+(defn sexpr-tokenize
+  :sig [(source : String) -> List]
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body (let (char-list : List (chars source))
+    (let (state : Map (fold (fn [s c] (sexpr-tok-char s c))
+      (map-from ["tokens" [] "current" "" "in-string" false
+                 "escape" false "in-comment" false])
+      char-list))
+      (let (cur : String (map-get state "current"))
+           (toks : List (map-get state "tokens"))
+        (if (= cur "")
+          toks
+          (append toks cur))))))
+
+;; ─── sexpr-tok-make ──────────────────────────────────────────────────
+(defn sexpr-tok-make
+  :sig [(toks : List) (cur : String) (in-str : Any) (esc : Any) (in-cmt : Any) -> Map]
+  :ensures [(valid result)]
+  :body (map-from ["tokens" toks "current" cur "in-string" in-str
+                   "escape" esc "in-comment" in-cmt]))
+
+;; ─── sexpr-tok-handle-comment ────────────────────────────────────────
+(defn sexpr-tok-handle-comment
+  :sig [(ch : String) (toks : List) (cur : String) -> Map]
+  :ensures [(valid result)]
+  :body (if (= ch "\n")
+    (sexpr-tok-make toks cur false false false)
+    (sexpr-tok-make toks cur false false true)))
+
+;; ─── sexpr-tok-handle-string ─────────────────────────────────────────
+(defn sexpr-tok-handle-string
+  :sig [(ch : String) (toks : List) (cur : String) (esc : Any) -> Map]
+  :ensures [(valid result)]
+  :body (if (= esc true)
+    (sexpr-tok-make toks (str cur ch) true false false)
+    (if (= ch "\\")
+      (sexpr-tok-make toks (str cur ch) true true false)
+      (if (= ch "\"")
+        (sexpr-tok-make (append toks (str cur "\"")) "" false false false)
+        (sexpr-tok-make toks (str cur ch) true false false)))))
+
+;; ─── sexpr-tok-flush-and-add ─────────────────────────────────────────
+(defn sexpr-tok-flush-and-add
+  :sig [(toks : List) (cur : String) (delim : String) -> Map]
+  :ensures [(valid result)]
+  :body (if (= cur "")
+    (sexpr-tok-make (append toks delim) "" false false false)
+    (let (t2 : List (append toks cur))
+      (sexpr-tok-make (append t2 delim) "" false false false))))
+
+;; ─── sexpr-tok-handle-normal ─────────────────────────────────────────
+(defn sexpr-tok-handle-normal
+  :sig [(state : Map) (ch : String) (toks : List) (cur : String) -> Map]
+  :ensures [(valid result)]
+  :body (if (= ch ";")
+    (if (= cur "")
+      (sexpr-tok-make toks "" false false true)
+      (sexpr-tok-make (append toks cur) "" false false true))
+    (if (= ch "\"")
+      (if (= cur "")
+        (sexpr-tok-make toks "\"" true false false)
+        (sexpr-tok-make (append toks cur) "\"" true false false))
+      (if (or (= ch "(") (= ch ")"))
+        (sexpr-tok-flush-and-add toks cur ch)
+        (if (or (= ch "[") (= ch "]"))
+          (sexpr-tok-flush-and-add toks cur ch)
+          (if (or (= ch " ") (or (= ch "\t") (= ch "\n")))
+            (if (= cur "")
+              state
+              (sexpr-tok-make (append toks cur) "" false false false))
+            (sexpr-tok-make toks (str cur ch) false false false)))))))
+
+;; ─── sexpr-tok-char ──────────────────────────────────────────────────
+(defn sexpr-tok-char
+  :sig [(state : Map) (ch : String) -> Map]
+  :requires [(valid state) (valid ch)]
+  :ensures [(valid result)]
+  :body (let (toks : List (map-get state "tokens"))
+             (cur : String (map-get state "current"))
+             (in-str : Any (map-get state "in-string"))
+             (esc : Any (map-get state "escape"))
+             (in-cmt : Any (map-get state "in-comment"))
+    (if (= in-cmt true)
+      (sexpr-tok-handle-comment ch toks cur)
+      (if (= in-str true)
+        (sexpr-tok-handle-string ch toks cur esc)
+        (sexpr-tok-handle-normal state ch toks cur)))))
+
+;; ─── sexpr-first-token ───────────────────────────────────────────────
+(defn sexpr-first-token
+  :sig [(form : String) -> String]
+  :requires [(valid form)]
+  :ensures [(valid result)]
+  :body (let (tokens : List (sexpr-tokenize form))
+    (if (< (length tokens) 2) "" (at tokens 1))))
+
+;; ─── sexpr-second-token ──────────────────────────────────────────────
+(defn sexpr-second-token
+  :sig [(form : String) -> String]
+  :requires [(valid form)]
+  :ensures [(valid result)]
+  :body (let (tokens : List (sexpr-tokenize form))
+    (if (< (length tokens) 3) "" (at tokens 2))))

@@ -1,0 +1,152 @@
+;; xref.airl — Cross-reference analysis
+;;
+;; Build call graphs, find callers/callees, compute dependency graphs
+;; and blast radius for impact analysis.
+
+;; ─── build-call-graph ────────────────────────────────────────────────
+;; Build a reverse call graph: callee-name → List of caller symbol IDs.
+(defn build-call-graph
+  :sig [(symbols : List) -> Map]
+  :intent "Build reverse call graph mapping callee names to caller IDs"
+  :requires [(valid symbols)]
+  :ensures [(valid result)]
+  :body (fold (fn [graph sym]
+    (let (caller-id : String (map-get sym "id"))
+         (calls : List (map-get-or sym "calls" []))
+      (fold (fn [g callee-name]
+        (let (existing : Any (map-get g callee-name))
+          (if (= existing nil)
+            (map-set g callee-name [caller-id])
+            (if (list-contains? existing caller-id)
+              g
+              (map-set g callee-name (append existing caller-id))))))
+        graph calls)))
+    (map-new) symbols))
+
+;; ─── find-callers ────────────────────────────────────────────────────
+;; Find all symbols that call a given function name.
+(defn find-callers
+  :sig [(index : Map) (function-name : String) -> List]
+  :intent "Find all symbols that call the given function"
+  :requires [(valid index) (valid function-name)]
+  :ensures [(valid result)]
+  :body (let (all-syms : List (index-all-symbols index))
+             (call-graph : Map (build-call-graph all-syms))
+    (let (caller-ids : Any (map-get call-graph function-name))
+      (if (= caller-ids nil)
+        []
+        ;; Resolve IDs to full symbol maps
+        (filter (fn [sym]
+          (list-contains? caller-ids (map-get sym "id")))
+          all-syms)))))
+
+;; ─── find-callees ────────────────────────────────────────────────────
+;; Find all functions called by a given function.
+(defn find-callees
+  :sig [(index : Map) (function-name : String) -> List]
+  :intent "Find all functions called by the given function"
+  :requires [(valid index) (valid function-name)]
+  :ensures [(valid result)]
+  :body (let (all-syms : List (index-all-symbols index))
+    (let (target : Any (find (fn [s] (= (map-get s "name") function-name)) all-syms))
+      (if (= target nil)
+        []
+        (map-get-or target "calls" [])))))
+
+;; ─── dependency-graph ────────────────────────────────────────────────
+;; Build file-level dependency graph.
+;; Returns Map of file → List of files it depends on (calls functions from).
+(defn dependency-graph
+  :sig [(index : Map) -> Map]
+  :intent "Build file-level dependency map"
+  :requires [(valid index)]
+  :ensures [(valid result)]
+  :body (let (all-syms : List (index-all-symbols index))
+             (sym-to-file : Map (fold (fn [m sym]
+               (map-set m (map-get sym "name") (map-get sym "file")))
+               (map-new) all-syms))
+    ;; For each file, find which other files its symbols call into
+    (let (files : Map (map-get index "files"))
+         (file-keys : List (map-keys files))
+      (fold (fn [graph file-key]
+        (let (file-syms : List (map-get (map-get files file-key) "symbols"))
+          (let (deps : List (fold (fn [dep-acc sym]
+              (let (calls : List (map-get-or sym "calls" []))
+                (fold (fn [da call-name]
+                  (let (dep-file : Any (map-get sym-to-file call-name))
+                    (if (= dep-file nil)
+                      da
+                      (if (= dep-file file-key)
+                        da  ;; Same file — not a dependency
+                        (if (list-contains? da dep-file)
+                          da
+                          (append da dep-file))))))
+                  dep-acc calls)))
+              [] file-syms))
+            (map-set graph file-key deps))))
+        (map-new) file-keys))))
+
+;; ─── blast-radius ────────────────────────────────────────────────────
+;; Compute the transitive closure of callers for a function.
+;; Returns a Map with "symbols" (affected symbol maps) and "files" (affected file list).
+(defn blast-radius
+  :sig [(index : Map) (function-name : String) -> Map]
+  :intent "Compute transitive impact of changing a function"
+  :requires [(valid index) (valid function-name)]
+  :ensures [(valid result)]
+  :body (let (all-syms : List (index-all-symbols index))
+             (call-graph : Map (build-call-graph all-syms))
+    (let (affected-ids : List (blast-radius-walk call-graph [function-name] []))
+      ;; Resolve IDs to symbols and collect affected files
+      (let (affected-syms : List (filter (fn [sym]
+          (list-contains? affected-ids (map-get sym "name")))
+          all-syms))
+        (let (affected-files : List (fold (fn [acc sym]
+            (let (f : String (map-get sym "file"))
+              (if (list-contains? acc f) acc (append acc f))))
+            [] affected-syms))
+          (map-from
+            ["function" function-name
+             "symbols" affected-syms
+             "files" affected-files
+             "direct-callers" (length (find-callers index function-name))
+             "total-affected" (length affected-syms)]))))))
+
+;; ─── blast-radius-walk ───────────────────────────────────────────────
+;; BFS-style walk of the call graph to find all transitive callers.
+(defn blast-radius-walk
+  :sig [(call-graph : Map) (worklist : List) (visited : List) -> List]
+  :intent "Walk call graph transitively to find all affected symbols"
+  :requires [(valid call-graph) (valid worklist) (valid visited)]
+  :ensures [(valid result)]
+  :body (if (empty? worklist)
+    visited
+    (let (current : String (head worklist))
+         (rest : List (tail worklist))
+      (if (list-contains? visited current)
+        (blast-radius-walk call-graph rest visited)
+        (let (new-visited : List (append visited current))
+             (callers : Any (map-get call-graph current))
+          (if (= callers nil)
+            (blast-radius-walk call-graph rest new-visited)
+            ;; Add caller names (need to resolve IDs to names)
+            (let (caller-names : List (fold (fn [acc caller-id]
+                ;; caller-id is like "file::name#kind" — extract name
+                (let (name : String (extract-name-from-id caller-id))
+                  (if (list-contains? acc name) acc (append acc name))))
+                [] callers))
+              (blast-radius-walk call-graph (concat rest caller-names) new-visited))))))))
+
+;; ─── extract-name-from-id ────────────────────────────────────────────
+;; Extract the function name from a symbol ID like "file::name#kind".
+(defn extract-name-from-id
+  :sig [(id : String) -> String]
+  :intent "Extract function name from symbol ID"
+  :requires [(valid id)]
+  :ensures [(valid result)]
+  :body (let (parts : List (split id "::"))
+    (if (< (length parts) 2)
+      id
+      (let (name-kind : String (at parts 1))
+        (let (name-parts : List (split name-kind "#"))
+          (head name-parts))))))

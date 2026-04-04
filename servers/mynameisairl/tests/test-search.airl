@@ -1,0 +1,149 @@
+;; test-search.airl — Tests for search.airl
+;;
+;; Tests symbol searching and ranking.
+
+;; ─── Helpers ─────────────────────────────────────────────────────────
+(define assert-eq (label expected actual)
+  (if (= expected actual)
+    (println "  PASS:" label)
+    (do
+      (println "  FAIL:" label)
+      (println "    expected:" expected)
+      (println "    actual:  " actual)
+      (assert false))))
+
+(define assert-len (label expected-len lst)
+  (assert-eq label expected-len (length lst)))
+
+(define assert-true (label val)
+  (assert-eq label true val))
+
+(println "test-search")
+
+;; ─── Build a test index ──────────────────────────────────────────────
+(define make-test-sym (name kind sig intent)
+  (map-from
+    ["id" (str "test.airl::" name "#" kind)
+     "file" "test.airl"
+     "name" name
+     "kind" kind
+     "sig" sig
+     "intent" intent
+     "requires" "(valid x)"
+     "ensures" "(valid result)"
+     "ownership" ""
+     "line" 1
+     "end-line" 5
+     "body-hash" ""
+     "calls" []]))
+
+(let (test-index : Map (map-from
+    ["name" "test-project"
+     "root" "/tmp/test"
+     "files" (map-from
+       ["test.airl" (map-from
+         ["hash" "abc123"
+          "symbols" [(make-test-sym "parse-route" "function" "[(path : String) -> Map]" "Parse a route pattern")
+                     (make-test-sym "parse-query" "function" "[(url : String) -> Map]" "Parse query parameters")
+                     (make-test-sym "render-html" "function" "[(template : String) -> String]" "Render an HTML template")
+                     (make-test-sym "validate-input" "function" "[(data : Map) -> Result]" "Validate user input")
+                     (make-test-sym "format-date" "function" "[(epoch : i64) -> String]" "Format date for display")
+                     (make-test-sym "Color" "type" "" "Color type")
+                     (make-test-sym "helper" "define" "[x y]" "")]])])
+     "all-symbols" [(make-test-sym "parse-route" "function" "[(path : String) -> Map]" "Parse a route pattern")
+                     (make-test-sym "parse-query" "function" "[(url : String) -> Map]" "Parse query parameters")
+                     (make-test-sym "render-html" "function" "[(template : String) -> String]" "Render an HTML template")
+                     (make-test-sym "validate-input" "function" "[(data : Map) -> Result]" "Validate user input")
+                     (make-test-sym "format-date" "function" "[(epoch : i64) -> String]" "Format date for display")
+                     (make-test-sym "Color" "type" "" "Color type")
+                     (make-test-sym "helper" "define" "[x y]" "")]]))
+
+  (do
+    ;; ─── Test 1: Exact name match ────────────────────────────────────
+    (let (r : List (search-symbols test-index "parse-route"))
+      (do
+        (assert-true "exact match found" (> (length r) 0))
+        (assert-eq "exact match first" "parse-route" (map-get (at r 0) "name"))))
+
+    ;; ─── Test 2: Prefix match ────────────────────────────────────────
+    (let (r : List (search-symbols test-index "parse"))
+      (do
+        (assert-true "prefix finds 2" (>= (length r) 2))
+        ;; Both parse-route and parse-query should be in results
+        (let (names : List (map (fn [s] (map-get s "name")) r))
+          (do
+            (assert-true "has parse-route" (list-contains? names "parse-route"))
+            (assert-true "has parse-query" (list-contains? names "parse-query"))))))
+
+    ;; ─── Test 3: Substring match ─────────────────────────────────────
+    (let (r : List (search-symbols test-index "route"))
+      (do
+        (assert-true "substring found" (> (length r) 0))
+        (assert-eq "substring result" "parse-route" (map-get (at r 0) "name"))))
+
+    ;; ─── Test 4: Sig search ──────────────────────────────────────────
+    (let (r : List (search-symbols test-index "string"))
+      ;; Should find functions with String in sig
+      (assert-true "sig search finds results" (> (length r) 0)))
+
+    ;; ─── Test 5: Intent search ───────────────────────────────────────
+    (let (r : List (search-symbols test-index "template"))
+      (do
+        (assert-true "intent search found" (> (length r) 0))
+        (assert-eq "intent match" "render-html" (map-get (at r 0) "name"))))
+
+    ;; ─── Test 6: No match ────────────────────────────────────────────
+    (let (r : List (search-symbols test-index "zzzznonexistent"))
+      (assert-len "no match" 0 r))
+
+    ;; ─── Test 7: Score ranking — exact > prefix > substring ──────────
+    (let (s-exact : i64 (score-symbol (make-test-sym "foo" "function" "" "") "foo"))
+         (s-prefix : i64 (score-symbol (make-test-sym "foobar" "function" "" "") "foo"))
+         (s-substr : i64 (score-symbol (make-test-sym "barfoo" "function" "" "") "foo"))
+      (do
+        (assert-true "exact > prefix" (> s-exact s-prefix))
+        (assert-true "prefix > substring" (> s-prefix s-substr))))
+
+    ;; ─── Test 8: Case insensitive ────────────────────────────────────
+    (let (r : List (search-symbols test-index "PARSE"))
+      (assert-true "case insensitive" (> (length r) 0)))
+
+    ;; ─── Test 9: search-symbols-limited ──────────────────────────────
+    (let (r : List (search-symbols-limited test-index "a" 2))
+      (assert-true "limited to 2" (<= (length r) 2)))
+
+    ;; ─── Test 10: search-by-kind ─────────────────────────────────────
+    (let (r : List (search-by-kind test-index "color" "type"))
+      (do
+        (assert-len "kind filter type" 1 r)
+        (assert-eq "kind filter name" "Color" (map-get (at r 0) "name"))))
+
+    ;; ─── Test 11: search-by-name ─────────────────────────────────────
+    (let (all-syms : List (index-all-symbols test-index))
+      (let (r : List (search-by-name all-syms "format"))
+        (do
+          (assert-len "by-name format" 1 r)
+          (assert-eq "by-name result" "format-date" (map-get (at r 0) "name")))))
+
+    ;; ─── Test 12: search-by-sig ──────────────────────────────────────
+    (let (all-syms : List (index-all-symbols test-index))
+      (let (r : List (search-by-sig all-syms "map"))
+        (assert-true "by-sig map" (> (length r) 0))))
+
+    ;; ─── Test 13: search-by-contract ─────────────────────────────────
+    (let (all-syms : List (index-all-symbols test-index))
+      (let (r : List (search-by-contract all-syms "valid"))
+        (assert-true "by-contract valid" (> (length r) 0))))
+
+    ;; ─── Test 14: Score 0 for no match ───────────────────────────────
+    (let (s : i64 (score-symbol (make-test-sym "alpha" "function" "[(x : i64) -> i64]" "do stuff") "zzz"))
+      (assert-eq "no match score 0" 0 s))
+
+    ;; ─── Test 15: Contract text match score ──────────────────────────
+    (let (sym : Map (map-from
+        ["name" "check" "kind" "function" "sig" "" "intent" ""
+         "requires" "(> x 0)" "ensures" "(valid result)"]))
+      (let (s : i64 (score-symbol sym "valid"))
+        (assert-eq "contract match score" 20 s)))
+
+    (println "test-search: all tests passed")))

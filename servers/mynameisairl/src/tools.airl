@@ -1,0 +1,373 @@
+;; tools.airl — MCP tool handler dispatch for AirMunch
+;;
+;; One handler function per tool. Each takes tool args and returns
+;; a JSON-serializable result string.
+;;
+;; Note: AIRL has no mutation, so cross-request caching is not possible
+;; in pure AIRL. Each tool call re-indexes from disk. For typical AIRL
+;; projects (< 50 files) this is fast enough.
+
+;; ─── safe-path? ─────────────────────────────────────────────────────
+;; Reject path components containing ".." to prevent directory traversal.
+(defn safe-path?
+  :sig [(file : String) -> Bool]
+  :intent "Check that a relative file path has no .. traversal"
+  :requires [(valid file)]
+  :ensures [(valid result)]
+  :body (let (parts : List (split file "/"))
+    (= 0 (length (filter (fn [p] (= p "..")) parts)))))
+
+;; ─── airmunch-dispatch ───────────────────────────────────────────────
+;; Main tool dispatcher. Called by airtraffic-serve-batch.
+(defn airmunch-dispatch
+  :sig [(cache : Map) (tool-name : String) (args : Map) -> Result]
+  :intent "Dispatch tool calls to appropriate handler"
+  :requires [(valid tool-name) (valid args)]
+  :ensures [(valid result)]
+  :body (if (= tool-name "airl_index_project")
+    (handle-index-project args)
+    (if (= tool-name "airl_file_tree")
+      (handle-file-tree args)
+      (if (= tool-name "airl_file_outline")
+        (handle-file-outline args)
+        (if (= tool-name "airl_get_symbol")
+          (handle-get-symbol args)
+          (if (= tool-name "airl_search_symbols")
+            (handle-search-symbols args)
+            (if (= tool-name "airl_get_content")
+              (handle-get-content args)
+              (if (= tool-name "airl_repo_outline")
+                (handle-repo-outline args)
+                (if (= tool-name "airl_find_callers")
+                  (handle-find-callers args)
+                  (if (= tool-name "airl_dependency_graph")
+                    (handle-dependency-graph args)
+                    (if (= tool-name "airl_blast_radius")
+                      (handle-blast-radius args)
+                      (Err (str "Unknown tool: " tool-name)))))))))))))
+
+;; ─── handle-index-project ────────────────────────────────────────────
+(defn handle-index-project
+  :sig [(args : Map) -> Result]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (let (path : String (map-get-or args "path" ""))
+    (if (= path "")
+      (Err "missing required argument: path")
+      (let (index : Map (index-project path))
+           (all-syms : List (index-all-symbols index))
+           (files : Map (map-get index "files"))
+        (Ok (json-stringify (map-from
+          ["status" "indexed"
+           "project" (map-get index "name")
+           "root" path
+           "files" (length (map-keys files))
+           "symbols" (length all-syms)])))))))
+
+;; ─── handle-file-tree ────────────────────────────────────────────────
+(defn handle-file-tree
+  :sig [(args : Map) -> Result]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (let (path : String (map-get-or args "path" ""))
+    (if (= path "")
+      (Err "missing required argument: path")
+      (let (files : List (find-airl-files path))
+        (let (entries : List (map (fn [f]
+            (let (rel : String (make-relative f path))
+                 (content : String (read-file f))
+                 (line-count : i64 (length (lines content)))
+              (map-from ["file" rel "lines" line-count])))
+            files))
+          (Ok (json-stringify (map-from
+            ["root" path
+             "files" entries
+             "total" (length entries)]))))))))
+
+;; ─── handle-file-outline ─────────────────────────────────────────────
+(defn handle-file-outline
+  :sig [(args : Map) -> Result]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (let (path : String (map-get-or args "path" ""))
+             (file : String (map-get-or args "file" ""))
+    (if (or (= path "") (= file ""))
+      (Err "missing required arguments: path, file")
+      (if (not (safe-path? file))
+        (Err "invalid file path: directory traversal not allowed")
+        (let (index : Map (index-project path))
+             (symbols : List (index-get-symbols index file))
+        (let (outline : List (map (fn [sym]
+            (map-from
+              ["name" (map-get sym "name")
+               "kind" (map-get sym "kind")
+               "sig" (map-get-or sym "sig" "")
+               "line" (map-get sym "line")
+               "end-line" (map-get sym "end-line")]))
+            symbols))
+          (Ok (json-stringify (map-from
+            ["file" file "symbols" outline])))))))))
+
+;; ─── handle-get-symbol ───────────────────────────────────────────────
+(defn handle-get-symbol
+  :sig [(args : Map) -> Result]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (let (path : String (map-get-or args "path" ""))
+             (symbol-id : String (map-get-or args "symbol_id" ""))
+    (if (or (= path "") (= symbol-id ""))
+      (Err "missing required arguments: path, symbol_id")
+      (let (index : Map (index-project path))
+           (all-syms : List (index-all-symbols index))
+        (let (found : Any (find (fn [s] (= (map-get s "id") symbol-id)) all-syms))
+          (if (= found nil)
+            (Err (str "symbol not found: " symbol-id))
+            ;; Validate the file path from the symbol before reading
+            (let (sym-file : String (map-get found "file"))
+              (if (not (safe-path? sym-file))
+                (Err "invalid file path: directory traversal not allowed")
+                (let (file-path : String (str path "/" sym-file))
+                     (sym-line : i64 (map-get found "line"))
+                     (sym-end : i64 (map-get found "end-line"))
+                  (let (content : String (read-file file-path))
+                       (file-lines : List (lines content))
+                    (let (source : String (join
+                        (take (- sym-end (- sym-line 1))
+                              (drop (- sym-line 1) file-lines)) "\n"))
+                      (Ok (json-stringify (map-set found "source" source))))))))))))))
+
+;; ─── handle-search-symbols ───────────────────────────────────────────
+(defn handle-search-symbols
+  :sig [(args : Map) -> Result]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (let (path : String (map-get-or args "path" ""))
+             (query : String (map-get-or args "query" ""))
+             (kind : String (map-get-or args "kind" ""))
+             (limit : i64 (map-get-or args "limit" 20))
+    (if (or (= path "") (= query ""))
+      (Err "missing required arguments: path, query")
+      (let (index : Map (index-project path))
+        (let (results : List (if (= kind "")
+            (search-symbols-limited index query limit)
+            (take limit (search-by-kind index query kind))))
+          ;; Return compact results
+          (let (compact : List (map (fn [sym]
+              (map-from
+                ["id" (map-get sym "id")
+                 "name" (map-get sym "name")
+                 "kind" (map-get sym "kind")
+                 "sig" (map-get-or sym "sig" "")
+                 "file" (map-get sym "file")
+                 "line" (map-get sym "line")]))
+              results))
+            (Ok (json-stringify (map-from
+              ["query" query "results" compact "count" (length compact)])))))))))
+
+;; ─── handle-get-content ──────────────────────────────────────────────
+(defn handle-get-content
+  :sig [(args : Map) -> Result]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (let (path : String (map-get-or args "path" ""))
+             (file : String (map-get-or args "file" ""))
+             (start-line : i64 (map-get-or args "start_line" 0))
+             (end-line : i64 (map-get-or args "end_line" 0))
+    (if (or (= path "") (= file ""))
+      (Err "missing required arguments: path, file")
+      (if (not (safe-path? file))
+        (Err "invalid file path: directory traversal not allowed")
+        (let (full-path : String (str path "/" file))
+          (if (not (file-exists? full-path))
+          (Err (str "file not found: " file))
+          (let (content : String (read-file full-path))
+            (if (and (= start-line 0) (= end-line 0))
+              ;; Return full file
+              (Ok (json-stringify (map-from
+                ["file" file "content" content
+                 "lines" (length (lines content))])))
+              ;; Return line range
+              (let (file-lines : List (lines content))
+                   (start : i64 (if (= start-line 0) 1 start-line))
+                   (end : i64 (if (= end-line 0) (length file-lines) end-line))
+                (let (selected : List (take (- end (- start 1))
+                                            (drop (- start 1) file-lines)))
+                  (Ok (json-stringify (map-from
+                    ["file" file
+                     "start_line" start
+                     "end_line" end
+                     "content" (join selected "\n")])))))))))))))
+
+;; ─── handle-repo-outline ─────────────────────────────────────────────
+(defn handle-repo-outline
+  :sig [(args : Map) -> Result]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (let (path : String (map-get-or args "path" ""))
+    (if (= path "")
+      (Err "missing required argument: path")
+      (let (index : Map (index-project path))
+           (files : Map (map-get index "files"))
+           (file-keys : List (map-keys files))
+        (let (outline : List (map (fn [fk]
+            (let (file-entry : Map (map-get files fk))
+                 (syms : List (map-get file-entry "symbols"))
+              (map-from
+                ["file" fk
+                 "symbols" (map (fn [sym]
+                    (str (map-get sym "name") " : " (map-get-or sym "sig" "-")
+                         " [" (map-get sym "kind") "]"))
+                    syms)])))
+            file-keys))
+          (Ok (json-stringify (map-from
+            ["project" (map-get index "name")
+             "files" outline]))))))))
+
+;; ─── handle-find-callers ─────────────────────────────────────────────
+(defn handle-find-callers
+  :sig [(args : Map) -> Result]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (let (path : String (map-get-or args "path" ""))
+             (function-name : String (map-get-or args "function_name" ""))
+    (if (or (= path "") (= function-name ""))
+      (Err "missing required arguments: path, function_name")
+      (let (index : Map (index-project path))
+           (callers : List (find-callers index function-name))
+        (let (compact : List (map (fn [sym]
+            (map-from
+              ["name" (map-get sym "name")
+               "file" (map-get sym "file")
+               "line" (map-get sym "line")
+               "kind" (map-get sym "kind")]))
+            callers))
+          (Ok (json-stringify (map-from
+            ["function" function-name
+             "callers" compact
+             "count" (length compact)]))))))))
+
+;; ─── handle-dependency-graph ─────────────────────────────────────────
+(defn handle-dependency-graph
+  :sig [(args : Map) -> Result]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (let (path : String (map-get-or args "path" ""))
+    (if (= path "")
+      (Err "missing required argument: path")
+      (let (index : Map (index-project path))
+           (dep-graph : Map (dependency-graph index))
+        (Ok (json-stringify dep-graph))))))
+
+;; ─── handle-blast-radius ─────────────────────────────────────────────
+(defn handle-blast-radius
+  :sig [(args : Map) -> Result]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (let (path : String (map-get-or args "path" ""))
+             (function-name : String (map-get-or args "function_name" ""))
+    (if (or (= path "") (= function-name ""))
+      (Err "missing required arguments: path, function_name")
+      (let (index : Map (index-project path))
+           (radius : Map (blast-radius index function-name))
+        (let (sym-names : List (map (fn [sym]
+            (map-from
+              ["name" (map-get sym "name")
+               "file" (map-get sym "file")
+               "line" (map-get sym "line")]))
+            (map-get radius "symbols")))
+          (Ok (json-stringify (map-from
+            ["function" function-name
+             "affected-symbols" sym-names
+             "affected-files" (map-get radius "files")
+             "direct-callers" (map-get radius "direct-callers")
+             "total-affected" (map-get radius "total-affected")]))))))))
+
+;; ─── Tool Definitions ────────────────────────────────────────────────
+;; Each tool definition is a Map compatible with airtraffic-tool.
+
+(defn make-tool-defs
+  :sig [-> List]
+  :intent "Create list of all AirMunch tool definitions"
+  :requires []
+  :ensures [(valid result)]
+  :body [
+    (map-from ["name" "airl_index_project"
+               "description" "Index all .airl files in a project directory, extracting symbols with contracts and signatures"
+               "inputSchema" (map-from
+                 ["type" "object"
+                  "properties" (map-from
+                    ["path" (map-from ["type" "string" "description" "Absolute path to the project root"])])
+                  "required" ["path"]])])
+    (map-from ["name" "airl_file_tree"
+               "description" "List all .airl files in a project with line counts"
+               "inputSchema" (map-from
+                 ["type" "object"
+                  "properties" (map-from
+                    ["path" (map-from ["type" "string" "description" "Absolute path to the project root"])])
+                  "required" ["path"]])])
+    (map-from ["name" "airl_file_outline"
+               "description" "Show all symbols in a file with names, kinds, signatures, and line numbers"
+               "inputSchema" (map-from
+                 ["type" "object"
+                  "properties" (map-from
+                    ["path" (map-from ["type" "string" "description" "Absolute path to the project root"])
+                     "file" (map-from ["type" "string" "description" "Relative path to the file within the project"])])
+                  "required" ["path" "file"]])])
+    (map-from ["name" "airl_get_symbol"
+               "description" "Get full details and source code of a specific symbol by ID"
+               "inputSchema" (map-from
+                 ["type" "object"
+                  "properties" (map-from
+                    ["path" (map-from ["type" "string" "description" "Absolute path to the project root"])
+                     "symbol_id" (map-from ["type" "string" "description" "Symbol ID (file::name#kind)"])])
+                  "required" ["path" "symbol_id"]])])
+    (map-from ["name" "airl_search_symbols"
+               "description" "Search symbols by name, signature, or contract text with relevance ranking"
+               "inputSchema" (map-from
+                 ["type" "object"
+                  "properties" (map-from
+                    ["path" (map-from ["type" "string" "description" "Absolute path to the project root"])
+                     "query" (map-from ["type" "string" "description" "Search query"])
+                     "kind" (map-from ["type" "string" "description" "Filter by kind: function, define, type, extern-c"])
+                     "limit" (map-from ["type" "integer" "description" "Max results (default 20)"])])
+                  "required" ["path" "query"]])])
+    (map-from ["name" "airl_get_content"
+               "description" "Read file content or a specific line range"
+               "inputSchema" (map-from
+                 ["type" "object"
+                  "properties" (map-from
+                    ["path" (map-from ["type" "string" "description" "Absolute path to the project root"])
+                     "file" (map-from ["type" "string" "description" "Relative path to the file"])
+                     "start_line" (map-from ["type" "integer" "description" "Start line (1-indexed, optional)"])
+                     "end_line" (map-from ["type" "integer" "description" "End line (inclusive, optional)"])])
+                  "required" ["path" "file"]])])
+    (map-from ["name" "airl_repo_outline"
+               "description" "Get a compact overview of all files and symbols in a project"
+               "inputSchema" (map-from
+                 ["type" "object"
+                  "properties" (map-from
+                    ["path" (map-from ["type" "string" "description" "Absolute path to the project root"])])
+                  "required" ["path"]])])
+    (map-from ["name" "airl_find_callers"
+               "description" "Find all functions that call a given function"
+               "inputSchema" (map-from
+                 ["type" "object"
+                  "properties" (map-from
+                    ["path" (map-from ["type" "string" "description" "Absolute path to the project root"])
+                     "function_name" (map-from ["type" "string" "description" "Name of the function to find callers for"])])
+                  "required" ["path" "function_name"]])])
+    (map-from ["name" "airl_dependency_graph"
+               "description" "Show file-level dependency relationships in a project"
+               "inputSchema" (map-from
+                 ["type" "object"
+                  "properties" (map-from
+                    ["path" (map-from ["type" "string" "description" "Absolute path to the project root"])])
+                  "required" ["path"]])])
+    (map-from ["name" "airl_blast_radius"
+               "description" "Compute the transitive impact of changing a function — who calls it, who calls them, and which files are affected"
+               "inputSchema" (map-from
+                 ["type" "object"
+                  "properties" (map-from
+                    ["path" (map-from ["type" "string" "description" "Absolute path to the project root"])
+                     "function_name" (map-from ["type" "string" "description" "Name of the function to analyze"])])
+                  "required" ["path" "function_name"]])])])

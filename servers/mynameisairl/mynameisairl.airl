@@ -1,12 +1,26 @@
-;; mynameisairl.airl — MCP prompt server that teaches AIRL to LLMs
+;; mynameisairl.airl — MCP server: AIRL language guide + code intelligence tools
 ;;
-;; Serves AIRL-LLM-Guide.md as an MCP prompt called "teach_airl".
-;; The guide text and version are embedded at build time via _generated.airl.
-;; Built on the AirTraffic MCP framework with prompt support.
+;; Serves:
+;;   - teach_airl prompt (AIRL-LLM-Guide.md)
+;;   - AirMunch code indexing tools (10 tools for symbol search, xref, etc.)
+;;
+;; Built on the AirTraffic MCP framework.
+
+;; ─── register-tools-direct ──────────────────────────────────────────
+;; Register tool definitions directly, bypassing role check.
+;; AirTraffic's role filter only knows workflow_* tools; AirMunch tools
+;; are server-specific and always available.
+(defn register-tools-direct
+  :sig [(server : Map) (tool-defs : List) -> Map]
+  :intent "Register tool defs by appending directly to server tools list"
+  :requires [(valid server) (valid tool-defs)]
+  :ensures [(valid result)]
+  :body (let (existing : List (map-get server "tools"))
+    (map-set server "tools" (concat existing tool-defs))))
 
 ;; ─── Top-level entry point ──────────────────────────────────────────
-;; Load embedded guide, register prompt, serve.
-(let (guide-text : String (mni-embedded-guide))
+;; Read guide from file next to the binary, register prompt and tools, serve.
+(let (guide-text : String (read-file "AIRL-LLM-Guide.md"))
   (let (prompt-def : Map (map-from
     ["name" "teach_airl"
      "description" "Comprehensive AIRL language guide for LLMs — syntax, types, ownership, contracts, builtins, and idioms"
@@ -21,7 +35,13 @@
         "content" (map-from
           ["type" "text"
            "text" "I know kung-fu."])])]]))
+    ;; Create server with supervisor role
     (let (server : Map (airtraffic-new "mynameisAIRL" (mni-version) "supervisor" ""))
-      (let (server2 : Map (airtraffic-prompt server prompt-def))
-        (airtraffic-serve-batch server2 (fn [tool-name args]
-          (Err (str "No tools available — this is a prompt-only server"))))))))
+      ;; Register the teach_airl prompt
+      (let (server : Map (airtraffic-prompt server prompt-def))
+        ;; Register AirMunch tools (bypass role filter — these are server-specific)
+        (let (server : Map (register-tools-direct server (make-tool-defs)))
+          ;; Serve — each tool call re-indexes from disk (AIRL has no mutation,
+          ;; so cross-request caching is not possible in pure AIRL)
+          (airtraffic-serve-batch server (fn [tool-name args]
+            (airmunch-dispatch (map-new) tool-name args))))))))

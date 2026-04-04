@@ -1,0 +1,113 @@
+;; index-store.airl — In-memory project index with file-level change detection
+;;
+;; Scans .airl files, extracts symbols, builds an index Map.
+;; Supports incremental re-indexing via sha256 file hashing.
+
+;; ─── index-project ───────────────────────────────────────────────────
+;; Scan a project root for .airl files, extract symbols, build index.
+;; Returns a project index Map.
+(defn index-project
+  :sig [(root-path : String) -> Map]
+  :intent "Index all .airl files under root-path into a project index"
+  :requires [(valid root-path)]
+  :ensures [(valid result)]
+  :body (let (project-name : String (path-filename root-path))
+             (airl-files : List (find-airl-files root-path))
+    (let (files-index : Map (fold (fn [acc file-path]
+        (let (content : String (read-file file-path))
+             (rel-path : String (make-relative file-path root-path))
+          (let (file-idx : Map (index-file rel-path content))
+            (map-set acc rel-path file-idx))))
+        (map-new) airl-files))
+      (let (all-syms : List (collect-all-symbols files-index))
+        (map-from
+          ["name" project-name
+           "root" root-path
+           "files" files-index
+           "all-symbols" all-syms])))))
+
+;; ─── index-file ──────────────────────────────────────────────────────
+;; Index a single file: hash content, extract symbols.
+(defn index-file
+  :sig [(path : String) (content : String) -> Map]
+  :intent "Extract symbols from a file and compute content hash"
+  :requires [(valid path) (valid content)]
+  :ensures [(valid result)]
+  :body (let (hash : String (sha256 content))
+             (symbols : List (extract-symbols-from-file path content))
+    (map-from ["hash" hash "symbols" symbols])))
+
+;; ─── index-get-symbols ───────────────────────────────────────────────
+;; Get symbols for a specific file from the index.
+(defn index-get-symbols
+  :sig [(index : Map) (file-path : String) -> List]
+  :intent "Retrieve symbols for a file from the project index"
+  :requires [(valid index) (valid file-path)]
+  :ensures [(valid result)]
+  :body (let (files : Map (map-get index "files"))
+    (let (file-entry : Any (map-get files file-path))
+      (if (= file-entry nil)
+        []
+        (map-get file-entry "symbols")))))
+
+;; ─── index-all-symbols ───────────────────────────────────────────────
+;; Get all symbols from the index.
+(defn index-all-symbols
+  :sig [(index : Map) -> List]
+  :intent "Get flat list of all symbols across all files"
+  :requires [(valid index)]
+  :ensures [(valid result)]
+  :body (map-get index "all-symbols"))
+
+;; ─── collect-all-symbols ─────────────────────────────────────────────
+;; Collect all symbols from the files index into a flat list.
+(defn collect-all-symbols
+  :sig [(files-index : Map) -> List]
+  :intent "Flatten all file symbol lists into one list"
+  :requires [(valid files-index)]
+  :ensures [(valid result)]
+  :body (let (keys : List (map-keys files-index))
+    (fold (fn [acc key]
+      (let (entry : Map (map-get files-index key))
+        (concat acc (map-get entry "symbols"))))
+      [] keys)))
+
+;; ─── find-airl-files ─────────────────────────────────────────────────
+;; Recursively find all .airl files under a directory.
+(defn find-airl-files
+  :sig [(dir-path : String) -> List]
+  :intent "Recursively find all .airl files in a directory tree"
+  :requires [(valid dir-path)]
+  :ensures [(valid result)]
+  :body (let (entries : List (read-dir dir-path))
+    (fold (fn [acc entry]
+      (let (full-path : String (str dir-path "/" entry))
+        (if (is-dir? full-path)
+          ;; Skip hidden directories and common non-source dirs
+          (if (starts-with entry ".")
+            acc
+            (if (= entry "target")
+              acc
+              (concat acc (find-airl-files full-path))))
+          ;; Check if it's an .airl file
+          (if (ends-with entry ".airl")
+            (append acc full-path)
+            acc))))
+      [] entries)))
+
+;; ─── make-relative ───────────────────────────────────────────────────
+;; Make a path relative to a root path.
+(defn make-relative
+  :sig [(full-path : String) (root : String) -> String]
+  :intent "Strip root prefix from a full path to make it relative"
+  :requires [(valid full-path) (valid root)]
+  :ensures [(valid result)]
+  :body (let (root-len : i64 (length root))
+    (if (starts-with full-path root)
+      (let (rel : String (substring full-path root-len (length full-path)))
+        ;; Strip leading /
+        (if (starts-with rel "/")
+          (substring rel 1 (length rel))
+          rel))
+      full-path)))
+
