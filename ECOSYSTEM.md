@@ -132,6 +132,30 @@ HTTP/1.1 server library with routing, middleware pipeline, and TLS support. Buil
 | **Commits** | 3 |
 | **Status** | Functional. Phase 1 complete (server, router, middleware, TLS). |
 
+### AirGate -- Web Application Framework
+
+Full-featured web framework built on airlhttp. Routing with path parameters and wildcards, middleware pipeline (logger, CORS, body-parser, auth), mustache-like templates, HMAC-signed sessions, static file serving, and structured error handling.
+
+| | |
+|---|---|
+| **Location** | `../AirGate` |
+| **Size** | 1,144 LOC (10 modules), 386 LOC tests (6 test suites) |
+| **Commits** | 4 |
+| **Status** | Functional. Core complete with routing, middleware, templates, sessions, static files. |
+| **Depends on** | airlhttp, airline, stdlib (json, string, collections, hmac) |
+
+### AirParse -- Multi-Format Parser Library
+
+Parsers and serializers for JSON (extends stdlib), YAML, TOML, and HTML (DOM tree with CSS selectors). Unified `airparse-parse`/`airparse-stringify`/`airparse-convert` API with round-trip support across all formats.
+
+| | |
+|---|---|
+| **Location** | `../AirParse` |
+| **Size** | 1,784 LOC (6 modules), 776 LOC tests (121 tests across 4 test suites) |
+| **Commits** | 6 |
+| **Status** | Functional. All four formats implemented with round-trip support. |
+| **Depends on** | stdlib (json, string, collections) |
+
 ### AirTraffic -- MCP Server Framework
 
 Model Context Protocol (MCP) server framework for AIRL. Enables building MCP-compatible tool and prompt servers that compile to native binaries. Role-based tool filtering, prompt registration, JSON-RPC 2.0, JSON Schema validation. Includes a workflow server for multi-agent coordination.
@@ -227,13 +251,13 @@ Benchmarks AIRL_castle's Kafka producer against Confluent's librdkafka (Python w
 
 ### airshell -- Interactive Shell
 
-Interactive shell targeting AIRLOS. REPL with command parsing, built-in commands, and history. Cross-compiles to AIRLOS via `make airlos`. Also runs natively on Linux.
+zsh-compatible interactive shell targeting AIRLOS. REPL with line editing, command history, 13 built-in commands, environment variable expansion, S-expression config file (`.ashrc`), and configurable prompt. Cross-compiles to AIRLOS via `make airlos`. Also runs natively on Linux.
 
 | | |
 |---|---|
 | **Location** | `../airshell` |
-| **Size** | 1,926 LOC |
-| **Commits** | 5 |
+| **Size** | 2,380 LOC (11 modules), 565 LOC tests |
+| **Commits** | 11 |
 | **Status** | Functional. Linux and AIRLOS targets. |
 
 ---
@@ -248,18 +272,20 @@ Interactive shell targeting AIRLOS. REPL with command parsing, built-in commands
 | airlDelivery | AIRL | 4,196 | 9 | Functional |
 | AirLift | AIRL | 4,219 | 11 | Functional |
 | airlhttp | AIRL | 2,230 | 3 | Functional |
+| airshell | AIRL | 2,380 | 11 | Functional |
 | CairLI | AIRL | 2,197 | 8 | Stable (v0.2.0) |
 | airtools | AIRL | 2,005 | 5 | Functional |
-| airshell | AIRL | 1,926 | 5 | Functional |
+| AirParse | AIRL | 1,784 | 6 | Functional |
 | AIReqL | AIRL | 1,618 | 22 | Functional |
 | AirTraffic | AIRL | 1,358 | 5 | Functional |
 | AIRLchart | AIRL | 1,313 | 10 | Functional |
 | kafka_sdk_bench | AIRL + Python | 1,281 | 3 | Functional |
 | airline | AIRL | 1,217 | 25 | Functional |
+| AirGate | AIRL | 1,144 | 4 | Functional |
 | airtest | AIRL | 891 | 3 | Functional |
 | AIRL_bench | AIRL | 847 | 27 | Functional |
 | mynameisAIRL | AIRL | 79 | 2 | Functional |
-| **Total** | | **~131,974** | **886** | |
+| **Total** | | **~135,356** | **902** | |
 
 ## Building
 
