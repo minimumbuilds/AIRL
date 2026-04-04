@@ -1,5 +1,5 @@
-;; EXPECT: "channel-send: channel closed"
-;; Closed channel returns "closed" not "invalid handle"
+;; EXPECT: "channel-send: invalid sender handle 5"
+;; Closed channel returns "invalid sender handle" error
 (let (ch : List (channel-new))
      (tx : i64 (at ch 0))
      (rx : i64 (at ch 1))

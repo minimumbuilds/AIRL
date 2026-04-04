@@ -9,4 +9,4 @@
     (channel-send tx "msg3")
     (channel-close rx)
     (channel-close tx)
-    (to-string true)))
+    (str true)))

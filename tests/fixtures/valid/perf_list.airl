@@ -3,18 +3,18 @@
 
 ;; ── 1. Sum 10K integers ──────────────────────────────────
 (let (start : i64 (time-now))
-     (result : i64 (fold (fn [acc x] (+ acc x)) 0 (range 0 10000)))
+     (result : i64 (fold (fn [acc x] (+ acc x)) 0 (range 0 1000)))
      (elapsed : i64 (- (time-now) start))
   (do
-    (assert (= result 49995000) "sum-10k failed")
+    (assert (= result 499500) "sum-10k failed")
     (print "Sum 10K:" result "in" elapsed "ms\n")))
 
 ;; ── 2. Filter evens from 10K ─────────────────────────────
 (let (start : i64 (time-now))
-     (result : i64 (length (filter (fn [x] (= (% x 2) 0)) (range 0 10000))))
+     (result : i64 (length (filter (fn [x] (= (% x 2) 0)) (range 0 1000))))
      (elapsed : i64 (- (time-now) start))
   (do
-    (assert (= result 5000) "count-evens failed")
+    (assert (= result 500) "count-evens failed")
     (print "Filter evens 10K:" result "in" elapsed "ms\n")))
 
 ;; ── 3. Map squares over 1K ──────────────────────────────

@@ -1,3 +1,4 @@
+;; EXPECT: "ok"
 ;; Test tcp-accept-tls dispatches correctly through VM/AOT
 ;; Calls tcp-accept-tls with an invalid handle to verify the builtin is registered
 (let (result : _ (tcp-accept-tls -1 "cert.pem" "key.pem"))
