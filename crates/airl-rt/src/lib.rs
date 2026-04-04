@@ -216,6 +216,7 @@ pub mod math;
 pub mod variant;
 pub mod closure;
 pub mod misc;
+pub mod identity;
 #[cfg(not(target_os = "airlos"))]
 pub mod thread;
 #[cfg(not(target_os = "airlos"))]

@@ -269,6 +269,16 @@ pub struct RuntimeImports {
     pub channel_drain: FuncId,
     pub channel_close: FuncId,
 
+    // Identity
+    pub whoami: FuncId,
+    pub id_fn: FuncId,
+    pub authenticate: FuncId,
+    pub switch_user: FuncId,
+    pub elevate: FuncId,
+    pub create_user: FuncId,
+    pub delete_user: FuncId,
+    pub set_password: FuncId,
+
     // Contract failure
     pub contract_fail: FuncId,
 }
@@ -779,6 +789,20 @@ impl BytecodeAot {
         let channel_drain = declare_import(m, "airl_channel_drain", s1.clone());
         let channel_close = declare_import(m, "airl_channel_close", s1.clone());
 
+        // Identity
+        let s0_ret_id = sig_0_ptr(m, ptr);
+        let whoami = declare_import(m, "airl_whoami", s0_ret_id);
+        let id_fn = declare_import(m, "airl_id", sig_0_ptr(m, ptr));
+        let authenticate = declare_import(m, "airl_authenticate", s2.clone());
+        let switch_user = declare_import(m, "airl_switch_user", s2.clone());
+        let elevate = declare_import(m, "airl_elevate", s2.clone());
+        let mut sig5_id = m.make_signature();
+        for _ in 0..5 { sig5_id.params.push(AbiParam::new(ptr)); }
+        sig5_id.returns.push(AbiParam::new(ptr));
+        let create_user = declare_import(m, "airl_create_user", sig5_id);
+        let delete_user = declare_import(m, "airl_delete_user", s1.clone());
+        let set_password = declare_import(m, "airl_set_password", s3.clone());
+
         // Contract failure: (kind: i64, fn_name_idx: i64, clause_idx: i64) -> i64
         let mut cf_sig = m.make_signature();
         cf_sig.params.push(AbiParam::new(types::I64));
@@ -831,6 +855,7 @@ impl BytecodeAot {
             dns_resolve, icmp_ping,
             tcp_connect, tcp_close, tcp_send, tcp_recv, tcp_recv_exact, tcp_set_timeout, tcp_connect_tls, tcp_listen, tcp_accept, tcp_accept_tls,
             thread_spawn, thread_join, thread_set_affinity, channel_new, channel_send, channel_recv, channel_recv_timeout, channel_drain, channel_close,
+            whoami, id_fn, authenticate, switch_user, elevate, create_user, delete_user, set_password,
             contract_fail,
         }
     }
@@ -1061,6 +1086,16 @@ impl BytecodeAot {
         m.insert("channel-recv-timeout".into(), rt.channel_recv_timeout);
         m.insert("channel-drain".into(),        rt.channel_drain);
         m.insert("channel-close".into(),        rt.channel_close);
+
+        // Identity
+        m.insert("whoami".into(),         rt.whoami);
+        m.insert("id".into(),             rt.id_fn);
+        m.insert("authenticate".into(),   rt.authenticate);
+        m.insert("switch-user".into(),    rt.switch_user);
+        m.insert("elevate".into(),        rt.elevate);
+        m.insert("create-user".into(),    rt.create_user);
+        m.insert("delete-user".into(),    rt.delete_user);
+        m.insert("set-password".into(),   rt.set_password);
 
         // NOTE: map/filter/fold/sort/any/all/find are NOT registered here.
         // They resolve to AIRL stdlib definitions (from prelude.airl) which
