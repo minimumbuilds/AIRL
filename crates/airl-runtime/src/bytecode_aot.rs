@@ -866,8 +866,11 @@ impl BytecodeAot {
         m.insert("println".into(),    rt.println);
         m.insert("eprint".into(),     rt.eprint);
         m.insert("eprintln".into(),   rt.eprintln);
-        // read-line, read-stdin
-        // deregistered — AIRL stdlib equivalents in io.airl take over
+        // read-line/read-stdin: kept as native builtins because g3's self-hosting
+        // parser cannot compile io.airl (no extern-c support), so AIRLOS
+        // cross-compilation needs these resolved from the C runtime directly.
+        m.insert("read-line".into(),   rt.read_line);
+        m.insert("read-stdin".into(),  rt.read_stdin);
         m.insert("type-of".into(), rt.type_of);
         m.insert("valid".into(),   rt.valid);
 
@@ -3016,9 +3019,24 @@ impl BytecodeAot {
         let flush_ref = self.module.declare_func_in_func(flush_id, builder.func);
         builder.ins().call(flush_ref, &[]);
 
-        // Return 0
-        let zero = builder.ins().iconst(types::I32, 0);
-        builder.ins().return_(&[zero]);
+        if is_freestanding {
+            // Freestanding _start must not return — the user stack has no
+            // valid return address (zeroed memory → jump to 0x0).
+            // Allocate RtValue(0) via airl_int, then pass to airl_exit.
+            let int_ref = self.module.declare_func_in_func(self.rt.int_ctor, builder.func);
+            let zero_i64 = builder.ins().iconst(types::I64, 0);
+            let int_call = builder.ins().call(int_ref, &[zero_i64]);
+            let rt_zero = builder.inst_results(int_call)[0];
+
+            let exit_ref = self.module.declare_func_in_func(self.rt.exit_fn, builder.func);
+            builder.ins().call(exit_ref, &[rt_zero]);
+            // airl_exit never returns on AIRLOS, but trap as safety net
+            builder.ins().trap(ir::TrapCode::user(1).unwrap());
+        } else {
+            // Return 0
+            let zero = builder.ins().iconst(types::I32, 0);
+            builder.ins().return_(&[zero]);
+        }
         builder.finalize();
 
         self.module

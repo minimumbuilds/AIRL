@@ -28,15 +28,14 @@ fn err_variant(msg: &str) -> *mut RtValue {
 // SEC-6: Process execution restriction via AIRL_ALLOW_EXEC env var
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Cached policy from AIRL_ALLOW_EXEC env var.
-/// Disabled = not allowed. AllowAll = "*" means all commands allowed.
-/// AllowList = only comma-separated binary names are allowed.
+#[cfg(not(target_os = "airlos"))]
 enum ExecPolicy {
     Disabled,
     AllowAll,
     AllowList(Vec<String>),
 }
 
+#[cfg(not(target_os = "airlos"))]
 fn exec_policy() -> &'static ExecPolicy {
     static POLICY: OnceLock<ExecPolicy> = OnceLock::new();
     POLICY.get_or_init(|| {
@@ -57,7 +56,7 @@ fn exec_policy() -> &'static ExecPolicy {
     })
 }
 
-/// Check if running `command` is allowed under the current policy.
+#[cfg(not(target_os = "airlos"))]
 fn check_exec(command: &str) -> Result<(), *mut RtValue> {
     match exec_policy() {
         ExecPolicy::Disabled => {
@@ -65,7 +64,6 @@ fn check_exec(command: &str) -> Result<(), *mut RtValue> {
         }
         ExecPolicy::AllowAll => Ok(()),
         ExecPolicy::AllowList(allowed) => {
-            // Extract binary name (last path component)
             let bin_name = std::path::Path::new(command)
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -1014,10 +1012,7 @@ pub extern "C" fn airl_getenv(name: *mut RtValue) -> *mut RtValue {
     }
 }
 
-/// Cache all environment variables at first access. mimalloc (the global
-/// allocator) can corrupt libc's environ block on some platforms, making
-/// std::env::var return garbled data. Reading them all once into a HashMap
-/// at process start avoids the issue.
+#[cfg(not(target_os = "airlos"))]
 fn env_snapshot() -> &'static std::collections::HashMap<String, String> {
     static CACHE: OnceLock<std::collections::HashMap<String, String>> = OnceLock::new();
     CACHE.get_or_init(|| {
@@ -1723,7 +1718,7 @@ pub extern "C" fn airl_bytes_set(buf: *mut RtValue, index: *mut RtValue, val: *m
     };
     let v = unsafe { &mut *buf };
     // COW: if sole owner, mutate in-place
-    if v.rc.load(std::sync::atomic::Ordering::Acquire) == 1 {
+    if v.rc.load(core::sync::atomic::Ordering::Acquire) == 1 {
         if let RtData::Bytes(ref mut bytes) = v.data {
             if i < 0 || i as usize >= bytes.len() {
                 rt_error("bytes-set!: index out of bounds");
