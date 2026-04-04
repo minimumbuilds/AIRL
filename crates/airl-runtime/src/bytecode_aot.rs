@@ -1202,7 +1202,7 @@ impl BytecodeAot {
     fn compile_func_unboxed(
         &mut self,
         func: &BytecodeFunc,
-        _all_functions: &HashMap<String, BytecodeFunc>,
+        all_functions: &HashMap<String, BytecodeFunc>,
     ) -> Result<(), String> {
         // ── 1. Build Cranelift signature (all I64) ──────────────────────────
         let mut sig = self.module.make_signature();
@@ -1243,7 +1243,12 @@ impl BytecodeAot {
                         && !call_targets.contains_key(callee_name)
                         && !inlined_builtins.contains(callee_name.as_str())
                     {
-                        let argc = instr.b as usize;
+                        // Use callee's declared arity when available, fall back to instr.b
+                        let argc = if let Some(callee_func) = all_functions.get(callee_name.as_str()) {
+                            callee_func.arity as usize
+                        } else {
+                            instr.b as usize
+                        };
                         let mut call_sig = self.module.make_signature();
                         for _ in 0..argc {
                             call_sig.params.push(AbiParam::new(types::I64));
@@ -2007,8 +2012,14 @@ impl BytecodeAot {
                             call_targets.insert(callee_name.clone(), builtin_id);
                         } else if self.eligible_funcs.contains(callee_name) {
                             // Callee was compiled unboxed — use I64 signature
+                            // Use callee's declared arity when available
+                            let callee_arity = if let Some(callee_func) = all_functions.get(callee_name.as_str()) {
+                                callee_func.arity as usize
+                            } else {
+                                argc
+                            };
                             let mut call_sig = self.module.make_signature();
-                            for _ in 0..argc {
+                            for _ in 0..callee_arity {
                                 call_sig.params.push(AbiParam::new(types::I64));
                             }
                             call_sig.returns.push(AbiParam::new(types::I64));
@@ -2020,8 +2031,16 @@ impl BytecodeAot {
                         } else if all_functions.contains_key(callee_name.as_str())
                             || self.compiled_funcs.contains_key(callee_name.as_str())
                         {
+                            // Use the callee's declared arity for the signature,
+                            // not the caller's instr.b — prevents arity mismatches
+                            // when nested control flow confuses the call-site argc.
+                            let callee_arity = if let Some(callee_func) = all_functions.get(callee_name.as_str()) {
+                                callee_func.arity as usize
+                            } else {
+                                argc
+                            };
                             let mut call_sig = self.module.make_signature();
-                            for _ in 0..argc {
+                            for _ in 0..callee_arity {
                                 call_sig.params.push(AbiParam::new(self.ptr));
                             }
                             call_sig.returns.push(AbiParam::new(self.ptr));
@@ -3497,5 +3516,190 @@ mod tests {
         let temp = std::env::temp_dir();
         assert!(p.starts_with(&temp),
             "Temp path should be under temp dir: {:?} vs {:?}", p, temp);
+    }
+
+    #[test]
+    fn aot_nested_if_preserves_arity_from_source() {
+        // Regression: 2-arg function with 3+ nested if, calling a 2-arg helper
+        // from within the branches. Verifies arity is preserved at all call sites.
+        let source = r#"
+        (defn helper
+          :sig [(a : i64) (b : i64) -> i64]
+          :requires [(valid a)]
+          :ensures [(valid result)]
+          :body (+ a b))
+        (defn classify
+          :sig [(x : i64) (y : i64) -> i64]
+          :requires [(valid x)]
+          :ensures [(valid result)]
+          :body (if (> x 0)
+                  (if (> y 0)
+                    (helper x y)
+                    (if (< y 0)
+                      (helper x 0)
+                      (helper 0 y)))
+                  (helper 0 0)))
+        (classify 1 -1)
+        "#;
+        let (funcs, main_func) = compile_source_to_bytecode(source, "test").unwrap();
+
+        // Verify classify function arity
+        let func_names: Vec<&str> = funcs.iter().map(|f| f.name.as_str()).collect();
+        let classify_bc = funcs.iter().find(|f| f.name.contains("classify"))
+            .unwrap_or_else(|| panic!("No classify function found in: {:?}", func_names));
+        assert_eq!(classify_bc.arity, 2, "classify bytecode arity should be 2, got {}", classify_bc.arity);
+
+        // Check that all Op::Call instructions to "helper" inside classify have argc=2
+        for (idx, instr) in classify_bc.instructions.iter().enumerate() {
+            if instr.op == Op::Call {
+                if let Some(Value::Str(s)) = classify_bc.constants.get(instr.a as usize) {
+                    if s.contains("helper") {
+                        assert_eq!(instr.b, 2,
+                            "Call to helper at instruction {} should have argc=2, got {}", idx, instr.b);
+                    }
+                }
+            }
+        }
+
+        // Verify the call instruction in __main__ has argc=2
+        let call_instr = main_func.instructions.iter()
+            .find(|i| i.op == Op::Call && {
+                if let Some(Value::Str(s)) = main_func.constants.get(i.a as usize) {
+                    s.contains("classify")
+                } else {
+                    false
+                }
+            })
+            .expect("__main__ should have a Call to classify");
+        assert_eq!(call_instr.b, 2, "Call to classify should have argc=2, got {}", call_instr.b);
+
+        // AOT compile
+        let mut all_map: HashMap<String, BytecodeFunc> = HashMap::new();
+        for f in &funcs {
+            all_map.insert(f.name.clone(), f.clone());
+        }
+        all_map.insert(main_func.name.clone(), main_func.clone());
+        let mut all_funcs = funcs.clone();
+        all_funcs.push(main_func);
+
+        let mut aot = BytecodeAot::new().unwrap();
+        let result = aot.compile_all(&all_funcs, &all_map);
+        assert!(result.is_ok(), "AOT compile_all failed: {:?}", result.err());
+    }
+
+    #[test]
+    fn aot_nested_if_preserves_arity() {
+        // Regression: 2-arg function with 3+ nested if expressions should
+        // preserve arity=2 in both the function signature and call sites.
+        use crate::bytecode_compiler::BytecodeCompiler;
+        use crate::ir::*;
+
+        // Build: (defn classify [x y]
+        //           (if (> x 0) (if (> y 0) "pp" (if (< y 0) "pn" "pz")) "np"))
+        let body = IRNode::If(
+            Box::new(IRNode::Call(">".into(), vec![IRNode::Load("x".into()), IRNode::Int(0)])),
+            Box::new(IRNode::If(
+                Box::new(IRNode::Call(">".into(), vec![IRNode::Load("y".into()), IRNode::Int(0)])),
+                Box::new(IRNode::Str("pp".into())),
+                Box::new(IRNode::If(
+                    Box::new(IRNode::Call("<".into(), vec![IRNode::Load("y".into()), IRNode::Int(0)])),
+                    Box::new(IRNode::Str("pn".into())),
+                    Box::new(IRNode::Str("pz".into())),
+                )),
+            )),
+            Box::new(IRNode::Str("np".into())),
+        );
+
+        let mut compiler = BytecodeCompiler::new();
+        let classify_func = compiler.compile_function(
+            "classify",
+            &["x".into(), "y".into()],
+            &body,
+        );
+        assert_eq!(classify_func.arity, 2, "classify arity should be 2");
+
+        // Now compile a program that defines classify and calls it
+        let program = vec![
+            IRNode::Func("classify".into(), vec!["x".into(), "y".into()], Box::new(body.clone())),
+            IRNode::Call("classify".into(), vec![IRNode::Int(1), IRNode::Int(-1)]),
+        ];
+        let mut compiler2 = BytecodeCompiler::new();
+        let (funcs, main_func) = compiler2.compile_program(&program);
+
+        // Verify classify function arity
+        let classify_bc = funcs.iter().find(|f| f.name == "classify").unwrap();
+        assert_eq!(classify_bc.arity, 2, "classify bytecode arity should be 2");
+
+        // Verify the call instruction in __main__ has argc=2
+        let call_instr = main_func.instructions.iter()
+            .find(|i| i.op == Op::Call)
+            .expect("__main__ should have a Call instruction");
+        assert_eq!(call_instr.b, 2, "Call to classify should have argc=2, got {}", call_instr.b);
+
+        // Now compile through AOT — this is where the bug manifests
+        let mut all_map: HashMap<String, BytecodeFunc> = HashMap::new();
+        for f in &funcs {
+            all_map.insert(f.name.clone(), f.clone());
+        }
+        all_map.insert(main_func.name.clone(), main_func.clone());
+
+        let mut aot = BytecodeAot::new().unwrap();
+        // Compile classify first, then __main__
+        let mut all_funcs = funcs.clone();
+        all_funcs.push(main_func);
+        let result = aot.compile_all(&all_funcs, &all_map);
+        assert!(result.is_ok(), "AOT compile_all failed: {:?}", result.err());
+    }
+
+    #[test]
+    fn aot_callee_arity_overrides_wrong_call_argc() {
+        // Verifies that the AOT pre-declaration uses the callee's declared
+        // arity (not the caller's instr.b) for the Cranelift signature.
+        // This prevents arity mismatches when nested control flow bytecode
+        // has a stale or incorrect argc in the call instruction.
+        use crate::bytecode_compiler::BytecodeCompiler;
+        use crate::ir::*;
+
+        // Compile a 2-arg "target" function
+        let mut compiler = BytecodeCompiler::new();
+        let target = compiler.compile_function(
+            "target",
+            &["a".into(), "b".into()],
+            &IRNode::Call("+".into(), vec![IRNode::Load("a".into()), IRNode::Load("b".into())]),
+        );
+        assert_eq!(target.arity, 2);
+
+        // Manually craft a caller with a WRONG argc (1 instead of 2)
+        // This simulates the described bug where nested if corrupts the argc
+        let caller = BytecodeFunc {
+            name: "caller".into(),
+            arity: 0,
+            register_count: 4,
+            capture_count: 0,
+            instructions: vec![
+                Instruction::new(Op::LoadConst, 1, 0, 0),  // r1 = 10
+                Instruction::new(Op::LoadConst, 2, 0, 0),  // r2 = 10
+                Instruction::new(Op::Call, 0, 1, 1),        // r0 = target(r1) — WRONG: argc=1 instead of 2
+                Instruction::new(Op::Return, 0, 0, 0),
+            ],
+            constants: vec![Value::Int(10), Value::Str("target".into())],
+        };
+
+        let mut all_map: HashMap<String, BytecodeFunc> = HashMap::new();
+        all_map.insert(target.name.clone(), target.clone());
+        all_map.insert(caller.name.clone(), caller.clone());
+
+        let mut aot = BytecodeAot::new().unwrap();
+        // Compile target first (establishes its arity=2 signature)
+        aot.compile_func(&target, &all_map).unwrap();
+        // Compile caller — the fix ensures the pre-declaration uses
+        // target's arity (2) not the wrong instr.b (1)
+        let result = aot.compile_func(&caller, &all_map);
+        // The call will still only pass 1 arg, but the SIGNATURE is correct (2 params).
+        // Cranelift's verifier catches the arg count mismatch against the signature,
+        // which is the desired behavior — fail loudly rather than silently miscompiling.
+        // Without the fix, the signature would have 1 param, matching the wrong argc,
+        // and the call would silently pass 1 arg to a 2-param function.
+        assert!(result.is_err(), "Should fail: caller passes 1 arg to a 2-param function");
     }
 }
