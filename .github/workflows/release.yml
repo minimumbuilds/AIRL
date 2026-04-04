@@ -19,9 +19,11 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: g3-macos-arm64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: g3-windows-x86_64.exe
+          # Windows disabled — terminal.rs uses POSIX libc (termios/ioctl)
+          # TODO: add #[cfg(unix)] guards or Windows equivalents
+          # - os: windows-latest
+          #   target: x86_64-pc-windows-msvc
+          #   artifact: g3-windows-x86_64.exe
 
     runs-on: ${{ matrix.os }}
 
@@ -112,4 +114,4 @@ jobs:
             g3-linux-x86_64/g3-linux-x86_64
             g3-linux-arm64/g3-linux-arm64
             g3-macos-arm64/g3-macos-arm64
-            g3-windows-x86_64.exe/g3-windows-x86_64.exe
+            # g3-windows-x86_64.exe/g3-windows-x86_64.exe
