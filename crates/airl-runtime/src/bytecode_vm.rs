@@ -567,7 +567,9 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         // deregistered — AIRL stdlib equivalents in map.airl take over
 
         // File I/O — OS-level builtins (cannot be pure AIRL)
-        "read-file" => airl_rt::io::airl_read_file(a0!()),
+        // User-facing names (read-file, get-args, getenv, exit) deregistered —
+        // stdlib/io.airl defines these as defn wrappers that call the airl_* extern-c names.
+        // Keeping only names that have no stdlib wrapper or are needed as intern builtins.
         "write-file" => airl_rt::io::airl_write_file(a0!(), a1!()),
         "file-exists?" => airl_rt::io::airl_file_exists(a0!()),
         "exec-file" => airl_rt::io::airl_exec_file(a0!()),
@@ -586,9 +588,6 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "read-lines" => airl_rt::misc::airl_read_lines(a0!()),
         "read-stdin" => airl_rt::io::airl_read_stdin(),
         // System — OS-level builtins (cannot be pure AIRL)
-        "get-args" => airl_rt::io::airl_get_args(),
-        "getenv" => airl_rt::misc::airl_getenv(a0!()),
-        "exit" => airl_rt::misc::airl_exit(a0!()),
         "sleep" => airl_rt::misc::airl_sleep(a0!()),
         "time-now" => airl_rt::misc::airl_time_now(),
         "cpu-count" => airl_rt::misc::airl_cpu_count(),

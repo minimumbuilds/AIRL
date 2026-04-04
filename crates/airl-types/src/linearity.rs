@@ -449,7 +449,8 @@ impl LinearityChecker {
         }
     }
 
-    /// Look up ownership state by string name.
+    /// Look up ownership state by string name (used in tests).
+    #[allow(dead_code)]
     pub(crate) fn lookup_state(&self, name: &str) -> Option<OwnershipState> {
         let id = self.interner.get(name)?;
         self.shadow.get(&id).map(|(s, _)| s.clone())
