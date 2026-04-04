@@ -7,6 +7,7 @@ on:
 jobs:
   build-g3:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -37,11 +38,19 @@ jobs:
 
       - name: Install Z3 (macOS)
         if: runner.os == 'macOS'
-        run: brew install z3
+        run: |
+          brew install z3
+          echo "Z3_SYS_Z3_HEADER=$(brew --prefix z3)/include/z3.h" >> "$GITHUB_ENV"
+          echo "CPATH=$(brew --prefix z3)/include" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=$(brew --prefix z3)/lib" >> "$GITHUB_ENV"
 
       - name: Install Z3 (Windows)
         if: runner.os == 'Windows'
-        run: choco install z3 -y
+        run: |
+          choco install z3 -y
+          echo "Z3_SYS_Z3_HEADER=C:\ProgramData\chocolatey\lib\z3\tools\include\z3.h" >> $env:GITHUB_ENV
+          echo "CPATH=C:\ProgramData\chocolatey\lib\z3\tools\include" >> $env:GITHUB_ENV
+          echo "LIBRARY_PATH=C:\ProgramData\chocolatey\lib\z3\tools\bin" >> $env:GITHUB_ENV
 
       - name: Build host binary
         run: cargo build --release --features aot
