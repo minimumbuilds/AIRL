@@ -2,11 +2,12 @@ use airl_syntax::{Span, Diagnostic, Diagnostics};
 use airl_syntax::ast::*;
 use crate::ty::{Ty, is_copy, PrimTy};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// Snapshot of linearity checker state for branch checking.
 #[derive(Debug, Clone)]
 pub struct LinearitySnapshot {
-    shadow: HashMap<String, (OwnershipState, usize)>,
+    shadow: Rc<HashMap<String, (OwnershipState, usize)>>,
     depth: usize,
     scope_bindings_len: usize,
 }
@@ -30,7 +31,8 @@ pub struct LinearityChecker {
     /// Current scope depth (0 = global).
     depth: usize,
     /// Flat shadow index: name -> (state, depth at which it was bound).
-    shadow: HashMap<String, (OwnershipState, usize)>,
+    /// Wrapped in Rc for O(1) snapshot/restore with clone-on-write mutations.
+    shadow: Rc<HashMap<String, (OwnershipState, usize)>>,
     /// Per-depth list of (name, Option<previous_entry>) for rollback on pop.
     scope_bindings: Vec<Vec<(String, Option<(OwnershipState, usize)>)>>,
     /// Registry of known function parameter ownerships for call-site analysis.
@@ -42,7 +44,7 @@ impl LinearityChecker {
     pub fn new() -> Self {
         Self {
             depth: 0,
-            shadow: HashMap::new(),
+            shadow: Rc::new(HashMap::new()),
             scope_bindings: vec![Vec::new()],
             fn_ownerships: HashMap::new(),
             diags: Diagnostics::new(),
@@ -51,7 +53,7 @@ impl LinearityChecker {
 
     /// Introduce a new owned binding in the current scope.
     pub fn introduce(&mut self, name: String) {
-        let prev = self.shadow.insert(name.clone(), (OwnershipState::Owned, self.depth));
+        let prev = Rc::make_mut(&mut self.shadow).insert(name.clone(), (OwnershipState::Owned, self.depth));
         if let Some(bindings) = self.scope_bindings.last_mut() {
             bindings.push((name, prev));
         }
@@ -378,7 +380,7 @@ impl LinearityChecker {
         span: Span,
     ) {
         // Compare all bindings in the flat shadow index
-        for (name, (state_in_a, _)) in &state_a.shadow {
+        for (name, (state_in_a, _)) in state_a.shadow.iter() {
             if let Some((state_in_b, _)) = state_b.shadow.get(name) {
                 let a_moved = matches!(state_in_a, OwnershipState::Moved { .. });
                 let b_moved = matches!(state_in_b, OwnershipState::Moved { .. });
@@ -425,7 +427,7 @@ impl LinearityChecker {
     }
 
     fn set_state(&mut self, name: &str, state: OwnershipState) {
-        if let Some(entry) = self.shadow.get_mut(name) {
+        if let Some(entry) = Rc::make_mut(&mut self.shadow).get_mut(name) {
             entry.0 = state;
         }
     }
@@ -440,10 +442,11 @@ impl LinearityChecker {
             return;
         }
         if let Some(bindings) = self.scope_bindings.pop() {
+            let shadow = Rc::make_mut(&mut self.shadow);
             for (name, prev) in bindings.into_iter().rev() {
                 match prev {
-                    Some(entry) => { self.shadow.insert(name, entry); }
-                    None => { self.shadow.remove(&name); }
+                    Some(entry) => { shadow.insert(name, entry); }
+                    None => { shadow.remove(&name); }
                 }
             }
         }
@@ -451,15 +454,20 @@ impl LinearityChecker {
     }
 
     /// Snapshot current state for branch checking.
+    /// O(1): clones the Rc, not the HashMap.
     pub fn snapshot(&self) -> LinearitySnapshot {
         LinearitySnapshot {
-            shadow: self.shadow.clone(),
+            shadow: Rc::clone(&self.shadow),
             depth: self.depth,
             scope_bindings_len: self.scope_bindings.len(),
         }
     }
 
     /// Restore state from a snapshot.
+    /// O(1): swaps the Rc pointer.
+    /// Note: only scope_bindings *length* is restored (deeper layers are truncated).
+    /// Callers must not introduce bindings at the current scope depth between
+    /// snapshot() and restore() without an intervening push_scope().
     pub fn restore(&mut self, snap: LinearitySnapshot) {
         self.shadow = snap.shadow;
         self.depth = snap.depth;
@@ -582,5 +590,70 @@ mod tests {
 
         // The branches disagree: one moved, the other didn't.
         assert_ne!(branch1_state, branch2_state, "branches should disagree on x's state");
+    }
+
+    #[test]
+    fn nested_snapshot_restore_cow() {
+        // Verify snapshot/restore with nested branches (if inside match inside if).
+        // Each snapshot should be O(1) via Rc clone, and mutations should
+        // clone-on-write without affecting other snapshots.
+        let mut lc = LinearityChecker::new();
+        lc.introduce("a".into());
+        lc.introduce("b".into());
+        lc.introduce("c".into());
+
+        // Outer if: snapshot
+        let outer_snap = lc.snapshot();
+        assert_eq!(Rc::strong_count(&lc.shadow), 2, "snapshot should share Rc");
+
+        // Then branch of outer if: move a
+        lc.track_move("a", span(0)).ok();
+        // After mutation, checker should have cloned away from snapshot
+        assert_eq!(Rc::strong_count(&outer_snap.shadow), 1, "mutation should clone-on-write");
+
+        // Inner match: snapshot inside then-branch
+        let match_snap = lc.snapshot();
+
+        // Match arm 1: move b
+        lc.track_move("b", span(1)).ok();
+        let arm1_state = lc.snapshot();
+
+        // Match arm 2: restore to match_snap, move c instead
+        lc.restore(match_snap.clone());
+        assert!(lc.lookup_state("b") == Some(OwnershipState::Owned), "b should be Owned after restore");
+        lc.track_move("c", span(2)).ok();
+        let arm2_state = lc.snapshot();
+
+        // Verify arms disagree on b and c
+        let b_in_arm1 = arm1_state.shadow.get("b").map(|(s, _)| s.clone());
+        let b_in_arm2 = arm2_state.shadow.get("b").map(|(s, _)| s.clone());
+        assert!(matches!(b_in_arm1, Some(OwnershipState::Moved { .. })));
+        assert!(matches!(b_in_arm2, Some(OwnershipState::Owned)));
+
+        let c_in_arm1 = arm1_state.shadow.get("c").map(|(s, _)| s.clone());
+        let c_in_arm2 = arm2_state.shadow.get("c").map(|(s, _)| s.clone());
+        assert!(matches!(c_in_arm1, Some(OwnershipState::Owned)));
+        assert!(matches!(c_in_arm2, Some(OwnershipState::Moved { .. })));
+
+        // Restore to outer snapshot: everything should be Owned again
+        lc.restore(outer_snap);
+        assert!(lc.lookup_state("a") == Some(OwnershipState::Owned));
+        assert!(lc.lookup_state("b") == Some(OwnershipState::Owned));
+        assert!(lc.lookup_state("c") == Some(OwnershipState::Owned));
+    }
+
+    #[test]
+    fn snapshot_cow_no_clone_without_mutation() {
+        // Verify that snapshot + restore without mutation never clones the HashMap.
+        let mut lc = LinearityChecker::new();
+        lc.introduce("x".into());
+
+        let snap = lc.snapshot();
+        // Both point to the same allocation
+        assert!(Rc::ptr_eq(&lc.shadow, &snap.shadow));
+
+        // Restore without mutation — still shared
+        lc.restore(snap.clone());
+        assert!(Rc::ptr_eq(&lc.shadow, &snap.shadow));
     }
 }
