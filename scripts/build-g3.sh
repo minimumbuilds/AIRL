@@ -57,7 +57,7 @@ AIRL_BIN="${AIRL_BIN:-cargo run --release --features aot --}"
 echo "[build-g3] Building host binary..."
 cargo build --release --features aot
 
-echo "[build-g3] Compiling G3 -> ${BUILD_PATH} (this takes ~23 minutes)..."
+echo "[build-g3] Compiling G3 -> ${BUILD_PATH}..."
 $AIRL_BIN run \
   --load bootstrap/lexer.airl \
   --load bootstrap/parser.airl \
