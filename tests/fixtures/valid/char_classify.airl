@@ -1,2 +1,2 @@
 ;; EXPECT: "true|false|true|false|true|false|true|false|true|false"
-(str (char-alpha? "a") "|" (char-alpha? "1") "|" (char-digit? "5") "|" (char-digit? "x") "|" (char-whitespace? " ") "|" (char-whitespace? "a") "|" (char-upper? "A") "|" (char-upper? "a") "|" (char-lower? "z") "|" (char-lower? "Z"))
+(str (char-alpha "a") "|" (char-alpha "1") "|" (char-digit "5") "|" (char-digit "x") "|" (char-whitespace " ") "|" (char-whitespace "a") "|" (char-upper? "A") "|" (char-upper? "a") "|" (char-lower? "z") "|" (char-lower? "Z"))
