@@ -1,13 +1,14 @@
 use airl_syntax::{Span, Diagnostic, Diagnostics};
 use airl_syntax::ast::*;
 use crate::ty::{Ty, is_copy, PrimTy};
+use crate::interner::{SymbolId, SymbolInterner};
 use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Snapshot of linearity checker state for branch checking.
 #[derive(Debug, Clone)]
 pub struct LinearitySnapshot {
-    shadow: Rc<HashMap<String, (OwnershipState, usize)>>,
+    shadow: Rc<HashMap<SymbolId, (OwnershipState, usize)>>,
     depth: usize,
     scope_bindings_len: usize,
 }
@@ -30,13 +31,15 @@ pub enum OwnershipState {
 pub struct LinearityChecker {
     /// Current scope depth (0 = global).
     depth: usize,
-    /// Flat shadow index: name -> (state, depth at which it was bound).
+    /// Flat shadow index: SymbolId -> (state, depth at which it was bound).
     /// Wrapped in Rc for O(1) snapshot/restore with clone-on-write mutations.
-    shadow: Rc<HashMap<String, (OwnershipState, usize)>>,
-    /// Per-depth list of (name, Option<previous_entry>) for rollback on pop.
-    scope_bindings: Vec<Vec<(String, Option<(OwnershipState, usize)>)>>,
+    shadow: Rc<HashMap<SymbolId, (OwnershipState, usize)>>,
+    /// Per-depth list of (id, Option<previous_entry>) for rollback on pop.
+    scope_bindings: Vec<Vec<(SymbolId, Option<(OwnershipState, usize)>)>>,
     /// Registry of known function parameter ownerships for call-site analysis.
-    fn_ownerships: HashMap<String, Vec<Ownership>>,
+    fn_ownerships: HashMap<SymbolId, Vec<Ownership>>,
+    /// String interner for symbol names.
+    interner: SymbolInterner,
     diags: Diagnostics,
 }
 
@@ -47,24 +50,27 @@ impl LinearityChecker {
             shadow: Rc::new(HashMap::new()),
             scope_bindings: vec![Vec::new()],
             fn_ownerships: HashMap::new(),
+            interner: SymbolInterner::new(),
             diags: Diagnostics::new(),
         }
     }
 
     /// Introduce a new owned binding in the current scope.
     pub fn introduce(&mut self, name: String) {
-        let prev = Rc::make_mut(&mut self.shadow).insert(name.clone(), (OwnershipState::Owned, self.depth));
+        let id = self.interner.intern(&name);
+        let prev = Rc::make_mut(&mut self.shadow).insert(id, (OwnershipState::Owned, self.depth));
         if let Some(bindings) = self.scope_bindings.last_mut() {
-            bindings.push((name, prev));
+            bindings.push((id, prev));
         }
     }
 
     /// Track a move of the named binding. Marks it as Moved.
     pub fn track_move(&mut self, name: &str, span: Span) -> Result<(), ()> {
-        let state = self.lookup_state(name);
+        let id = self.interner.intern(name);
+        let state = self.lookup_state_id(id);
         match state {
             Some(OwnershipState::Owned) => {
-                self.set_state(name, OwnershipState::Moved { moved_at: span });
+                self.set_state_id(id, OwnershipState::Moved { moved_at: span });
                 Ok(())
             }
             Some(OwnershipState::Moved { moved_at }) => {
@@ -93,11 +99,12 @@ impl LinearityChecker {
 
     /// Track a borrow of the named binding.
     pub fn track_borrow(&mut self, name: &str, kind: BorrowKind, span: Span) -> Result<(), ()> {
-        let state = self.lookup_state(name);
+        let id = self.interner.intern(name);
+        let state = self.lookup_state_id(id);
         match (state, kind) {
             (Some(OwnershipState::Owned), BorrowKind::Immutable) => {
-                self.set_state(
-                    name,
+                self.set_state_id(
+                    id,
                     OwnershipState::Borrowed {
                         kind: BorrowKind::Immutable,
                         count: 1,
@@ -112,8 +119,8 @@ impl LinearityChecker {
                 }),
                 BorrowKind::Immutable,
             ) => {
-                self.set_state(
-                    name,
+                self.set_state_id(
+                    id,
                     OwnershipState::Borrowed {
                         kind: BorrowKind::Immutable,
                         count: count + 1,
@@ -122,8 +129,8 @@ impl LinearityChecker {
                 Ok(())
             }
             (Some(OwnershipState::Owned), BorrowKind::Mutable) => {
-                self.set_state(
-                    name,
+                self.set_state_id(
+                    id,
                     OwnershipState::Borrowed {
                         kind: BorrowKind::Mutable,
                         count: 1,
@@ -169,7 +176,8 @@ impl LinearityChecker {
         let ownerships: Vec<Ownership> = def.params.iter()
             .map(|p| p.ownership)
             .collect();
-        self.fn_ownerships.insert(def.name.clone(), ownerships);
+        let id = self.interner.intern(&def.name);
+        self.fn_ownerships.insert(id, ownerships);
     }
 
     /// Check a function definition for linearity violations.
@@ -349,8 +357,10 @@ impl LinearityChecker {
     /// Returns ownership list if callee is a known function with registered annotations.
     fn extract_callee_ownerships(&self, callee: &Expr, _arg_count: usize) -> Vec<Ownership> {
         if let ExprKind::SymbolRef(name) = &callee.kind {
-            if let Some(ownerships) = self.fn_ownerships.get(name) {
-                return ownerships.clone();
+            if let Some(id) = self.interner.get(name) {
+                if let Some(ownerships) = self.fn_ownerships.get(&id) {
+                    return ownerships.clone();
+                }
             }
         }
         vec![]
@@ -380,11 +390,12 @@ impl LinearityChecker {
         span: Span,
     ) {
         // Compare all bindings in the flat shadow index
-        for (name, (state_in_a, _)) in state_a.shadow.iter() {
-            if let Some((state_in_b, _)) = state_b.shadow.get(name) {
+        for (id, (state_in_a, _)) in state_a.shadow.iter() {
+            if let Some((state_in_b, _)) = state_b.shadow.get(id) {
                 let a_moved = matches!(state_in_a, OwnershipState::Moved { .. });
                 let b_moved = matches!(state_in_b, OwnershipState::Moved { .. });
                 if a_moved != b_moved {
+                    let name = self.interner.resolve(*id);
                     self.diags.add(Diagnostic::error(
                         format!(
                             "branches disagree on ownership of `{}`: moved in one branch but not the other",
@@ -404,11 +415,12 @@ impl LinearityChecker {
 
     /// Release a borrow on the named binding (decrement count or return to Owned).
     pub fn release_borrow(&mut self, name: &str) {
-        let state = self.lookup_state(name);
+        let id = self.interner.intern(name);
+        let state = self.lookup_state_id(id);
         match state {
             Some(OwnershipState::Borrowed { kind, count }) if count > 1 => {
-                self.set_state(
-                    name,
+                self.set_state_id(
+                    id,
                     OwnershipState::Borrowed {
                         kind,
                         count: count - 1,
@@ -416,18 +428,24 @@ impl LinearityChecker {
                 );
             }
             Some(OwnershipState::Borrowed { .. }) => {
-                self.set_state(name, OwnershipState::Owned);
+                self.set_state_id(id, OwnershipState::Owned);
             }
             _ => {}
         }
     }
 
-    fn lookup_state(&self, name: &str) -> Option<OwnershipState> {
-        self.shadow.get(name).map(|(s, _)| s.clone())
+    /// Look up ownership state by string name (public API convenience).
+    pub fn lookup_state(&self, name: &str) -> Option<OwnershipState> {
+        let id = self.interner.get(name)?;
+        self.shadow.get(&id).map(|(s, _)| s.clone())
     }
 
-    fn set_state(&mut self, name: &str, state: OwnershipState) {
-        if let Some(entry) = Rc::make_mut(&mut self.shadow).get_mut(name) {
+    fn lookup_state_id(&self, id: SymbolId) -> Option<OwnershipState> {
+        self.shadow.get(&id).map(|(s, _)| s.clone())
+    }
+
+    fn set_state_id(&mut self, id: SymbolId, state: OwnershipState) {
+        if let Some(entry) = Rc::make_mut(&mut self.shadow).get_mut(&id) {
             entry.0 = state;
         }
     }
@@ -443,10 +461,10 @@ impl LinearityChecker {
         }
         if let Some(bindings) = self.scope_bindings.pop() {
             let shadow = Rc::make_mut(&mut self.shadow);
-            for (name, prev) in bindings.into_iter().rev() {
+            for (id, prev) in bindings.into_iter().rev() {
                 match prev {
-                    Some(entry) => { shadow.insert(name, entry); }
-                    None => { shadow.remove(&name); }
+                    Some(entry) => { shadow.insert(id, entry); }
+                    None => { shadow.remove(&id); }
                 }
             }
         }
@@ -624,14 +642,16 @@ mod tests {
         lc.track_move("c", span(2)).ok();
         let arm2_state = lc.snapshot();
 
-        // Verify arms disagree on b and c
-        let b_in_arm1 = arm1_state.shadow.get("b").map(|(s, _)| s.clone());
-        let b_in_arm2 = arm2_state.shadow.get("b").map(|(s, _)| s.clone());
+        // Verify arms disagree on b and c (use interner to get SymbolIds)
+        let b_id = lc.interner.get("b").unwrap();
+        let c_id = lc.interner.get("c").unwrap();
+        let b_in_arm1 = arm1_state.shadow.get(&b_id).map(|(s, _)| s.clone());
+        let b_in_arm2 = arm2_state.shadow.get(&b_id).map(|(s, _)| s.clone());
         assert!(matches!(b_in_arm1, Some(OwnershipState::Moved { .. })));
         assert!(matches!(b_in_arm2, Some(OwnershipState::Owned)));
 
-        let c_in_arm1 = arm1_state.shadow.get("c").map(|(s, _)| s.clone());
-        let c_in_arm2 = arm2_state.shadow.get("c").map(|(s, _)| s.clone());
+        let c_in_arm1 = arm1_state.shadow.get(&c_id).map(|(s, _)| s.clone());
+        let c_in_arm2 = arm2_state.shadow.get(&c_id).map(|(s, _)| s.clone());
         assert!(matches!(c_in_arm1, Some(OwnershipState::Owned)));
         assert!(matches!(c_in_arm2, Some(OwnershipState::Moved { .. })));
 
