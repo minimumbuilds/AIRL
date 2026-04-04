@@ -680,6 +680,10 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "bytes-slice" => airl_rt::misc::airl_bytes_slice(a0!(), a1!(), a2!()),
         "crc32c" => airl_rt::misc::airl_crc32c(a0!()),
 
+        // DNS / ICMP
+        "dns-resolve" => airl_rt::misc::airl_dns_resolve(a0!()),
+        "icmp-ping" => airl_rt::misc::airl_icmp_ping(a0!(), a1!()),
+
         // TCP
         "tcp-connect" => airl_rt::misc::airl_tcp_connect(a0!(), a1!()),
         "tcp-close" => airl_rt::misc::airl_tcp_close(a0!()),
