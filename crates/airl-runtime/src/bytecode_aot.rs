@@ -703,7 +703,7 @@ impl BytecodeAot {
         let map_ho = declare_import(m, "airl_map", s2.clone());
         let filter_ho = declare_import(m, "airl_filter", s2.clone());
         let s3 = sig_3_ptr(m, ptr);
-        let fold_ho = declare_import(m, "airl_fold", s3);
+        let fold_ho = declare_import(m, "airl_fold", s3.clone());
         let sort_ho = declare_import(m, "airl_sort", s2.clone());
         let any_ho = declare_import(m, "airl_any", s2.clone());
         let all_ho = declare_import(m, "airl_all", s2.clone());
