@@ -22,6 +22,11 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      - name: Download TLC
+        run: |
+          curl -sL -o tla/tla2tools.jar \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
+
       - name: TLC model check — channel protocol invariants
         run: |
           java -jar tla/tla2tools.jar \
