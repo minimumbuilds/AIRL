@@ -53,7 +53,15 @@ pub extern "C" fn airl_call_closure(
 
     let total = params.len();
 
-    // Dispatch by total arity using transmute to typed function pointers
+    // Dispatch by total arity using transmute to typed function pointers.
+    //
+    // SAFETY: `func_ptr` was produced by the AIRL AOT compiler (Cranelift) or
+    // the bytecode compiler, and genuinely has the extern "C" signature
+    //   fn(*mut RtValue, ...) -> *mut RtValue
+    // with exactly `total` parameters. The compiler guarantees arity matches.
+    // Transmuting to the wrong arity would be UB (stack corruption), but the
+    // type checker + codegen ensure the closure's stored arity matches the
+    // call site. The > 8 case calls rt_error (process::exit) so never returns.
     unsafe {
         match total {
             0 => {

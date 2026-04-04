@@ -7,10 +7,24 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// Wrapper to send *mut RtValue across threads.
-/// Safety: RtValue is ref-counted and we retain before sending, release after receiving.
+/// Wrapper to send `*mut RtValue` across threads via channels.
+///
+/// # Safety
+///
+/// `SendPtr` is sound under these invariants (enforced by call sites):
+///   1. The value is retained (`airl_value_retain`) before wrapping in `SendPtr`.
+///   2. The receiver owns the retained reference and must release it.
+///   3. The sender does not access the value after sending.
+///
+/// **Note:** `SendableRtValue` (in value.rs) is the preferred type-safe
+/// alternative for new code. `SendPtr` is kept for channel internals where
+/// the retain/release is managed explicitly at the channel-send/recv boundary.
 struct SendPtr(*mut RtValue);
+// SAFETY: See above — the retain-before-send / release-after-recv protocol
+// ensures no two threads hold mutable access to the same RtValue.
 unsafe impl Send for SendPtr {}
+// SAFETY: SendPtr is only accessed through Mutex-guarded channel operations,
+// so concurrent &SendPtr access never actually occurs.
 unsafe impl Sync for SendPtr {}
 
 type SharedReceiver = Arc<Mutex<std::sync::mpsc::Receiver<SendPtr>>>;

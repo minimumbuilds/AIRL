@@ -18,6 +18,9 @@ pub extern "C" fn airl_value_retain(ptr: *mut RtValue) {
     if ptr.is_null() {
         return;
     }
+    // SAFETY: Caller guarantees `ptr` is a valid, live RtValue. The null check
+    // above handles the only expected invalid input. Non-atomic increment is
+    // safe because the AIRL threading model forbids concurrent mutation.
     unsafe {
         let old = (*ptr).rc.fetch_add(1, Ordering::Relaxed);
         // SEC-2: If we just incremented past the immortal threshold,
@@ -37,6 +40,9 @@ pub extern "C" fn airl_value_release(ptr: *mut RtValue) {
     if ptr.is_null() {
         return;
     }
+    // SAFETY: Same preconditions as `airl_value_retain`. Additionally, when
+    // rc reaches zero we call `free_value` which takes ownership of the Box
+    // and drops it — the pointer must not be used after this point.
     unsafe {
         // SEC-2: Immortal values are never freed
         let current = (*ptr).rc.load(Ordering::Relaxed);
@@ -57,6 +63,12 @@ pub extern "C" fn airl_value_release(ptr: *mut RtValue) {
     }
 }
 
+/// Recursively release nested pointers and deallocate the RtValue.
+///
+/// # Safety
+///
+/// `ptr` must be a valid, exclusively-owned `*mut RtValue` with `rc == 0`.
+/// After this call, `ptr` is dangling — the caller must not use it again.
 unsafe fn free_value(ptr: *mut RtValue) {
     // Recursively release nested pointers before dropping
     match &(*ptr).data {
