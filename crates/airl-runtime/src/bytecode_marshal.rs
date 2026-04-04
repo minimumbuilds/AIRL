@@ -24,6 +24,7 @@ fn type_err(msg: &str) -> RuntimeError {
 /// that the path exists and is a regular file (not a symlink to an unexpected location).
 fn validate_linker_script_env(default: &str) -> Result<String, RuntimeError> {
     match std::env::var("AIRL_LINKER_SCRIPT") {
+        Ok(script) if script.is_empty() => Ok(default.into()),
         Ok(script) => {
             let path = std::path::Path::new(&script);
             if !path.exists() {

@@ -2140,12 +2140,12 @@ pub extern "C" fn airl_icmp_ping(addr: *mut RtValue, timeout_ms: *mut RtValue) -
             let rtt_us = u32::from_le_bytes([resp[20], resp[21], resp[22], resp[23]]);
             let ttl = resp[24];
             let seq = u16::from_le_bytes([resp[26], resp[27]]);
-            let mut pairs = Vec::new();
+            let mut m = HashMap::new();
             // rtt_ms = rtt_us / 1000 (integer division, microseconds to milliseconds)
-            pairs.push((rt_str("rtt_ms".into()), rt_int((rtt_us / 1000) as i64)));
-            pairs.push((rt_str("ttl".into()), rt_int(ttl as i64)));
-            pairs.push((rt_str("seq".into()), rt_int(seq as i64)));
-            ok_variant(rt_map(pairs))
+            m.insert("rtt_ms".into(), rt_int((rtt_us / 1000) as i64));
+            m.insert("ttl".into(), rt_int(ttl as i64));
+            m.insert("seq".into(), rt_int(seq as i64));
+            ok_variant(rt_map(m))
         }
         -1 => err_variant("icmp-ping: timeout"),
         -2 => err_variant("icmp-ping: unreachable"),
