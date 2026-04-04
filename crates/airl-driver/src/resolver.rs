@@ -173,17 +173,20 @@ fn resolve_recursive(
         .unwrap_or("unknown")
         .to_string();
 
+    // Consume canonical to avoid repeated clones: we need it in resolved, import_map, and visited.
+    // Clone once for resolved.path, then move through import_map and visited.
+    let path_for_module = canonical.clone();
+    import_map.insert(canonical.clone(), directives);
+    visited.insert(canonical);
+    stack.pop();
+
     resolved.push(ResolvedModule {
-        path: canonical.clone(),
+        path: path_for_module,
         name,
         tops,
         public_fns,
         public_types,
     });
-
-    import_map.insert(canonical.clone(), directives);
-    visited.insert(canonical.clone());
-    stack.pop();
 
     Ok(())
 }
