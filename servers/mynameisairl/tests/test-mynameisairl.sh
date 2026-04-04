@@ -105,8 +105,9 @@ echo ""
 
 # ─── Test 7: Version from Cargo.toml ────────────────────────────────
 echo "Test 7: Version"
+EXPECTED_VERSION=$(grep '^version' "${AIRL_DIR:-$HOME/repos/AIRL}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 OUTPUT=$(run_server '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
-assert_contains "version matches Cargo.toml" "$OUTPUT" "0.11.0"
+assert_contains "version matches Cargo.toml ($EXPECTED_VERSION)" "$OUTPUT" "$EXPECTED_VERSION"
 echo ""
 
 # Cleanup
