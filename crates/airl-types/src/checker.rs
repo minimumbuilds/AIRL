@@ -1030,7 +1030,7 @@ mod tests {
     #[test]
     fn check_comparison_returns_bool() {
         assert_eq!(parse_and_check("(< 1 2)"), Ok(Ty::Prim(PrimTy::Bool)));
-        assert_eq!(parse_and_check("(== 3 4)"), Ok(Ty::Prim(PrimTy::Bool)));
+        assert_eq!(parse_and_check("(= 3 4)"), Ok(Ty::Prim(PrimTy::Bool)));
     }
 
     #[test]
