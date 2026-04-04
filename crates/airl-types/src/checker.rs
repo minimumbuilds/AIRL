@@ -133,6 +133,8 @@ impl TypeChecker {
             // Threading and channels
             "thread-spawn", "thread-join", "thread-set-affinity",
             "channel-new", "channel-send", "channel-recv", "channel-recv-timeout", "channel-drain", "channel-close",
+            // Container runtime (aircon) — AIRLOS-only IPC stubs
+            "aircon_create", "aircon_start", "aircon_stop", "aircon_status", "aircon_list",
         ] {
             self.env.bind(name.to_string(), Ty::TypeVar("builtin".to_string()));
         }

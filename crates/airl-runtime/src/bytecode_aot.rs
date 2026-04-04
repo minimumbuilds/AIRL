@@ -279,6 +279,13 @@ pub struct RuntimeImports {
     pub delete_user: FuncId,
     pub set_password: FuncId,
 
+    // Container runtime (aircon)
+    pub aircon_create: FuncId,
+    pub aircon_start:  FuncId,
+    pub aircon_stop:   FuncId,
+    pub aircon_status: FuncId,
+    pub aircon_list:   FuncId,
+
     // Contract failure
     pub contract_fail: FuncId,
 }
@@ -803,6 +810,13 @@ impl BytecodeAot {
         let delete_user = declare_import(m, "airl_delete_user", s1.clone());
         let set_password = declare_import(m, "airl_set_password", s3.clone());
 
+        // Container runtime (aircon)
+        let aircon_create = declare_import(m, "airl_aircon_create", sig_3_ptr(m, ptr));
+        let aircon_start  = declare_import(m, "airl_aircon_start",  s1.clone());
+        let aircon_stop   = declare_import(m, "airl_aircon_stop",   s1.clone());
+        let aircon_status = declare_import(m, "airl_aircon_status", s1.clone());
+        let aircon_list   = declare_import(m, "airl_aircon_list",   sig_0_ptr(m, ptr));
+
         // Contract failure: (kind: i64, fn_name_idx: i64, clause_idx: i64) -> i64
         let mut cf_sig = m.make_signature();
         cf_sig.params.push(AbiParam::new(types::I64));
@@ -856,6 +870,7 @@ impl BytecodeAot {
             tcp_connect, tcp_close, tcp_send, tcp_recv, tcp_recv_exact, tcp_set_timeout, tcp_connect_tls, tcp_listen, tcp_accept, tcp_accept_tls,
             thread_spawn, thread_join, thread_set_affinity, channel_new, channel_send, channel_recv, channel_recv_timeout, channel_drain, channel_close,
             whoami, id_fn, authenticate, switch_user, elevate, create_user, delete_user, set_password,
+            aircon_create, aircon_start, aircon_stop, aircon_status, aircon_list,
             contract_fail,
         }
     }
@@ -1096,6 +1111,13 @@ impl BytecodeAot {
         m.insert("create-user".into(),    rt.create_user);
         m.insert("delete-user".into(),    rt.delete_user);
         m.insert("set-password".into(),   rt.set_password);
+
+        // Container runtime (aircon) — AIRLOS-only IPC stubs
+        m.insert("aircon_create".into(), rt.aircon_create);
+        m.insert("aircon_start".into(),  rt.aircon_start);
+        m.insert("aircon_stop".into(),   rt.aircon_stop);
+        m.insert("aircon_status".into(), rt.aircon_status);
+        m.insert("aircon_list".into(),   rt.aircon_list);
 
         // NOTE: map/filter/fold/sort/any/all/find are NOT registered here.
         // They resolve to AIRL stdlib definitions (from prelude.airl) which

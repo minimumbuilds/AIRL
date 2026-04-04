@@ -1,0 +1,44 @@
+;; ── AIRL Standard Library: Container Runtime (AIRLOS only) ─────
+;;
+;; Wrappers around aircon_* builtins for container lifecycle management.
+;; On Linux these return (Err "not available on Linux").
+
+;; ── aircon-create : create a new container ──
+(defn aircon-create
+  :sig [(image : String) (mem-kb : i64) (cpu-ms : i64) -> _]
+  :intent "Create a container from image with memory and CPU limits"
+  :requires [(valid image) (valid mem-kb) (valid cpu-ms)]
+  :ensures [(valid result)]
+  :body (aircon_create image mem-kb cpu-ms))
+
+;; ── aircon-start : start a container by ID ──
+(defn aircon-start
+  :sig [(id : i64) -> _]
+  :intent "Start a previously created container"
+  :requires [(valid id)]
+  :ensures [(valid result)]
+  :body (aircon_start id))
+
+;; ── aircon-stop : stop a running container ──
+(defn aircon-stop
+  :sig [(id : i64) -> _]
+  :intent "Stop a running container"
+  :requires [(valid id)]
+  :ensures [(valid result)]
+  :body (aircon_stop id))
+
+;; ── aircon-status : query container status ──
+(defn aircon-status
+  :sig [(id : i64) -> _]
+  :intent "Query container status: created, running, stopped, or failed"
+  :requires [(valid id)]
+  :ensures [(valid result)]
+  :body (aircon_status id))
+
+;; ── aircon-list : list all containers ──
+(defn aircon-list
+  :sig [-> _]
+  :intent "List all container IDs"
+  :requires []
+  :ensures [(valid result)]
+  :body (aircon_list))

@@ -765,6 +765,13 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "delete-user" => airl_rt::identity::airl_delete_user(a0!()),
         "set-password" => airl_rt::identity::airl_set_password(a0!(), a1!(), a2!()),
 
+        // Container runtime (aircon)
+        "aircon_create" => airl_rt::aircon::airl_aircon_create(a0!(), a1!(), a2!()),
+        "aircon_start"  => airl_rt::aircon::airl_aircon_start(a0!()),
+        "aircon_stop"   => airl_rt::aircon::airl_aircon_stop(a0!()),
+        "aircon_status" => airl_rt::aircon::airl_aircon_status(a0!()),
+        "aircon_list"   => airl_rt::aircon::airl_aircon_list(),
+
         // Canopy terminal I/O
         "canopy_raw_mode_enable" => airl_rt::terminal::canopy_raw_mode_enable(),
         "canopy_raw_mode_disable" => airl_rt::terminal::canopy_raw_mode_disable(),
@@ -784,6 +791,13 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
             args.get(4).copied().unwrap_or(std::ptr::null_mut())),
         "airl_delete_user" => airl_rt::identity::airl_delete_user(a0!()),
         "airl_set_password" => airl_rt::identity::airl_set_password(a0!(), a1!(), a2!()),
+
+        // Container runtime (extern-c aliases)
+        "airl_aircon_create" => airl_rt::aircon::airl_aircon_create(a0!(), a1!(), a2!()),
+        "airl_aircon_start"  => airl_rt::aircon::airl_aircon_start(a0!()),
+        "airl_aircon_stop"   => airl_rt::aircon::airl_aircon_stop(a0!()),
+        "airl_aircon_status" => airl_rt::aircon::airl_aircon_status(a0!()),
+        "airl_aircon_list"   => airl_rt::aircon::airl_aircon_list(),
 
         // Not found
         _ => return None,
