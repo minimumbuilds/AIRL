@@ -11,3 +11,22 @@ jobs:
       - run: cargo clean -p airl-runtime
       - run: cargo build --features aot
       - run: cargo test -p airl-syntax -p airl-types -p airl-contracts -p airl-runtime -p airl-agent -p airl-driver
+
+  tlc-model-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: TLC model check — channel protocol invariants
+        run: |
+          java -jar tla/tla2tools.jar \
+            -config tla/MC_channels.cfg \
+            -workers auto \
+            -deadlock \
+            tla/airl_channels.tla
+        timeout-minutes: 5
