@@ -29,9 +29,11 @@ The compiler and runtime. 10-crate Rust workspace + self-hosted bootstrap compil
 
 **Stdlib:** 13 modules -- collections, math, result, string, map, set, json, base64, sha256, hmac, pbkdf2, io, path. 73 functions migrated from Rust builtins to pure AIRL in v0.11.0.
 
-**New runtime builtins:** `dns-resolve`, `icmp-ping` (networking, in `airl-rt`).
+**New runtime builtins:** `dns-resolve`, `icmp-ping` (networking), 8 identity IPC stubs (`whoami`, `id`, `authenticate`, `su`, `sudo`, `useradd`, `userdel`, `usermod`), 7 Canopy terminal extern-c functions (all in `airl-rt`).
 
-**Stats:** 35K Rust LOC, 44K AIRL LOC, 577 commits, 690 unit tests, 76 AOT tests.
+**Recent fixes:** AOT arity bug -- use callee's declared arity, not caller's argc.
+
+**Stats:** 36K Rust LOC, 40K AIRL LOC, 592 commits, 703 unit tests, 74 AOT tests.
 
 **Execution modes:**
 - `airl run` -- AOT compile to temp binary, execute, clean up
@@ -107,8 +109,8 @@ Self-hosted linter for AIRL code. Imports the bootstrap compiler's lexer/parser 
 | | |
 |---|---|
 | **Location** | `../airtools` |
-| **Size** | 2,005 LOC (10 modules + LSP server) |
-| **Commits** | 5 |
+| **Size** | 6,065 LOC (10 modules + LSP server) |
+| **Commits** | 8 |
 | **Status** | Functional. 14 rules implemented, LSP server scaffold complete. |
 
 ### AIRLchart -- Code Visualization
@@ -169,6 +171,18 @@ Model Context Protocol (MCP) server framework for AIRL. Enables building MCP-com
 | **Commits** | 5 |
 | **Status** | Functional. Tool and prompt support merged to main. |
 
+### AirLog -- Structured Logging Framework
+
+Structured logging library for AIRL applications. Level-based filtering (debug, info, warn, error), key-value structured fields, pluggable outputs (console, file), and JSON log format support. Includes file rotation via the file output module.
+
+| | |
+|---|---|
+| **Location** | `../AirLog` |
+| **Size** | 649 LOC (2 modules + tests + examples) |
+| **Commits** | 1 |
+| **Status** | Functional. Core API and file output complete. |
+| **Depends on** | stdlib (json, string, io) |
+
 ### mynameisAIRL -- MCP Prompt Server + Code Indexer
 
 MCP prompt server that serves AIRL-LLM-Guide.md to LLMs as a `teach_airl` prompt, plus the AirMunch code indexer providing 10 MCP tools: `index_project`, `file_tree`, `file_outline`, `get_symbol`, `search_symbols`, `get_content`, `repo_outline`, `find_callers`, `dependency_graph`, `blast_radius`. Built on the AirTraffic framework. Supports CLI, environment variable, and Docker volume-mount guide path resolution. Stdio transport.
@@ -182,14 +196,14 @@ MCP prompt server that serves AIRL-LLM-Guide.md to LLMs as a `teach_airl` prompt
 
 ### Canopy -- Algebraic TUI Framework
 
-Terminal UI framework built on a single premise: the UI is data. Scenes are S-expression lists, layout is a pure fold, diffing is pattern matching, rendering produces ANSI escape sequences. No components, no virtual DOM, no mutable state — just pure functions transforming data. Supports boxes (column/row layout, grow weights, padding, borders, overflow scroll), styled text, and spacers. Channel-based event coordination for concurrent input and resize handling.
+Terminal UI framework built on a single premise: the UI is data. Scenes are S-expression lists, layout is a pure fold, diffing is pattern matching, rendering produces ANSI escape sequences. No components, no virtual DOM, no mutable state -- just pure functions transforming data. Supports boxes (column/row layout, grow weights, padding, borders, overflow scroll), styled text, and spacers. Channel-based event coordination for concurrent input and resize handling. Phase B adds interactive terminal applications: key/mouse event dispatch, focus management, text input widgets, scroll views, and a reactive app-loop with model-update-view architecture.
 
 | | |
 |---|---|
 | **Location** | `../canopy` |
-| **Size** | In development (Phase A) |
-| **Commits** | 2 |
-| **Status** | Design complete. Phase A implementation in progress. |
+| **Size** | 1,384 LOC (7 src modules, 6 test suites, 2 demos) |
+| **Commits** | 4 |
+| **Status** | Functional. Phase A+B complete (layout, rendering, diffing, interactive TUI). |
 | **Depends on** | 7 extern-c terminal I/O functions in AIRL runtime, stdlib (string, collections, sha256) |
 
 ---
@@ -243,7 +257,7 @@ Benchmarks AIRL_castle's Kafka producer against Confluent's librdkafka (Python w
 |---|---|
 | **Location** | `../kafka_sdk_bench` |
 | **Languages** | AIRL (producer) + Python/librdkafka (baseline) |
-| **Size** | ~750 LOC (AIRL benchmark + Python baseline + orchestrator + analysis) |
+| **Size** | ~1,073 LOC (AIRL benchmark + Python baseline + orchestrator + analysis) |
 | **Key results** | Sync: AIRL 5.9K vs Confluent 7.9K msg/s (75%). Batch: 46K msg/s. Root cause: per-byte value boxing. |
 | **Status** | Functional. 14 optimization specs documenting improvement roadmap. |
 
@@ -253,26 +267,36 @@ Benchmarks AIRL_castle's Kafka producer against Confluent's librdkafka (Python w
 
 ### AIRLOS -- Capability-Based Microkernel
 
-32-bit x86 microkernel with per-process page tables, capability-based security (12 capability bits), synchronous IPC (256-byte messages), async notifications, shared memory, and lwIP TCP/IP networking. Boots via Multiboot/GRUB on QEMU. Includes an embedded AIRL S-expression evaluator for kernel-side policy evaluation, and a TCP agent server with HMAC-SHA256 authentication. 12 new C runtime builtins, DNS resolution + ICMP ping in net service, keyboard debug traces, ash boot fix (keyboard service ID caching).
+32-bit x86 microkernel with per-process page tables, capability-based security (12 capability bits), synchronous IPC (256-byte messages), async notifications, shared memory, and lwIP TCP/IP networking. Boots via Multiboot/GRUB on QEMU. Includes an embedded AIRL S-expression evaluator for kernel-side policy evaluation, and a TCP agent server with HMAC-SHA256 authentication.
+
+**GUI foundation:** VESA framebuffer with bitmap font rendering (Spec 30), PS/2 mouse driver with IRQ 12 packet decode and event broadcast (Spec 31), window server with compositor (Spec 32), and display protocol for client-server rendering (Spec 33).
+
+**VFS and exec:** VFS-based `/bin/` directory populated from ramdisk ELFs at boot (Spec 34). `SYS_EXEC_BUF` syscall for loading and executing binaries from VFS.
+
+**Networking:** 12 C runtime builtins, DNS resolution + ICMP ping in net service, SSH server with command interpreter.
 
 | | |
 |---|---|
 | **Location** | `../AIRLOS` |
 | **Language** | C (freestanding, gnu99), x86 assembly |
-| **Size** | ~34,300 LOC kernel + drivers + user-space (excluding vendored lwIP) |
-| **Commits** | 177 |
-| **Status** | Functional prototype. Security hardening complete (Spec 00 fixed). 19 design specs. CI via GitHub Actions. |
+| **Size** | ~36,100 LOC kernel + drivers + user-space (excluding vendored lwIP) |
+| **Commits** | 185 |
+| **Status** | Functional prototype. Security hardening complete (Spec 00 fixed). 35 design specs. CI via GitHub Actions. |
 
 ### airshell -- Interactive Shell
 
-zsh-compatible interactive shell targeting AIRLOS. REPL with line editing, command history, 13 built-in commands, environment variable expansion, S-expression config file (`.ashrc`), and configurable prompt. Cross-compiles to AIRLOS via `make airlos`. Also runs natively on Linux. Full scripting support: if/for/while/case/function, trap handlers (EXIT/INT/ERR/DEBUG), `$@`/`$*` support, POSIX dispatch order, ping/host builtins.
+zsh-compatible interactive shell targeting AIRLOS. REPL with line editing, command history, 13+ built-in commands, environment variable expansion, S-expression config file (`.ashrc`), and configurable prompt. Cross-compiles to AIRLOS via `make airlos`. Also runs natively on Linux. Full scripting support: if/for/while/case/function, trap handlers (EXIT/INT/ERR/DEBUG), `$@`/`$*` support, POSIX dispatch order, ping/host builtins.
+
+**Job control:** Background execution (`&`), `jobs`/`fg`/`bg` builtins, job completion tracking in the REPL loop.
+
+**Identity:** `whoami`, `id`, `groups` builtins. Standalone programs: `passwd`, `su`, `sudo`, `useradd`, `userdel`, `usermod` (in `programs/`, compiled separately).
 
 | | |
 |---|---|
 | **Location** | `../airshell` |
-| **Size** | 2,864 LOC (11 modules), 929 LOC tests |
-| **Commits** | 19 |
-| **Status** | Functional. Linux and AIRLOS targets. Full scripting and POSIX dispatch. |
+| **Size** | 4,228 LOC (11 modules + 7 standalone programs), 1,068 LOC tests |
+| **Commits** | 22 |
+| **Status** | Functional. Linux and AIRLOS targets. Full scripting, POSIX dispatch, job control, and identity management. |
 
 ---
 
@@ -280,26 +304,28 @@ zsh-compatible interactive shell targeting AIRLOS. REPL with line editing, comma
 
 | Project | Language | LOC | Commits | Status |
 |---------|----------|-----|---------|--------|
-| AIRL | Rust + AIRL | 78,659 | 577 | v0.11.0, self-hosted |
-| AIRLOS | C + asm | 34,300 | 177 | Prototype |
+| AIRL | Rust + AIRL | 76,307 | 592 | v0.11.0, self-hosted |
+| AIRLOS | C + asm | 36,100 | 185 | Prototype |
 | AIRL_castle | AIRL | 8,811 | 78 | Functional |
+| airtools | AIRL | 6,065 | 8 | Functional |
 | AirLift | AIRL | 4,219 | 11 | Functional |
+| airshell | AIRL | 4,228 | 22 | Functional |
 | airlDelivery | AIRL | 4,196 | 9 | Functional |
-| airshell | AIRL | 2,864 | 19 | Functional |
 | AIReqL | AIRL | 2,697 | 26 | v0.2.0 |
 | airlhttp | AIRL | 2,230 | 3 | Functional |
 | CairLI | AIRL | 2,197 | 8 | Stable (v0.2.0) |
-| airtools | AIRL | 2,005 | 5 | Functional |
 | mynameisAIRL | AIRL | 1,963 | 7 | Functional |
 | AirGate | AIRL | 1,890 | 7 | v0.2.0 |
 | AirParse | AIRL | 1,784 | 6 | Functional |
+| Canopy | AIRL | 1,384 | 4 | Functional |
 | AirTraffic | AIRL | 1,358 | 5 | Functional |
 | AIRLchart | AIRL | 1,313 | 10 | Functional |
-| kafka_sdk_bench | AIRL + Python | 1,281 | 3 | Functional |
+| kafka_sdk_bench | AIRL + Python | 1,073 | 3 | Functional |
 | airline | AIRL | 1,217 | 25 | Functional |
 | airtest | AIRL | 891 | 3 | Functional |
 | AIRL_bench | AIRL | 847 | 27 | Functional |
-| **Total** | | **~154,722** | **1,006** | |
+| AirLog | AIRL | 649 | 1 | Functional |
+| **Total** | | **~161,419** | **1,040** | |
 
 ## Building
 
