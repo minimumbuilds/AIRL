@@ -1,0 +1,140 @@
+name: mynameisairl
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout AirTraffic
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository_owner }}/AirTraffic
+          path: AirTraffic
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libz3-dev libcurl4-openssl-dev libssl-dev
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build host binary
+        run: cargo build --release --features aot
+
+      - name: Compile g3
+        env:
+          AIRL_STDLIB: ${{ github.workspace }}/stdlib
+        run: |
+          cargo run --release --features aot -- run \
+            --load bootstrap/lexer.airl \
+            --load bootstrap/parser.airl \
+            --load bootstrap/bc_compiler.airl \
+            bootstrap/g3_compiler.airl -- \
+            bootstrap/lexer.airl \
+            bootstrap/parser.airl \
+            bootstrap/bc_compiler.airl \
+            bootstrap/g3_compiler.airl \
+            -o g3
+
+      - name: Test mynameisairl
+        env:
+          AIRL_DIR: ${{ github.workspace }}
+          G3: ${{ github.workspace }}/g3
+          AT_ROOT: ${{ github.workspace }}/AirTraffic
+          AIRL_STDLIB: ${{ github.workspace }}/stdlib
+        run: bash servers/mynameisairl/tests/test-mynameisairl.sh
+
+  docker-publish:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout AirTraffic
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository_owner }}/AirTraffic
+          path: AirTraffic
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libz3-dev libcurl4-openssl-dev libssl-dev
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build host binary
+        run: cargo build --release --features aot
+
+      - name: Compile g3
+        env:
+          AIRL_STDLIB: ${{ github.workspace }}/stdlib
+        run: |
+          cargo run --release --features aot -- run \
+            --load bootstrap/lexer.airl \
+            --load bootstrap/parser.airl \
+            --load bootstrap/bc_compiler.airl \
+            bootstrap/g3_compiler.airl -- \
+            bootstrap/lexer.airl \
+            bootstrap/parser.airl \
+            bootstrap/bc_compiler.airl \
+            bootstrap/g3_compiler.airl \
+            -o g3
+
+      - name: Compile mynameisairl
+        env:
+          AIRL_DIR: ${{ github.workspace }}
+          G3: ${{ github.workspace }}/g3
+          AT_ROOT: ${{ github.workspace }}/AirTraffic
+          AIRL_STDLIB: ${{ github.workspace }}/stdlib
+        run: |
+          bash servers/mynameisairl/build.sh servers/mynameisairl/mynameisairl
+          chmod +x servers/mynameisairl/mynameisairl
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        env:
+          IMAGE_OWNER: ${{ github.repository_owner }}
+          IMAGE_TAG: ${{ github.ref_name }}
+        run: |
+          TMPDIR=$(mktemp -d)
+          trap 'rm -rf "$TMPDIR"' EXIT
+          cp servers/mynameisairl/mynameisairl "$TMPDIR/"
+          cp servers/mynameisairl/mcp-stdio-wrapper.sh "$TMPDIR/"
+          cp servers/mynameisairl/Dockerfile.prebuilt "$TMPDIR/Dockerfile"
+          IMAGE="ghcr.io/$IMAGE_OWNER/mynameisairl"
+          docker build -t "$IMAGE:$IMAGE_TAG" -t "$IMAGE:latest" "$TMPDIR"
+          docker push "$IMAGE:$IMAGE_TAG"
+          docker push "$IMAGE:latest"
