@@ -218,3 +218,5 @@ pub mod closure;
 pub mod misc;
 #[cfg(not(target_os = "airlos"))]
 pub mod thread;
+#[cfg(not(target_os = "airlos"))]
+pub mod terminal;

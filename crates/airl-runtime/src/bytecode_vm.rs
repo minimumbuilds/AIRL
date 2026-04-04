@@ -755,6 +755,15 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "airl_cpu_count" => airl_rt::misc::airl_cpu_count(),
         "airl_format_time" => airl_rt::misc::airl_format_time(a0!(), a1!()),
 
+        // Canopy terminal I/O
+        "canopy_raw_mode_enable" => airl_rt::terminal::canopy_raw_mode_enable(),
+        "canopy_raw_mode_disable" => airl_rt::terminal::canopy_raw_mode_disable(),
+        "canopy_stdin_read_byte" => airl_rt::terminal::canopy_stdin_read_byte(),
+        "canopy_stdin_read_available" => airl_rt::terminal::canopy_stdin_read_available(),
+        "canopy_stdout_write" => airl_rt::terminal::canopy_stdout_write(a0!()),
+        "canopy_terminal_size" => airl_rt::terminal::canopy_terminal_size(),
+        "canopy_on_resize" => airl_rt::terminal::canopy_on_resize(a0!()),
+
         // Not found
         _ => return None,
     };
