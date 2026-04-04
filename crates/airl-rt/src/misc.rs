@@ -106,7 +106,16 @@ pub extern "C" fn airl_char_count(s: *mut RtValue) -> *mut RtValue {
 #[no_mangle]
 pub extern "C" fn airl_str_variadic(args: *const *mut RtValue, count: i64) -> *mut RtValue {
     let count = count as usize;
-    let mut result = String::new();
+    // Estimate capacity from string arguments
+    let mut est_cap = 0usize;
+    for i in 0..count {
+        let v = unsafe { &**args.add(i) };
+        match &v.data {
+            RtData::Str(s) => est_cap += s.len(),
+            _ => est_cap += 16,
+        }
+    }
+    let mut result = String::with_capacity(est_cap);
     for i in 0..count {
         let v = unsafe { &**args.add(i) };
         match &v.data {
@@ -360,13 +369,17 @@ pub extern "C" fn airl_read_lines(path: *mut RtValue) -> *mut RtValue {
 pub extern "C" fn airl_concat_lists(a: *mut RtValue, b: *mut RtValue) -> *mut RtValue {
     let a_val = unsafe { &*a };
     let b_val = unsafe { &*b };
-    let mut items = Vec::new();
-    if let RtData::List { .. } = &a_val.data {
-        for &item in crate::list::list_items(&a_val.data) { crate::memory::airl_value_retain(item); items.push(item); }
-    }
-    if let RtData::List { .. } = &b_val.data {
-        for &item in crate::list::list_items(&b_val.data) { crate::memory::airl_value_retain(item); items.push(item); }
-    }
+    let a_slice = match &a_val.data {
+        RtData::List { .. } => crate::list::list_items(&a_val.data),
+        _ => &[],
+    };
+    let b_slice = match &b_val.data {
+        RtData::List { .. } => crate::list::list_items(&b_val.data),
+        _ => &[],
+    };
+    let mut items = Vec::with_capacity(a_slice.len() + b_slice.len());
+    for &item in a_slice { crate::memory::airl_value_retain(item); items.push(item); }
+    for &item in b_slice { crate::memory::airl_value_retain(item); items.push(item); }
     rt_list(items)
 }
 
@@ -378,7 +391,8 @@ pub extern "C" fn airl_range(start: *mut RtValue, end: *mut RtValue) -> *mut RtV
     if (e - s) > 10_000_000 {
         rt_error(&format!("range: size {} exceeds 10,000,000 element limit", e - s));
     }
-    let items: Vec<*mut RtValue> = (s..e).map(|i| rt_int(i)).collect();
+    let mut items = Vec::with_capacity((e - s) as usize);
+    for i in s..e { items.push(rt_int(i)); }
     rt_list(items)
 }
 

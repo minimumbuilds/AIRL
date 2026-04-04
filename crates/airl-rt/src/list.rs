@@ -204,7 +204,8 @@ pub extern "C" fn airl_append(list: *mut RtValue, elem: *mut RtValue) -> *mut Rt
                 RtData::Int(n) => *n as u8,
                 _ => rt_error("airl_append: Bytes can only append Int"),
             };
-            let mut new_bytes = bytes.clone();
+            let mut new_bytes = Vec::with_capacity(bytes.len() + 1);
+            new_bytes.extend_from_slice(bytes);
             new_bytes.push(b);
             rt_bytes(new_bytes)
         }
@@ -352,7 +353,7 @@ pub extern "C" fn airl_filter(closure: *mut RtValue, list: *mut RtValue) -> *mut
             _ => rt_error("airl_filter: second arg must be a List"),
         }
     };
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(items.len());
     for &item in &items {
         airl_value_retain(item);
         let args: [*mut RtValue; 1] = [item];
