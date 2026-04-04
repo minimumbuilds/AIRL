@@ -134,13 +134,41 @@ impl RtValue {
     }
 }
 
+// ── Static singletons for frequently-created immutable values ─────
+// These avoid heap allocation entirely. The rc is set to u32::MAX
+// (immortal), so retain/release are no-ops and free_value is never called.
+
+static NIL_SINGLETON: RtValue = RtValue {
+    tag: TAG_NIL,
+    rc: AtomicU32::new(u32::MAX),
+    data: RtData::Nil,
+};
+
+static UNIT_SINGLETON: RtValue = RtValue {
+    tag: TAG_UNIT,
+    rc: AtomicU32::new(u32::MAX),
+    data: RtData::Unit,
+};
+
+static TRUE_SINGLETON: RtValue = RtValue {
+    tag: TAG_BOOL,
+    rc: AtomicU32::new(u32::MAX),
+    data: RtData::Bool(true),
+};
+
+static FALSE_SINGLETON: RtValue = RtValue {
+    tag: TAG_BOOL,
+    rc: AtomicU32::new(u32::MAX),
+    data: RtData::Bool(false),
+};
+
 // Rust-side constructors
 pub fn rt_nil() -> *mut RtValue {
-    RtValue::alloc(TAG_NIL, RtData::Nil)
+    &NIL_SINGLETON as *const RtValue as *mut RtValue
 }
 
 pub fn rt_unit() -> *mut RtValue {
-    RtValue::alloc(TAG_UNIT, RtData::Unit)
+    &UNIT_SINGLETON as *const RtValue as *mut RtValue
 }
 
 pub fn rt_int(v: i64) -> *mut RtValue {
@@ -152,7 +180,11 @@ pub fn rt_float(v: f64) -> *mut RtValue {
 }
 
 pub fn rt_bool(v: bool) -> *mut RtValue {
-    RtValue::alloc(TAG_BOOL, RtData::Bool(v))
+    if v {
+        &TRUE_SINGLETON as *const RtValue as *mut RtValue
+    } else {
+        &FALSE_SINGLETON as *const RtValue as *mut RtValue
+    }
 }
 
 pub fn rt_str(v: String) -> *mut RtValue {
@@ -406,6 +438,10 @@ mod tests {
     use core::sync::atomic::Ordering;
 
     unsafe fn free_value(ptr: *mut RtValue) {
+        // Skip static singletons (immortal rc) — they cannot be freed.
+        if (*ptr).rc.load(Ordering::Relaxed) == u32::MAX {
+            return;
+        }
         drop(Box::from_raw(ptr));
     }
 
@@ -726,5 +762,45 @@ mod tests {
         // Compile-time check that SendableRtValue implements Send.
         fn assert_send<T: Send>() {}
         assert_send::<SendableRtValue>();
+    }
+
+    // ── Singleton contract tests ─────────────────────────────────
+
+    #[test]
+    fn test_nil_singleton_same_pointer() {
+        let a = rt_nil();
+        let b = rt_nil();
+        assert_eq!(a, b, "rt_nil() should return the same pointer each time");
+    }
+
+    #[test]
+    fn test_bool_singleton_same_pointer() {
+        let t1 = rt_bool(true);
+        let t2 = rt_bool(true);
+        let f1 = rt_bool(false);
+        let f2 = rt_bool(false);
+        assert_eq!(t1, t2, "rt_bool(true) should return the same pointer");
+        assert_eq!(f1, f2, "rt_bool(false) should return the same pointer");
+        assert_ne!(t1, f1, "true and false should be different pointers");
+    }
+
+    #[test]
+    fn test_unit_singleton_same_pointer() {
+        let a = rt_unit();
+        let b = rt_unit();
+        assert_eq!(a, b, "rt_unit() should return the same pointer each time");
+    }
+
+    #[test]
+    fn test_singleton_retain_release_are_noops() {
+        unsafe {
+            let n = rt_nil();
+            let rc_before = (*n).rc.load(Ordering::Relaxed);
+            assert_eq!(rc_before, u32::MAX, "singleton rc should be immortal");
+            crate::memory::airl_value_retain(n);
+            assert_eq!((*n).rc.load(Ordering::Relaxed), u32::MAX);
+            crate::memory::airl_value_release(n);
+            assert_eq!((*n).rc.load(Ordering::Relaxed), u32::MAX);
+        }
     }
 }

@@ -226,7 +226,8 @@ pub extern "C" fn airl_map_keys(m: *mut RtValue) -> *mut RtValue {
     let map_v = unsafe { &*m };
     match &map_v.data {
         RtData::Map(map) => {
-            let items: Vec<*mut RtValue> = map.keys().map(|k| rt_str(k.clone())).collect();
+            let mut items = Vec::with_capacity(map.len());
+            for k in map.keys() { items.push(rt_str(k.clone())); }
             rt_list(items)
         }
         _ => rt_error("airl_map_keys: argument must be a Map"),
@@ -240,13 +241,11 @@ pub extern "C" fn airl_map_values(m: *mut RtValue) -> *mut RtValue {
     let map_v = unsafe { &*m };
     match &map_v.data {
         RtData::Map(map) => {
-            let items: Vec<*mut RtValue> = map
-                .values()
-                .map(|&val| {
-                    airl_value_retain(val);
-                    val
-                })
-                .collect();
+            let mut items = Vec::with_capacity(map.len());
+            for &val in map.values() {
+                airl_value_retain(val);
+                items.push(val);
+            }
             rt_list(items)
         }
         _ => rt_error("airl_map_values: argument must be a Map"),

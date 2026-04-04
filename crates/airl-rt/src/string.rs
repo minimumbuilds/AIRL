@@ -88,10 +88,11 @@ pub extern "C" fn airl_chars(s: *mut RtValue) -> *mut RtValue {
         RtData::Str(s) => s,
         _ => rt_error("chars: argument must be a Str"),
     };
-    let items: Vec<*mut RtValue> = str_val
-        .chars()
-        .map(|c| rt_str(c.to_string()))
-        .collect();
+    let char_count = str_val.chars().count();
+    let mut items = Vec::with_capacity(char_count);
+    for c in str_val.chars() {
+        items.push(rt_str(c.to_string()));
+    }
     rt_list(items)
 }
 
@@ -129,7 +130,16 @@ pub extern "C" fn airl_join(list: *mut RtValue, sep: *mut RtValue) -> *mut RtVal
         RtData::Str(s) => s,
         _ => rt_error("join: second argument must be a Str"),
     };
-    let mut result = String::new();
+    // Estimate capacity: sum of string lengths + separators
+    let mut est_cap = sep_val.len() * items.len().saturating_sub(1);
+    for &item in items.iter() {
+        let val = unsafe { &*item };
+        match &val.data {
+            RtData::Str(s) => est_cap += s.len(),
+            _ => est_cap += 16, // rough estimate for non-string Display
+        }
+    }
+    let mut result = String::with_capacity(est_cap);
     for (idx, &item) in items.iter().enumerate() {
         if idx > 0 {
             result.push_str(sep_val.as_str());
