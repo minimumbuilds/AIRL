@@ -145,12 +145,10 @@ pub extern "C" fn airl_at(list: *mut RtValue, index: *mut RtValue) -> *mut RtVal
 
 #[no_mangle]
 pub extern "C" fn airl_append(list: *mut RtValue, elem: *mut RtValue) -> *mut RtValue {
-    // SAFETY: Creating `&mut *list` is sound — we immediately check `rc == 1`
-    // to guarantee exclusive ownership before any mutation. See airl_map_set
-    // in map.rs for the full COW-exclusive-ownership safety argument.
-    let v = unsafe { &mut *list };
-    // COW fast path: sole owner, not a view, at start of array
-    if v.rc == 1 {
+    // COW fast path: sole owner, not a view, at start of array.
+    // SAFETY: Only form &mut when rc == 1 (exclusive ownership). See airl_map_set.
+    if unsafe { (*list).rc } == 1 {
+        let v = unsafe { &mut *list };
         match &mut v.data {
             RtData::List { items, offset, parent } if parent.is_none() && *offset == 0 => {
                 airl_value_retain(elem);
@@ -170,7 +168,8 @@ pub extern "C" fn airl_append(list: *mut RtValue, elem: *mut RtValue) -> *mut Rt
             _ => {} // fall through to clone path
         }
     }
-    // Clone path
+    // Clone path — shared reference only.
+    let v = unsafe { &*list };
     match &v.data {
         RtData::List { .. } => {
             let slice = list_items(&v.data);

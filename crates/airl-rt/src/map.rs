@@ -106,14 +106,13 @@ pub extern "C" fn airl_map_set(
         _ => rt_error("airl_map_set: key must be a Str"),
     };
 
-    // SAFETY: Creating `&mut *m` is sound here because we immediately check
-    // `rc == 1`, guaranteeing exclusive ownership before any mutation. If
-    // `rc > 1` the mutable ref is only used for shared reads (the `&v.data`
-    // match below). The AIRL calling convention ensures `m` is a valid,
-    // live pointer — the compiler retains it before calling this builtin.
-    let v = unsafe { &mut *m };
-    // COW fast path: sole owner → mutate in place (O(1) instead of O(N))
-    if v.rc == 1 {
+    // COW fast path: sole owner → mutate in place (O(1) instead of O(N)).
+    // Read rc through the raw pointer first to avoid forming &mut when rc > 1.
+    // SAFETY: `m` is a valid, live RtValue (the AIRL calling convention retains
+    // it before calling this builtin). We only form `&mut` when rc == 1,
+    // guaranteeing exclusive ownership — no other alias can exist.
+    if unsafe { (*m).rc } == 1 {
+        let v = unsafe { &mut *m };
         match &mut v.data {
             RtData::Map(map) => {
                 // Release old value if key already exists
@@ -129,7 +128,9 @@ pub extern "C" fn airl_map_set(
         }
     }
 
-    // rc > 1: clone as before (existing logic, unchanged)
+    // rc > 1: clone — use shared reference only.
+    // SAFETY: `m` is a valid, live RtValue with rc > 1 (shared).
+    let v = unsafe { &*m };
     match &v.data {
         RtData::Map(map) => {
             let mut new_map: HashMap<String, *mut RtValue> = HashMap::with_capacity(map.len() + 1);
@@ -176,10 +177,10 @@ pub extern "C" fn airl_map_remove(m: *mut RtValue, key: *mut RtValue) -> *mut Rt
         _ => rt_error("airl_map_remove: key must be a Str"),
     };
 
-    // SAFETY: Same COW-exclusive-ownership pattern as airl_map_set — see comment there.
-    let v = unsafe { &mut *m };
-    // COW fast path: sole owner → mutate in place
-    if v.rc == 1 {
+    // COW fast path: sole owner → mutate in place.
+    // SAFETY: Same pattern as airl_map_set — only form &mut when rc == 1.
+    if unsafe { (*m).rc } == 1 {
+        let v = unsafe { &mut *m };
         match &mut v.data {
             RtData::Map(map) => {
                 if let Some(old_val) = map.remove(k) {
@@ -192,7 +193,8 @@ pub extern "C" fn airl_map_remove(m: *mut RtValue, key: *mut RtValue) -> *mut Rt
         }
     }
 
-    // rc > 1: clone without the removed key (existing logic, unchanged)
+    // rc > 1: clone without the removed key — shared reference only.
+    let v = unsafe { &*m };
     match &v.data {
         RtData::Map(map) => {
             let mut new_map: HashMap<String, *mut RtValue> = HashMap::with_capacity(map.len());
