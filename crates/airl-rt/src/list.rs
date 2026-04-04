@@ -71,7 +71,19 @@ pub extern "C" fn airl_tail(list: *mut RtValue) -> *mut RtValue {
 
 #[no_mangle]
 pub extern "C" fn airl_cons(elem: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
-    let v = unsafe { &*list };
+    let v = unsafe { &mut *list };
+    // COW fast path: sole owner, not a view, at start of array
+    if v.rc.load(Ordering::Relaxed) == 1 {
+        if let RtData::List { items, offset, parent } = &mut v.data {
+            if parent.is_none() && *offset == 0 {
+                airl_value_retain(elem);
+                items.insert(0, elem);
+                airl_value_retain(list); // caller expects +1 ref
+                return list;
+            }
+        }
+    }
+    // Clone path
     let slice = list_items(&v.data);
     airl_value_retain(elem);
     let mut new_items = Vec::with_capacity(slice.len() + 1);
@@ -234,7 +246,7 @@ pub extern "C" fn airl_at_or(list: *mut RtValue, idx: *mut RtValue, default: *mu
 /// `set-at(list, idx, val)` -- return new list with element at idx replaced.
 #[no_mangle]
 pub extern "C" fn airl_set_at(list: *mut RtValue, idx: *mut RtValue, val: *mut RtValue) -> *mut RtValue {
-    let v = unsafe { &*list };
+    let v = unsafe { &mut *list };
     let iv = unsafe { &*idx };
     let i = match &iv.data {
         RtData::Int(n) => {
@@ -249,20 +261,35 @@ pub extern "C" fn airl_set_at(list: *mut RtValue, idx: *mut RtValue, val: *mut R
             if i >= slice.len() {
                 rt_error(&format!("set-at: index {} out of bounds (len {})", i, slice.len()));
             }
-            let mut new_items = Vec::with_capacity(slice.len());
-            for (j, &item) in slice.iter().enumerate() {
-                if j == i {
-                    airl_value_retain(val);
-                    new_items.push(val);
-                } else {
-                    airl_value_retain(item);
-                    new_items.push(item);
-                }
-            }
-            rt_list(new_items)
         }
         _ => rt_error("set-at: first argument must be List"),
     }
+    // COW fast path: sole owner, not a view
+    if v.rc.load(Ordering::Relaxed) == 1 {
+        if let RtData::List { items, offset, parent } = &mut v.data {
+            if parent.is_none() && *offset == 0 {
+                let old = items[i];
+                airl_value_retain(val);
+                items[i] = val;
+                crate::memory::airl_value_release(old);
+                airl_value_retain(list); // caller expects +1 ref
+                return list;
+            }
+        }
+    }
+    // Clone path
+    let slice = list_items(&v.data);
+    let mut new_items = Vec::with_capacity(slice.len());
+    for (j, &item) in slice.iter().enumerate() {
+        if j == i {
+            airl_value_retain(val);
+            new_items.push(val);
+        } else {
+            airl_value_retain(item);
+            new_items.push(item);
+        }
+    }
+    rt_list(new_items)
 }
 
 /// `list-contains?(list, val)` -- check if element is in list.
@@ -777,6 +804,107 @@ mod tests {
             airl_value_release(default);
             airl_value_release(idx);
             airl_value_release(list);
+        }
+    }
+
+    // ── COW cons tests ──
+
+    #[test]
+    fn cons_cow_returns_same_pointer() {
+        unsafe {
+            let a = rt_int(2);
+            let b = rt_int(3);
+            let list = rt_list(vec![a, b]);
+            assert_eq!((*list).rc.load(Ordering::Relaxed), 1);
+            let elem = rt_int(1);
+            let result = airl_cons(elem, list);
+            assert_eq!(result, list, "COW cons should return same pointer when rc == 1");
+            let slice = list_items(&(*result).data);
+            assert_eq!(slice.len(), 3);
+            assert_eq!((*slice[0]).as_int(), 1);
+            assert_eq!((*slice[1]).as_int(), 2);
+            assert_eq!((*slice[2]).as_int(), 3);
+            airl_value_release(elem);
+            airl_value_release(result);
+        }
+    }
+
+    #[test]
+    fn cons_clones_when_shared() {
+        unsafe {
+            let a = rt_int(2);
+            let list = rt_list(vec![a]);
+            airl_value_retain(list); // rc == 2
+            let elem = rt_int(1);
+            let result = airl_cons(elem, list);
+            assert_ne!(result, list, "cons should clone when rc > 1");
+            airl_value_release(elem);
+            airl_value_release(list);
+            airl_value_release(list);
+            airl_value_release(result);
+        }
+    }
+
+    #[test]
+    fn cons_clones_when_view() {
+        unsafe {
+            let a = rt_int(1);
+            let b = rt_int(2);
+            let list = rt_list(vec![a, b]);
+            let view = airl_tail(list);
+            assert_eq!((*view).rc.load(Ordering::Relaxed), 1);
+            let elem = rt_int(0);
+            let result = airl_cons(elem, view);
+            assert_ne!(result, view, "cons should clone when list is a view");
+            let slice = list_items(&(*result).data);
+            assert_eq!(slice.len(), 2);
+            assert_eq!((*slice[0]).as_int(), 0);
+            assert_eq!((*slice[1]).as_int(), 2);
+            airl_value_release(elem);
+            airl_value_release(result);
+            airl_value_release(view);
+            airl_value_release(list);
+        }
+    }
+
+    // ── COW set-at tests ──
+
+    #[test]
+    fn set_at_cow_returns_same_pointer() {
+        unsafe {
+            let a = rt_int(10);
+            let b = rt_int(20);
+            let list = rt_list(vec![a, b]);
+            assert_eq!((*list).rc.load(Ordering::Relaxed), 1);
+            let idx = rt_int(1);
+            let val = rt_int(99);
+            let result = airl_set_at(list, idx, val);
+            assert_eq!(result, list, "COW set-at should return same pointer when rc == 1");
+            let slice = list_items(&(*result).data);
+            assert_eq!((*slice[0]).as_int(), 10);
+            assert_eq!((*slice[1]).as_int(), 99);
+            airl_value_release(val);
+            airl_value_release(idx);
+            airl_value_release(result);
+        }
+    }
+
+    #[test]
+    fn set_at_clones_when_shared() {
+        unsafe {
+            let a = rt_int(10);
+            let b = rt_int(20);
+            let list = rt_list(vec![a, b]);
+            airl_value_retain(list); // rc == 2
+            let idx = rt_int(0);
+            let val = rt_int(99);
+            let result = airl_set_at(list, idx, val);
+            assert_ne!(result, list, "set-at should clone when rc > 1");
+            airl_value_release(val);
+            airl_value_release(idx);
+            airl_value_release(list);
+            airl_value_release(list);
+            airl_value_release(result);
         }
     }
 }
