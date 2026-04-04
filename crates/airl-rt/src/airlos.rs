@@ -606,15 +606,27 @@ pub fn vga_print(s: &str) {
 /// and accumulates into a line buffer until Enter is pressed.
 /// Supports backspace editing and Ctrl-C cancellation.
 pub fn keyboard_read_line() -> Option<String> {
-    let mut svc = lookup_service("keyboard");
-    let mut retries = 0;
-    while svc <= 0 && retries < 10000 {
-        unsafe { syscall0(2); } // SYS_YIELD
-        svc = lookup_service("keyboard");
-        retries += 1;
-    }
+    // Cache the keyboard service ID — lookup once, reuse forever.
+    // Matches the caching pattern used by vga_print and get_fs_port.
+    static KBD_SVC: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(0);
+    let mut svc = KBD_SVC.load(core::sync::atomic::Ordering::Relaxed);
     if svc <= 0 {
-        return None;
+        // Keyboard is a required service — retry until it registers.
+        // At boot, the keyboard service may not have called register_service
+        // yet since all tasks start concurrently after scheduler_enable().
+        let mut retries: u32 = 0;
+        loop {
+            svc = lookup_service("keyboard");
+            if svc > 0 {
+                KBD_SVC.store(svc, core::sync::atomic::Ordering::Relaxed);
+                break;
+            }
+            retries = retries.saturating_add(1);
+            if retries % 50000 == 0 {
+                serial_print("KBD_WAIT: keyboard service not yet registered, still waiting\n");
+            }
+            unsafe { syscall0(2); } // SYS_YIELD
+        }
     }
     let mut line = String::new();
     let mut buf = [0u8; 1024];
