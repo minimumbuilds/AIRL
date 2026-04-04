@@ -4,9 +4,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SERVER_DIR="$(dirname "$SCRIPT_DIR")"
-G3="${G3:-$HOME/repos/AIRL/g3}"
-AT_ROOT="${AT_ROOT:-$HOME/repos/AirTraffic}"
-GUIDE_PATH="${GUIDE_PATH:-$HOME/repos/AIRL/AIRL-LLM-Guide.md}"
 
 PASS=0
 FAIL=0
@@ -39,29 +36,10 @@ assert_not_contains() {
 
 echo "=== mynameisAIRL Integration Tests ==="
 
-# Check g3 exists
-if [[ ! -x "$G3" ]]; then
-    echo "Error: g3 compiler not found at $G3"
-    exit 1
-fi
-
-# Check guide exists
-if [[ ! -f "$GUIDE_PATH" ]]; then
-    echo "Error: AIRL-LLM-Guide.md not found at $GUIDE_PATH"
-    exit 1
-fi
-
-# Build the server
+# Build the server (build.sh handles g3 check, guide embedding, etc.)
 echo "Building mynameisairl..."
 BIN="/tmp/mynameisairl-test-$$"
-if ! AIRL_STDLIB="${AIRL_STDLIB:-$HOME/repos/AIRL/stdlib}" "$G3" -- \
-    "$AT_ROOT/src/transport.airl" \
-    "$AT_ROOT/src/jsonrpc.airl" \
-    "$AT_ROOT/src/schema.airl" \
-    "$SERVER_DIR/patch-prompts-list.airl" \
-    "$AT_ROOT/src/airtraffic.airl" \
-    "$SERVER_DIR/mynameisairl.airl" \
-    -o "$BIN" 2>/tmp/mynameisairl-build.log; then
+if ! bash "$SERVER_DIR/build.sh" "$BIN" 2>/tmp/mynameisairl-build.log; then
     echo "FAIL: build failed"
     cat /tmp/mynameisairl-build.log
     exit 1
@@ -71,7 +49,7 @@ echo ""
 
 run_server() {
     local input="$1"
-    echo "$input" | AIRL_ALLOW_EXEC="*" "$BIN" --guide "$GUIDE_PATH" 2>/dev/null
+    echo "$input" | AIRL_ALLOW_EXEC="*" "$BIN" 2>/dev/null
 }
 
 # ─── Test 1: Initialize ──────────────────────────────────────────────
@@ -123,6 +101,13 @@ OUTPUT=$(run_server '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 {"jsonrpc":"2.0","id":2,"method":"bogus/method","params":{}}')
 assert_contains "method not found error" "$OUTPUT" "Method not found"
+echo ""
+
+# ─── Test 7: Version from Cargo.toml ────────────────────────────────
+echo "Test 7: Version"
+EXPECTED_VERSION=$(grep '^version' "${AIRL_DIR:-$HOME/repos/AIRL}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+OUTPUT=$(run_server '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
+assert_contains "version matches Cargo.toml ($EXPECTED_VERSION)" "$OUTPUT" "$EXPECTED_VERSION"
 echo ""
 
 # Cleanup

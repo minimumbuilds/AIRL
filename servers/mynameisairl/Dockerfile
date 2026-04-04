@@ -12,18 +12,13 @@ RUN cargo build -p airl-rt && cargo clean -p airl-runtime && cargo build --relea
 COPY airtraffic/ /build/airtraffic/
 # Copy mynameisairl sources
 COPY mynameisairl/ /build/mynameisairl/
-# Compile mynameisairl
-RUN AIRL_STDLIB=/build/airl/stdlib ./g3 -- \
-    /build/airtraffic/src/transport.airl \
-    /build/airtraffic/src/jsonrpc.airl \
-    /build/airtraffic/src/schema.airl \
-    /build/mynameisairl/patch-prompts-list.airl \
-    /build/airtraffic/src/airtraffic.airl \
-    /build/mynameisairl/mynameisairl.airl \
-    -o /build/mynameisairl/mynameisairl
+# Generate embedded guide + version, then compile
+RUN AIRL_DIR=/build/airl G3=/build/airl/g3 AT_ROOT=/build/airtraffic \
+    AIRL_STDLIB=/build/airl/stdlib \
+    bash /build/mynameisairl/build.sh /build/mynameisairl/mynameisairl
 
 # Stage 2: Runtime
 FROM ubuntu:24.04
 COPY --from=builder /build/mynameisairl/mynameisairl /usr/local/bin/mynameisairl
-COPY --from=builder /build/airl/AIRL-LLM-Guide.md /data/AIRL-LLM-Guide.md
+# Guide is now embedded in the binary at build time — no file mount needed
 ENTRYPOINT ["mynameisairl"]
