@@ -27,9 +27,9 @@ The compiler and runtime. 10-crate Rust workspace + self-hosted bootstrap compil
 
 **Bootstrap:** 30 AIRL files (~27K lines) implementing lexer, parser, bytecode compiler, and G3 driver.
 
-**Stdlib:** 13 modules -- collections, math, result, string, map, set, json, base64, sha256, hmac, pbkdf2, io, path. 73 functions migrated from Rust builtins to pure AIRL in v0.11.0. ELF rebuild in v1.1.1.
+**Stdlib:** 14 modules -- collections, math, result, string, map, set, json, base64, sha256, hmac, pbkdf2, io, path, aircon. 73 functions migrated from Rust builtins to pure AIRL in v0.11.0. ELF rebuild in v1.1.1.
 
-**New runtime builtins:** `dns-resolve`, `icmp-ping` (networking), 8 identity IPC stubs (`whoami`, `id`, `authenticate`, `su`, `sudo`, `useradd`, `userdel`, `usermod`), 7 Canopy terminal extern-c functions (all in `airl-rt`).
+**New runtime builtins:** `dns-resolve`, `icmp-ping` (networking), 8 identity IPC stubs (`whoami`, `id`, `authenticate`, `su`, `sudo`, `useradd`, `userdel`, `usermod`), 7 Canopy terminal extern-c functions, 5 AirCon container IPC stubs (`aircon-create`, `aircon-start`, `aircon-stop`, `aircon-status`, `aircon-list`), `ash-install-sigint`/`ash-sigint-pending` for REPL signal handling (all in `airl-rt`).
 
 **Recent fixes:** AOT arity bug -- use callee's declared arity, not caller's argc.
 
@@ -275,13 +275,20 @@ Benchmarks AIRL_castle's Kafka producer against Confluent's librdkafka (Python w
 
 **Networking:** 12 C runtime builtins, DNS resolution + ICMP ping in net service, SSH server with command interpreter.
 
+**AirCon container stack (v0.2.x):** Four-phase container support:
+- Phase 1 (v0.2.2): Task groups with resource limits (`sc_group_create/spawn/destroy/setlimit`)
+- Phase 2 (v0.2.3): VFS mount namespaces per container
+- Phase 3 (v0.2.4): `.aircon` binary image format (CON1 magic, S-expression manifest, ELF layers) + container service IPC at 0xC00 (`CONTAINER_CREATE/START/STOP/STATUS/LIST`)
+- Phase 4 (v0.2.5): Network namespaces — `net_ns_manager` service, auto-assigned 10.0.1.x/24 IPs, IPC at 0xD00 (`NET_NS_CREATE/DESTROY/BIND/QUERY`), `CAP_NET_RAW` required for mutating ops
+
 | | |
 |---|---|
 | **Location** | `../AIRLOS` |
 | **Language** | C (freestanding, gnu99), x86 assembly |
 | **Size** | ~36,100 LOC kernel + drivers + user-space (excluding vendored lwIP) |
-| **Commits** | 185 |
-| **Status** | Functional prototype. Security hardening complete (Spec 00 fixed). 35 design specs. CI via GitHub Actions. |
+| **Commits** | 190 |
+| **Version** | 0.2.6 |
+| **Status** | Functional prototype. Security hardening complete (Spec 00 fixed). 35 design specs. CI via GitHub Actions. Full container lifecycle (create/start/stop/status/list) with network isolation. |
 
 ### airshell -- Interactive Shell
 
@@ -291,12 +298,18 @@ zsh-compatible interactive shell targeting AIRLOS. REPL with line editing, comma
 
 **Identity:** `whoami`, `id`, `groups` builtins. Standalone programs: `passwd`, `su`, `sudo`, `useradd`, `userdel`, `usermod` (in `programs/`, compiled separately).
 
+**Container management:** `aircon` standalone program with `create/start/stop/status/list/help` sub-commands. On AIRLOS: IPC to container service at 0xC00. On Linux: stub with clear "not available" message.
+
+**Signal handling:** Ctrl-C (SIGINT) installs a non-terminating handler at REPL startup; `read_line` detects interruption and re-prompts with exit code 130. Running INT trap if registered. Cooperative SIGINT check in long-running builtins (ping).
+
+**Ping:** Per-probe output lines (`64 bytes from IP: icmp_seq=N ttl=T time=X ms`, `Request timeout for icmp_seq N`, `Destination Host Unreachable`). Linux stub exits cleanly after first probe. RTT/packet-loss summary on completion.
+
 | | |
 |---|---|
 | **Location** | `../airshell` |
-| **Size** | 4,228 LOC (11 modules + 7 standalone programs), 1,068 LOC tests |
-| **Commits** | 22 |
-| **Status** | Functional. Linux and AIRLOS targets. Full scripting, POSIX dispatch, job control, and identity management. |
+| **Size** | ~4,600 LOC (11 modules + 8 standalone programs), ~1,200 LOC tests |
+| **Commits** | 28 |
+| **Status** | Functional. Linux and AIRLOS targets. Full scripting, POSIX dispatch, job control, identity management, container CLI, and SIGINT handling. |
 
 ### AirLock -- SSH Client
 
@@ -316,12 +329,12 @@ SSH client for AIRLOS. Implements the SSH-2 protocol from scratch: key exchange 
 
 | Project | Language | LOC | Commits | Status |
 |---------|----------|-----|---------|--------|
-| AIRL | Rust + AIRL | 76,307 | 595 | v1.1.1, self-hosted |
-| AIRLOS | C + asm | 36,100 | 185 | Prototype |
+| AIRL | Rust + AIRL | 76,307 | 595 | v0.11.2, self-hosted |
+| AIRLOS | C + asm | 36,100 | 190 | v0.2.6, Prototype |
 | AIRL_castle | AIRL | 8,811 | 78 | Functional |
 | airtools | AIRL | 6,065 | 8 | Functional |
 | AirLift | AIRL | 4,219 | 11 | Functional |
-| airshell | AIRL | 4,228 | 22 | Functional |
+| airshell | AIRL | 4,600 | 28 | Functional |
 | airlDelivery | AIRL | 4,196 | 9 | Functional |
 | AIReqL | AIRL | 2,697 | 26 | v0.2.0 |
 | airlhttp | AIRL | 2,230 | 3 | Functional |
