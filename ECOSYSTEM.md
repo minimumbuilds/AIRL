@@ -8,7 +8,7 @@ The compiler is self-hosted: the G3 binary is written in AIRL and compiles itsel
 
 ## Core
 
-### AIRL (v0.11.0)
+### AIRL (v1.1.1)
 
 The compiler and runtime. 10-crate Rust workspace + self-hosted bootstrap compiler.
 
@@ -27,7 +27,7 @@ The compiler and runtime. 10-crate Rust workspace + self-hosted bootstrap compil
 
 **Bootstrap:** 30 AIRL files (~27K lines) implementing lexer, parser, bytecode compiler, and G3 driver.
 
-**Stdlib:** 13 modules -- collections, math, result, string, map, set, json, base64, sha256, hmac, pbkdf2, io, path. 73 functions migrated from Rust builtins to pure AIRL in v0.11.0.
+**Stdlib:** 13 modules -- collections, math, result, string, map, set, json, base64, sha256, hmac, pbkdf2, io, path. 73 functions migrated from Rust builtins to pure AIRL in v0.11.0. ELF rebuild in v1.1.1.
 
 **New runtime builtins:** `dns-resolve`, `icmp-ping` (networking), 8 identity IPC stubs (`whoami`, `id`, `authenticate`, `su`, `sudo`, `useradd`, `userdel`, `usermod`), 7 Canopy terminal extern-c functions (all in `airl-rt`).
 
@@ -298,13 +298,25 @@ zsh-compatible interactive shell targeting AIRLOS. REPL with line editing, comma
 | **Commits** | 22 |
 | **Status** | Functional. Linux and AIRLOS targets. Full scripting, POSIX dispatch, job control, and identity management. |
 
+### AirLock -- SSH Client
+
+SSH client for AIRLOS. Implements the SSH-2 protocol from scratch: key exchange (Curve25519/ECDH), host key verification (Ed25519), authentication (none probe, password, publickey), channel multiplexing, and interactive terminal sessions. Built with CairLI for CLI argument parsing.
+
+| | |
+|---|---|
+| **Location** | `../AirLock` |
+| **Size** | 2,607 LOC (9 modules) |
+| **Commits** | 3 |
+| **Status** | Functional. SSH-2 protocol complete. Interactive terminal sessions. |
+| **Depends on** | stdlib (bytes, crypto, string), CairLI |
+
 ---
 
 ## Ecosystem Stats
 
 | Project | Language | LOC | Commits | Status |
 |---------|----------|-----|---------|--------|
-| AIRL | Rust + AIRL | 76,307 | 592 | v0.11.0, self-hosted |
+| AIRL | Rust + AIRL | 76,307 | 595 | v1.1.1, self-hosted |
 | AIRLOS | C + asm | 36,100 | 185 | Prototype |
 | AIRL_castle | AIRL | 8,811 | 78 | Functional |
 | airtools | AIRL | 6,065 | 8 | Functional |
@@ -325,7 +337,8 @@ zsh-compatible interactive shell targeting AIRLOS. REPL with line editing, comma
 | airtest | AIRL | 891 | 3 | Functional |
 | AIRL_bench | AIRL | 847 | 27 | Functional |
 | AirLog | AIRL | 649 | 1 | Functional |
-| **Total** | | **~161,419** | **1,040** | |
+| AirLock | AIRL | 2,607 | 3 | Functional |
+| **Total** | | **~164,029** | **1,046** | |
 
 ## Building
 
