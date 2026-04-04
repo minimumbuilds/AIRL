@@ -1,5 +1,5 @@
 use crate::error::rt_error;
-use crate::memory::airl_value_retain;
+use crate::memory::{airl_value_retain, airl_value_release};
 use crate::value::{rt_bool, rt_bytes, rt_int, rt_list, RtData, RtValue, TAG_LIST};
 
 /// Return a slice of the list's elements, resolving views through the parent pointer.
@@ -145,6 +145,9 @@ pub extern "C" fn airl_at(list: *mut RtValue, index: *mut RtValue) -> *mut RtVal
 
 #[no_mangle]
 pub extern "C" fn airl_append(list: *mut RtValue, elem: *mut RtValue) -> *mut RtValue {
+    // SAFETY: Creating `&mut *list` is sound — we immediately check `rc == 1`
+    // to guarantee exclusive ownership before any mutation. See airl_map_set
+    // in map.rs for the full COW-exclusive-ownership safety argument.
     let v = unsafe { &mut *list };
     // COW fast path: sole owner, not a view, at start of array
     if v.rc == 1 {
@@ -313,7 +316,9 @@ pub extern "C" fn airl_filter(closure: *mut RtValue, list: *mut RtValue) -> *mut
         airl_value_retain(item);
         let args: [*mut RtValue; 1] = [item];
         let test = airl_call_closure(closure, args.as_ptr(), 1);
+        // SAFETY: test is a freshly allocated RtValue from the closure call (rc=1).
         let keep = unsafe { matches!(&(*test).data, RtData::Bool(true)) };
+        airl_value_release(test);
         if keep {
             airl_value_retain(item);
             result.push(item);
@@ -364,7 +369,9 @@ pub extern "C" fn airl_sort(closure: *mut RtValue, list: *mut RtValue) -> *mut R
             airl_value_retain(vec[j]);
             let args: [*mut RtValue; 2] = [vec[j - 1], vec[j]];
             let cmp = airl_call_closure(closure, args.as_ptr(), 2);
+            // SAFETY: cmp is a freshly allocated RtValue from the closure call (rc=1).
             let is_less = unsafe { matches!(&(*cmp).data, RtData::Bool(true)) };
+            airl_value_release(cmp);
             if !is_less {
                 vec.swap(j - 1, j);
                 j -= 1;
@@ -390,7 +397,10 @@ pub extern "C" fn airl_any(closure: *mut RtValue, list: *mut RtValue) -> *mut Rt
         airl_value_retain(item);
         let args: [*mut RtValue; 1] = [item];
         let test = airl_call_closure(closure, args.as_ptr(), 1);
-        if unsafe { matches!(&(*test).data, RtData::Bool(true)) } {
+        // SAFETY: test is a freshly allocated RtValue from the closure call (rc=1).
+        let found = unsafe { matches!(&(*test).data, RtData::Bool(true)) };
+        airl_value_release(test);
+        if found {
             return rt_bool(true);
         }
     }
@@ -410,7 +420,10 @@ pub extern "C" fn airl_all(closure: *mut RtValue, list: *mut RtValue) -> *mut Rt
         airl_value_retain(item);
         let args: [*mut RtValue; 1] = [item];
         let test = airl_call_closure(closure, args.as_ptr(), 1);
-        if !unsafe { matches!(&(*test).data, RtData::Bool(true)) } {
+        // SAFETY: test is a freshly allocated RtValue from the closure call (rc=1).
+        let passed = unsafe { matches!(&(*test).data, RtData::Bool(true)) };
+        airl_value_release(test);
+        if !passed {
             return rt_bool(false);
         }
     }
@@ -430,7 +443,10 @@ pub extern "C" fn airl_find(closure: *mut RtValue, list: *mut RtValue) -> *mut R
         airl_value_retain(item);
         let args: [*mut RtValue; 1] = [item];
         let test = airl_call_closure(closure, args.as_ptr(), 1);
-        if unsafe { matches!(&(*test).data, RtData::Bool(true)) } {
+        // SAFETY: test is a freshly allocated RtValue from the closure call (rc=1).
+        let found = unsafe { matches!(&(*test).data, RtData::Bool(true)) };
+        airl_value_release(test);
+        if found {
             airl_value_retain(item);
             return item;
         }

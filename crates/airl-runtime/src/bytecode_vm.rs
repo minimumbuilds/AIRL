@@ -178,6 +178,14 @@ fn rt_display(ptr: *mut RtValue) -> String {
 /// # Safety
 ///
 /// `ptr` must be a valid, non-null, properly retained `*mut RtValue`.
+///
+/// **Lifetime note:** The `'static` lifetime is technically unsound — the
+/// value lives only as long as its refcount is > 0, not for `'static`.
+/// In practice this is safe because every call site uses the reference
+/// transiently (within one VM instruction) and the register bank holds
+/// the owning pointer that keeps rc > 0. A future refactor could use
+/// a generic lifetime `'a` tied to the register borrow, but this would
+/// require threading lifetimes through every instruction handler.
 #[inline(always)]
 unsafe fn rt_ref(ptr: *mut RtValue) -> &'static RtValue {
     &*ptr
@@ -699,9 +707,11 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
 
 // ── BytecodeVm ─────────────────────────────────────────────────────
 
-// SAFETY: BytecodeVm contains *mut RtValue in CallFrame registers.
-// These pointers are owned (rc-managed) and never shared across threads.
-// Each child VM (from spawn_child) gets a fresh empty call stack.
+// SAFETY: BytecodeVm contains `*mut RtValue` pointers in CallFrame registers.
+// These are owned (each register holds a retained reference) and never shared
+// across threads — `spawn_child()` creates a fresh VM with an empty call stack,
+// not a clone of the parent's registers. The `functions` HashMap contains only
+// bytecode (no raw pointers), so it is inherently Send.
 unsafe impl Send for BytecodeVm {}
 
 pub struct BytecodeVm {

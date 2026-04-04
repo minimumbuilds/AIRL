@@ -106,6 +106,11 @@ pub extern "C" fn airl_map_set(
         _ => rt_error("airl_map_set: key must be a Str"),
     };
 
+    // SAFETY: Creating `&mut *m` is sound here because we immediately check
+    // `rc == 1`, guaranteeing exclusive ownership before any mutation. If
+    // `rc > 1` the mutable ref is only used for shared reads (the `&v.data`
+    // match below). The AIRL calling convention ensures `m` is a valid,
+    // live pointer — the compiler retains it before calling this builtin.
     let v = unsafe { &mut *m };
     // COW fast path: sole owner → mutate in place (O(1) instead of O(N))
     if v.rc == 1 {
@@ -171,6 +176,7 @@ pub extern "C" fn airl_map_remove(m: *mut RtValue, key: *mut RtValue) -> *mut Rt
         _ => rt_error("airl_map_remove: key must be a Str"),
     };
 
+    // SAFETY: Same COW-exclusive-ownership pattern as airl_map_set — see comment there.
     let v = unsafe { &mut *m };
     // COW fast path: sole owner → mutate in place
     if v.rc == 1 {
