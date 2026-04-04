@@ -257,11 +257,11 @@ const VFS_CHUNK_SIZE: usize = 240;
 
 // ── VFS IPC helpers ──
 
-fn write_u32_le(buf: &mut [u8], offset: usize, val: u32) {
+pub(crate) fn write_u32_le(buf: &mut [u8], offset: usize, val: u32) {
     buf[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
 }
 
-fn read_u32_le(buf: &[u8], offset: usize) -> u32 {
+pub(crate) fn read_u32_le(buf: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]])
 }
 

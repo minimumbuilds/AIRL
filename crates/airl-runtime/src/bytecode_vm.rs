@@ -754,6 +754,17 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "airl_cpu_count" => airl_rt::misc::airl_cpu_count(),
         "airl_format_time" => airl_rt::misc::airl_format_time(a0!(), a1!()),
 
+        // Identity
+        "whoami" => airl_rt::identity::airl_whoami(),
+        "id" => airl_rt::identity::airl_id(),
+        "authenticate" => airl_rt::identity::airl_authenticate(a0!(), a1!()),
+        "switch-user" => airl_rt::identity::airl_switch_user(a0!(), a1!()),
+        "elevate" => airl_rt::identity::airl_elevate(a0!(), a1!()),
+        "create-user" => airl_rt::identity::airl_create_user(a0!(), a1!(), a2!(), a3!(),
+            args.get(4).copied().unwrap_or(std::ptr::null_mut())),
+        "delete-user" => airl_rt::identity::airl_delete_user(a0!()),
+        "set-password" => airl_rt::identity::airl_set_password(a0!(), a1!(), a2!()),
+
         // Canopy terminal I/O
         "canopy_raw_mode_enable" => airl_rt::terminal::canopy_raw_mode_enable(),
         "canopy_raw_mode_disable" => airl_rt::terminal::canopy_raw_mode_disable(),
@@ -762,6 +773,17 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "canopy_stdout_write" => airl_rt::terminal::canopy_stdout_write(a0!()),
         "canopy_terminal_size" => airl_rt::terminal::canopy_terminal_size(),
         "canopy_on_resize" => airl_rt::terminal::canopy_on_resize(a0!()),
+
+        // Identity (extern-c aliases)
+        "airl_whoami" => airl_rt::identity::airl_whoami(),
+        "airl_id" => airl_rt::identity::airl_id(),
+        "airl_authenticate" => airl_rt::identity::airl_authenticate(a0!(), a1!()),
+        "airl_switch_user" => airl_rt::identity::airl_switch_user(a0!(), a1!()),
+        "airl_elevate" => airl_rt::identity::airl_elevate(a0!(), a1!()),
+        "airl_create_user" => airl_rt::identity::airl_create_user(a0!(), a1!(), a2!(), a3!(),
+            args.get(4).copied().unwrap_or(std::ptr::null_mut())),
+        "airl_delete_user" => airl_rt::identity::airl_delete_user(a0!()),
+        "airl_set_password" => airl_rt::identity::airl_set_password(a0!(), a1!(), a2!()),
 
         // Not found
         _ => return None,
