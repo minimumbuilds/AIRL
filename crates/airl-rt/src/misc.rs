@@ -384,7 +384,17 @@ pub extern "C" fn airl_range(start: *mut RtValue, end: *mut RtValue) -> *mut RtV
 
 #[no_mangle]
 pub extern "C" fn airl_reverse_list(list: *mut RtValue) -> *mut RtValue {
-    let val = unsafe { &*list };
+    let val = unsafe { &mut *list };
+    // COW fast path: sole owner, not a view
+    if val.rc.load(core::sync::atomic::Ordering::Relaxed) == 1 {
+        if let RtData::List { items, offset, parent } = &mut val.data {
+            if parent.is_none() && *offset == 0 {
+                items.reverse();
+                crate::memory::airl_value_retain(list);
+                return list;
+            }
+        }
+    }
     if let RtData::List { .. } = &val.data {
         let slice = crate::list::list_items(&val.data);
         let reversed: Vec<*mut RtValue> = slice.iter().rev().map(|&i| { crate::memory::airl_value_retain(i); i }).collect();
@@ -446,7 +456,16 @@ pub extern "C" fn airl_flatten(list: *mut RtValue) -> *mut RtValue {
     let val = unsafe { &*list };
     if let RtData::List { .. } = &val.data {
         let slice = crate::list::list_items(&val.data);
-        let mut result = Vec::new();
+        // Pre-estimate capacity to avoid repeated reallocation
+        let capacity: usize = slice.iter().map(|&item| {
+            let sub = unsafe { &*item };
+            if let RtData::List { .. } = &sub.data {
+                crate::list::list_len(&sub.data)
+            } else {
+                1
+            }
+        }).sum();
+        let mut result = Vec::with_capacity(capacity);
         for &item in slice {
             let sub = unsafe { &*item };
             if let RtData::List { .. } = &sub.data {
@@ -2541,6 +2560,42 @@ mod tests {
                 tcp_handles().lock().unwrap().remove(&h);
             }
             _ => panic!("Expected Ok variant"),
+        }
+    }
+
+    // ── COW reverse tests ──
+
+    #[test]
+    fn test_reverse_cow_returns_same_pointer() {
+        unsafe {
+            let a = rt_int(1);
+            let b = rt_int(2);
+            let c = rt_int(3);
+            let list = rt_list(vec![a, b, c]);
+            assert_eq!((*list).rc.load(core::sync::atomic::Ordering::Relaxed), 1);
+            let result = airl_reverse_list(list);
+            assert_eq!(result, list, "COW reverse should return same pointer when rc == 1");
+            let slice = crate::list::list_items(&(*result).data);
+            assert_eq!(slice.len(), 3);
+            assert_eq!((*slice[0]).as_int(), 3);
+            assert_eq!((*slice[1]).as_int(), 2);
+            assert_eq!((*slice[2]).as_int(), 1);
+            crate::memory::airl_value_release(result);
+        }
+    }
+
+    #[test]
+    fn test_reverse_clones_when_shared() {
+        unsafe {
+            let a = rt_int(1);
+            let b = rt_int(2);
+            let list = rt_list(vec![a, b]);
+            crate::memory::airl_value_retain(list); // rc == 2
+            let result = airl_reverse_list(list);
+            assert_ne!(result, list, "reverse should clone when rc > 1");
+            crate::memory::airl_value_release(list);
+            crate::memory::airl_value_release(list);
+            crate::memory::airl_value_release(result);
         }
     }
 }
