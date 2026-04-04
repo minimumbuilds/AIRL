@@ -32,11 +32,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install Z3 (Ubuntu)
+      - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libz3-dev
+        run: sudo apt-get update && sudo apt-get install -y libz3-dev libcurl4-openssl-dev libssl-dev
 
-      - name: Install Z3 (macOS)
+      - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
           brew install z3
@@ -44,13 +44,14 @@ jobs:
           echo "CPATH=$(brew --prefix z3)/include" >> "$GITHUB_ENV"
           echo "LIBRARY_PATH=$(brew --prefix z3)/lib" >> "$GITHUB_ENV"
 
-      - name: Install Z3 (Windows)
+      - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install z3 -y
-          echo "Z3_SYS_Z3_HEADER=C:\ProgramData\chocolatey\lib\z3\tools\include\z3.h" >> $env:GITHUB_ENV
-          echo "CPATH=C:\ProgramData\chocolatey\lib\z3\tools\include" >> $env:GITHUB_ENV
-          echo "LIBRARY_PATH=C:\ProgramData\chocolatey\lib\z3\tools\bin" >> $env:GITHUB_ENV
+          choco install z3 --version=4.13.4 -y
+          $z3dir = (Get-ChildItem "C:\ProgramData\chocolatey\lib\z3\tools" -Directory | Select-Object -First 1).FullName
+          echo "Z3_SYS_Z3_HEADER=$z3dir\include\z3.h" >> $env:GITHUB_ENV
+          echo "CPATH=$z3dir\include" >> $env:GITHUB_ENV
+          echo "LIBRARY_PATH=$z3dir\bin" >> $env:GITHUB_ENV
 
       - name: Build host binary
         run: cargo build --release --features aot
