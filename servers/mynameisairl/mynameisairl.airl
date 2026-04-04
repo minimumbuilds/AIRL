@@ -41,7 +41,7 @@
       (let (server : Map (airtraffic-prompt server prompt-def))
         ;; Register AirMunch tools (bypass role filter — these are server-specific)
         (let (server : Map (register-tools-direct server (make-tool-defs)))
-          ;; Create index cache and serve
-          (let (cache : Map (map-new))
-            (airtraffic-serve-batch server (fn [tool-name args]
-              (airmunch-dispatch cache tool-name args)))))))))
+          ;; Serve — each tool call re-indexes from disk (AIRL has no mutation,
+          ;; so cross-request caching is not possible in pure AIRL)
+          (airtraffic-serve-batch server (fn [tool-name args]
+            (airmunch-dispatch (map-new) tool-name args))))))))

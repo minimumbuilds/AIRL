@@ -37,15 +37,6 @@
              (symbols : List (extract-symbols-from-file path content))
     (map-from ["hash" hash "symbols" symbols])))
 
-;; ─── index-needs-update? ─────────────────────────────────────────────
-;; Check if a file needs re-indexing based on hash comparison.
-(defn index-needs-update?
-  :sig [(stored-hash : String) (current-hash : String) -> Bool]
-  :intent "Compare hashes to determine if re-indexing is needed"
-  :requires [(valid stored-hash) (valid current-hash)]
-  :ensures [(valid result)]
-  :body (not (= stored-hash current-hash)))
-
 ;; ─── index-get-symbols ───────────────────────────────────────────────
 ;; Get symbols for a specific file from the index.
 (defn index-get-symbols
@@ -120,23 +111,3 @@
           rel))
       full-path)))
 
-;; ─── index-update-file ───────────────────────────────────────────────
-;; Incrementally update a single file in an existing index.
-;; Returns updated index.
-(defn index-update-file
-  :sig [(index : Map) (file-path : String) (content : String) -> Map]
-  :intent "Re-index a single file if its content has changed"
-  :requires [(valid index) (valid file-path) (valid content)]
-  :ensures [(valid result)]
-  :body (let (files : Map (map-get index "files"))
-             (new-hash : String (sha256 content))
-    (let (existing : Any (map-get files file-path))
-      (let (needs-update : Bool (if (= existing nil)
-            true
-            (index-needs-update? (map-get existing "hash") new-hash)))
-        (if needs-update
-          (let (new-file-idx : Map (index-file file-path content))
-               (new-files : Map (map-set files file-path new-file-idx))
-            (let (new-all : List (collect-all-symbols new-files))
-              (map-set (map-set index "files" new-files) "all-symbols" new-all)))
-          index)))))

@@ -2,41 +2,53 @@
 ;;
 ;; One handler function per tool. Each takes tool args and returns
 ;; a JSON-serializable result string.
-;; The global index cache is threaded through the dispatcher closure.
+;;
+;; Note: AIRL has no mutation, so cross-request caching is not possible
+;; in pure AIRL. Each tool call re-indexes from disk. For typical AIRL
+;; projects (< 50 files) this is fast enough.
+
+;; ─── safe-path? ─────────────────────────────────────────────────────
+;; Reject path components containing ".." to prevent directory traversal.
+(defn safe-path?
+  :sig [(file : String) -> Bool]
+  :intent "Check that a relative file path has no .. traversal"
+  :requires [(valid file)]
+  :ensures [(valid result)]
+  :body (let (parts : List (split file "/"))
+    (= 0 (length (filter (fn [p] (= p "..")) parts)))))
 
 ;; ─── airmunch-dispatch ───────────────────────────────────────────────
 ;; Main tool dispatcher. Called by airtraffic-serve-batch.
-;; The cache is a mutable ref holding indexed projects.
 (defn airmunch-dispatch
   :sig [(cache : Map) (tool-name : String) (args : Map) -> Result]
   :intent "Dispatch tool calls to appropriate handler"
   :requires [(valid tool-name) (valid args)]
   :ensures [(valid result)]
   :body (if (= tool-name "airl_index_project")
-    (handle-index-project cache args)
+    (handle-index-project args)
     (if (= tool-name "airl_file_tree")
       (handle-file-tree args)
       (if (= tool-name "airl_file_outline")
-        (handle-file-outline cache args)
+        (handle-file-outline args)
         (if (= tool-name "airl_get_symbol")
-          (handle-get-symbol cache args)
+          (handle-get-symbol args)
           (if (= tool-name "airl_search_symbols")
-            (handle-search-symbols cache args)
+            (handle-search-symbols args)
             (if (= tool-name "airl_get_content")
               (handle-get-content args)
               (if (= tool-name "airl_repo_outline")
-                (handle-repo-outline cache args)
+                (handle-repo-outline args)
                 (if (= tool-name "airl_find_callers")
-                  (handle-find-callers cache args)
+                  (handle-find-callers args)
                   (if (= tool-name "airl_dependency_graph")
-                    (handle-dependency-graph cache args)
+                    (handle-dependency-graph args)
                     (if (= tool-name "airl_blast_radius")
-                      (handle-blast-radius cache args)
+                      (handle-blast-radius args)
                       (Err (str "Unknown tool: " tool-name)))))))))))))
 
 ;; ─── handle-index-project ────────────────────────────────────────────
 (defn handle-index-project
-  :sig [(cache : Map) (args : Map) -> Result]
+  :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
   :body (let (path : String (map-get-or args "path" ""))
@@ -74,15 +86,17 @@
 
 ;; ─── handle-file-outline ─────────────────────────────────────────────
 (defn handle-file-outline
-  :sig [(cache : Map) (args : Map) -> Result]
+  :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
   :body (let (path : String (map-get-or args "path" ""))
              (file : String (map-get-or args "file" ""))
     (if (or (= path "") (= file ""))
       (Err "missing required arguments: path, file")
-      (let (index : Map (index-project path))
-           (symbols : List (index-get-symbols index file))
+      (if (not (safe-path? file))
+        (Err "invalid file path: directory traversal not allowed")
+        (let (index : Map (index-project path))
+             (symbols : List (index-get-symbols index file))
         (let (outline : List (map (fn [sym]
             (map-from
               ["name" (map-get sym "name")
@@ -92,11 +106,11 @@
                "end-line" (map-get sym "end-line")]))
             symbols))
           (Ok (json-stringify (map-from
-            ["file" file "symbols" outline]))))))))
+            ["file" file "symbols" outline])))))))))
 
 ;; ─── handle-get-symbol ───────────────────────────────────────────────
 (defn handle-get-symbol
-  :sig [(cache : Map) (args : Map) -> Result]
+  :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
   :body (let (path : String (map-get-or args "path" ""))
@@ -108,20 +122,23 @@
         (let (found : Any (find (fn [s] (= (map-get s "id") symbol-id)) all-syms))
           (if (= found nil)
             (Err (str "symbol not found: " symbol-id))
-            ;; Read the source lines for this symbol
-            (let (file-path : String (str path "/" (map-get found "file")))
-                 (sym-line : i64 (map-get found "line"))
-                 (sym-end : i64 (map-get found "end-line"))
-              (let (content : String (read-file file-path))
-                   (file-lines : List (lines content))
-                (let (source : String (join
-                    (take (- sym-end (- sym-line 1))
-                          (drop (- sym-line 1) file-lines)) "\n"))
-                  (Ok (json-stringify (map-set found "source" source))))))))))))
+            ;; Validate the file path from the symbol before reading
+            (let (sym-file : String (map-get found "file"))
+              (if (not (safe-path? sym-file))
+                (Err "invalid file path: directory traversal not allowed")
+                (let (file-path : String (str path "/" sym-file))
+                     (sym-line : i64 (map-get found "line"))
+                     (sym-end : i64 (map-get found "end-line"))
+                  (let (content : String (read-file file-path))
+                       (file-lines : List (lines content))
+                    (let (source : String (join
+                        (take (- sym-end (- sym-line 1))
+                              (drop (- sym-line 1) file-lines)) "\n"))
+                      (Ok (json-stringify (map-set found "source" source))))))))))))))
 
 ;; ─── handle-search-symbols ───────────────────────────────────────────
 (defn handle-search-symbols
-  :sig [(cache : Map) (args : Map) -> Result]
+  :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
   :body (let (path : String (map-get-or args "path" ""))
@@ -158,8 +175,10 @@
              (end-line : i64 (map-get-or args "end_line" 0))
     (if (or (= path "") (= file ""))
       (Err "missing required arguments: path, file")
-      (let (full-path : String (str path "/" file))
-        (if (not (file-exists? full-path))
+      (if (not (safe-path? file))
+        (Err "invalid file path: directory traversal not allowed")
+        (let (full-path : String (str path "/" file))
+          (if (not (file-exists? full-path))
           (Err (str "file not found: " file))
           (let (content : String (read-file full-path))
             (if (and (= start-line 0) (= end-line 0))
@@ -177,11 +196,11 @@
                     ["file" file
                      "start_line" start
                      "end_line" end
-                     "content" (join selected "\n")]))))))))))))
+                     "content" (join selected "\n")])))))))))))))
 
 ;; ─── handle-repo-outline ─────────────────────────────────────────────
 (defn handle-repo-outline
-  :sig [(cache : Map) (args : Map) -> Result]
+  :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
   :body (let (path : String (map-get-or args "path" ""))
@@ -206,7 +225,7 @@
 
 ;; ─── handle-find-callers ─────────────────────────────────────────────
 (defn handle-find-callers
-  :sig [(cache : Map) (args : Map) -> Result]
+  :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
   :body (let (path : String (map-get-or args "path" ""))
@@ -229,7 +248,7 @@
 
 ;; ─── handle-dependency-graph ─────────────────────────────────────────
 (defn handle-dependency-graph
-  :sig [(cache : Map) (args : Map) -> Result]
+  :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
   :body (let (path : String (map-get-or args "path" ""))
@@ -241,7 +260,7 @@
 
 ;; ─── handle-blast-radius ─────────────────────────────────────────────
 (defn handle-blast-radius
-  :sig [(cache : Map) (args : Map) -> Result]
+  :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
   :body (let (path : String (map-get-or args "path" ""))
