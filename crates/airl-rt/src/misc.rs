@@ -2015,9 +2015,257 @@ pub extern "C" fn airl_zstd_decompress(data: *mut RtValue) -> *mut RtValue {
 
 // airl_run_bytecode and airl_compile_to_executable are defined elsewhere in airl-runtime
 
+// ── DNS resolve ──
+
+#[cfg(not(target_os = "airlos"))]
+#[no_mangle]
+pub extern "C" fn airl_dns_resolve(hostname: *mut RtValue) -> *mut RtValue {
+    let h = match unsafe { &(*hostname).data } {
+        RtData::Str(s) => s.clone(),
+        _ => return err_variant("dns-resolve: hostname must be string"),
+    };
+    use std::net::ToSocketAddrs;
+    match format!("{}:0", h).to_socket_addrs() {
+        Ok(mut addrs) => match addrs.next() {
+            Some(addr) => ok_variant(rt_str(addr.ip().to_string())),
+            None => err_variant("dns-resolve: no addresses found"),
+        },
+        Err(e) => err_variant(&format!("dns-resolve: {}", e)),
+    }
+}
+
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_dns_resolve(hostname: *mut RtValue) -> *mut RtValue {
+    let h = match unsafe { &(*hostname).data } {
+        RtData::Str(s) => s.as_str(),
+        _ => return err_variant("dns-resolve: hostname must be string"),
+    };
+    let net_svc = get_net_port();
+    if net_svc <= 0 {
+        return err_variant("dns-resolve: net service not available");
+    }
+    // Build NET_DNS_RESOLVE request: header(16) + hostname[224]
+    let mut msg = [0u8; 256];
+    // type = 0x520 (NET_DNS_RESOLVE)
+    msg[0..4].copy_from_slice(&0x520u32.to_le_bytes());
+    // seq, payload_len, flags = 0
+    let hostname_bytes = h.as_bytes();
+    let copy_len = hostname_bytes.len().min(223); // leave room for null terminator
+    msg[16..16 + copy_len].copy_from_slice(&hostname_bytes[..copy_len]);
+    // msg[16 + copy_len] is already 0 (null terminator)
+
+    let mut resp = [0u8; 256];
+    let n = crate::airlos::ipc_sendrecv(net_svc, &msg[..240], &mut resp);
+    if n < 24 { // header(16) + status(4) + addr(4) minimum
+        return err_variant("dns-resolve: IPC error");
+    }
+    let status = i32::from_le_bytes([resp[16], resp[17], resp[18], resp[19]]);
+    match status {
+        0 => {
+            // Parse addr_str from offset 24, up to 16 bytes, null-terminated
+            let str_start = 24;
+            let str_end = (str_start + 16).min(n as usize);
+            let addr_bytes = &resp[str_start..str_end];
+            let len = addr_bytes.iter().position(|&b| b == 0).unwrap_or(addr_bytes.len());
+            match core::str::from_utf8(&addr_bytes[..len]) {
+                Ok(s) => ok_variant(rt_str(s.into())),
+                Err(_) => err_variant("dns-resolve: invalid response encoding"),
+            }
+        }
+        -1 => err_variant("dns-resolve: NXDOMAIN"),
+        -2 => err_variant("dns-resolve: timeout"),
+        _ => err_variant("dns-resolve: unknown error"),
+    }
+}
+
+// ── ICMP ping ──
+
+#[cfg(not(target_os = "airlos"))]
+#[no_mangle]
+pub extern "C" fn airl_icmp_ping(addr: *mut RtValue, timeout_ms: *mut RtValue) -> *mut RtValue {
+    let _ = match unsafe { &(*addr).data } {
+        RtData::Str(s) => s.clone(),
+        _ => return err_variant("icmp-ping: addr must be string"),
+    };
+    let _ = match unsafe { &(*timeout_ms).data } {
+        RtData::Int(n) => *n,
+        _ => return err_variant("icmp-ping: timeout must be int"),
+    };
+    err_variant("icmp-ping: not available on Linux (use system ping)")
+}
+
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_icmp_ping(addr: *mut RtValue, timeout_ms: *mut RtValue) -> *mut RtValue {
+    let addr_str = match unsafe { &(*addr).data } {
+        RtData::Str(s) => s.as_str(),
+        _ => return err_variant("icmp-ping: addr must be string"),
+    };
+    let timeout = match unsafe { &(*timeout_ms).data } {
+        RtData::Int(n) => *n as u32,
+        _ => return err_variant("icmp-ping: timeout must be int"),
+    };
+    // Parse dotted-decimal IP to u32 (network byte order)
+    let ip_u32 = match parse_ipv4(addr_str) {
+        Some(ip) => ip,
+        None => return err_variant("icmp-ping: invalid IPv4 address"),
+    };
+    let net_svc = get_net_port();
+    if net_svc <= 0 {
+        return err_variant("icmp-ping: net service not available");
+    }
+    // Build NET_ICMP_PING request: header(16) + dest_addr(4) + seq(2) + payload_len(2) + timeout_ms(4) = 28
+    let mut msg = [0u8; 28];
+    // type = 0x522 (NET_ICMP_PING)
+    msg[0..4].copy_from_slice(&0x522u32.to_le_bytes());
+    // seq, payload_len, flags in header = 0
+    // dest_addr at offset 16
+    msg[16..20].copy_from_slice(&ip_u32.to_be_bytes());
+    // seq = 1 at offset 20
+    msg[20..22].copy_from_slice(&1u16.to_le_bytes());
+    // payload_len = 56 at offset 22
+    msg[22..24].copy_from_slice(&56u16.to_le_bytes());
+    // timeout_ms at offset 24
+    msg[24..28].copy_from_slice(&timeout.to_le_bytes());
+
+    let mut resp = [0u8; 256];
+    let n = crate::airlos::ipc_sendrecv(net_svc, &msg, &mut resp);
+    if n < 28 { // header(16) + status(4) + rtt_us(4) + ttl(1) + pad(1) + seq(2)
+        return err_variant("icmp-ping: IPC error");
+    }
+    let status = i32::from_le_bytes([resp[16], resp[17], resp[18], resp[19]]);
+    match status {
+        0 => {
+            let rtt_us = u32::from_le_bytes([resp[20], resp[21], resp[22], resp[23]]);
+            let ttl = resp[24];
+            let seq = u16::from_le_bytes([resp[26], resp[27]]);
+            let mut pairs = Vec::new();
+            // rtt_ms = rtt_us / 1000 (integer division, microseconds to milliseconds)
+            pairs.push((rt_str("rtt_ms".into()), rt_int((rtt_us / 1000) as i64)));
+            pairs.push((rt_str("ttl".into()), rt_int(ttl as i64)));
+            pairs.push((rt_str("seq".into()), rt_int(seq as i64)));
+            ok_variant(rt_map(pairs))
+        }
+        -1 => err_variant("icmp-ping: timeout"),
+        -2 => err_variant("icmp-ping: unreachable"),
+        _ => err_variant("icmp-ping: unknown error"),
+    }
+}
+
+// ── AIRLOS net service helper ──
+
+#[cfg(target_os = "airlos")]
+fn get_net_port() -> i32 {
+    static NET_SVC: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(0);
+    let mut svc = NET_SVC.load(core::sync::atomic::Ordering::Relaxed);
+    if svc <= 0 {
+        for _ in 0..5000 {
+            svc = crate::airlos::lookup_service("net");
+            if svc > 0 {
+                NET_SVC.store(svc, core::sync::atomic::Ordering::Relaxed);
+                return svc;
+            }
+            unsafe { crate::airlos::syscall0(2); } // SYS_YIELD
+        }
+        return 0;
+    }
+    svc
+}
+
+#[cfg(target_os = "airlos")]
+fn parse_ipv4(s: &str) -> Option<u32> {
+    let mut octets = [0u8; 4];
+    let mut parts = s.split('.');
+    for octet in &mut octets {
+        let part = parts.next()?;
+        *octet = part.parse::<u8>().ok()?;
+    }
+    if parts.next().is_some() {
+        return None; // too many parts
+    }
+    Some(u32::from_be_bytes(octets))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── DNS resolve tests ──
+
+    #[test]
+    fn test_dns_resolve_localhost() {
+        let hostname = rt_str("localhost".to_string());
+        let result = airl_dns_resolve(hostname);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Variant { tag_name: tag, inner } => {
+                assert_eq!(tag.as_str(), "Ok");
+                let inner_v = unsafe { &**inner };
+                match &inner_v.data {
+                    RtData::Str(s) => assert!(s == "127.0.0.1" || s == "::1", "unexpected addr: {}", s),
+                    _ => panic!("expected string inside Ok"),
+                }
+            }
+            _ => panic!("expected variant"),
+        }
+    }
+
+    #[test]
+    fn test_dns_resolve_bad_type() {
+        let not_a_string = rt_int(42);
+        let result = airl_dns_resolve(not_a_string);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Variant { tag_name, .. } => assert_eq!(tag_name.as_str(), "Err"),
+            _ => panic!("expected Err variant"),
+        }
+    }
+
+    // ── ICMP ping tests ──
+
+    #[test]
+    fn test_icmp_ping_returns_err_on_linux() {
+        let addr = rt_str("127.0.0.1".to_string());
+        let timeout = rt_int(1000);
+        let result = airl_icmp_ping(addr, timeout);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Variant { tag_name: tag, inner } => {
+                assert_eq!(tag.as_str(), "Err");
+                let inner_v = unsafe { &**inner };
+                match &inner_v.data {
+                    RtData::Str(s) => assert!(s.contains("not available on Linux")),
+                    _ => panic!("expected string inside Err"),
+                }
+            }
+            _ => panic!("expected Err variant"),
+        }
+    }
+
+    #[test]
+    fn test_icmp_ping_bad_addr_type() {
+        let not_a_string = rt_int(42);
+        let timeout = rt_int(1000);
+        let result = airl_icmp_ping(not_a_string, timeout);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Variant { tag_name, .. } => assert_eq!(tag_name.as_str(), "Err"),
+            _ => panic!("expected Err variant"),
+        }
+    }
+
+    #[test]
+    fn test_icmp_ping_bad_timeout_type() {
+        let addr = rt_str("127.0.0.1".to_string());
+        let not_an_int = rt_str("bad".to_string());
+        let result = airl_icmp_ping(addr, not_an_int);
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::Variant { tag_name, .. } => assert_eq!(tag_name.as_str(), "Err"),
+            _ => panic!("expected Err variant"),
+        }
+    }
 
     #[test]
     fn test_tcp_accept_tls_invalid_handle() {

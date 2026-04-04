@@ -242,6 +242,10 @@ pub struct RuntimeImports {
     pub zstd_compress: FuncId,
     pub zstd_decompress: FuncId,
 
+    // DNS / ICMP
+    pub dns_resolve: FuncId,
+    pub icmp_ping: FuncId,
+
     // TCP sockets
     pub tcp_connect: FuncId,
     pub tcp_close: FuncId,
@@ -744,6 +748,10 @@ impl BytecodeAot {
         let zstd_compress = declare_import(m, "airl_zstd_compress", s1.clone());
         let zstd_decompress = declare_import(m, "airl_zstd_decompress", s1.clone());
 
+        // DNS / ICMP
+        let dns_resolve = declare_import(m, "airl_dns_resolve", s1.clone());
+        let icmp_ping = declare_import(m, "airl_icmp_ping", s2.clone());
+
         // TCP sockets
         let tcp_connect = declare_import(m, "airl_tcp_connect", s2.clone());
         let tcp_close = declare_import(m, "airl_tcp_close", s1.clone());
@@ -820,6 +828,7 @@ impl BytecodeAot {
             bytes_from_string, bytes_to_string, bytes_concat, bytes_concat_all, bytes_slice, crc32c,
             gzip_compress, gzip_decompress, snappy_compress, snappy_decompress,
             lz4_compress, lz4_decompress, zstd_compress, zstd_decompress,
+            dns_resolve, icmp_ping,
             tcp_connect, tcp_close, tcp_send, tcp_recv, tcp_recv_exact, tcp_set_timeout, tcp_connect_tls, tcp_listen, tcp_accept, tcp_accept_tls,
             thread_spawn, thread_join, thread_set_affinity, channel_new, channel_send, channel_recv, channel_recv_timeout, channel_drain, channel_close,
             contract_fail,
@@ -1025,6 +1034,10 @@ impl BytecodeAot {
         m.insert("lz4-decompress".into(),   rt.lz4_decompress);
         m.insert("zstd-compress".into(),    rt.zstd_compress);
         m.insert("zstd-decompress".into(),  rt.zstd_decompress);
+
+        // DNS / ICMP
+        m.insert("dns-resolve".into(),     rt.dns_resolve);
+        m.insert("icmp-ping".into(),       rt.icmp_ping);
 
         // TCP sockets
         m.insert("tcp-connect".into(),     rt.tcp_connect);
