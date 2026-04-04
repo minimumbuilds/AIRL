@@ -66,7 +66,16 @@ impl LinearityChecker {
 
     /// Track a move of the named binding. Marks it as Moved.
     pub fn track_move(&mut self, name: &str, span: Span) -> Result<(), ()> {
-        let id = self.interner.intern(name);
+        let id = match self.interner.get(name) {
+            Some(id) => id,
+            None => {
+                self.diags.add(Diagnostic::error(
+                    format!("use of undefined value `{}`", name),
+                    span,
+                ));
+                return Err(());
+            }
+        };
         let state = self.lookup_state_id(id);
         match state {
             Some(OwnershipState::Owned) => {
@@ -99,7 +108,10 @@ impl LinearityChecker {
 
     /// Track a borrow of the named binding.
     pub fn track_borrow(&mut self, name: &str, kind: BorrowKind, span: Span) -> Result<(), ()> {
-        let id = self.interner.intern(name);
+        let id = match self.interner.get(name) {
+            Some(id) => id,
+            None => return Err(()),
+        };
         let state = self.lookup_state_id(id);
         match (state, kind) {
             (Some(OwnershipState::Owned), BorrowKind::Immutable) => {
@@ -415,7 +427,10 @@ impl LinearityChecker {
 
     /// Release a borrow on the named binding (decrement count or return to Owned).
     pub fn release_borrow(&mut self, name: &str) {
-        let id = self.interner.intern(name);
+        let id = match self.interner.get(name) {
+            Some(id) => id,
+            None => return,
+        };
         let state = self.lookup_state_id(id);
         match state {
             Some(OwnershipState::Borrowed { kind, count }) if count > 1 => {
@@ -434,8 +449,8 @@ impl LinearityChecker {
         }
     }
 
-    /// Look up ownership state by string name (public API convenience).
-    pub fn lookup_state(&self, name: &str) -> Option<OwnershipState> {
+    /// Look up ownership state by string name.
+    pub(crate) fn lookup_state(&self, name: &str) -> Option<OwnershipState> {
         let id = self.interner.get(name)?;
         self.shadow.get(&id).map(|(s, _)| s.clone())
     }
