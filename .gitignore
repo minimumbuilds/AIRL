@@ -24,6 +24,7 @@ g3v0.8.0
 commands/*/build/
 servers/*/build/
 servers/*/mynameisairl
+servers/*/_generated.airl
 **/target/
 crates/airl-syntax/fuzz/target/
 
