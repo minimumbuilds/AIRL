@@ -180,6 +180,18 @@ MCP prompt server that serves AIRL-LLM-Guide.md to LLMs as a `teach_airl` prompt
 | **Commits** | 7 |
 | **Status** | Functional. Native and Docker builds. AirMunch indexer with 10 MCP tools. |
 
+### Canopy -- Algebraic TUI Framework
+
+Terminal UI framework built on a single premise: the UI is data. Scenes are S-expression lists, layout is a pure fold, diffing is pattern matching, rendering produces ANSI escape sequences. No components, no virtual DOM, no mutable state — just pure functions transforming data. Supports boxes (column/row layout, grow weights, padding, borders, overflow scroll), styled text, and spacers. Channel-based event coordination for concurrent input and resize handling.
+
+| | |
+|---|---|
+| **Location** | `../canopy` |
+| **Size** | In development (Phase A) |
+| **Commits** | 2 |
+| **Status** | Design complete. Phase A implementation in progress. |
+| **Depends on** | 7 extern-c terminal I/O functions in AIRL runtime, stdlib (string, collections, sha256) |
+
 ---
 
 ## Tooling
