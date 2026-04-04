@@ -246,6 +246,10 @@ pub struct RuntimeImports {
     pub dns_resolve: FuncId,
     pub icmp_ping: FuncId,
 
+    // ash REPL signal handling
+    pub ash_install_sigint: FuncId,
+    pub ash_sigint_pending: FuncId,
+
     // TCP sockets
     pub tcp_connect: FuncId,
     pub tcp_close: FuncId,
@@ -769,6 +773,10 @@ impl BytecodeAot {
         let dns_resolve = declare_import(m, "airl_dns_resolve", s1.clone());
         let icmp_ping = declare_import(m, "airl_icmp_ping", s2.clone());
 
+        // ash REPL signal handling
+        let ash_install_sigint = declare_import(m, "airl_ash_install_sigint", sig_0_ptr(m, ptr));
+        let ash_sigint_pending = declare_import(m, "airl_ash_sigint_pending", sig_0_ptr(m, ptr));
+
         // TCP sockets
         let tcp_connect = declare_import(m, "airl_tcp_connect", s2.clone());
         let tcp_close = declare_import(m, "airl_tcp_close", s1.clone());
@@ -867,6 +875,7 @@ impl BytecodeAot {
             gzip_compress, gzip_decompress, snappy_compress, snappy_decompress,
             lz4_compress, lz4_decompress, zstd_compress, zstd_decompress,
             dns_resolve, icmp_ping,
+            ash_install_sigint, ash_sigint_pending,
             tcp_connect, tcp_close, tcp_send, tcp_recv, tcp_recv_exact, tcp_set_timeout, tcp_connect_tls, tcp_listen, tcp_accept, tcp_accept_tls,
             thread_spawn, thread_join, thread_set_affinity, channel_new, channel_send, channel_recv, channel_recv_timeout, channel_drain, channel_close,
             whoami, id_fn, authenticate, switch_user, elevate, create_user, delete_user, set_password,
@@ -1078,6 +1087,10 @@ impl BytecodeAot {
         // DNS / ICMP
         m.insert("dns-resolve".into(),     rt.dns_resolve);
         m.insert("icmp-ping".into(),       rt.icmp_ping);
+
+        // ash REPL signal handling
+        m.insert("ash-install-sigint".into(), rt.ash_install_sigint);
+        m.insert("ash-sigint-pending".into(), rt.ash_sigint_pending);
 
         // TCP sockets
         m.insert("tcp-connect".into(),     rt.tcp_connect);

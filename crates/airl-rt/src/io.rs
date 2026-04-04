@@ -5,7 +5,7 @@ use crate::value::{rt_bool, rt_int, rt_nil, rt_str, rt_unit, rt_variant, RtData,
 #[cfg(not(target_os = "airlos"))]
 use std::io::Write;
 #[cfg(not(target_os = "airlos"))]
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 #[cfg(not(target_os = "airlos"))]
 use std::path::PathBuf;
@@ -149,6 +149,49 @@ pub extern "C" fn airl_print_values(args: *const *mut RtValue, count: i64) -> *m
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SIGINT handling for ash REPL
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(not(target_os = "airlos"))]
+static SIGINT_PENDING: AtomicBool = AtomicBool::new(false);
+
+#[cfg(not(target_os = "airlos"))]
+extern "C" fn ash_sigint_handler(_sig: libc::c_int) {
+    SIGINT_PENDING.store(true, Ordering::SeqCst);
+}
+
+/// `ash-install-sigint` — install a SIGINT handler that records the signal
+/// in an atomic flag instead of terminating the process. Call once at shell
+/// startup. Returns Nil.
+#[cfg(not(target_os = "airlos"))]
+#[no_mangle]
+pub extern "C" fn airl_ash_install_sigint() -> *mut RtValue {
+    unsafe {
+        libc::signal(libc::SIGINT, ash_sigint_handler as *const () as libc::sighandler_t);
+    }
+    rt_nil()
+}
+
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_ash_install_sigint() -> *mut RtValue {
+    rt_nil()
+}
+
+/// `ash-sigint-pending` — returns Bool true if SIGINT has fired since last
+/// check. Atomically clears the flag.
+#[no_mangle]
+pub extern "C" fn airl_ash_sigint_pending() -> *mut RtValue {
+    #[cfg(not(target_os = "airlos"))]
+    {
+        let was_set = SIGINT_PENDING.swap(false, Ordering::SeqCst);
+        return rt_bool(was_set);
+    }
+    #[cfg(target_os = "airlos")]
+    rt_bool(false)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // read-line
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -157,6 +200,10 @@ pub extern "C" fn airl_print_values(args: *const *mut RtValue, count: i64) -> *m
 pub extern "C" fn airl_read_line() -> *mut RtValue {
     use std::io::BufRead;
     let _ = std::io::stdout().flush(); // flush any pending prompt
+    // If SIGINT fired before we enter the read, return interrupted immediately.
+    if SIGINT_PENDING.swap(false, Ordering::SeqCst) {
+        return rt_variant("Err".into(), rt_str("interrupted".into()));
+    }
     let mut line = String::new();
     match std::io::stdin().lock().read_line(&mut line) {
         Ok(0) => rt_variant("Err".into(), rt_str("EOF".into())),
@@ -164,6 +211,10 @@ pub extern "C" fn airl_read_line() -> *mut RtValue {
             if line.ends_with('\n') { line.pop(); }
             if line.ends_with('\r') { line.pop(); }
             rt_variant("Ok".into(), rt_str(line))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+            SIGINT_PENDING.store(false, Ordering::SeqCst);
+            rt_variant("Err".into(), rt_str("interrupted".into()))
         }
         Err(e) => rt_variant("Err".into(), rt_str(format!("read-line: {}", e))),
     }

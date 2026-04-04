@@ -683,6 +683,10 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "dns-resolve" => airl_rt::misc::airl_dns_resolve(a0!()),
         "icmp-ping" => airl_rt::misc::airl_icmp_ping(a0!(), a1!()),
 
+        // ash REPL signal handling
+        "ash-install-sigint" => airl_rt::io::airl_ash_install_sigint(),
+        "ash-sigint-pending" => airl_rt::io::airl_ash_sigint_pending(),
+
         // TCP
         "tcp-connect" => airl_rt::misc::airl_tcp_connect(a0!(), a1!()),
         "tcp-close" => airl_rt::misc::airl_tcp_close(a0!()),
