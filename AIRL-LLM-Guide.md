@@ -534,7 +534,7 @@ These functions were compiler builtins prior to v0.11.0 and are now implemented 
 | `base64-decode` | `(base64-decode str)` → Str | Base64 decode |
 | `base64-encode-bytes` | `(base64-encode-bytes buf)` → Str | Encode IntList to base64 string |
 | `base64-decode-bytes` | `(base64-decode-bytes s)` → IntList | Decode base64 string to IntList |
-| `random-bytes` | `(random-bytes n)` → List | List of n random byte values (0-255) — intrinsic |
+| `random-bytes` | `(random-bytes n)` → Str | Hex string of n random bytes (e.g., n=4 → `"a1b2c3d4"`, length 2n) — intrinsic |
 
 ### Byte-Array Intrinsics (v0.11.0)
 
