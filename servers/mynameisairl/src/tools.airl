@@ -17,34 +17,107 @@
   :body (let (parts : List (split file "/"))
     (= 0 (length (filter (fn [p] (= p "..")) parts)))))
 
+;; ─── Token savings tracking ─────────────────────────────────────────
+;; Persists cumulative token savings to ~/.airl-mcp/savings.json.
+;; Each tool call reads the current total, adds its savings, writes back.
+
+(defn savings-path
+  :sig [-> String]
+  :intent "Path to the persistent token savings file"
+  :body
+  (match (getenv "HOME")
+    (Ok home) (str home "/.airl-mcp/savings.json")
+    (Err _) "/tmp/airl-mcp-savings.json"))
+
+(defn load-savings
+  :sig [-> i64]
+  :intent "Read cumulative token count from disk; return 0 if missing"
+  :body
+  (let (p : String (savings-path))
+    (if (file-exists? p)
+      (let (data : Any (json-parse (read-file p)))
+        (if (= data nil) 0 (map-get-or data "total" 0)))
+      0)))
+
+(defn save-savings
+  :sig [(total : i64) -> Bool]
+  :intent "Persist updated token count to disk, creating directory if needed"
+  :body
+  (let (p : String (savings-path))
+    (let (dir : String (match (getenv "HOME")
+                          (Ok home) (str home "/.airl-mcp")
+                          (Err _) "/tmp"))
+      (let (_ : Bool (if (not (is-dir? dir)) (create-dir dir) true))
+        (write-file p (json-stringify (map-from ["total" total])))))))
+
+;; ─── add-meta ────────────────────────────────────────────────────────
+;; Wraps a JSON response string with a _meta block reporting byte counts
+;; and estimated token savings vs. reading the raw file.
+(defn add-meta
+  :sig [(response-json : String) (file-bytes : i64) -> String]
+  :intent "Append _meta token savings block to a tool response JSON"
+  :body
+  (let (resp-bytes : i64 (length response-json))
+    (let (saved : i64 (/ (- file-bytes resp-bytes) 4))
+      (let (meta : Map (map-from
+              ["response_bytes" resp-bytes
+               "file_bytes" file-bytes
+               "tokens_saved" (if (> saved 0) saved 0)]))
+        (str "{\"result\":" response-json ",\"_meta\":" (json-stringify meta) "}")))))
+
+;; ─── file-bytes-for-tool ─────────────────────────────────────────────
+;; Returns the raw byte cost of the equivalent Read/Grep approach:
+;; - Single-file tools: full file size (what Read would have returned)
+;; - Project-level tools: total size of all .airl files in the project
+;; - Search/tree tools: 0 (no single-file comparison point)
+(defn file-bytes-for-tool
+  :sig [(tool-name : String) (args : Map) -> i64]
+  :intent "Compute raw file bytes that would have been read without the indexer"
+  :body
+  (let (path : String (map-get-or args "path" ""))
+       (file : String (map-get-or args "file" ""))
+    (if (and (not (= file "")) (and (safe-path? file) (not (= path ""))))
+      (let (full-path : String (str path "/" file))
+        (if (file-exists? full-path) (file-size full-path) 0))
+      (if (and (not (= path ""))
+               (or (= tool-name "airl_repo_outline")
+                   (or (= tool-name "airl_dependency_graph")
+                       (or (= tool-name "airl_blast_radius")
+                           (= tool-name "airl_find_callers")))))
+        (fold (fn [acc f] (+ acc (file-size f))) 0 (find-airl-files path))
+        0))))
+
 ;; ─── airmunch-dispatch ───────────────────────────────────────────────
 ;; Main tool dispatcher. Called by airtraffic-serve-batch.
+;; Wraps every Ok response with _meta token savings data and persists
+;; the cumulative total to ~/.airl-mcp/savings.json.
 (defn airmunch-dispatch
   :sig [(cache : Map) (tool-name : String) (args : Map) -> Result]
   :intent "Dispatch tool calls to appropriate handler"
   :requires [(valid tool-name) (valid args)]
   :ensures [(valid result)]
-  :body (if (= tool-name "airl_index_project")
-    (handle-index-project args)
-    (if (= tool-name "airl_file_tree")
-      (handle-file-tree args)
-      (if (= tool-name "airl_file_outline")
-        (handle-file-outline args)
-        (if (= tool-name "airl_get_symbol")
-          (handle-get-symbol args)
-          (if (= tool-name "airl_search_symbols")
-            (handle-search-symbols args)
-            (if (= tool-name "airl_get_content")
-              (handle-get-content args)
-              (if (= tool-name "airl_repo_outline")
-                (handle-repo-outline args)
-                (if (= tool-name "airl_find_callers")
-                  (handle-find-callers args)
-                  (if (= tool-name "airl_dependency_graph")
-                    (handle-dependency-graph args)
-                    (if (= tool-name "airl_blast_radius")
-                      (handle-blast-radius args)
-                      (Err (str "Unknown tool: " tool-name)))))))))))))
+  :body
+  (let (handler-result : Result
+        (if (= tool-name "airl_index_project") (handle-index-project args)
+          (if (= tool-name "airl_file_tree") (handle-file-tree args)
+            (if (= tool-name "airl_file_outline") (handle-file-outline args)
+              (if (= tool-name "airl_get_symbol") (handle-get-symbol args)
+                (if (= tool-name "airl_search_symbols") (handle-search-symbols args)
+                  (if (= tool-name "airl_get_content") (handle-get-content args)
+                    (if (= tool-name "airl_repo_outline") (handle-repo-outline args)
+                      (if (= tool-name "airl_find_callers") (handle-find-callers args)
+                        (if (= tool-name "airl_dependency_graph") (handle-dependency-graph args)
+                          (if (= tool-name "airl_blast_radius") (handle-blast-radius args)
+                            (if (= tool-name "airl_session_stats") (handle-session-stats args)
+                              (Err (str "Unknown tool: " tool-name))))))))))))))
+    (match handler-result
+      (Ok json)
+        (let (fb : i64 (file-bytes-for-tool tool-name args))
+          (let (rb : i64 (length json))
+            (let (saved : i64 (if (> (- fb rb) 0) (/ (- fb rb) 4) 0))
+              (let (_ : Bool (save-savings (+ (load-savings) saved)))
+                (Ok (add-meta json fb))))))
+      (Err msg) (Err msg))))
 
 ;; ─── handle-index-project ────────────────────────────────────────────
 (defn handle-index-project
@@ -282,6 +355,17 @@
              "direct-callers" (map-get radius "direct-callers")
              "total-affected" (map-get radius "total-affected")]))))))))
 
+;; ─── handle-session-stats ────────────────────────────────────────────
+(defn handle-session-stats
+  :sig [(args : Map) -> Result]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body
+  (let (total : i64 (load-savings))
+    (Ok (json-stringify (map-from
+      ["total_tokens_saved" total
+       "savings_file" (savings-path)])))))
+
 ;; ─── Tool Definitions ────────────────────────────────────────────────
 ;; Each tool definition is a Map compatible with airtraffic-tool.
 
@@ -370,4 +454,10 @@
                   "properties" (map-from
                     ["path" (map-from ["type" "string" "description" "Absolute path to the project root"])
                      "function_name" (map-from ["type" "string" "description" "Name of the function to analyze"])])
-                  "required" ["path" "function_name"]])])])
+                  "required" ["path" "function_name"]])])
+    (map-from ["name" "airl_session_stats"
+               "description" "Get cumulative token savings — how many tokens the indexer has saved vs raw file reads across all sessions"
+               "inputSchema" (map-from
+                 ["type" "object"
+                  "properties" (map-from [])
+                  "required" []])])])
