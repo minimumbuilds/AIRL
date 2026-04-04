@@ -27,14 +27,15 @@ pub enum PipelineMode {
     Repl,   // type errors warn to stderr, execution proceeds
 }
 
-pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, PipelineError> {
-    // Lex
+/// Lex and parse source into top-level forms, with expression fallback.
+/// Returns tops without checking accumulated diagnostics — callers that need
+/// strict diagnostics checking (e.g. run_source_with_mode) must check separately.
+fn parse_source(source: &str) -> Result<(Vec<airl_syntax::ast::TopLevel>, Diagnostics), PipelineError> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
     let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
     let mut diags = Diagnostics::new();
 
-    // Parse all top-level forms
     let mut tops = Vec::new();
     for sexpr in &sexprs {
         match parser::parse_top_level(sexpr, &mut diags) {
@@ -48,6 +49,51 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
             }
         }
     }
+    Ok((tops, diags))
+}
+
+/// Lex and parse source into top-level forms, strict mode (no expression fallback).
+/// Used by check_source where bare expressions are not expected.
+/// Checks diags for errors after parsing.
+fn parse_source_strict(source: &str) -> Result<Vec<airl_syntax::ast::TopLevel>, PipelineError> {
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
+    let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
+    let mut diags = Diagnostics::new();
+
+    let mut tops = Vec::new();
+    for sexpr in &sexprs {
+        match parser::parse_top_level(sexpr, &mut diags) {
+            Ok(top) => tops.push(top),
+            Err(_) => {}
+        }
+    }
+    if diags.has_errors() {
+        return Err(PipelineError::Parse(diags));
+    }
+    Ok(tops)
+}
+
+/// Lex and parse stdlib source. Fails fast on `Err` from parse_top_level
+/// but does NOT check accumulated diagnostics (stdlib may have known warnings).
+fn parse_source_stdlib(source: &str, name: &str) -> Result<Vec<airl_syntax::ast::TopLevel>, PipelineError> {
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
+    let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
+    let mut diags = Diagnostics::new();
+
+    let mut tops = Vec::new();
+    for sexpr in &sexprs {
+        match parser::parse_top_level(sexpr, &mut diags) {
+            Ok(top) => tops.push(top),
+            Err(d) => return Err(PipelineError::Io(format!("{} parse error: {}", name, d.message))),
+        }
+    }
+    Ok(tops)
+}
+
+pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, PipelineError> {
+    let (tops, diags) = parse_source(source)?;
     if diags.has_errors() {
         return Err(PipelineError::Parse(diags));
     }
@@ -167,23 +213,7 @@ pub fn run_file_with_preloads(path: &str, preloads: &[String]) -> Result<Value, 
     let source = std::fs::read_to_string(path)
         .map_err(|e| PipelineError::Io(e.to_string()))?;
 
-    let mut lexer = Lexer::new(&source);
-    let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
-    let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
-    let mut diags = Diagnostics::new();
-    let mut tops = Vec::new();
-    for sexpr in &sexprs {
-        match parser::parse_top_level(sexpr, &mut diags) {
-            Ok(top) => tops.push(top),
-            Err(d) => {
-                let mut diags2 = Diagnostics::new();
-                match parser::parse_expr(sexpr, &mut diags2) {
-                    Ok(expr) => tops.push(airl_syntax::ast::TopLevel::Expr(expr)),
-                    Err(_) => return Err(PipelineError::Syntax(d)),
-                }
-            }
-        }
-    }
+    let (tops, _diags) = parse_source(&source)?;
 
     let ownership_map = build_ownership_map(&tops);
     let (ir_nodes, contracts, fn_meta) = compile_tops_with_contracts(&tops);
@@ -226,21 +256,7 @@ pub fn run_file(path: &str) -> Result<Value, PipelineError> {
 }
 
 pub fn check_source(source: &str) -> Result<(), PipelineError> {
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
-    let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
-    let mut diags = Diagnostics::new();
-
-    let mut tops = Vec::new();
-    for sexpr in &sexprs {
-        match parser::parse_top_level(sexpr, &mut diags) {
-            Ok(top) => tops.push(top),
-            Err(_) => {}
-        }
-    }
-    if diags.has_errors() {
-        return Err(PipelineError::Parse(diags));
-    }
+    let tops = parse_source_strict(source)?;
 
     // Type check (strict mode)
     let mut checker = TypeChecker::new();
@@ -527,21 +543,22 @@ fn compile_tops_with_contracts(
         match top {
             airl_syntax::ast::TopLevel::Defn(f) => {
                 let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
-                ir_nodes.push(IRNode::Func(f.name.clone(), param_names, Box::new(compile_expr(&f.body))));
+                ir_nodes.push(IRNode::Func(f.name.clone(), param_names.clone(), Box::new(compile_expr(&f.body))));
 
+                // Collect contract IR+source pairs, extracting source strings
+                // in the same pass to avoid a second iteration.
+                let mut req_strings = Vec::with_capacity(f.requires.len());
                 let req: Vec<(IRNode, String)> = f.requires.iter()
-                    .map(|e| (compile_expr(e), e.to_airl()))
+                    .map(|e| { let s = e.to_airl(); req_strings.push(s.clone()); (compile_expr(e), s) })
                     .collect();
+                let mut ens_strings = Vec::with_capacity(f.ensures.len());
                 let ens: Vec<(IRNode, String)> = f.ensures.iter()
-                    .map(|e| (compile_expr(e), e.to_airl()))
+                    .map(|e| { let s = e.to_airl(); ens_strings.push(s.clone()); (compile_expr(e), s) })
                     .collect();
+                let mut inv_strings = Vec::with_capacity(f.invariants.len());
                 let inv: Vec<(IRNode, String)> = f.invariants.iter()
-                    .map(|e| (compile_expr(e), e.to_airl()))
+                    .map(|e| { let s = e.to_airl(); inv_strings.push(s.clone()); (compile_expr(e), s) })
                     .collect();
-                // Capture metadata for runtime introspection (before moving contract vecs)
-                let req_strings: Vec<String> = req.iter().map(|(_, s)| s.clone()).collect();
-                let ens_strings: Vec<String> = ens.iter().map(|(_, s)| s.clone()).collect();
-                let inv_strings: Vec<String> = inv.iter().map(|(_, s)| s.clone()).collect();
 
                 if !req.is_empty() || !ens.is_empty() || !inv.is_empty() {
                     contracts.insert(f.name.clone(), (req, ens, inv));
@@ -549,7 +566,7 @@ fn compile_tops_with_contracts(
 
                 metadata.push(airl_runtime::bytecode::FnDefMetadata {
                     name: f.name.clone(),
-                    param_names: f.params.iter().map(|p| p.name.clone()).collect(),
+                    param_names,
                     param_types: f.params.iter().map(|p| p.ty.to_airl()).collect(),
                     return_type: f.return_type.to_airl(),
                     intent: f.intent.clone(),
@@ -574,6 +591,65 @@ fn compile_tops_with_contracts(
     (ir_nodes, contracts, metadata)
 }
 
+/// Like `compile_tops_with_contracts` but skips `Expr` nodes.
+/// Used for library modules in the import pipeline where top-level expressions
+/// should not be executed.
+fn compile_tops_without_exprs(
+    tops: &[airl_syntax::ast::TopLevel],
+) -> (
+    Vec<IRNode>,
+    HashMap<String, (Vec<(IRNode, String)>, Vec<(IRNode, String)>, Vec<(IRNode, String)>)>,
+    Vec<airl_runtime::bytecode::FnDefMetadata>,
+) {
+    let mut ir_nodes = Vec::new();
+    let mut contracts = HashMap::new();
+    let mut metadata = Vec::new();
+
+    for top in tops {
+        match top {
+            airl_syntax::ast::TopLevel::Defn(f) => {
+                let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
+                ir_nodes.push(IRNode::Func(f.name.clone(), param_names.clone(), Box::new(compile_expr(&f.body))));
+
+                let mut req_strings = Vec::with_capacity(f.requires.len());
+                let req: Vec<(IRNode, String)> = f.requires.iter()
+                    .map(|e| { let s = e.to_airl(); req_strings.push(s.clone()); (compile_expr(e), s) })
+                    .collect();
+                let mut ens_strings = Vec::with_capacity(f.ensures.len());
+                let ens: Vec<(IRNode, String)> = f.ensures.iter()
+                    .map(|e| { let s = e.to_airl(); ens_strings.push(s.clone()); (compile_expr(e), s) })
+                    .collect();
+                let mut inv_strings = Vec::with_capacity(f.invariants.len());
+                let inv: Vec<(IRNode, String)> = f.invariants.iter()
+                    .map(|e| { let s = e.to_airl(); inv_strings.push(s.clone()); (compile_expr(e), s) })
+                    .collect();
+
+                if !req.is_empty() || !ens.is_empty() || !inv.is_empty() {
+                    contracts.insert(f.name.clone(), (req, ens, inv));
+                }
+
+                metadata.push(airl_runtime::bytecode::FnDefMetadata {
+                    name: f.name.clone(),
+                    param_names,
+                    param_types: f.params.iter().map(|p| p.ty.to_airl()).collect(),
+                    return_type: f.return_type.to_airl(),
+                    intent: f.intent.clone(),
+                    requires: req_strings,
+                    ensures: ens_strings,
+                    invariants: inv_strings,
+                });
+            }
+            airl_syntax::ast::TopLevel::Define(d) => {
+                ir_nodes.push(IRNode::Func(d.name.clone(), d.params.clone(), Box::new(compile_expr(&d.body))));
+            }
+            // Skip Expr and Import nodes for library modules
+            _ => {}
+        }
+    }
+
+    (ir_nodes, contracts, metadata)
+}
+
 /// Cached stdlib functions: parsed and compiled once, cloned into each new VM.
 static STDLIB_CACHE: OnceLock<Vec<(Vec<BytecodeFunc>, BytecodeFunc)>> = OnceLock::new();
 
@@ -589,17 +665,7 @@ fn compile_stdlib_all() -> Result<Vec<(Vec<BytecodeFunc>, BytecodeFunc)>, Pipeli
     ];
     let mut result = Vec::new();
     for (src, name) in stdlib_modules {
-        let mut lexer = Lexer::new(src);
-        let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
-        let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
-        let mut diags = Diagnostics::new();
-        let mut tops = Vec::new();
-        for sexpr in &sexprs {
-            match parser::parse_top_level(sexpr, &mut diags) {
-                Ok(top) => tops.push(top),
-                Err(d) => return Err(PipelineError::Io(format!("{} parse error: {}", name, d.message))),
-            }
-        }
+        let tops = parse_source_stdlib(src, name)?;
         let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
         let mut bc_compiler = BytecodeCompiler::with_prefix(name);
         let (funcs, main_func) = bc_compiler.compile_program(&ir_nodes);
@@ -624,18 +690,7 @@ fn load_cached_stdlib(vm: &mut BytecodeVm) -> Result<(), PipelineError> {
 }
 
 fn compile_and_load_stdlib_bytecode(vm: &mut BytecodeVm, source: &str, name: &str) -> Result<(), PipelineError> {
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
-    let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
-    let mut diags = Diagnostics::new();
-
-    let mut tops = Vec::new();
-    for sexpr in &sexprs {
-        match parser::parse_top_level(sexpr, &mut diags) {
-            Ok(top) => tops.push(top),
-            Err(d) => return Err(PipelineError::Io(format!("{} parse error: {}", name, d.message))),
-        }
-    }
+    let tops = parse_source_stdlib(source, name)?;
 
     let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
     let mut bc_compiler = BytecodeCompiler::with_prefix(name);
@@ -671,24 +726,27 @@ pub fn run_file_with_imports(entry_path: &str) -> Result<Value, PipelineError> {
     // Load cached stdlib
     load_cached_stdlib(&mut vm)?;
 
-    let entry_canonical = std::fs::canonicalize(entry_path)
-        .map_err(|e| PipelineError::Io(e.to_string()))?;
+    // The resolver returns modules in dependency order with the entry last.
+    // Use the entry path from the resolved modules directly to avoid a redundant canonicalize.
+    let entry_canonical = &modules.last()
+        .ok_or_else(|| PipelineError::Io("no modules resolved".into()))?
+        .path;
 
     for module in &modules {
-        let is_entry = module.path == entry_canonical;
+        let is_entry = &module.path == entry_canonical;
         let directives = import_map.get(&module.path)
             .map(|d| d.as_slice())
             .unwrap_or(&[]);
 
-        // Filter tops: remove Import nodes, skip Expr for non-entry modules
-        let filtered_tops: Vec<airl_syntax::ast::TopLevel> = module.tops.iter()
-            .filter(|t| !matches!(t, airl_syntax::ast::TopLevel::Import { .. }))
-            .filter(|t| is_entry || !matches!(t, airl_syntax::ast::TopLevel::Expr(_)))
-            .cloned()
-            .collect();
-
-        let ownership_map = build_ownership_map(&filtered_tops);
-        let (ir_nodes, contracts, fn_meta) = compile_tops_with_contracts(&filtered_tops);
+        // Import nodes compile to Nil (handled by the _ branch in compile_tops_with_contracts),
+        // so we only need to filter Expr nodes for non-entry (library) modules.
+        // Pass tops directly to avoid cloning the entire AST.
+        let ownership_map = build_ownership_map(&module.tops);
+        let (ir_nodes, contracts, fn_meta) = if is_entry {
+            compile_tops_with_contracts(&module.tops)
+        } else {
+            compile_tops_without_exprs(&module.tops)
+        };
 
         // Rewrite qualified names for the entry module (with visibility checks)
         let final_ir = if is_entry && !directives.is_empty() {
@@ -946,24 +1004,7 @@ pub fn compile_and_load_stdlib_bytecode_repl(vm: &mut BytecodeVm) -> Result<(), 
 /// Compile AIRL source and run it in an existing bytecode VM (for incremental REPL use).
 /// Functions defined in previous calls persist in the VM's function table.
 pub fn compile_and_run_repl_input(source: &str, vm: &mut BytecodeVm) -> Result<Value, String> {
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.lex_all().map_err(|d| d.message)?;
-    let sexprs = parse_sexpr_all(&tokens).map_err(|d| d.message)?;
-    let mut diags = Diagnostics::new();
-
-    let mut tops = Vec::new();
-    for sexpr in &sexprs {
-        match parser::parse_top_level(sexpr, &mut diags) {
-            Ok(top) => tops.push(top),
-            Err(_) => {
-                let mut diags2 = Diagnostics::new();
-                match parser::parse_expr(sexpr, &mut diags2) {
-                    Ok(expr) => tops.push(airl_syntax::ast::TopLevel::Expr(expr)),
-                    Err(d) => return Err(d.message),
-                }
-            }
-        }
-    }
+    let (tops, _diags) = parse_source(source).map_err(|e| format!("{}", e))?;
 
     let ownership_map = build_ownership_map(&tops);
     let (ir_nodes, contracts, fn_meta) = compile_tops_with_contracts(&tops);
