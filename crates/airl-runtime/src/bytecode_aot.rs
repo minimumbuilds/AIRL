@@ -906,7 +906,7 @@ impl BytecodeAot {
         // deregistered — AIRL stdlib equivalents in map.airl take over
 
         // File I/O, Directory I/O — OS-level builtins (cannot be pure AIRL)
-        // "read-file" deregistered — stdlib/io.airl wrapper calls airl_read_file
+        m.insert("read-file".into(),   rt.read_file);
         m.insert("write-file".into(),  rt.write_file);
         m.insert("file-exists?".into(),rt.file_exists);
         m.insert("exec-file".into(),  rt.exec_file);
@@ -921,7 +921,7 @@ impl BytecodeAot {
         m.insert("temp-file".into(),   rt.temp_file);
         m.insert("temp-dir".into(),    rt.temp_dir);
         m.insert("file-mtime".into(),  rt.file_mtime);
-        // "get-args" deregistered — stdlib/io.airl wrapper calls airl_get_args
+        m.insert("get-args".into(),    rt.get_args);
         m.insert("run-bytecode".into(), rt.run_bytecode);
         m.insert("compile-to-executable".into(), rt.compile_to_exe);
         m.insert("compile-bytecode-to-executable".into(), rt.compile_bc_to_exe);
@@ -955,7 +955,7 @@ impl BytecodeAot {
         // System — OS-level builtins (cannot be pure AIRL)
         m.insert("cpu-count".into(),  rt.cpu_count);
         m.insert("time-now".into(),   rt.time_now);
-        // "getenv" deregistered — stdlib/io.airl wrapper calls airl_getenv
+        m.insert("getenv".into(),     rt.getenv);
         m.insert("get-cwd".into(),    rt.get_cwd);
 
         // json-parse, json-stringify
@@ -972,7 +972,7 @@ impl BytecodeAot {
         m.insert("assert".into(),        rt.assert_fn);
         m.insert("panic".into(),         rt.panic_fn);
         // OS-level builtins (cannot be pure AIRL)
-        // "exit" deregistered — stdlib/io.airl wrapper calls airl_exit
+        m.insert("exit".into(),        rt.exit_fn);
         m.insert("sleep".into(),       rt.sleep_fn);
         m.insert("format-time".into(), rt.format_time);
         m.insert("read-lines".into(),  rt.read_lines);
