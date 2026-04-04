@@ -1,0 +1,132 @@
+;; test-xref.airl — Tests for xref.airl
+;;
+;; Tests call graph, callers, callees, dependency graph, blast radius.
+
+;; ─── Helpers ─────────────────────────────────────────────────────────
+(define assert-eq (label expected actual)
+  (if (= expected actual)
+    (println "  PASS:" label)
+    (do
+      (println "  FAIL:" label)
+      (println "    expected:" expected)
+      (println "    actual:  " actual)
+      (assert false))))
+
+(define assert-len (label expected-len lst)
+  (assert-eq label expected-len (length lst)))
+
+(define assert-true (label val)
+  (assert-eq label true val))
+
+(println "test-xref")
+
+;; ─── Build test symbols ──────────────────────────────────────────────
+(define make-sym (name file calls)
+  (map-from
+    ["id" (str file "::" name "#function")
+     "file" file
+     "name" name
+     "kind" "function"
+     "sig" "[-> i64]"
+     "intent" ""
+     "requires" ""
+     "ensures" ""
+     "ownership" ""
+     "line" 1
+     "end-line" 5
+     "body-hash" ""
+     "calls" calls]))
+
+;; a calls b, b calls c, d calls b
+(let (sym-a : Map (make-sym "a" "mod1.airl" ["b"]))
+     (sym-b : Map (make-sym "b" "mod1.airl" ["c"]))
+     (sym-c : Map (make-sym "c" "mod2.airl" []))
+     (sym-d : Map (make-sym "d" "mod2.airl" ["b"]))
+  (let (all-syms : List [sym-a sym-b sym-c sym-d])
+    (let (test-index : Map (map-from
+        ["name" "test"
+         "root" "/tmp/test"
+         "files" (map-from
+           ["mod1.airl" (map-from ["hash" "h1" "symbols" [sym-a sym-b]])
+            "mod2.airl" (map-from ["hash" "h2" "symbols" [sym-c sym-d]])])
+         "all-symbols" all-syms]))
+
+      (do
+        ;; ─── Test 1: Build call graph ────────────────────────────────
+        (let (cg : Map (build-call-graph all-syms))
+          (do
+            ;; b is called by a and d
+            (let (b-callers : Any (map-get cg "b"))
+              (do
+                (assert-true "b has callers" (not (= b-callers nil)))
+                (assert-len "b caller count" 2 b-callers)))
+            ;; c is called by b
+            (let (c-callers : Any (map-get cg "c"))
+              (assert-len "c caller count" 1 c-callers))))
+
+        ;; ─── Test 2: Find callers of b ───────────────────────────────
+        (let (callers : List (find-callers test-index "b"))
+          (do
+            (assert-len "callers of b" 2 callers)
+            (let (names : List (map (fn [s] (map-get s "name")) callers))
+              (do
+                (assert-true "a calls b" (list-contains? names "a"))
+                (assert-true "d calls b" (list-contains? names "d"))))))
+
+        ;; ─── Test 3: Find callers of c ───────────────────────────────
+        (let (callers : List (find-callers test-index "c"))
+          (do
+            (assert-len "callers of c" 1 callers)
+            (assert-eq "b calls c" "b" (map-get (at callers 0) "name"))))
+
+        ;; ─── Test 4: No callers ──────────────────────────────────────
+        (let (callers : List (find-callers test-index "a"))
+          (assert-len "no callers for a" 0 callers))
+
+        ;; ─── Test 5: Find callees ────────────────────────────────────
+        (let (callees : List (find-callees test-index "a"))
+          (do
+            (assert-len "a calls 1" 1 callees)
+            (assert-eq "a calls b" "b" (at callees 0))))
+
+        ;; ─── Test 6: Find callees — no calls ─────────────────────────
+        (let (callees : List (find-callees test-index "c"))
+          (assert-len "c calls nothing" 0 callees))
+
+        ;; ─── Test 7: Dependency graph ────────────────────────────────
+        (let (deps : Map (dependency-graph test-index))
+          (do
+            ;; mod1.airl depends on mod2.airl (b calls c which is in mod2)
+            (let (mod1-deps : Any (map-get deps "mod1.airl"))
+              (assert-true "mod1 depends on mod2" (list-contains? mod1-deps "mod2.airl")))
+            ;; mod2.airl depends on mod1.airl (d calls b which is in mod1)
+            (let (mod2-deps : Any (map-get deps "mod2.airl"))
+              (assert-true "mod2 depends on mod1" (list-contains? mod2-deps "mod1.airl")))))
+
+        ;; ─── Test 8: Blast radius of c ───────────────────────────────
+        ;; c is called by b, b is called by a and d
+        ;; So blast radius includes c, b, a, d
+        (let (br : Map (blast-radius test-index "c"))
+          (do
+            (let (total : i64 (map-get br "total-affected"))
+              (assert-true "blast radius >= 3" (>= total 3)))
+            (let (files : List (map-get br "files"))
+              (do
+                (assert-true "affects mod1" (list-contains? files "mod1.airl"))
+                (assert-true "affects mod2" (list-contains? files "mod2.airl"))))))
+
+        ;; ─── Test 9: Blast radius of leaf function ───────────────────
+        ;; a is not called by anyone, so blast radius is just a itself
+        (let (br : Map (blast-radius test-index "a"))
+          (assert-eq "leaf blast radius" 1 (map-get br "total-affected")))
+
+        ;; ─── Test 10: extract-name-from-id ───────────────────────────
+        (do
+          (assert-eq "extract name" "foo" (extract-name-from-id "bar.airl::foo#function"))
+          (assert-eq "extract name simple" "baz" (extract-name-from-id "x::baz#define")))
+
+        ;; ─── Test 11: Nonexistent function callers ───────────────────
+        (let (callers : List (find-callers test-index "nonexistent"))
+          (assert-len "nonexistent callers" 0 callers))
+
+        (println "test-xref: all tests passed")))))

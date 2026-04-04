@@ -1,0 +1,113 @@
+;; search.airl — Symbol search with ranking
+;;
+;; Search symbols by name, signature, contract text with relevance ranking.
+;; Ranking: exact name > prefix > substring in name > sig match > contract match.
+
+;; ─── search-symbols ──────────────────────────────────────────────────
+;; Search all symbols in an index, return ranked results.
+(defn search-symbols
+  :sig [(index : Map) (query : String) -> List]
+  :intent "Search symbols by name, sig, or contract text and return ranked results"
+  :requires [(valid index) (valid query)]
+  :ensures [(valid result)]
+  :body (let (all-syms : List (index-all-symbols index))
+             (query-lower : String (to-lower query))
+    (let (scored : List (fold (fn [acc sym]
+        (let (score : i64 (score-symbol sym query-lower))
+          (if (> score 0)
+            (append acc (map-from ["symbol" sym "score" score]))
+            acc)))
+        [] all-syms))
+      ;; Sort by score descending
+      (let (sorted : List (sort (fn [a b]
+          (> (map-get a "score") (map-get b "score"))) scored))
+        ;; Extract just the symbol maps
+        (map (fn [entry] (map-get entry "symbol")) sorted)))))
+
+;; ─── search-symbols-limited ──────────────────────────────────────────
+;; Search with a result limit.
+(defn search-symbols-limited
+  :sig [(index : Map) (query : String) (limit : i64) -> List]
+  :intent "Search symbols with a maximum number of results"
+  :requires [(valid index) (valid query) (> limit 0)]
+  :ensures [(valid result)]
+  :body (take limit (search-symbols index query)))
+
+;; ─── search-by-kind ──────────────────────────────────────────────────
+;; Search symbols filtered by kind.
+(defn search-by-kind
+  :sig [(index : Map) (query : String) (kind : String) -> List]
+  :intent "Search symbols filtered by kind (function, define, type, extern-c)"
+  :requires [(valid index) (valid query) (valid kind)]
+  :ensures [(valid result)]
+  :body (filter (fn [sym]
+    (= (map-get sym "kind") kind))
+    (search-symbols index query)))
+
+;; ─── score-symbol ────────────────────────────────────────────────────
+;; Score a symbol against a search query. Higher = better match.
+;; Returns 0 for no match.
+(defn score-symbol
+  :sig [(sym : Map) (query : String) -> i64]
+  :intent "Score how well a symbol matches a search query"
+  :requires [(valid sym) (valid query)]
+  :ensures [(>= result 0)]
+  :body (let (name : String (to-lower (map-get sym "name")))
+             (sig : String (to-lower (map-get-or sym "sig" "")))
+             (intent : String (to-lower (map-get-or sym "intent" "")))
+             (requires-t : String (to-lower (map-get-or sym "requires" "")))
+             (ensures-t : String (to-lower (map-get-or sym "ensures" "")))
+    ;; Exact name match: 100
+    (if (= name query) 100
+      ;; Prefix match: 80
+      (if (starts-with name query) 80
+        ;; Substring in name: 60
+        (if (contains name query) 60
+          ;; Match in intent: 40
+          (if (and (not (= intent "")) (contains intent query)) 40
+            ;; Match in sig: 30
+            (if (and (not (= sig "")) (contains sig query)) 30
+              ;; Match in contracts: 20
+              (if (or (contains requires-t query) (contains ensures-t query)) 20
+                ;; No match
+                0))))))))
+
+;; ─── search-by-name ──────────────────────────────────────────────────
+;; Search only by name (prefix + substring).
+(defn search-by-name
+  :sig [(symbols : List) (query : String) -> List]
+  :intent "Search symbols by name only"
+  :requires [(valid symbols) (valid query)]
+  :ensures [(valid result)]
+  :body (let (q : String (to-lower query))
+    (filter (fn [sym]
+      (let (name : String (to-lower (map-get sym "name")))
+        (contains name q)))
+      symbols)))
+
+;; ─── search-by-sig ───────────────────────────────────────────────────
+;; Search in signature text.
+(defn search-by-sig
+  :sig [(symbols : List) (query : String) -> List]
+  :intent "Search symbols by signature text"
+  :requires [(valid symbols) (valid query)]
+  :ensures [(valid result)]
+  :body (let (q : String (to-lower query))
+    (filter (fn [sym]
+      (let (sig : String (to-lower (map-get-or sym "sig" "")))
+        (if (= sig "") false (contains sig q))))
+      symbols)))
+
+;; ─── search-by-contract ──────────────────────────────────────────────
+;; Search in contract text (requires + ensures).
+(defn search-by-contract
+  :sig [(symbols : List) (query : String) -> List]
+  :intent "Search symbols by contract text"
+  :requires [(valid symbols) (valid query)]
+  :ensures [(valid result)]
+  :body (let (q : String (to-lower query))
+    (filter (fn [sym]
+      (let (req : String (to-lower (map-get-or sym "requires" "")))
+           (ens : String (to-lower (map-get-or sym "ensures" "")))
+        (or (contains req q) (contains ens q))))
+      symbols)))

@@ -1,0 +1,175 @@
+;; test-symbol-extract.airl — Tests for symbol-extract.airl
+;;
+;; Tests extraction of defn, define, deftype, extern-c, top-level let.
+
+;; ─── Helpers ─────────────────────────────────────────────────────────
+(define assert-eq (label expected actual)
+  (if (= expected actual)
+    (println "  PASS:" label)
+    (do
+      (println "  FAIL:" label)
+      (println "    expected:" expected)
+      (println "    actual:  " actual)
+      (assert false))))
+
+(define assert-len (label expected-len lst)
+  (assert-eq label expected-len (length lst)))
+
+(println "test-symbol-extract")
+
+;; ─── Test 1: Extract simple defn ─────────────────────────────────────
+(let (src : String "(defn add-one\n  :sig [(x : i32) -> i32]\n  :requires [(valid x)]\n  :ensures [(= result (+ x 1))]\n  :body (+ x 1))")
+  (let (syms : List (extract-symbols-from-file "test.airl" src))
+    (do
+      (assert-len "defn count" 1 syms)
+      (let (s : Map (at syms 0))
+        (do
+          (assert-eq "defn name" "add-one" (map-get s "name"))
+          (assert-eq "defn kind" "function" (map-get s "kind"))
+          (assert-eq "defn file" "test.airl" (map-get s "file"))
+          (assert-eq "defn line" 1 (map-get s "line")))))))
+
+;; ─── Test 2: Extract defn with intent ────────────────────────────────
+(let (src : String "(defn greet\n  :sig [(name : String) -> String]\n  :intent \"Say hello\"\n  :ensures [(valid result)]\n  :body (str \"Hello \" name))")
+  (let (syms : List (extract-symbols-from-file "test.airl" src))
+    (let (s : Map (at syms 0))
+      (assert-eq "defn intent" "Say hello" (map-get s "intent")))))
+
+;; ─── Test 3: Extract define ──────────────────────────────────────────
+(let (src : String "(define square (x) (* x x))")
+  (let (syms : List (extract-symbols-from-file "test.airl" src))
+    (do
+      (assert-len "define count" 1 syms)
+      (let (s : Map (at syms 0))
+        (do
+          (assert-eq "define name" "square" (map-get s "name"))
+          (assert-eq "define kind" "define" (map-get s "kind")))))))
+
+;; ─── Test 4: Extract deftype ─────────────────────────────────────────
+(let (src : String "(deftype Color :body (Red | Green | Blue))")
+  (let (syms : List (extract-symbols-from-file "test.airl" src))
+    (do
+      (assert-len "deftype count" 1 syms)
+      (let (s : Map (at syms 0))
+        (do
+          (assert-eq "deftype name" "Color" (map-get s "name"))
+          (assert-eq "deftype kind" "type" (map-get s "kind")))))))
+
+;; ─── Test 5: Extract extern-c ────────────────────────────────────────
+(let (src : String "(extern-c \"airl_read_file\" [(path : String) -> String])")
+  (let (syms : List (extract-symbols-from-file "test.airl" src))
+    (do
+      (assert-len "extern-c count" 1 syms)
+      (let (s : Map (at syms 0))
+        (do
+          (assert-eq "extern-c name" "airl_read_file" (map-get s "name"))
+          (assert-eq "extern-c kind" "extern-c" (map-get s "kind")))))))
+
+;; ─── Test 6: Extract top-level let ───────────────────────────────────
+(let (src : String "(let (version : String \"1.0\") (print version))")
+  (let (syms : List (extract-symbols-from-file "test.airl" src))
+    (do
+      (assert-len "top-let count" 1 syms)
+      (let (s : Map (at syms 0))
+        (do
+          (assert-eq "top-let name" "version" (map-get s "name"))
+          (assert-eq "top-let kind" "constant" (map-get s "kind")))))))
+
+;; ─── Test 7: Multiple symbols in one file ────────────────────────────
+(let (src : String "(defn a :sig [-> i64] :ensures [(valid result)] :body 1)\n(defn b :sig [-> i64] :ensures [(valid result)] :body 2)\n(define c () 3)")
+  (let (syms : List (extract-symbols-from-file "test.airl" src))
+    (do
+      (assert-len "multi-sym count" 3 syms)
+      (assert-eq "sym 1 name" "a" (map-get (at syms 0) "name"))
+      (assert-eq "sym 2 name" "b" (map-get (at syms 1) "name"))
+      (assert-eq "sym 3 name" "c" (map-get (at syms 2) "name")))))
+
+;; ─── Test 8: Symbol ID format ────────────────────────────────────────
+(let (src : String "(defn foo :sig [-> i64] :ensures [(valid result)] :body 1)")
+  (let (syms : List (extract-symbols-from-file "src/bar.airl" src))
+    (assert-eq "symbol ID" "src/bar.airl::foo#function" (map-get (at syms 0) "id"))))
+
+;; ─── Test 9: Body hash is consistent ─────────────────────────────────
+(let (src : String "(defn foo :sig [-> i64] :ensures [(valid result)] :body (+ 1 2))")
+  (let (syms1 : List (extract-symbols-from-file "a.airl" src))
+       (syms2 : List (extract-symbols-from-file "b.airl" src))
+    (let (hash1 : String (map-get (at syms1 0) "body-hash"))
+         (hash2 : String (map-get (at syms2 0) "body-hash"))
+      (assert-eq "body hash consistent" hash1 hash2))))
+
+;; ─── Test 10: Calls extraction ───────────────────────────────────────
+(let (src : String "(defn process :sig [-> i64] :ensures [(valid result)] :body (+ (foo 1) (bar 2)))")
+  (let (syms : List (extract-symbols-from-file "test.airl" src))
+    (let (calls : List (map-get (at syms 0) "calls"))
+      (do
+        (assert-eq "calls has foo" true (list-contains? calls "foo"))
+        (assert-eq "calls has bar" true (list-contains? calls "bar"))
+        (assert-eq "calls has +" true (list-contains? calls "+"))))))
+
+;; ─── Test 11: Sig extraction ─────────────────────────────────────────
+(let (src : String "(defn add :sig [(a : i32) (b : i32) -> i32] :ensures [(valid result)] :body (+ a b))")
+  (let (syms : List (extract-symbols-from-file "test.airl" src))
+    (let (sig : String (map-get (at syms 0) "sig"))
+      ;; sig should contain the bracket contents
+      (assert-eq "sig not empty" true (not (= sig ""))))))
+
+;; ─── Test 12: Empty source ───────────────────────────────────────────
+(let (syms : List (extract-symbols-from-file "empty.airl" ""))
+  (assert-len "empty source" 0 syms))
+
+;; ─── Test 13: Comments only ──────────────────────────────────────────
+(let (syms : List (extract-symbols-from-file "comments.airl" ";; just comments\n;; nothing here"))
+  (assert-len "comments only" 0 syms))
+
+;; ─── Test 14: Mixed form types ───────────────────────────────────────
+(let (src : String "(defn f1 :sig [-> i64] :ensures [(valid result)] :body 1)\n(define f2 () 2)\n(deftype T :body (A | B))\n(extern-c \"f3\" [-> i64])")
+  (let (syms : List (extract-symbols-from-file "mix.airl" src))
+    (do
+      (assert-len "mixed types count" 4 syms)
+      (assert-eq "kind 1" "function" (map-get (at syms 0) "kind"))
+      (assert-eq "kind 2" "define" (map-get (at syms 1) "kind"))
+      (assert-eq "kind 3" "type" (map-get (at syms 2) "kind"))
+      (assert-eq "kind 4" "extern-c" (map-get (at syms 3) "kind")))))
+
+;; ─── Test 15: strip-quotes ──────────────────────────────────────────
+(do
+  (assert-eq "strip normal" "hello" (strip-quotes "\"hello\""))
+  (assert-eq "strip empty quotes" "" (strip-quotes "\"\""))
+  (assert-eq "strip no quotes" "foo" (strip-quotes "foo"))
+  (assert-eq "strip empty" "" (strip-quotes "")))
+
+;; ─── Test 16: is-call-target ─────────────────────────────────────────
+(do
+  (assert-eq "call target: symbol" true (is-call-target "foo"))
+  (assert-eq "call target: paren" false (is-call-target "("))
+  (assert-eq "call target: keyword" false (is-call-target ":body"))
+  (assert-eq "call target: string" false (is-call-target "\"hello\""))
+  (assert-eq "call target: number" false (is-call-target "42"))
+  (assert-eq "call target: empty" false (is-call-target "")))
+
+;; ─── Test 17: Ownership extraction ───────────────────────────────────
+(let (src : String "(defn consume :sig [(own x : i32) (ref y : i32) -> i32] :requires [(valid x)] :body (+ x y))")
+  (let (syms : List (extract-symbols-from-file "test.airl" src))
+    (let (ownership : String (map-get (at syms 0) "ownership"))
+      (assert-eq "ownership not empty" true (not (= ownership ""))))))
+
+;; ─── Test 18: Defn with no intent ────────────────────────────────────
+(let (src : String "(defn plain :sig [-> i64] :requires [(valid 1)] :body 42)")
+  (let (syms : List (extract-symbols-from-file "test.airl" src))
+    (assert-eq "no intent" "" (map-get (at syms 0) "intent"))))
+
+;; ─── Test 19: Line numbers for multiple forms ───────────────────────
+(let (src : String ";; header\n(defn a :sig [-> i64]\n  :ensures [(valid result)]\n  :body 1)\n\n(defn b :sig [-> i64]\n  :ensures [(valid result)]\n  :body 2)")
+  (let (syms : List (extract-symbols-from-file "test.airl" src))
+    (do
+      (assert-eq "sym a line" 2 (map-get (at syms 0) "line"))
+      (assert-eq "sym b line" 6 (map-get (at syms 1) "line")))))
+
+;; ─── Test 20: Calls deduplication ────────────────────────────────────
+(let (src : String "(defn dup :sig [-> i64] :ensures [(valid result)] :body (+ (foo 1) (foo 2) (foo 3)))")
+  (let (syms : List (extract-symbols-from-file "test.airl" src))
+    (let (calls : List (map-get (at syms 0) "calls"))
+      ;; foo should appear only once
+      (assert-eq "foo appears once" 1 (length (filter (fn [c] (= c "foo")) calls))))))
+
+(println "test-symbol-extract: all tests passed")

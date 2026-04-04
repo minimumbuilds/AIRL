@@ -1,0 +1,132 @@
+;; test-sexpr-reader.airl — Tests for sexpr-reader.airl
+;;
+;; Tests: top-level splitting, tokenization, paren balancing,
+;; string handling, comment handling, line counting.
+
+;; ─── Helper: assert-equal ────────────────────────────────────────────
+(define assert-eq (label expected actual)
+  (if (= expected actual)
+    (println "  PASS:" label)
+    (do
+      (println "  FAIL:" label)
+      (println "    expected:" expected)
+      (println "    actual:  " actual)
+      (assert false))))
+
+(define assert-len (label expected-len lst)
+  (assert-eq label expected-len (length lst)))
+
+;; ─── Test 1: Empty source ────────────────────────────────────────────
+(println "test-sexpr-reader")
+
+(let (r : List (sexpr-split-toplevel ""))
+  (assert-len "empty source → 0 forms" 0 r))
+
+;; ─── Test 2: Single simple form ──────────────────────────────────────
+(let (r : List (sexpr-split-toplevel "(print 42)"))
+  (do
+    (assert-len "single form count" 1 r)
+    (assert-eq "single form text" "(print 42)" (map-get (at r 0) "form"))
+    (assert-eq "single form line" 1 (map-get (at r 0) "line"))))
+
+;; ─── Test 3: Multiple forms ─────────────────────────────────────────
+(let (r : List (sexpr-split-toplevel "(a 1)\n(b 2)\n(c 3)"))
+  (do
+    (assert-len "three forms" 3 r)
+    (assert-eq "first form" "(a 1)" (map-get (at r 0) "form"))
+    (assert-eq "third form" "(c 3)" (map-get (at r 2) "form"))))
+
+;; ─── Test 4: Nested parens ──────────────────────────────────────────
+(let (r : List (sexpr-split-toplevel "(defn foo :body (+ 1 (- 2 3)))"))
+  (do
+    (assert-len "nested parens count" 1 r)
+    (assert-eq "nested form text" "(defn foo :body (+ 1 (- 2 3)))" (map-get (at r 0) "form"))))
+
+;; ─── Test 5: Comments between forms ─────────────────────────────────
+(let (r : List (sexpr-split-toplevel ";; comment\n(a 1)\n;; another\n(b 2)"))
+  (do
+    (assert-len "comments between forms" 2 r)
+    (assert-eq "first after comment" "(a 1)" (map-get (at r 0) "form"))))
+
+;; ─── Test 6: String with parens inside ──────────────────────────────
+(let (r : List (sexpr-split-toplevel "(print \"hello (world)\")"))
+  (do
+    (assert-len "string with parens" 1 r)
+    (assert-eq "form with string" "(print \"hello (world)\")" (map-get (at r 0) "form"))))
+
+;; ─── Test 7: String with escaped quotes ─────────────────────────────
+(let (r : List (sexpr-split-toplevel "(print \"he said \\\"hi\\\"\")"))
+  (assert-len "escaped quotes" 1 r))
+
+;; ─── Test 8: Multi-line form ─────────────────────────────────────────
+(let (src : String "(defn foo\n  :sig [-> i64]\n  :body 42)")
+  (let (r : List (sexpr-split-toplevel src))
+    (do
+      (assert-len "multi-line form" 1 r)
+      (assert-eq "multi-line start" 1 (map-get (at r 0) "line"))
+      (assert-eq "multi-line end" 3 (map-get (at r 0) "end-line")))))
+
+;; ─── Test 9: Comments inside forms ──────────────────────────────────
+(let (r : List (sexpr-split-toplevel "(defn foo\n  ;; inside comment\n  :body 1)"))
+  (do
+    (assert-len "comment inside form" 1 r)
+    (assert-eq "form end line" 3 (map-get (at r 0) "end-line"))))
+
+;; ─── Test 10: Line numbers across multiple forms ─────────────────────
+(let (r : List (sexpr-split-toplevel "(a 1)\n\n(b 2)\n\n\n(c 3)"))
+  (do
+    (assert-eq "form 1 line" 1 (map-get (at r 0) "line"))
+    (assert-eq "form 2 line" 3 (map-get (at r 1) "line"))
+    (assert-eq "form 3 line" 6 (map-get (at r 2) "line"))))
+
+;; ─── Test 11: Tokenize simple expression ─────────────────────────────
+(let (t : List (sexpr-tokenize "(+ 1 2)"))
+  (do
+    (assert-len "tokenize simple" 5 t)
+    (assert-eq "tok 0" "(" (at t 0))
+    (assert-eq "tok 1" "+" (at t 1))
+    (assert-eq "tok 2" "1" (at t 2))
+    (assert-eq "tok 3" "2" (at t 3))
+    (assert-eq "tok 4" ")" (at t 4))))
+
+;; ─── Test 12: Tokenize with brackets ─────────────────────────────────
+(let (t : List (sexpr-tokenize "(defn foo :sig [-> i64])"))
+  (do
+    (assert-eq "tok bracket open" "[" (at t 3))
+    (assert-eq "tok arrow" "->" (at t 4))
+    (assert-eq "tok bracket close" "]" (at t 5))))
+
+;; ─── Test 13: Tokenize with string ───────────────────────────────────
+(let (t : List (sexpr-tokenize "(print \"hello world\")"))
+  (do
+    (assert-eq "tok string" "\"hello world\"" (at t 2))))
+
+;; ─── Test 14: Tokenize with keywords ─────────────────────────────────
+(let (t : List (sexpr-tokenize "(defn foo :sig :body)"))
+  (do
+    (assert-eq "tok keyword 1" ":sig" (at t 3))
+    (assert-eq "tok keyword 2" ":body" (at t 4))))
+
+;; ─── Test 15: first-token and second-token ───────────────────────────
+(do
+  (assert-eq "first-token defn" "defn" (sexpr-first-token "(defn foo :body 1)"))
+  (assert-eq "second-token name" "foo" (sexpr-second-token "(defn foo :body 1)"))
+  (assert-eq "first-token define" "define" (sexpr-first-token "(define bar (x) x)"))
+  (assert-eq "first-token empty" "" (sexpr-first-token "()")))
+
+;; ─── Test 16: Deeply nested form ─────────────────────────────────────
+(let (r : List (sexpr-split-toplevel "(a (b (c (d (e 1)))))"))
+  (do
+    (assert-len "deeply nested" 1 r)
+    (assert-eq "deeply nested text" "(a (b (c (d (e 1)))))" (map-get (at r 0) "form"))))
+
+;; ─── Test 17: Only comments — no forms ───────────────────────────────
+(let (r : List (sexpr-split-toplevel ";; just a comment\n;; and another"))
+  (assert-len "only comments" 0 r))
+
+;; ─── Test 18: Form with semicolons inside string ─────────────────────
+(let (r : List (sexpr-split-toplevel "(print \";; not a comment\")"))
+  (do
+    (assert-len "semicolons in string" 1 r)))
+
+(println "test-sexpr-reader: all tests passed")
