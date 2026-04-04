@@ -1,21 +1,21 @@
 ;; EXPECT: ()
 ;; Performance test fixtures for AIRL v0.3.0 list-heavy operations
 
-;; ── 1. Sum 10K integers ──────────────────────────────────
+;; ── 1. Sum 1K integers ──────────────────────────────────
 (let (start : i64 (time-now))
      (result : i64 (fold (fn [acc x] (+ acc x)) 0 (range 0 1000)))
      (elapsed : i64 (- (time-now) start))
   (do
-    (assert (= result 499500) "sum-10k failed")
-    (print "Sum 10K:" result "in" elapsed "ms\n")))
+    (assert (= result 499500) "sum-1k failed")
+    (print "Sum 1K:" result "in" elapsed "ms\n")))
 
-;; ── 2. Filter evens from 10K ─────────────────────────────
+;; ── 2. Filter evens from 1K ─────────────────────────────
 (let (start : i64 (time-now))
      (result : i64 (length (filter (fn [x] (= (% x 2) 0)) (range 0 1000))))
      (elapsed : i64 (- (time-now) start))
   (do
-    (assert (= result 500) "count-evens failed")
-    (print "Filter evens 10K:" result "in" elapsed "ms\n")))
+    (assert (= result 500) "count-evens-1k failed")
+    (print "Filter evens 1K:" result "in" elapsed "ms\n")))
 
 ;; ── 3. Map squares over 1K ──────────────────────────────
 (let (start : i64 (time-now))
