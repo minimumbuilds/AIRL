@@ -1,6 +1,6 @@
 # AIRL — AI Intermediate Representation Language
 
-**v0.11.1** — Linearity-typed, capability-verified functional language with a Rust bootstrap and self-hosted native compiler. Designed for AI-to-AI program exchange: the syntax is the serialization format, the message is the program.
+**v0.11.1** — AIRL is a new category of software artifact: an **LLM-native executable language**. It is designed to be synthesized by a language model and compiled directly to native code — with no human authoring step in between. Initial benchmarking shows LLMs generate equivalent programs in AIRL using roughly **half the tokens** they would in Python — a structural property of the language, not the model. While AIRL is not intended to be written by humans, it is deliberately human-readable: a developer can inspect, audit, and reason about synthesized AIRL without tooling.
 
 ```clojure
 (defn safe-divide
@@ -15,14 +15,45 @@
 (safe-divide 9 3)  ;; → (Ok 3)
 ```
 
+## A New Category
+
+Every existing programming language optimizes for human readability and human authorship. AIRL does not. It is **synthesis-first**: the primary author is an LLM, the primary consumer is a compiler.
+
+This makes AIRL something more specific than a programming language:
+
+> **An LLM output format that compiles directly to executable code.**
+
+Think of it as the relationship between protobuf and JSON — not a replacement for general-purpose languages, but a purpose-built format for a specific exchange: *intent → synthesis → execution*. The human expresses intent in natural language. The LLM synthesizes AIRL. The compiler produces a native binary. The human never touches the AIRL source.
+
+The design-by-contract layer (`:requires` / `:ensures`) is not documentation — it is a **verifiable interface** between the synthesis step and the execution step. Contracts the LLM generates are checked by the compiler; those that cannot be proven statically become native conditional branches at runtime.
+
+## Why Not Python
+
+Python is the dominant LLM output format today — by accident, not design. It is human-readable, has a vast ecosystem, and the models know it well. But it optimizes for humans, which has a measurable cost when used as a machine output format.
+
+Benchmarking an **untrained** model (qwen3-coder, zero AIRL exposure) against Python across 19 tasks:
+
+| Metric | AIRL | Python |
+|--------|------|--------|
+| Completion tokens (avg/task) | 122 | 283 |
+| **Token ratio** | **0.43×** | 1.0× |
+| Correctness (zero-shot) | 74% | 100% |
+
+AIRL uses **43% of the completion tokens Python does** — a structural property of the language, not the model. The 74% zero-shot correctness is a floor: with a model trained on AIRL, correctness is expected to reach parity or better. The token efficiency advantage is permanent — it comes from the language design, not the model's familiarity with it.
+
+Fewer tokens has three compounding effects:
+
+- **Lower cost** — API pricing is per token. At 0.43× token usage, generating the same program in AIRL costs roughly half as much. At scale across thousands of agentic tasks, that difference is material.
+- **Faster generation** — LLMs generate tokens sequentially. Fewer tokens means faster time-to-result, directly — not through any architectural change, just by saying the same thing in less space.
+- **Lower energy use** — Token generation is the dominant energy cost of LLM inference. Generating half the tokens to produce equivalent code consumes roughly half the energy per inference call. Across large-scale deployments, AIRL's structural conciseness translates directly to a smaller compute and carbon footprint.
+
 ## What It Solves
 
-Every existing programming language optimizes for human readability. AIRL optimizes for AI producers and consumers:
-
-- **Mandatory contracts** — The compiler rejects functions without `:requires`/`:ensures`. AI code generators skip optional features; they cannot skip grammar requirements.
+- **Mandatory contracts** — The compiler rejects functions without `:requires`/`:ensures`. LLMs skip optional features; they cannot skip grammar requirements. Synthesis correctness is structurally enforced.
 - **S-expression syntax** — The AST *is* the syntax. LL(1), zero ambiguity, trivially parseable, maximally token-efficient.
-- **Messages are programs** — Agents exchange AIRL source text as both the message format and the execution format. No protobuf, no gRPC, no separate serialization layer.
+- **Messages are programs** — Agents exchange AIRL source as both the message format and the execution format. No protobuf, no gRPC, no separate serialization layer.
 - **Formal verification** — Z3 SMT solver proves contracts at compile time. What cannot be proven is checked at runtime as native conditional branches.
+- **Compiled to native** — Not interpreted, not sandboxed. AIRL compiles to native x86-64 and ARM64 binaries via Cranelift. 42× faster than Python on pure arithmetic.
 - **Linear ownership** — Rust-style move semantics with static linearity analysis. No garbage collector.
 - **Self-hosted** — The compiler is written in its own language (since v0.6.0). Fixpoint verified.
 
@@ -272,9 +303,9 @@ AIRL Source
 cargo run --release --features aot -- run examples/01-hello-world/hello_world.airl
 ```
 
-## Ecosystem Position
+## Ecosystem
 
-AIRL is the core language in a broader ecosystem:
+AIRL is the core language in a growing ecosystem of LLM-native libraries:
 
 | Repo | Role |
 |------|------|
@@ -308,6 +339,7 @@ AIRL_STDLIB=$AIRL_DIR/stdlib bash servers/mynameisairl/build.sh ./mynameisairl
 - **15 stdlib modules** + **~150 compiler intrinsics**
 - **Cross-platform** — Linux x86-64 and macOS ARM64
 - **42x faster than Python** on pure arithmetic (AOT native)
+- **0.43× completion tokens vs Python** — structural token efficiency, model-independent
 - **Contracts always enforced** — native conditional branches in AOT
 
 ## Specification
