@@ -53,6 +53,7 @@ pub fn parse_expr(sexpr: &SExpr, diags: &mut Diagnostics) -> Result<Expr, Diagno
                     "try" => parse_try_expr(&items[1..], span, diags),
                     "forall" => parse_quantifier_expr(&items[1..], span, true, diags),
                     "exists" => parse_quantifier_expr(&items[1..], span, false, diags),
+                    "->>" => parse_thread_last(&items[1..], span, diags),
                     s if is_capitalized(s) => {
                         // VariantCtor
                         let name = s.to_string();
@@ -72,6 +73,9 @@ pub fn parse_expr(sexpr: &SExpr, diags: &mut Diagnostics) -> Result<Expr, Diagno
                         Ok(Expr { kind: ExprKind::FnCall(Box::new(callee), args), span })
                     }
                 }
+            } else if matches!(items[0], SExpr::Atom(Atom { kind: AtomKind::Arrow, .. })) {
+                // (-> ...) thread-first macro
+                parse_thread_first(&items[1..], span, diags)
             } else {
                 // First element is not a symbol — treat as FnCall
                 let callee = parse_expr(&items[0], diags)?;
@@ -120,33 +124,183 @@ fn parse_if_expr(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result
     })
 }
 
+/// Global counter for generating unique gensym names during destructuring.
+static GENSYM_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn gensym() -> String {
+    let n = GENSYM_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("__d{}", n)
+}
+
 fn is_let_binding(sexpr: &SExpr) -> bool {
-    // A binding is a list of 4+ elements where the second element is ":"
     if let SExpr::List(items, _) = sexpr {
+        if items.is_empty() {
+            return false;
+        }
+        // Standard typed binding: (name : Type value) — 4+ items, second is ":"
         if items.len() >= 4 {
             if let Some(s) = items[1].as_symbol() {
-                return s == ":";
+                if s == ":" {
+                    return true;
+                }
+            }
+        }
+        // List destructure: ([a b c] value) or ([a b c] : Type value)
+        if let SExpr::BracketList(_, _) = &items[0] {
+            return items.len() >= 2;
+        }
+        // Map destructure: ({name age} value) — first item is a List starting with a symbol (map key names)
+        if let SExpr::List(pattern_items, _) = &items[0] {
+            if !pattern_items.is_empty() {
+                // A map pattern is a list of symbols (keys), not a function call
+                if pattern_items.iter().all(|p| p.as_symbol().is_some()) {
+                    return items.len() >= 2;
+                }
             }
         }
     }
     false
 }
 
-fn parse_let_binding(sexpr: &SExpr, diags: &mut Diagnostics) -> Result<LetBinding, Diagnostic> {
+/// Parse one let-binding sexpr into potentially multiple `LetBinding`s (destructuring expands).
+fn parse_let_bindings_from(sexpr: &SExpr, diags: &mut Diagnostics) -> Result<Vec<LetBinding>, Diagnostic> {
     let span = sexpr.span();
     if let SExpr::List(items, _) = sexpr {
-        // (name : Type value)
+        if items.is_empty() {
+            return Err(Diagnostic::error("expected let binding list", span));
+        }
+        // List destructure: ([a b & rest] value) or ([a b & rest] : Type value)
+        if let SExpr::BracketList(pattern_items, _) = &items[0] {
+            return parse_list_destructure(pattern_items, &items[1..], span, diags);
+        }
+        // Map destructure: ({name age} value) — list of symbols as keys
+        if let SExpr::List(pattern_items, _) = &items[0] {
+            if !pattern_items.is_empty() && pattern_items.iter().all(|p| p.as_symbol().is_some()) {
+                return parse_map_destructure(pattern_items, &items[1..], span, diags);
+            }
+        }
+        // Standard: (name : Type value)
         if items.len() < 4 {
             return Err(Diagnostic::error("let binding requires (name : Type value)", span));
         }
         let name = expect_symbol(&items[0])?;
-        // items[1] is ":"
         let ty = parse_type(&items[2], diags)?;
         let value = parse_expr(&items[3], diags)?;
-        Ok(LetBinding { name, ty, value, span })
+        Ok(vec![LetBinding { name, ty, value, span }])
     } else {
         Err(Diagnostic::error("expected let binding list", span))
     }
+}
+
+/// Desugar `([a b & rest] value)` into gensym + sequential `at` bindings.
+fn parse_list_destructure(
+    pattern_items: &[SExpr],
+    rest_items: &[SExpr],   // items after the pattern in the binding form
+    span: Span,
+    diags: &mut Diagnostics,
+) -> Result<Vec<LetBinding>, Diagnostic> {
+    // Skip optional `: Type` annotation between pattern and value
+    let (value_sexpr, _ty) = if rest_items.len() >= 3
+        && rest_items[0].as_symbol() == Some(":")
+    {
+        let ty = parse_type(&rest_items[1], diags)?;
+        (&rest_items[2], Some(ty))
+    } else if !rest_items.is_empty() {
+        (&rest_items[0], None)
+    } else {
+        return Err(Diagnostic::error("list destructure binding missing value", span));
+    };
+
+    let wild_ty = AstType { kind: AstTypeKind::Named("_".to_string()), span };
+
+    // Bind the value expression to a gensym to avoid double-evaluation
+    let gs = gensym();
+    let value_expr = parse_expr(value_sexpr, diags)?;
+    let mut bindings = vec![LetBinding {
+        name: gs.clone(),
+        ty: wild_ty.clone(),
+        value: value_expr,
+        span,
+    }];
+
+    // Walk the pattern items, handling `& rest`
+    let mut idx = 0usize;
+    let mut i = 0;
+    while i < pattern_items.len() {
+        if let Some("&") = pattern_items[i].as_symbol() {
+            // Rest binding: everything after current index as (drop idx gensym)
+            i += 1;
+            if i >= pattern_items.len() {
+                return Err(Diagnostic::error("& in let pattern requires a name after it", span));
+            }
+            let rest_name = expect_symbol(&pattern_items[i])?;
+            let drop_fn = Expr { kind: ExprKind::SymbolRef("drop".to_string()), span };
+            let idx_lit = Expr { kind: ExprKind::IntLit(idx as i64), span };
+            let gs_ref = Expr { kind: ExprKind::SymbolRef(gs.clone()), span };
+            bindings.push(LetBinding {
+                name: rest_name,
+                ty: wild_ty.clone(),
+                value: Expr { kind: ExprKind::FnCall(Box::new(drop_fn), vec![idx_lit, gs_ref]), span },
+                span,
+            });
+            i += 1;
+        } else {
+            let elem_name = expect_symbol(&pattern_items[i])?;
+            let at_fn = Expr { kind: ExprKind::SymbolRef("at".to_string()), span };
+            let gs_ref = Expr { kind: ExprKind::SymbolRef(gs.clone()), span };
+            let idx_lit = Expr { kind: ExprKind::IntLit(idx as i64), span };
+            bindings.push(LetBinding {
+                name: elem_name,
+                ty: wild_ty.clone(),
+                value: Expr { kind: ExprKind::FnCall(Box::new(at_fn), vec![gs_ref, idx_lit]), span },
+                span,
+            });
+            idx += 1;
+            i += 1;
+        }
+    }
+
+    Ok(bindings)
+}
+
+/// Desugar `({name age} value)` into `(map-get gensym "name")` etc.
+fn parse_map_destructure(
+    pattern_items: &[SExpr],
+    rest_items: &[SExpr],
+    span: Span,
+    diags: &mut Diagnostics,
+) -> Result<Vec<LetBinding>, Diagnostic> {
+    let value_sexpr = if !rest_items.is_empty() {
+        &rest_items[0]
+    } else {
+        return Err(Diagnostic::error("map destructure binding missing value", span));
+    };
+
+    let wild_ty = AstType { kind: AstTypeKind::Named("_".to_string()), span };
+
+    let gs = gensym();
+    let value_expr = parse_expr(value_sexpr, diags)?;
+    let mut bindings = vec![LetBinding {
+        name: gs.clone(),
+        ty: wild_ty.clone(),
+        value: value_expr,
+        span,
+    }];
+
+    for item in pattern_items {
+        let key_name = expect_symbol(item)?;
+        let map_get = Expr { kind: ExprKind::SymbolRef("map-get".to_string()), span };
+        let gs_ref = Expr { kind: ExprKind::SymbolRef(gs.clone()), span };
+        let key_str = Expr { kind: ExprKind::StrLit(key_name.clone()), span };
+        bindings.push(LetBinding {
+            name: key_name,
+            ty: wild_ty.clone(),
+            value: Expr { kind: ExprKind::FnCall(Box::new(map_get), vec![gs_ref, key_str]), span },
+            span,
+        });
+    }
+
+    Ok(bindings)
 }
 
 fn parse_let_expr(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Expr, Diagnostic> {
@@ -157,7 +311,8 @@ fn parse_let_expr(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Resul
     let mut bindings = Vec::new();
     let mut i = 0;
     while i < items.len() && is_let_binding(&items[i]) {
-        bindings.push(parse_let_binding(&items[i], diags)?);
+        let mut new_bindings = parse_let_bindings_from(&items[i], diags)?;
+        bindings.append(&mut new_bindings);
         i += 1;
     }
 
@@ -368,6 +523,61 @@ fn parse_quantifier_expr(
     };
 
     Ok(Expr { kind, span })
+}
+
+// ── Threading macros ───────────────────────────────────
+
+/// `(-> seed step1 step2 ...)` — thread-first: insert acc as first arg of each step.
+fn parse_thread_first(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Expr, Diagnostic> {
+    if items.is_empty() {
+        return Err(Diagnostic::error("-> requires at least one argument", span));
+    }
+    let mut acc = parse_expr(&items[0], diags)?;
+    for step in &items[1..] {
+        acc = thread_step(acc, step, /*last=*/false, diags)?;
+    }
+    Ok(acc)
+}
+
+/// `(->> seed step1 step2 ...)` — thread-last: insert acc as last arg of each step.
+fn parse_thread_last(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Expr, Diagnostic> {
+    if items.is_empty() {
+        return Err(Diagnostic::error("->> requires at least one argument", span));
+    }
+    let mut acc = parse_expr(&items[0], diags)?;
+    for step in &items[1..] {
+        acc = thread_step(acc, step, /*last=*/true, diags)?;
+    }
+    Ok(acc)
+}
+
+/// Build one threading step: if `last` is true, acc is the last arg; otherwise first.
+fn thread_step(acc: Expr, step: &SExpr, last: bool, diags: &mut Diagnostics) -> Result<Expr, Diagnostic> {
+    let step_span = step.span();
+    match step {
+        // Symbol step: (f acc) — same position regardless of ->/->>.
+        SExpr::Atom(atom) if matches!(atom.kind, AtomKind::Symbol(_)) => {
+            let f = parse_expr(step, diags)?;
+            Ok(Expr { kind: ExprKind::FnCall(Box::new(f), vec![acc]), span: step_span })
+        }
+        // List step: (f a b ...) → (f acc a b ...) or (f a b ... acc)
+        SExpr::List(elems, _) if !elems.is_empty() => {
+            let f = parse_expr(&elems[0], diags)?;
+            let mut extra: Vec<Expr> = elems[1..].iter()
+                .map(|a| parse_expr(a, diags))
+                .collect::<Result<_, _>>()?;
+            let args = if last {
+                extra.push(acc);
+                extra
+            } else {
+                let mut args = vec![acc];
+                args.extend(extra);
+                args
+            };
+            Ok(Expr { kind: ExprKind::FnCall(Box::new(f), args), span: step_span })
+        }
+        _ => Err(Diagnostic::error("threading macro step must be a symbol or list", step_span)),
+    }
 }
 
 // ── Pattern parsing ────────────────────────────────────
@@ -611,6 +821,8 @@ fn parse_defn(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Fn
     let mut requires = Vec::new();
     let mut ensures = Vec::new();
     let mut invariants = Vec::new();
+    let mut is_pure = false;
+    let mut is_total = false;
     let mut body = None;
     let mut execute_on = None;
     let mut priority = None;
@@ -656,6 +868,27 @@ fn parse_defn(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Fn
                     }
                     invariants = parse_expr_list(&items[i], diags)?;
                 }
+                "pure" => {
+                    is_pure = true;
+                }
+                "total" => {
+                    is_total = true;
+                    is_pure = true;
+                }
+                "pre" => {
+                    i += 1;
+                    if i >= items.len() {
+                        return Err(Diagnostic::error("expected list after :pre", span));
+                    }
+                    requires.extend(parse_expr_list(&items[i], diags)?);
+                }
+                "post" => {
+                    i += 1;
+                    if i >= items.len() {
+                        return Err(Diagnostic::error("expected list after :post", span));
+                    }
+                    ensures.extend(parse_expr_list(&items[i], diags)?);
+                }
                 "body" => {
                     i += 1;
                     if i >= items.len() {
@@ -688,6 +921,20 @@ fn parse_defn(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Fn
         i += 1;
     }
 
+    // Expand :pure / :total — generate (valid <param>) requires + (valid result) ensures
+    if is_pure {
+        let generated_requires: Vec<Expr> = params.iter()
+            .map(|p| make_valid_call(&p.name, span))
+            .collect();
+        // Prepend generated requires before any :pre entries
+        let mut merged_requires = generated_requires;
+        merged_requires.extend(requires.drain(..));
+        requires = merged_requires;
+        if ensures.is_empty() {
+            ensures.push(make_valid_call("result", span));
+        }
+    }
+
     // Validate contracts — must have at least one of requires or ensures
     if requires.is_empty() && ensures.is_empty() {
         diags.add(Diagnostic::error(
@@ -714,6 +961,8 @@ fn parse_defn(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Fn
         requires,
         ensures,
         invariants,
+        is_pure,
+        is_total,
         body,
         execute_on,
         priority,
@@ -1297,6 +1546,13 @@ fn parse_use_symbols(sexpr: &SExpr) -> Result<UseKind, Diagnostic> {
 
 // ── Helpers ────────────────────────────────────────────
 
+/// Build a `(valid <name>)` call expression for contract generation.
+fn make_valid_call(name: &str, span: Span) -> Expr {
+    let callee = Expr { kind: ExprKind::SymbolRef("valid".to_string()), span };
+    let arg = Expr { kind: ExprKind::SymbolRef(name.to_string()), span };
+    Expr { kind: ExprKind::FnCall(Box::new(callee), vec![arg]), span }
+}
+
 fn expect_symbol(sexpr: &SExpr) -> Result<String, Diagnostic> {
     match sexpr {
         SExpr::Atom(Atom { kind: AtomKind::Symbol(s), .. }) => Ok(s.clone()),
@@ -1760,5 +2016,263 @@ mod tests {
         assert_eq!(tops.len(), 2);
         assert!(matches!(&tops[0], TopLevel::ExternC(_)));
         assert!(matches!(&tops[1], TopLevel::Defn(_)));
+    }
+
+    // ── Threading macro tests ────────────────────────────
+
+    #[test]
+    fn parse_thread_first_basic() {
+        // (-> 1 (+ 2) (+ 3)) => (+ (+ 1 2) 3)
+        let e = parse_expr_str("(-> 1 (+ 2) (+ 3))");
+        if let ExprKind::FnCall(f, args) = &e.kind {
+            assert!(matches!(f.kind, ExprKind::SymbolRef(ref s) if s == "+"));
+            assert_eq!(args.len(), 2);
+            if let ExprKind::FnCall(f2, args2) = &args[0].kind {
+                assert!(matches!(f2.kind, ExprKind::SymbolRef(ref s) if s == "+"));
+                assert_eq!(args2.len(), 2);
+                assert!(matches!(args2[0].kind, ExprKind::IntLit(1)));
+                assert!(matches!(args2[1].kind, ExprKind::IntLit(2)));
+            } else {
+                panic!("expected inner FnCall, got {:?}", args[0].kind);
+            }
+            assert!(matches!(args[1].kind, ExprKind::IntLit(3)));
+        } else {
+            panic!("expected FnCall, got {:?}", e.kind);
+        }
+    }
+
+    #[test]
+    fn parse_thread_first_symbol_step() {
+        // (-> [3 1 2] sort) => (sort [3 1 2])
+        let e = parse_expr_str("(-> [3 1 2] sort)");
+        if let ExprKind::FnCall(f, args) = &e.kind {
+            assert!(matches!(f.kind, ExprKind::SymbolRef(ref s) if s == "sort"));
+            assert_eq!(args.len(), 1);
+            assert!(matches!(args[0].kind, ExprKind::ListLit(_)));
+        } else {
+            panic!("expected FnCall, got {:?}", e.kind);
+        }
+    }
+
+    #[test]
+    fn parse_thread_first_single_seed() {
+        // (-> 5) => just 5
+        let e = parse_expr_str("(-> 5)");
+        assert!(matches!(e.kind, ExprKind::IntLit(5)));
+    }
+
+    #[test]
+    fn parse_thread_last_basic() {
+        // (->> [1 2 3] (map f)) => (map f [1 2 3])
+        let e = parse_expr_str("(->> [1 2 3] (map f))");
+        if let ExprKind::FnCall(f, args) = &e.kind {
+            assert!(matches!(f.kind, ExprKind::SymbolRef(ref s) if s == "map"));
+            assert_eq!(args.len(), 2);
+            assert!(matches!(args[0].kind, ExprKind::SymbolRef(ref s) if s == "f"));
+            assert!(matches!(args[1].kind, ExprKind::ListLit(_)));
+        } else {
+            panic!("expected FnCall, got {:?}", e.kind);
+        }
+    }
+
+    #[test]
+    fn parse_thread_last_chained() {
+        // (->> [1 2 3] (filter p) (map f)) => (map f (filter p [1 2 3]))
+        let e = parse_expr_str("(->> [1 2 3] (filter p) (map f))");
+        if let ExprKind::FnCall(f, args) = &e.kind {
+            assert!(matches!(f.kind, ExprKind::SymbolRef(ref s) if s == "map"));
+            assert_eq!(args.len(), 2);
+            assert!(matches!(args[0].kind, ExprKind::SymbolRef(ref s) if s == "f"));
+            if let ExprKind::FnCall(f2, args2) = &args[1].kind {
+                assert!(matches!(f2.kind, ExprKind::SymbolRef(ref s) if s == "filter"));
+                assert_eq!(args2.len(), 2);
+                assert!(matches!(args2[1].kind, ExprKind::ListLit(_)));
+            } else {
+                panic!("expected inner FnCall");
+            }
+        } else {
+            panic!("expected FnCall, got {:?}", e.kind);
+        }
+    }
+
+    #[test]
+    fn parse_thread_first_error_no_args() {
+        let mut lexer = Lexer::new("(->)");
+        let tokens = lexer.lex_all().unwrap();
+        let sexprs = parse_sexpr_all(&tokens).unwrap();
+        let mut diags = Diagnostics::new();
+        let result = parse_expr(&sexprs[0], &mut diags);
+        assert!(result.is_err(), "expected error for empty ->");
+    }
+
+    // ── Contract shorthand tests ─────────────────────────
+
+    #[test]
+    fn parse_defn_pure_generates_contracts() {
+        let tops = parse_top(r#"
+            (defn double
+              :pure
+              :sig [(x : i64) -> i64]
+              :intent "double x"
+              :body (* x 2))
+        "#);
+        if let TopLevel::Defn(f) = &tops[0] {
+            assert_eq!(f.name, "double");
+            assert!(f.is_pure);
+            assert!(!f.is_total);
+            assert_eq!(f.requires.len(), 1);
+            assert_eq!(f.ensures.len(), 1);
+            if let ExprKind::FnCall(callee, args) = &f.requires[0].kind {
+                assert!(matches!(callee.kind, ExprKind::SymbolRef(ref s) if s == "valid"));
+                assert!(matches!(args[0].kind, ExprKind::SymbolRef(ref s) if s == "x"));
+            } else {
+                panic!("expected (valid x) in requires");
+            }
+        } else {
+            panic!("expected Defn");
+        }
+    }
+
+    #[test]
+    fn parse_defn_total_sets_both_flags() {
+        let tops = parse_top(r#"
+            (defn fib
+              :total
+              :sig [(n : i64) -> i64]
+              :intent "fibonacci"
+              :body n)
+        "#);
+        if let TopLevel::Defn(f) = &tops[0] {
+            assert!(f.is_pure);
+            assert!(f.is_total);
+            assert!(!f.requires.is_empty());
+        } else {
+            panic!("expected Defn");
+        }
+    }
+
+    #[test]
+    fn parse_defn_pre_post_aliases() {
+        let tops = parse_top(r#"
+            (defn safe-div
+              :sig [(a : i64) (b : i64) -> i64]
+              :intent "divide safely"
+              :pre  [(not (= b 0))]
+              :post [(valid result)]
+              :body (/ a b))
+        "#);
+        if let TopLevel::Defn(f) = &tops[0] {
+            assert_eq!(f.requires.len(), 1);
+            assert_eq!(f.ensures.len(), 1);
+            assert!(!f.is_pure);
+        } else {
+            panic!("expected Defn");
+        }
+    }
+
+    #[test]
+    fn parse_defn_pure_plus_pre_merges() {
+        let tops = parse_top(r#"
+            (defn bounded
+              :pure
+              :sig [(x : i64) -> i64]
+              :intent "clamp"
+              :pre  [(>= x 0) (<= x 100)]
+              :body x)
+        "#);
+        if let TopLevel::Defn(f) = &tops[0] {
+            // :pure generates (valid x), then :pre adds 2 more
+            assert_eq!(f.requires.len(), 3);
+            assert_eq!(f.ensures.len(), 1);
+        } else {
+            panic!("expected Defn");
+        }
+    }
+
+    // ── Let destructuring tests ──────────────────────────
+
+    #[test]
+    fn parse_let_list_destructure_with_type() {
+        let e = parse_expr_str("(let ([a b c] : _ lst) (+ a b))");
+        if let ExprKind::Let(bindings, _body) = &e.kind {
+            // gensym + a + b + c = 4 bindings
+            assert_eq!(bindings.len(), 4);
+            assert!(matches!(bindings[0].value.kind, ExprKind::SymbolRef(ref s) if s == "lst"));
+            assert_eq!(bindings[1].name, "a");
+            assert_eq!(bindings[2].name, "b");
+            assert_eq!(bindings[3].name, "c");
+            if let ExprKind::FnCall(f, args) = &bindings[1].value.kind {
+                assert!(matches!(f.kind, ExprKind::SymbolRef(ref s) if s == "at"));
+                assert!(matches!(args[1].kind, ExprKind::IntLit(0)));
+            } else {
+                panic!("expected (at ...) for a");
+            }
+        } else {
+            panic!("expected Let");
+        }
+    }
+
+    #[test]
+    fn parse_let_list_destructure_rest() {
+        // [h & t] → h = (at gs 0), t = (drop 1 gs)  — drop 1 because h consumed index 0
+        let e = parse_expr_str("(let ([h & t] : _ lst) h)");
+        if let ExprKind::Let(bindings, _body) = &e.kind {
+            // gensym + h + t = 3 bindings
+            assert_eq!(bindings.len(), 3);
+            assert_eq!(bindings[1].name, "h");
+            assert_eq!(bindings[2].name, "t");
+            if let ExprKind::FnCall(f, args) = &bindings[2].value.kind {
+                assert!(matches!(f.kind, ExprKind::SymbolRef(ref s) if s == "drop"));
+                // idx = 1 because h was at index 0 and consumed it
+                assert!(matches!(args[0].kind, ExprKind::IntLit(1)));
+            } else {
+                panic!("expected (drop ...) for t");
+            }
+        } else {
+            panic!("expected Let");
+        }
+    }
+
+    #[test]
+    fn parse_let_map_destructure() {
+        // Map destructure: list of symbols as pattern
+        let e = parse_expr_str("(let ((name age) person) nil)");
+        if let ExprKind::Let(bindings, _body) = &e.kind {
+            // gensym + name + age = 3 bindings
+            assert_eq!(bindings.len(), 3);
+            assert_eq!(bindings[1].name, "name");
+            assert_eq!(bindings[2].name, "age");
+            if let ExprKind::FnCall(f, args) = &bindings[1].value.kind {
+                assert!(matches!(f.kind, ExprKind::SymbolRef(ref s) if s == "map-get"));
+                assert!(matches!(args[1].kind, ExprKind::StrLit(ref s) if s == "name"));
+            } else {
+                panic!("expected (map-get ...) for name");
+            }
+        } else {
+            panic!("expected Let");
+        }
+    }
+
+    #[test]
+    fn parse_let_list_destructure_no_type_annotation() {
+        let e = parse_expr_str("(let ([a b] mylist) (+ a b))");
+        if let ExprKind::Let(bindings, _) = &e.kind {
+            // gensym + a + b = 3
+            assert_eq!(bindings.len(), 3);
+        } else {
+            panic!("expected Let");
+        }
+    }
+
+    #[test]
+    fn parse_let_mixed_normal_and_destructure() {
+        let e = parse_expr_str("(let (n : i64 10) ([x y] pair) (+ n x))");
+        if let ExprKind::Let(bindings, _) = &e.kind {
+            // n + gensym + x + y = 4
+            assert_eq!(bindings.len(), 4);
+            assert_eq!(bindings[0].name, "n");
+        } else {
+            panic!("expected Let");
+        }
     }
 }

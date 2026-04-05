@@ -62,6 +62,12 @@ impl<'src> Lexer<'src> {
             b',' => { self.advance(); TokenKind::Comma }
             b'"' => self.lex_string()?,
             b':' => self.lex_keyword_or_colon(),
+            b'-' if self.peek_at(1) == Some(b'>') && self.peek_at(2) == Some(b'>') => {
+                self.advance();
+                self.advance();
+                self.advance();
+                TokenKind::Symbol("->>".to_string())
+            }
             b'-' if self.peek_at(1) == Some(b'>') => {
                 self.advance();
                 self.advance();
