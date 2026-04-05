@@ -595,6 +595,7 @@ mod tests {
         assert_eq!(result.unwrap(), test_path);
     }
 
+
     #[cfg(feature = "aot")]
     #[test]
     fn test_compile_with_target_none_uses_host() {
