@@ -40,7 +40,7 @@ The G3 compiler pipeline:
 
 All compilation logic is AIRL code. Cranelift (native code generation) and `libairl_rt.a` (runtime) are exposed as builtins embedded in the host binary — same as Go's assembler is part of the Go toolchain, not written in Go.
 
-**Verified:** The G3 binary compiles itself and all 58 AOT tests pass through the self-compiled binary. The bytecode compiler produces identical output through both the host binary and self-hosted compiler (fixpoint verified).
+**Verified:** The G3 binary compiles itself and all AOT tests pass through the self-compiled binary. The bytecode compiler produces identical output through both the host binary and self-hosted compiler (fixpoint verified).
 
 ### Building G3
 
@@ -316,7 +316,7 @@ airl call tcp:127.0.0.1:9001 add 3 4    # → 7
 cargo test -p airl-syntax -p airl-types -p airl-contracts \
   -p airl-runtime -p airl-agent -p airl-driver
 
-# G2 AOT test suite (58 tests — bootstrap, stdlib, builtins)
+# AOT test suite (bootstrap, stdlib, builtins)
 bash tests/aot/run_aot_tests.sh
 
 # Run all tests through the self-compiled G3 binary
@@ -343,7 +343,7 @@ cargo run --release --features aot -- run examples/01-hello-world/hello_world.ai
 ## Project Stats
 
 - **Self-hosted compiler** — AIRL compiles itself to native binaries (since v0.6.0, current v0.11.0)
-- **68 AOT tests** — all pass through both the Rust-hosted and self-compiled pipelines
+- **75 AOT tests** — all pass through both the Rust-hosted and self-compiled pipelines
 - **~478 Rust tests** across 10 crates
 - **Cross-platform** — Linux x86-64 and macOS ARM64
 - **13 stdlib modules** + **~150 compiler intrinsics**
