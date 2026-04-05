@@ -11,10 +11,10 @@ Requires the g3 compiler and the AirTraffic source:
 
 ```bash
 # Build
-AIRL_STDLIB=~/repos/AIRL/stdlib bash build.sh ./mynameisairl
+AIRL_STDLIB=$AIRL_DIR/stdlib bash build.sh ./mynameisairl
 
 # Or specify paths explicitly
-G3=~/repos/AIRL/g3 AT_ROOT=~/repos/AirTraffic bash build.sh ./mynameisairl
+G3=$AIRL_DIR/g3 AT_ROOT=$AT_ROOT bash build.sh ./mynameisairl
 ```
 
 ## Building with Docker
@@ -31,10 +31,10 @@ This builds a minimal container with the server binary and the guide baked in.
 
 ```bash
 # Pass the guide path via CLI
-./mynameisairl --guide ~/repos/AIRL/AIRL-LLM-Guide.md
+./mynameisairl --guide ./AIRL-LLM-Guide.md
 
 # Or via environment variable
-AIRL_GUIDE=~/repos/AIRL/AIRL-LLM-Guide.md ./mynameisairl
+AIRL_GUIDE=./AIRL-LLM-Guide.md ./mynameisairl
 ```
 
 ### Docker
@@ -48,7 +48,7 @@ The Docker image includes the guide at `/data/AIRL-LLM-Guide.md` (the default pa
 ## Installing as an MCP server in Claude Code
 
 ```bash
-claude mcp add mynameisairl -- ./mynameisairl --guide ~/repos/AIRL/AIRL-LLM-Guide.md
+claude mcp add mynameisairl -- ./mynameisairl --guide ./AIRL-LLM-Guide.md
 ```
 
 Or with Docker:
@@ -66,7 +66,7 @@ You can also test manually by piping JSON-RPC messages:
 
 ```bash
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | \
-  ./mynameisairl --guide ~/repos/AIRL/AIRL-LLM-Guide.md
+  ./mynameisairl --guide ./AIRL-LLM-Guide.md
 ```
 
 ## Testing
