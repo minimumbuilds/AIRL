@@ -41,3 +41,5 @@ crates/airl-syntax/fuzz/target/
 __pycache__/
 .DS_Store
 Thumbs.db
+servers/mynameisairl/AIRL-LLM-Guide.md
+.mcp.json
