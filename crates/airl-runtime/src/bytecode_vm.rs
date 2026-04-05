@@ -88,7 +88,26 @@ pub fn value_to_rt(v: &Value) -> *mut RtValue {
             )
         }
         Value::Bytes(v) => airl_rt::value::rt_bytes(v.clone()),
-        Value::BuiltinFn(_) | Value::IRFuncRef(_) => rt_nil(),
+        Value::BuiltinFn(name) => {
+            // Represent builtins as a named partial with 0 captured args.
+            // This allows builtins stored in registers to be called via CallReg.
+            let _ = name;
+            rt_nil()
+        }
+        Value::IRFuncRef(_) => rt_nil(),
+        Value::PartialApp { func, captured_args, remaining_arity } => {
+            // Encode the function name from the boxed func value
+            let func_name = match func.as_ref() {
+                Value::BuiltinFn(n) | Value::IRFuncRef(n) => n.clone(),
+                Value::BytecodeClosure(bc) => bc.func_name.clone(),
+                _ => return rt_nil(),
+            };
+            let captured_ptrs: Vec<*mut RtValue> = captured_args.iter().map(|v| value_to_rt(v)).collect();
+            // rt_partial_app retains each pointer; we must release our owned ptrs
+            let result = airl_rt::value::rt_partial_app(func_name, captured_ptrs.clone(), *remaining_arity);
+            for p in &captured_ptrs { airl_value_release(*p); }
+            result
+        }
     }
 }
 
@@ -141,6 +160,14 @@ pub fn rt_to_value_no_release(ptr: *mut RtValue) -> Value {
                 Value::BuiltinFn(format!("<closure@{:p}>", func_ptr))
             }
             RtData::Bytes(v) => Value::Bytes(v.clone()),
+            RtData::PartialApp { func_name, captured_args, remaining_arity } => {
+                let captured_vals: Vec<Value> = captured_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+                Value::PartialApp {
+                    func: Box::new(Value::BuiltinFn(func_name.clone())),
+                    captured_args: captured_vals,
+                    remaining_arity: *remaining_arity,
+                }
+            }
         }
     }
 }
@@ -807,6 +834,91 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         _ => return None,
     };
     Some(result)
+}
+
+// ── Builtin arity table ────────────────────────────────────────────
+
+/// Returns the fixed arity of a builtin function, or `None` for variadic
+/// builtins (e.g. `str`, `format`, multi-arg `print`) that cannot be
+/// partially applied.
+fn builtin_arity(name: &str) -> Option<usize> {
+    match name {
+        // Arithmetic (binary)
+        "+" | "-" | "*" | "/" | "%" => Some(2),
+        // Comparison (binary)
+        "=" | "!=" | "<" | ">" | "<=" | ">=" => Some(2),
+        // Logic
+        "and" | "or" | "xor" => Some(2),
+        "not" => Some(1),
+        // Collections — unary
+        "length" | "head" | "tail" | "empty?" => Some(1),
+        "chars" | "char-count" | "char-code" | "char-upper?" | "char-lower?" => Some(1),
+        // Collections — binary
+        "at" | "append" | "cons" | "list-contains?" => Some(2),
+        "map-get" | "map-has" | "map-remove" | "map-keys" | "map-set" => {
+            match name {
+                "map-get" | "map-has" | "map-remove" => Some(2),
+                "map-keys" => Some(1),
+                "map-set" => Some(3),
+                _ => None,
+            }
+        }
+        // Collections — ternary
+        "at-or" | "set-at" => Some(3),
+        // String — binary
+        "split" | "join" | "char-at" | "string-ci=?" | "char-from-code" => Some(2),
+        // String — ternary
+        "substring" | "replace" => Some(3),
+        // I/O — unary
+        "print" | "println" | "eprint" | "eprintln" => Some(1),
+        "read-lines" | "write-file" | "file-exists?" | "exec-file" | "append-file"
+        | "delete-file" | "delete-dir" | "read-dir" | "create-dir" | "file-size"
+        | "is-dir?" | "temp-file" | "temp-dir" | "file-mtime" => Some(1),
+        "rename-file" => Some(2),
+        // Type conversion — unary
+        "int-to-string" | "float-to-string" | "string-to-int" | "string-to-float"
+        | "type-of" | "valid" | "panic" => Some(1),
+        // Math — unary
+        "sqrt" | "sin" | "cos" | "tan" | "log" | "exp" | "floor" | "ceil" | "round"
+        | "float-to-int" | "int-to-float" | "is-nan?" | "is-infinite?" => Some(1),
+        // Math — binary
+        "parse-int-radix" | "int-to-string-radix" | "format-time" => Some(2),
+        // Bitwise — binary
+        "bitwise-xor" | "bitwise-and" | "bitwise-or" | "bitwise-shr" | "bitwise-shl" => Some(2),
+        // Bytes — unary
+        "bytes-alloc" | "bytes-length" | "bytes-new" | "bytes-from-int8" | "bytes-from-int16"
+        | "bytes-from-int32" | "bytes-from-int64" | "bytes-from-string" | "bytes-concat-all"
+        | "crc32c" | "gzip-compress" | "gzip-decompress" | "snappy-compress"
+        | "snappy-decompress" | "lz4-compress" | "lz4-decompress" | "zstd-compress"
+        | "zstd-decompress" => Some(1),
+        // Bytes — binary
+        "bytes-get" | "bytes-to-int16" | "bytes-to-int32" | "bytes-to-int64"
+        | "bytes-concat" | "regex-match" | "regex-find-all" | "regex-split"
+        | "sha512" | "hmac-sha512" | "sha512-bytes" | "hmac-sha512-bytes"
+        | "shell-exec" | "assert" | "sleep" | "dns-resolve" | "icmp-ping" => {
+            match name {
+                "bytes-get" | "bytes-to-int16" | "bytes-to-int32" | "bytes-to-int64"
+                | "bytes-concat" | "regex-match" | "regex-find-all" | "regex-split"
+                | "sha512" | "hmac-sha512" | "sha512-bytes" | "hmac-sha512-bytes"
+                | "shell-exec" | "assert" | "icmp-ping" => Some(2),
+                "sleep" | "dns-resolve" => Some(1),
+                _ => None,
+            }
+        }
+        // Bytes — ternary
+        "bytes-set!" | "bytes-to-string" | "bytes-slice" | "regex-replace"
+        | "shell-exec-with-stdin" => Some(3),
+        // 0-arg
+        "map-new" | "read-line" | "read-stdin" | "time-now" | "cpu-count"
+        | "get-cwd" | "infinity" | "nan" | "random-bytes" | "get-args" | "whoami" | "id"
+        | "ash-install-sigint" | "ash-sigint-pending" | "canopy_raw_mode_enable"
+        | "canopy_raw_mode_disable" | "canopy_stdin_read_byte" | "canopy_stdin_read_available"
+        | "canopy_terminal_size" | "aircon_list" | "airl_aircon_list" => Some(0),
+        // Variadic — cannot be partially applied
+        "str" | "format" => None,
+        // Everything else: unknown arity — don't partially apply
+        _ => None,
+    }
 }
 
 // ── BytecodeVm ─────────────────────────────────────────────────────
@@ -1565,6 +1677,37 @@ impl BytecodeVm {
                         (0..argc).map(|i| reg_get(r, instr.dst as usize + 1 + i)).collect()
                     };
 
+                    // Check for partial application of known builtins
+                    if let Some(expected) = builtin_arity(&name) {
+                        let supplied = argc;
+                        if supplied < expected {
+                            let args_val: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+                            let partial = Value::PartialApp {
+                                func: Box::new(Value::BuiltinFn(name.clone())),
+                                captured_args: args_val,
+                                remaining_arity: expected - supplied,
+                            };
+                            reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, value_to_rt(&partial));
+                            continue;
+                        }
+                    }
+
+                    // Check for partial application of user-defined functions
+                    if let Some(func) = self.functions.get(&name) {
+                        let expected = func.arity as usize;
+                        let supplied = argc;
+                        if supplied < expected {
+                            let args_val: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+                            let partial = Value::PartialApp {
+                                func: Box::new(Value::IRFuncRef(name.clone())),
+                                captured_args: args_val,
+                                remaining_arity: expected - supplied,
+                            };
+                            reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, value_to_rt(&partial));
+                            continue;
+                        }
+                    }
+
                     // Dispatch chain: special cases first, then airl-rt, then push frame
                     if name == "thread-spawn" {
                         let result = self.dispatch_thread_spawn_rt(&rt_args)?;
@@ -1590,6 +1733,21 @@ impl BytecodeVm {
                         (0..argc).map(|i| reg_get(r, instr.dst as usize + 1 + i)).collect()
                     };
 
+                    // Check for partial application of known builtins
+                    if let Some(expected) = builtin_arity(&name) {
+                        let supplied = argc;
+                        if supplied < expected {
+                            let args_val: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+                            let partial = Value::PartialApp {
+                                func: Box::new(Value::BuiltinFn(name.clone())),
+                                captured_args: args_val,
+                                remaining_arity: expected - supplied,
+                            };
+                            reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, value_to_rt(&partial));
+                            continue;
+                        }
+                    }
+
                     if name == "thread-spawn" {
                         let result = self.dispatch_thread_spawn_rt(&rt_args)?;
                         reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
@@ -1611,13 +1769,47 @@ impl BytecodeVm {
                         (0..argc).map(|i| reg_get(r, instr.dst as usize + 1 + i)).collect()
                     };
                     let callee_val = rt_to_value_no_release(callee);
-                    match callee_val {
-                        Value::BytecodeClosure(ref closure) => {
-                            let mut full_args = closure.captured.clone();
-                            let args_val: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
-                            full_args.extend(args_val);
-                            let name = closure.func_name.clone();
 
+                    // Resolve PartialApp: prepend captured args and replace callee_val
+                    let (resolved_callee, resolved_args_val) = match callee_val {
+                        Value::PartialApp { func, captured_args, .. } => {
+                            let new_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+                            let mut all_args = captured_args;
+                            all_args.extend(new_args);
+                            (*func, all_args)
+                        }
+                        other => {
+                            let new_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+                            (other, new_args)
+                        }
+                    };
+
+                    match resolved_callee {
+                        Value::BytecodeClosure(ref closure) => {
+                            let expected_arity = self.functions.get(&closure.func_name)
+                                .map(|f| f.arity as usize)
+                                .unwrap_or(0);
+                            let mut full_args = closure.captured.clone();
+                            full_args.extend(resolved_args_val);
+                            let supplied = full_args.len();
+
+                            if supplied < expected_arity {
+                                // Partial application: not enough args yet
+                                let partial = Value::PartialApp {
+                                    func: Box::new(resolved_callee.clone()),
+                                    captured_args: full_args,
+                                    remaining_arity: expected_arity - supplied,
+                                };
+                                reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, value_to_rt(&partial));
+                                continue;
+                            } else if supplied > expected_arity {
+                                return Err(RuntimeError::Custom(format!(
+                                    "call: too many arguments: {} expects {} but got {}",
+                                    closure.func_name, expected_arity, supplied
+                                )));
+                            }
+
+                            let name = closure.func_name.clone();
                             if let Some(func) = self.functions.get(&name) {
                                 if is_simple_closure(func) {
                                     let func = func.clone();
@@ -1630,17 +1822,34 @@ impl BytecodeVm {
                         }
                         Value::IRFuncRef(ref name) | Value::BuiltinFn(ref name) => {
                             let name = name.clone();
+                            // Check for partial application on fixed-arity builtins
+                            if let Some(expected) = builtin_arity(&name) {
+                                let supplied = resolved_args_val.len();
+                                if supplied < expected {
+                                    let partial = Value::PartialApp {
+                                        func: Box::new(resolved_callee.clone()),
+                                        captured_args: resolved_args_val,
+                                        remaining_arity: expected - supplied,
+                                    };
+                                    reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, value_to_rt(&partial));
+                                    continue;
+                                }
+                            }
+                            let rt_resolved: Vec<*mut RtValue> = resolved_args_val.iter().map(|v| value_to_rt(v)).collect();
                             if name == "thread-spawn" {
-                                let result = self.dispatch_thread_spawn_rt(&rt_args)?;
+                                let result = self.dispatch_thread_spawn_rt(&rt_resolved)?;
+                                for p in &rt_resolved { airl_value_release(*p); }
                                 reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                             } else if name == "fn-metadata" {
-                                let result = self.dispatch_fn_metadata_rt(&rt_args)?;
+                                let result = self.dispatch_fn_metadata_rt(&rt_resolved)?;
+                                for p in &rt_resolved { airl_value_release(*p); }
                                 reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
-                            } else if let Some(result) = dispatch_rt_builtin(&name, &rt_args) {
+                            } else if let Some(result) = dispatch_rt_builtin(&name, &rt_resolved) {
+                                for p in &rt_resolved { airl_value_release(*p); }
                                 reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, result);
                             } else {
-                                let value_args: Vec<Value> = rt_args.iter().map(|&p| rt_to_value_no_release(p)).collect();
-                                self.push_frame(&name, &value_args, instr.dst)?;
+                                for p in &rt_resolved { airl_value_release(*p); }
+                                self.push_frame(&name, &resolved_args_val, instr.dst)?;
                             }
                         }
                         _ => return Err(RuntimeError::NotCallable(rt_display(callee))),
@@ -1968,6 +2177,118 @@ mod tests {
             IRNode::Call("count-down".into(), vec![IRNode::Int(100_000)]),
         ];
         assert_eq!(compile_and_run(&nodes), Value::Int(0));
+    }
+
+    // ── Partial application tests ──────────────────────────────────
+
+    /// Helper: compile + run, expecting success.
+    fn compile_and_run_expr(nodes: &[IRNode]) -> Result<Value, RuntimeError> {
+        let mut compiler = BytecodeCompiler::new();
+        let (funcs, main_func) = compiler.compile_program(nodes);
+        let mut vm = BytecodeVm::new();
+        vm.exec_program(funcs, main_func)
+    }
+
+    #[test]
+    fn test_partial_builtin_two_arg() {
+        // (+ 1) applied to 5 should yield 6.
+        // IR: (let (add1 (+ 1)) (add1 5))
+        let add1 = IRNode::Call("+".into(), vec![IRNode::Int(1)]);
+        let apply = IRNode::CallExpr(
+            Box::new(IRNode::Load("add1".into())),
+            vec![IRNode::Int(5)],
+        );
+        let nodes = vec![
+            IRNode::Let(
+                vec![IRBinding { name: "add1".into(), expr: add1 }],
+                Box::new(apply),
+            ),
+        ];
+        assert_eq!(
+            compile_and_run_expr(&nodes).expect("partial builtin failed"),
+            Value::Int(6)
+        );
+    }
+
+    #[test]
+    fn test_partial_builtin_full_call_unchanged() {
+        // Full-arity calls must not change: (+ 1 2) = 3
+        let node = IRNode::Call("+".into(), vec![IRNode::Int(1), IRNode::Int(2)]);
+        assert_eq!(
+            compile_and_run_expr(&[node]).expect("full call failed"),
+            Value::Int(3)
+        );
+    }
+
+    #[test]
+    fn test_partial_builtin_chained() {
+        // (+ 1) applied to (+ 2) applied to 10 is an error (+ returns Int, not a fn).
+        // But: let add5 = (+ 5); add5 applied to 10 = 15.
+        let add5 = IRNode::Call("+".into(), vec![IRNode::Int(5)]);
+        let apply = IRNode::CallExpr(
+            Box::new(IRNode::Load("add5".into())),
+            vec![IRNode::Int(10)],
+        );
+        let nodes = vec![
+            IRNode::Let(
+                vec![IRBinding { name: "add5".into(), expr: add5 }],
+                Box::new(apply),
+            ),
+        ];
+        assert_eq!(
+            compile_and_run_expr(&nodes).expect("chained partial failed"),
+            Value::Int(15)
+        );
+    }
+
+    #[test]
+    fn test_partial_builtin_comparison() {
+        // (< 0) is a partial, applied to 5 gives (< 0 5) = true
+        let lt0 = IRNode::Call("<".into(), vec![IRNode::Int(0)]);
+        let apply = IRNode::CallExpr(
+            Box::new(IRNode::Load("lt0".into())),
+            vec![IRNode::Int(5)],
+        );
+        let nodes = vec![
+            IRNode::Let(
+                vec![IRBinding { name: "lt0".into(), expr: lt0 }],
+                Box::new(apply),
+            ),
+        ];
+        assert_eq!(
+            compile_and_run_expr(&nodes).expect("partial comparison failed"),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn test_partial_user_function() {
+        // (define add (a b) (+ a b))
+        // (let (add1 (add 1)) (add1 5)) => 6
+        let add_fn = IRNode::Func(
+            "add".into(),
+            vec!["a".into(), "b".into()],
+            Box::new(IRNode::Call("+".into(), vec![
+                IRNode::Load("a".into()),
+                IRNode::Load("b".into()),
+            ])),
+        );
+        let add1 = IRNode::Call("add".into(), vec![IRNode::Int(1)]);
+        let apply = IRNode::CallExpr(
+            Box::new(IRNode::Load("add1".into())),
+            vec![IRNode::Int(5)],
+        );
+        let nodes = vec![
+            add_fn,
+            IRNode::Let(
+                vec![IRBinding { name: "add1".into(), expr: add1 }],
+                Box::new(apply),
+            ),
+        ];
+        assert_eq!(
+            compile_and_run_expr(&nodes).expect("partial user fn failed"),
+            Value::Int(6)
+        );
     }
 
     // NOTE: map/filter/fold tests removed in v0.6.0 — these are now stdlib AIRL functions

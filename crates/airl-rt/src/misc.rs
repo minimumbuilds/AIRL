@@ -1328,6 +1328,9 @@ pub extern "C" fn airl_json_stringify(val: *mut RtValue) -> *mut RtValue {
             }
             RtData::Closure { .. } => "\"<closure>\"".to_string(),
             RtData::Bytes(v) => format!("\"<Bytes len={}>\"", v.len()),
+            RtData::PartialApp { func_name, remaining_arity, .. } => {
+                format!("\"<partial {} remaining={}>\"", func_name, remaining_arity)
+            }
         }
     }
     let v = unsafe { &*val };

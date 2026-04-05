@@ -383,20 +383,27 @@ impl BytecodeCompiler {
                     _ => None,
                 };
 
-                if let Some(op) = direct_op {
-                    if args.len() == 2 {
-                        let a_reg = self.alloc_reg();
-                        self.compile_expr(&args[0], a_reg);
-                        let b_reg = self.alloc_reg();
-                        self.compile_expr(&args[1], b_reg);
-                        self.emit(op, dst, a_reg, b_reg);
-                        self.free_reg_to(a_reg.max(dst + 1));
-                    } else if args.len() == 1 {
-                        let a_reg = self.alloc_reg();
-                        self.compile_expr(&args[0], a_reg);
-                        self.emit(op, dst, a_reg, 0);
-                        self.free_reg_to(a_reg.max(dst + 1));
-                    }
+                // Binary direct-op (Op::Add etc.) requires exactly 2 args.
+                // For 2-arg calls, use the fast direct opcode.
+                // For under-arity calls (e.g. (+ 1) with 1 arg), fall through to
+                // the general call path so the VM's partial application logic applies.
+                let use_direct = direct_op.is_some() && args.len() == 2;
+                // Unary `not` can be used with 1 arg directly.
+                let use_unary_not = name.as_str() == "not" && args.len() == 1;
+
+                if use_direct {
+                    let op = direct_op.unwrap();
+                    let a_reg = self.alloc_reg();
+                    self.compile_expr(&args[0], a_reg);
+                    let b_reg = self.alloc_reg();
+                    self.compile_expr(&args[1], b_reg);
+                    self.emit(op, dst, a_reg, b_reg);
+                    self.free_reg_to(a_reg.max(dst + 1));
+                } else if use_unary_not {
+                    let a_reg = self.alloc_reg();
+                    self.compile_expr(&args[0], a_reg);
+                    self.emit(Op::Not, dst, a_reg, 0);
+                    self.free_reg_to(a_reg.max(dst + 1));
                 } else {
                     // General function call
                     let is_local_call = self.locals.contains_key(name);

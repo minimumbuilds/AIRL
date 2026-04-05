@@ -26,12 +26,17 @@ pub const TAG_VARIANT: u8 = 7;
 pub const TAG_CLOSURE: u8 = 8;
 pub const TAG_UNIT: u8 = 9;
 pub const TAG_BYTES: u8 = 10;
+/// Interpreter-only: a partially-applied function.
+/// Not visible to AOT-compiled code; fallback to nil in AOT context.
+pub const TAG_PARTIAL_APP: u8 = 11;
 
 /// Variant order MUST match TAG_* constants (0-10).
 /// The Rust compiler assigns discriminants by position,
 /// and airl-rt functions match on RtData using these discriminants.
 /// AOT-compiled code checks the `tag` byte directly.
 /// If these diverge, AOT binaries will misidentify value types.
+///
+/// TAG_PARTIAL_APP (11) is interpreter-only and never observed by AOT code.
 pub enum RtData {
     Nil,                                                    // 0 = TAG_NIL
     Int(i64),                                               // 1 = TAG_INT
@@ -44,6 +49,15 @@ pub enum RtData {
     Closure { func_ptr: *const u8, captures: Vec<*mut RtValue> }, // 8 = TAG_CLOSURE
     Unit,                                                   // 9 = TAG_UNIT
     Bytes(Vec<u8>),                                         // 10 = TAG_BYTES
+    /// Interpreter-only partial application. `func_name` identifies the underlying
+    /// function (builtin name or IR function name). `captured_args` are the args
+    /// supplied so far (retained pointers). `remaining_arity` is how many more
+    /// args are needed before the function can be fully applied.
+    PartialApp {                                             // 11 = TAG_PARTIAL_APP
+        func_name: String,
+        captured_args: Vec<*mut RtValue>,
+        remaining_arity: usize,
+    },
 }
 
 #[repr(C)]
@@ -205,6 +219,15 @@ pub fn rt_variant(tag_name: String, inner: *mut RtValue) -> *mut RtValue {
 
 pub fn rt_bytes(v: Vec<u8>) -> *mut RtValue {
     RtValue::alloc(TAG_BYTES, RtData::Bytes(v))
+}
+
+/// Construct a partial application value.
+/// Retains each pointer in `captured_args`.
+pub fn rt_partial_app(func_name: String, captured_args: Vec<*mut RtValue>, remaining_arity: usize) -> *mut RtValue {
+    for &p in &captured_args {
+        crate::memory::airl_value_retain(p);
+    }
+    RtValue::alloc(TAG_PARTIAL_APP, RtData::PartialApp { func_name, captured_args, remaining_arity })
 }
 
 // C-ABI constructors
@@ -428,6 +451,9 @@ impl fmt::Display for RtValue {
             }
             RtData::Closure { .. } => write!(f, "<closure>"),
             RtData::Bytes(v) => write!(f, "<Bytes len={}>", v.len()),
+            RtData::PartialApp { func_name, captured_args, remaining_arity } => {
+                write!(f, "<partial {} args={} remaining={}>", func_name, captured_args.len(), remaining_arity)
+            }
         }
     }
 }

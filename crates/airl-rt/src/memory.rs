@@ -96,6 +96,11 @@ unsafe fn free_value(ptr: *mut RtValue) {
                 airl_value_release(cap);
             }
         }
+        RtData::PartialApp { captured_args, .. } => {
+            for &cap in captured_args {
+                airl_value_release(cap);
+            }
+        }
         _ => {}
     }
     drop(Box::from_raw(ptr));
@@ -150,6 +155,10 @@ pub extern "C" fn airl_value_clone(ptr: *mut RtValue) -> *mut RtValue {
                         captures: captures.clone(),
                     },
                 )
+            }
+            RtData::PartialApp { func_name, captured_args, remaining_arity } => {
+                // rt_partial_app retains each arg internally, so just clone the vec
+                crate::value::rt_partial_app(func_name.clone(), captured_args.clone(), *remaining_arity)
             }
         }
     }

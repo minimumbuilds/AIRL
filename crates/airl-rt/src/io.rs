@@ -768,6 +768,7 @@ pub extern "C" fn airl_type_of(v: *mut RtValue) -> *mut RtValue {
         RtData::Variant { .. } => "variant",
         RtData::Closure { .. } => "closure",
         RtData::Bytes(_) => "bytes",
+        RtData::PartialApp { .. } => "partial-app",
     };
     rt_str(name.to_string())
 }
@@ -837,20 +838,8 @@ pub extern "C" fn airl_file_mtime(_path_val: *mut RtValue) -> *mut RtValue {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // exec-file — execute an ELF binary from the VFS and wait for it to exit
+// (AIRLOS only — the non-AIRLOS implementation is defined earlier in this file)
 // ─────────────────────────────────────────────────────────────────────────────
-
-#[cfg(not(target_os = "airlos"))]
-#[no_mangle]
-pub extern "C" fn airl_exec_file(path: *mut RtValue) -> *mut RtValue {
-    let _path_str = unsafe {
-        match &(*path).data {
-            RtData::Str(s) => s.clone(),
-            _ => crate::error::rt_error("exec-file: expected string path"),
-        }
-    };
-    // exec-file is only meaningful on AIRLOS
-    crate::error::rt_error("exec-file: not supported on this platform")
-}
 
 #[cfg(target_os = "airlos")]
 #[no_mangle]

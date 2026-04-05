@@ -6,6 +6,8 @@ use std::fmt;
 ///
 /// v0.6.0: Runtime-only variants (Tensor, Struct, UInt, IRClosure, Function,
 /// Lambda) have been removed. Runtime values are now RtValue from airl-rt.
+///
+/// v0.7.0: PartialApp added for implicit partial application of under-arity calls.
 #[derive(Debug, Clone)]
 pub enum Value {
     Int(i64),
@@ -23,6 +25,13 @@ pub enum Value {
     IRFuncRef(String),
     BytecodeClosure(crate::bytecode::BytecodeClosureValue),
     Bytes(Vec<u8>),
+    /// A partially-applied function: `func` called with `captured_args` so far,
+    /// still needs `remaining_arity` more arguments before it can be fully called.
+    PartialApp {
+        func: Box<Value>,
+        captured_args: Vec<Value>,
+        remaining_arity: usize,
+    },
 }
 
 impl fmt::Display for Value {
@@ -84,6 +93,9 @@ impl fmt::Display for Value {
             Value::IRFuncRef(name) => write!(f, "<ir-fn:{}>", name),
             Value::BytecodeClosure(_) => write!(f, "<bytecode-closure>"),
             Value::Bytes(v) => write!(f, "<Bytes len={}>", v.len()),
+            Value::PartialApp { func, captured_args, remaining_arity } => {
+                write!(f, "<partial {} args={} remaining={}>", func, captured_args.len(), remaining_arity)
+            }
         }
     }
 }
@@ -117,6 +129,11 @@ impl PartialEq for Value {
             (Value::IRFuncRef(_), _) => false,
             (Value::BytecodeClosure(_), _) => false,
             (Value::Bytes(a), Value::Bytes(b)) => a == b,
+            (Value::PartialApp { func: fa, captured_args: ca, remaining_arity: ra },
+             Value::PartialApp { func: fb, captured_args: cb, remaining_arity: rb }) => {
+                ra == rb && fa == fb && ca == cb
+            }
+            (Value::PartialApp { .. }, _) | (_, Value::PartialApp { .. }) => false,
             _ => false,
         }
     }
@@ -132,6 +149,14 @@ impl Value {
             Value::Bytes(v) => v.into_iter().map(|b| Value::Int(b as i64)).collect(),
             other => vec![other],
         }
+    }
+
+    /// Returns true if this value is callable (function, closure, builtin, or partial).
+    pub fn is_callable(&self) -> bool {
+        matches!(self,
+            Value::BuiltinFn(_) | Value::IRFuncRef(_) |
+            Value::BytecodeClosure(_) | Value::PartialApp { .. }
+        )
     }
 }
 
