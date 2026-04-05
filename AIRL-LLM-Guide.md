@@ -1,8 +1,11 @@
-# AIRL Reference Guide (v0.11.0)
+# AIRL Reference Guide (v0.12.0)
 
 > A complete reference for writing AIRL (AI Intermediate Representation Language) programs.
 > AIRL is an S-expression language designed for AI systems, featuring mandatory contracts,
 > linear ownership, tensor operations, and multi-agent orchestration.
+>
+> **v0.12.0** adds: threading macros (`->` / `->>`), implicit partial application,
+> let destructuring (list and map patterns), and contract shorthand (`:pure`, `:pre`, `:post`, `:total`).
 >
 > **v0.11.0** introduced the stdlib migration: ~150 functions remain as compiler intrinsics
 > (always available), while 73 functions moved to the pure-AIRL standard library (auto-loaded
@@ -150,7 +153,7 @@ Multi-binding `let` is the **preferred** style — multiple bindings in one `let
 
 - **`:sig`** — Parameter list and return type. Always required.
 - **`:body`** — The function body expression. Always required.
-- **At least one contract** — Either `:requires` or `:ensures` must be present (or both).
+- **At least one contract** — Either `:requires`, `:ensures`, or `:pure` must be present.
 
 ### Optional Fields
 
@@ -158,6 +161,43 @@ Multi-binding `let` is the **preferred** style — multiple bindings in one `let
 - **`:invariant`** — Checked after body evaluation, before `:ensures`.
 - **`:execute-on`** — `cpu`, `gpu`, `any`, or an agent name.
 - **`:priority`** — `critical`, `high`, `normal`, `low`.
+
+### Contract Shorthand
+
+For functions with standard "valid input → valid output" contracts, use `:pure` instead of writing boilerplate `:requires`/`:ensures`:
+
+```lisp
+;; Long form
+(defn double
+  :sig [(x : i64) -> i64]
+  :requires [(valid x)]
+  :ensures  [(valid result)]
+  :body (* x 2))
+
+;; Shorthand — identical semantics
+(defn double
+  :pure
+  :sig [(x : i64) -> i64]
+  :body (* x 2))
+```
+
+`:pure` generates `(valid <param>)` for every parameter and `(valid result)` for `:ensures`.
+
+Use `:pre` and `:post` as shorthand for `:requires` and `:ensures`:
+
+```lisp
+(defn clamp
+  :pure
+  :sig [(val : i64) (lo : i64) (hi : i64) -> i64]
+  :pre  [(<= lo hi)]
+  :post [(>= result lo) (<= result hi)]
+  :body (if (< val lo) lo (if (> val hi) hi val)))
+```
+
+`:total` implies `:pure` plus a termination hint to the verifier:
+
+```lisp
+(defn fibonacci :total :sig [(n : i64) -> i64] :body ...)
 
 ### Parameter Syntax
 
@@ -256,7 +296,43 @@ Bind one or more values, then evaluate a body expression:
 (let (x : i32 5) (y : i32 10) (+ x y))  ;; multiple bindings → 15
 ```
 
-Each binding has the form `(name : Type value)`. The type annotation is required.
+Each binding has the form `(name : Type value)`. The type annotation is optional.
+
+### Let Destructuring
+
+Destructure a list or map directly in a `let` binding:
+
+**List destructuring** — binds elements by position:
+```lisp
+(let ([a b c] [10 20 30])
+  (+ a b c))   ;; → 60
+
+;; Rest binding
+(let ([head & tail] my-list)
+  (print head))  ;; head = first element, tail = remainder
+```
+
+**Map destructuring** — binds keys as variable names:
+```lisp
+(let ({name age city} person-map)
+  (str name " is " (int-to-string age)))
+;; Equivalent to:
+;; (let (name (map-get person-map "name"))
+;;      (age  (map-get person-map "age"))
+;;      (city (map-get person-map "city")) ...)
+```
+
+Destructuring dramatically reduces boilerplate for tuple-like lists:
+```lisp
+;; Before
+(let (a (list-nth state 0)) (b (list-nth state 1))
+     (c (list-nth state 2)) (d (list-nth state 3))
+  ...)
+
+;; After
+(let ([a b c d] state)
+  ...)
+```
 
 ### Do Block
 
@@ -1291,6 +1367,30 @@ Lambda parameters do **not** need type annotations (unlike `defn` parameters).
 (apply-twice (fn [x] (* x 2)) 3)   ;; → 12
 ```
 
+### Partial Application
+
+Calling a function with **fewer arguments than its arity** returns a partial closure rather than erroring. Args are filled left to right:
+
+```lisp
+;; Named function used directly as a callback (eta-reduction)
+(map be32-to-list hash)             ;; be32-to-list takes 1 arg — works directly
+
+;; Partially applying a 2-arg function
+(let (get-name (map-get person-map))   ;; map-get takes 2 args
+  (get-name "name"))                   ;; supplies the second
+
+;; In pipelines
+(map (map-get m) (map-keys m))      ;; get all values from m
+
+;; Arithmetic
+(let (add5 (+ 5))
+  (map add5 [1 2 3]))               ;; → [6 7 8]
+```
+
+**Note:** Args fill left-to-right. `(> 0)` returns `fn[x] → (> 0 x)` which is `x < 0`, not `x > 0`. Design accordingly.
+
+Variable-arity functions (`str`, `concat`) cannot be partially applied.
+
 ### Closures
 
 Lambdas capture their enclosing scope:
@@ -1300,6 +1400,65 @@ Lambdas capture their enclosing scope:
   (let (add-offset : fn (fn [x] (+ x offset)))
     (add-offset 5)))  ;; → 15
 ```
+
+---
+
+## 16a. Threading Macros
+
+Threading macros reduce nesting depth for linear data pipelines. They are pure syntactic sugar — no runtime overhead.
+
+### `->` (thread-first)
+
+Inserts the accumulated value as the **first argument** of each step. Natural for object-style operations where the subject is the first param (`map-set`, `map-update`, etc.):
+
+```lisp
+;; Before
+(map-set (map-set (map-set base "a" x) "b" y) "c" z)
+
+;; After — reads in natural order
+(-> base
+    (map-set "a" x)
+    (map-set "b" y)
+    (map-set "c" z))
+
+;; Symbol step (no extra args) — inserts as sole argument
+(-> "  hello  " trim)   ;; → (trim "  hello  ")
+
+;; Mixed
+(-> value
+    (clamp 0 100)
+    int-to-string
+    (str "result: "))
+```
+
+### `->>` (thread-last)
+
+Inserts the accumulated value as the **last argument** of each step. Natural for collection pipelines where the collection is the last param (`map`, `filter`, `fold`):
+
+```lisp
+;; Before
+(fold + 0 (map (fn [x] (* x x)) (filter (fn [x] (> x 0)) xs)))
+
+;; After
+(->> xs
+     (filter (fn [x] (> x 0)))
+     (map (fn [x] (* x x)))
+     (fold + 0))
+
+;; With partial application
+(->> xs
+     (filter (< 0))       ;; (< 0 x) = x > 0
+     (map (* 2))
+     (fold + 0))
+```
+
+### When to use which
+
+| Use `->` | Use `->>` |
+|----------|-----------|
+| `map-set`, `map-update`, `map-merge` | `map`, `filter`, `fold` |
+| String builders | Collection transforms |
+| Object/record updates | Data pipelines |
 
 ---
 
