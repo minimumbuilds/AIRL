@@ -6,6 +6,10 @@ Requirements:
 - fibonacci(n) = fibonacci(n-1) + fibonacci(n-2) for n > 1
 - The function must validate its input is in the valid range [0, 30]
 
-Test case: fibonacci(10) should return 55
-
 Print the result of calling the function with argument 10.
+
+---TESTS---
+fibonacci(0) => 0
+fibonacci(1) => 1
+fibonacci(10) => 55
+fibonacci(20) => 6765

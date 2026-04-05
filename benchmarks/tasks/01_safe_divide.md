@@ -5,7 +5,10 @@ Requirements:
 - If `b` is non-zero, return the integer division result
 - The function must validate that `b` is not zero before dividing
 
-Test case: safe-divide(10, 3) should return 3 (integer division)
-Test case: safe-divide(10, 0) should return an error, not crash
-
 Print the result of calling the function with arguments 10 and 3.
+
+---TESTS---
+safe-divide(10, 3) => 3
+safe-divide(10, 0) => error
+safe-divide(0, 5) => 0
+safe-divide(-6, 2) => -3

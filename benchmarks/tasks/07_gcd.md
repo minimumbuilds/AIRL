@@ -5,7 +5,10 @@ Requirements:
 - The function must return a non-negative result
 - When one argument is zero, return the other argument
 
-Test case: gcd(12, 8) should return 4
-Test case: gcd(15, 0) should return 15
-
 Print the result of calling the function with arguments 48 and 18.
+
+---TESTS---
+gcd(12, 8) => 4
+gcd(15, 0) => 15
+gcd(48, 18) => 6
+gcd(100, 75) => 25
