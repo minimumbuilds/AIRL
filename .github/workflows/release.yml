@@ -96,8 +96,68 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
 
+  build-mynameisairl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout AirTraffic
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository_owner }}/AirTraffic
+          path: AirTraffic
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libz3-dev libcurl4-openssl-dev libssl-dev
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build host binary
+        run: cargo build --release --features aot
+
+      - name: Compile g3
+        env:
+          AIRL_STDLIB: ${{ github.workspace }}/stdlib
+        run: |
+          cargo run --release --features aot -- run \
+            --load bootstrap/lexer.airl \
+            --load bootstrap/parser.airl \
+            --load bootstrap/bc_compiler.airl \
+            bootstrap/g3_compiler.airl -- \
+            bootstrap/lexer.airl \
+            bootstrap/parser.airl \
+            bootstrap/bc_compiler.airl \
+            bootstrap/g3_compiler.airl \
+            -o g3
+
+      - name: Compile mynameisairl
+        env:
+          AIRL_DIR: ${{ github.workspace }}
+          G3: ${{ github.workspace }}/g3
+          AT_ROOT: ${{ github.workspace }}/AirTraffic
+          AIRL_STDLIB: ${{ github.workspace }}/stdlib
+        run: |
+          bash servers/mynameisairl/build.sh servers/mynameisairl/mynameisairl
+          chmod +x servers/mynameisairl/mynameisairl
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: mynameisairl-linux-x86_64
+          path: servers/mynameisairl/mynameisairl
+
   release:
-    needs: build-g3
+    needs: [build-g3, build-mynameisairl]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -114,4 +174,5 @@ jobs:
             g3-linux-x86_64/g3-linux-x86_64
             g3-linux-arm64/g3-linux-arm64
             g3-macos-arm64/g3-macos-arm64
+            mynameisairl-linux-x86_64/mynameisairl
             # g3-windows-x86_64.exe/g3-windows-x86_64.exe
