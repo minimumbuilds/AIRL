@@ -207,6 +207,30 @@ pub fn run_source(source: &str) -> Result<Value, PipelineError> {
     run_source_with_mode(source, PipelineMode::Run)
 }
 
+/// Run source and also return the set of function names that were fully Z3-verified.
+/// A function is "Z3-verified" if it has at least one :ensures clause and all clauses
+/// are `VerifyResult::Proven`. Used by the fixture test harness for ;;Z3-PROVEN: checks.
+pub fn run_source_with_z3_info(source: &str) -> Result<(Value, Vec<String>), PipelineError> {
+    let (tops, diags) = parse_source(source)?;
+    if diags.has_errors() {
+        return Err(PipelineError::Parse(diags));
+    }
+
+    let z3_prover = airl_solver::prover::Z3Prover::new();
+    let mut z3_verified: Vec<String> = Vec::new();
+    for top in &tops {
+        if let airl_syntax::ast::TopLevel::Defn(f) = top {
+            let verification = z3_prover.verify_function(f);
+            if !verification.ensures_results.is_empty() && verification.all_proven() {
+                z3_verified.push(f.name.clone());
+            }
+        }
+    }
+
+    let value = run_source_with_mode(source, PipelineMode::Run)?;
+    Ok((value, z3_verified))
+}
+
 /// Run a file with preloaded modules (required for G3 bootstrap).
 /// Each --load module is compiled and loaded into the VM before the main file runs.
 pub fn run_file_with_preloads(path: &str, preloads: &[String]) -> Result<Value, PipelineError> {

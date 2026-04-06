@@ -21,6 +21,17 @@ fn extract_error(source: &str) -> Option<String> {
         .map(|l| l.split(";; ERROR:").nth(1).unwrap().trim().to_string())
 }
 
+/// Extract all ;;Z3-PROVEN: annotations from a fixture source file.
+/// Each annotation names one function that must have been fully Z3-verified.
+fn extract_z3_proven(source: &str) -> Vec<String> {
+    source
+        .lines()
+        .filter(|l| l.contains(";;Z3-PROVEN:"))
+        .map(|l| l.split(";;Z3-PROVEN:").nth(1).unwrap().trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 fn fixtures_root() -> PathBuf {
     // Integration tests run from the crate directory, but fixtures are at workspace root
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -290,4 +301,57 @@ fn import_private_rejected() {
     let err = format!("{}", result.unwrap_err());
     assert!(err.contains("not public") || err.contains("private") || err.contains("not found"),
         "error should mention visibility: {}", err);
+}
+
+// ── Z3-PROVEN fixture tests ──────────────────────────────
+
+#[test]
+fn z3_proven_fixtures_all_pass() {
+    let z3_dir = fixtures_root().join("z3_proven");
+    let files = collect_airl_files(&z3_dir);
+
+    if files.is_empty() {
+        // If the directory doesn't exist yet, skip gracefully
+        eprintln!("  no z3_proven fixture files found — skipping");
+        return;
+    }
+
+    let mut failures = Vec::new();
+
+    for file in &files {
+        let source = fs::read_to_string(file).unwrap();
+        let proven_names = extract_z3_proven(&source);
+
+        if proven_names.is_empty() {
+            // A z3_proven fixture with no annotations is a misconfiguration
+            failures.push(format!("{}: no ;;Z3-PROVEN: annotation found", file.display()));
+            continue;
+        }
+
+        match airl_driver::pipeline::run_source_with_z3_info(&source) {
+            Ok((_value, z3_verified)) => {
+                for name in &proven_names {
+                    if !z3_verified.contains(name) {
+                        failures.push(format!(
+                            "{}: function '{}' was not Z3-verified (verified: {:?})",
+                            file.display(), name, z3_verified
+                        ));
+                    }
+                }
+            }
+            Err(e) => {
+                failures.push(format!("{}: pipeline error: {}", file.display(), e));
+            }
+        }
+    }
+
+    if !failures.is_empty() {
+        panic!(
+            "\n{} z3_proven fixture(s) failed:\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        );
+    }
+
+    eprintln!("  {} z3_proven fixtures passed", files.len());
 }

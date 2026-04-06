@@ -1,0 +1,12 @@
+;; EXPECT: 6
+;; Test that add-one is fully Z3-verified via body translation.
+;; The :ensures clause references `result`, which the solver proves by binding
+;; result = body = (+ x 1) and then checking (= result (+ x 1)) → Proven.
+;;Z3-PROVEN: add-one
+(defn add-one
+  :sig [(x : i32) -> i32]
+  :intent "increment x by one"
+  :requires [(valid x)]
+  :ensures [(= result (+ x 1))]
+  :body (+ x 1))
+(add-one 5)
