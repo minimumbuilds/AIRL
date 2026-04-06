@@ -356,6 +356,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn send_to_closed_channel_returns_closed_error() {
+        let ch = airl_channel_new();
+        let (tx_id, _rx_id) = unsafe {
+            if let RtData::List { ref items, .. } = (*ch).data {
+                (extract_int(items[0]).unwrap(), extract_int(items[1]).unwrap())
+            } else {
+                panic!("channel-new did not return a list");
+            }
+        };
+
+        // Close the sender handle
+        let closed = airl_channel_close(rt_int(tx_id));
+        unsafe {
+            assert!(
+                matches!((*closed).data, RtData::Bool(true)),
+                "close should return true"
+            );
+        }
+
+        // Send after close — must return Err("channel closed"), not Err("invalid handle")
+        let result = airl_channel_send(rt_int(tx_id), rt_int(99));
+        unsafe {
+            match &(*result).data {
+                RtData::Variant { tag_name, inner } => {
+                    assert_eq!(tag_name.as_str(), "Err", "expected Err variant");
+                    match &(**inner).data {
+                        RtData::Str(msg) => {
+                            assert!(
+                                msg.contains("channel closed"),
+                                "expected 'channel closed' error, got: {}", msg
+                            );
+                            assert!(
+                                !msg.contains("invalid"),
+                                "error must not say 'invalid handle'; got: {}", msg
+                            );
+                        }
+                        _ => panic!("Err payload is not a string"),
+                    }
+                }
+                _ => panic!("result is not a variant"),
+            }
+        }
+    }
+
+    #[test]
     fn concurrent_recv_on_shared_channel() {
         let ch = airl_channel_new();
         let (tx_id, rx_id) = unsafe {
