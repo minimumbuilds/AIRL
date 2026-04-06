@@ -85,7 +85,7 @@ cargo run --release --features aot -- check examples/03-verified-arithmetic/veri
 ### Building the G3 self-hosted compiler
 
 ```bash
-# Rebuild G3 (~23 min, ~25 GB RAM)
+# Rebuild G3 (~1 min)
 bash scripts/build-g3.sh
 
 # Use G3 to compile AIRL programs (no Rust toolchain needed)
@@ -135,7 +135,7 @@ Cranelift (native code generation) and `libairl_rt.a` (runtime) are exposed as b
 | `undefined reference to airl_*` | Stale G3 binary | Rebuild via `bash scripts/build-g3.sh` |
 | `Compilation error: unregistered builtin 'X'` | Source uses newer builtin | Rebuild G3 |
 | Segfault at runtime | Register allocation bug | Report with source; use `airl compile` as workaround |
-| Out of memory during build | Bootstrap uses ~25 GB | Ensure sufficient RAM or swap |
+| Out of memory during build | Insufficient RAM | Ensure at least 4 GB free |
 
 ## Language Features
 
