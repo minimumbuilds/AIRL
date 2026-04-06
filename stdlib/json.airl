@@ -116,10 +116,48 @@
               (json-skip-ws src (+ pos 1) len)
               pos))))
 
+;; ── hex-digit-to-int : ASCII hex digit byte → 0–15 ──
+(defn hex-digit-to-int
+  :sig [(b : i64) -> i64]
+  :intent "Convert an ASCII hex digit byte (0-9, a-f, A-F) to its integer value"
+  :requires [(or (and (>= b 48) (<= b 57)) (or (and (>= b 65) (<= b 70)) (and (>= b 97) (<= b 102))))]
+  :ensures [(and (>= result 0) (<= result 15))]
+  :body (if (and (>= b 48) (<= b 57))
+          (- b 48)
+          (if (and (>= b 65) (<= b 70))
+            (- b 55)
+            (- b 87))))
+
+;; ── unicode-escape-to-bytes : \uXXXX → UTF-8 Bytes ──
+(defn unicode-escape-to-bytes
+  :sig [(src : Bytes) (pos : i64) -> Bytes]
+  :intent "Decode 4 hex digits at pos into UTF-8 bytes for the Unicode codepoint"
+  :requires [(>= pos 0)]
+  :ensures [(valid result)]
+  :body
+    (let (cp : i64 (bitwise-or
+                     (bitwise-or
+                       (bitwise-or
+                         (bitwise-shl (hex-digit-to-int (at src pos))       12)
+                         (bitwise-shl (hex-digit-to-int (at src (+ pos 1)))  8))
+                       (bitwise-shl   (hex-digit-to-int (at src (+ pos 2)))  4))
+                     (hex-digit-to-int (at src (+ pos 3)))))
+      (if (<= cp 127)
+        (bytes-from-int8 cp)
+        (if (<= cp 2047)
+          (bytes-concat
+            (bytes-from-int8 (bitwise-or 192 (bitwise-shr cp 6)))
+            (bytes-from-int8 (bitwise-or 128 (bitwise-and cp 63))))
+          (bytes-concat
+            (bytes-from-int8 (bitwise-or 224 (bitwise-shr cp 12)))
+            (bytes-concat
+              (bytes-from-int8 (bitwise-or 128 (bitwise-and (bitwise-shr cp 6) 63)))
+              (bytes-from-int8 (bitwise-or 128 (bitwise-and cp 63)))))))))
+
 ;; ── json-parse-string-loop : collect bytes of a JSON string ──
 (defn json-parse-string-loop
   :sig [(src : Bytes) (pos : i64) (len : i64) -> List]
-  :intent "Collect string bytes handling escapes, return [bytesList, endPos]"
+  :intent "Collect string bytes handling escapes (including \\uXXXX), return [bytesList, endPos]"
   :requires [(>= pos 0)]
   :ensures [(valid result)]
   :body (if (>= pos len)
@@ -129,12 +167,16 @@
               [[] pos]
               (if (= b 92) ;; backslash escape
                 (let (next : i64 (at src (+ pos 1)))
-                     (escaped : Bytes (if (= next 110) (bytes-from-int8 10)   ;; \n
-                                        (if (= next 116) (bytes-from-int8 9)  ;; \t
-                                          (if (= next 114) (bytes-from-int8 13) ;; \r
-                                            (bytes-from-int8 next)))))          ;; \\ \" etc
-                     (rest : List (json-parse-string-loop src (+ pos 2) len))
-                  [(concat [escaped] (at rest 0)) (at rest 1)])
+                  (if (= next 117) ;; \u unicode escape — consume 6 chars: \uXXXX
+                    (let (esc-bytes : Bytes (unicode-escape-to-bytes src (+ pos 2)))
+                         (rest : List (json-parse-string-loop src (+ pos 6) len))
+                      [(concat [esc-bytes] (at rest 0)) (at rest 1)])
+                    (let (escaped : Bytes (if (= next 110) (bytes-from-int8 10)   ;; \n
+                                            (if (= next 116) (bytes-from-int8 9)  ;; \t
+                                              (if (= next 114) (bytes-from-int8 13) ;; \r
+                                                (bytes-from-int8 next)))))          ;; \\ \" etc
+                         (rest : List (json-parse-string-loop src (+ pos 2) len))
+                      [(concat [escaped] (at rest 0)) (at rest 1)])))
                 (let (rest : List (json-parse-string-loop src (+ pos 1) len))
                   [(concat [(bytes-from-int8 b)] (at rest 0)) (at rest 1)]))))))
 

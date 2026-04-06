@@ -29,53 +29,25 @@ fn err_variant(msg: &str) -> *mut RtValue {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(not(target_os = "airlos"))]
-enum ExecPolicy {
-    Disabled,
-    AllowAll,
-    AllowList(Vec<String>),
-}
-
-#[cfg(not(target_os = "airlos"))]
-fn exec_policy() -> &'static ExecPolicy {
-    static POLICY: OnceLock<ExecPolicy> = OnceLock::new();
-    POLICY.get_or_init(|| {
-        match std::env::var("AIRL_ALLOW_EXEC") {
-            Ok(val) if !val.is_empty() => {
-                if val.trim() == "*" {
-                    ExecPolicy::AllowAll
-                } else {
-                    let names: Vec<String> = val.split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                    ExecPolicy::AllowList(names)
-                }
-            }
-            _ => ExecPolicy::Disabled,
-        }
-    })
-}
-
-#[cfg(not(target_os = "airlos"))]
 fn check_exec(command: &str) -> Result<(), *mut RtValue> {
-    match exec_policy() {
-        ExecPolicy::Disabled => {
-            Err(err_variant("shell-exec: disabled (set AIRL_ALLOW_EXEC to enable)"))
-        }
-        ExecPolicy::AllowAll => Ok(()),
-        ExecPolicy::AllowList(allowed) => {
-            let bin_name = std::path::Path::new(command)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(command);
-            if allowed.iter().any(|a| a == bin_name) {
+    let bin_name = std::path::Path::new(command)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(command);
+    // Use env_snapshot() instead of std::env::var — mimalloc corrupts the libc
+    // environ block after startup, so std::env::var is unreliable post-init.
+    let val = env_snapshot().get("AIRL_ALLOW_EXEC").map(|s| s.as_str()).unwrap_or("");
+    match val.trim() {
+        "*" => Ok(()),
+        v if !v.is_empty() => {
+            let allowed: Vec<&str> = v.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+            if allowed.iter().any(|a| *a == bin_name) {
                 Ok(())
             } else {
-                Err(err_variant(&format!(
-                    "shell-exec: '{}' not in AIRL_ALLOW_EXEC allowlist", bin_name
-                )))
+                Err(err_variant(&format!("shell-exec: '{}' not in AIRL_ALLOW_EXEC allowlist", bin_name)))
             }
         }
+        _ => Err(err_variant("shell-exec: disabled (set AIRL_ALLOW_EXEC to enable)")),
     }
 }
 
