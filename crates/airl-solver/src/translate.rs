@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use z3::ast::{self, Ast};
 use z3::Context;
-use airl_syntax::ast::{Expr, ExprKind};
+use airl_syntax::ast::{Expr, ExprKind, LetBinding, AstTypeKind};
 
 /// Error during AIRL → Z3 translation.
 #[derive(Debug, Clone)]
@@ -75,6 +75,102 @@ impl<'ctx> Translator<'ctx> {
         self.real_vars.get(name)
     }
 
+    /// Get a reference to a boolean variable.
+    pub fn get_bool_var(&self, name: &str) -> Option<&ast::Bool<'ctx>> {
+        self.bool_vars.get(name)
+    }
+
+    /// Push let bindings into the variable maps, saving prior state.
+    /// Returns the saved state on success, or restores on error and returns Err.
+    fn push_let_bindings(
+        &mut self,
+        bindings: &[LetBinding],
+    ) -> Result<(
+        Vec<(String, Option<ast::Int<'ctx>>)>,
+        Vec<(String, Option<ast::Bool<'ctx>>)>,
+        Vec<(String, Option<ast::Real<'ctx>>)>,
+    ), TranslateError> {
+        let mut saved_ints: Vec<(String, Option<ast::Int<'ctx>>)> = Vec::new();
+        let mut saved_bools: Vec<(String, Option<ast::Bool<'ctx>>)> = Vec::new();
+        let mut saved_reals: Vec<(String, Option<ast::Real<'ctx>>)> = Vec::new();
+
+        for binding in bindings {
+            let sort = if let AstTypeKind::Named(tn) = &binding.ty.kind {
+                Self::sort_from_type_name(tn)
+            } else {
+                None
+            };
+
+            match sort {
+                Some(VarSort::Int) => match self.translate_int(&binding.value) {
+                    Ok(v) => {
+                        let prev = self.int_vars.insert(binding.name.clone(), v);
+                        saved_ints.push((binding.name.clone(), prev));
+                    }
+                    Err(e) => {
+                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals);
+                        return Err(e);
+                    }
+                },
+                Some(VarSort::Bool) => match self.translate_bool(&binding.value) {
+                    Ok(v) => {
+                        let prev = self.bool_vars.insert(binding.name.clone(), v);
+                        saved_bools.push((binding.name.clone(), prev));
+                    }
+                    Err(e) => {
+                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals);
+                        return Err(e);
+                    }
+                },
+                Some(VarSort::Real) => match self.translate_real(&binding.value) {
+                    Ok(v) => {
+                        let prev = self.real_vars.insert(binding.name.clone(), v);
+                        saved_reals.push((binding.name.clone(), prev));
+                    }
+                    Err(e) => {
+                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals);
+                        return Err(e);
+                    }
+                },
+                None => {
+                    self.pop_let_bindings(saved_ints, saved_bools, saved_reals);
+                    return Err(TranslateError::UnsupportedExpression(
+                        format!("let binding '{}': unsupported type", binding.name)
+                    ));
+                }
+            }
+        }
+
+        Ok((saved_ints, saved_bools, saved_reals))
+    }
+
+    /// Restore variable maps from state saved by `push_let_bindings`.
+    fn pop_let_bindings(
+        &mut self,
+        saved_ints: Vec<(String, Option<ast::Int<'ctx>>)>,
+        saved_bools: Vec<(String, Option<ast::Bool<'ctx>>)>,
+        saved_reals: Vec<(String, Option<ast::Real<'ctx>>)>,
+    ) {
+        for (name, prev) in saved_ints.into_iter().rev() {
+            match prev {
+                Some(v) => { self.int_vars.insert(name, v); }
+                None => { self.int_vars.remove(&name); }
+            }
+        }
+        for (name, prev) in saved_bools.into_iter().rev() {
+            match prev {
+                Some(v) => { self.bool_vars.insert(name, v); }
+                None => { self.bool_vars.remove(&name); }
+            }
+        }
+        for (name, prev) in saved_reals.into_iter().rev() {
+            match prev {
+                Some(v) => { self.real_vars.insert(name, v); }
+                None => { self.real_vars.remove(&name); }
+            }
+        }
+    }
+
     /// Translate an AIRL expression to a Z3 Bool (for contracts).
     pub fn translate_bool(&mut self, expr: &Expr) -> Result<ast::Bool<'ctx>, TranslateError> {
         match &expr.kind {
@@ -127,6 +223,24 @@ impl<'ctx> Translator<'ctx> {
                 }
             }
 
+            ExprKind::If(cond, then_e, else_e) => {
+                let c = self.translate_bool(cond)?;
+                let t = self.translate_bool(then_e)?;
+                let e = self.translate_bool(else_e)?;
+                Ok(c.ite(&t, &e))
+            }
+
+            ExprKind::Let(bindings, body) => {
+                let saved = self.push_let_bindings(bindings)?;
+                let result = self.translate_bool(body);
+                self.pop_let_bindings(saved.0, saved.1, saved.2);
+                result
+            }
+
+            ExprKind::Do(exprs) => exprs.last()
+                .ok_or_else(|| TranslateError::UnsupportedExpression("empty do block".into()))
+                .and_then(|e| self.translate_bool(e)),
+
             ExprKind::Forall(param, where_clause, body) => {
                 self.translate_quantifier(param, where_clause.as_deref(), body, true)
             }
@@ -170,6 +284,10 @@ impl<'ctx> Translator<'ctx> {
                                 let lhs = self.translate_int(&args[0])?;
                                 let rhs = self.translate_int(&args[1])?;
                                 Ok(ast::Int::sub(self.ctx, &[&lhs, &rhs]))
+                            } else if args.len() == 1 {
+                                let inner = self.translate_int(&args[0])?;
+                                let neg_one = ast::Int::from_i64(self.ctx, -1);
+                                Ok(ast::Int::mul(self.ctx, &[&neg_one, &inner]))
                             } else {
                                 Err(TranslateError::UnsupportedExpression("unary minus".into()))
                             }
@@ -200,6 +318,24 @@ impl<'ctx> Translator<'ctx> {
                     Err(TranslateError::UnsupportedExpression("non-symbol callee".into()))
                 }
             }
+
+            ExprKind::If(cond, then_e, else_e) => {
+                let c = self.translate_bool(cond)?;
+                let t = self.translate_int(then_e)?;
+                let e = self.translate_int(else_e)?;
+                Ok(c.ite(&t, &e))
+            }
+
+            ExprKind::Let(bindings, body) => {
+                let saved = self.push_let_bindings(bindings)?;
+                let result = self.translate_int(body);
+                self.pop_let_bindings(saved.0, saved.1, saved.2);
+                result
+            }
+
+            ExprKind::Do(exprs) => exprs.last()
+                .ok_or_else(|| TranslateError::UnsupportedExpression("empty do block".into()))
+                .and_then(|e| self.translate_int(e)),
 
             _ => Err(TranslateError::UnsupportedExpression(
                 format!("int context: {:?}", expr.kind)
@@ -271,6 +407,24 @@ impl<'ctx> Translator<'ctx> {
                     Err(TranslateError::UnsupportedExpression("non-symbol callee".into()))
                 }
             }
+
+            ExprKind::If(cond, then_e, else_e) => {
+                let c = self.translate_bool(cond)?;
+                let t = self.translate_real(then_e)?;
+                let e = self.translate_real(else_e)?;
+                Ok(c.ite(&t, &e))
+            }
+
+            ExprKind::Let(bindings, body) => {
+                let saved = self.push_let_bindings(bindings)?;
+                let result = self.translate_real(body);
+                self.pop_let_bindings(saved.0, saved.1, saved.2);
+                result
+            }
+
+            ExprKind::Do(exprs) => exprs.last()
+                .ok_or_else(|| TranslateError::UnsupportedExpression("empty do block".into()))
+                .and_then(|e| self.translate_real(e)),
 
             _ => Err(TranslateError::UnsupportedExpression(
                 format!("real context: {:?}", expr.kind)

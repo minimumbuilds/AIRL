@@ -1,4 +1,5 @@
 use z3::{Config, Context, SatResult, Solver};
+use z3::ast::Ast;
 use airl_syntax::ast::{Expr, ExprKind, FnDef, AstTypeKind};
 use crate::translate::{Translator, VarSort};
 use crate::{VerifyResult, FunctionVerification};
@@ -109,12 +110,46 @@ impl Z3Prover {
             }
         }
 
+        // Translate the function body and bind it to `result`.
+        // If translation fails (unsupported constructs), fall back to Unknown for
+        // any ensures clause that references result.
+        let body_translated = match &def.return_type.kind {
+            AstTypeKind::Named(type_name) => match Translator::sort_from_type_name(type_name) {
+                Some(VarSort::Int) => match translator.translate_int(&def.body) {
+                    Ok(body_z3) => {
+                        let result_var = translator.get_int_var("result").unwrap().clone();
+                        solver.assert(&result_var._eq(&body_z3));
+                        true
+                    }
+                    Err(_) => false,
+                },
+                Some(VarSort::Bool) => match translator.translate_bool(&def.body) {
+                    Ok(body_z3) => {
+                        let result_var = translator.get_bool_var("result").unwrap().clone();
+                        solver.assert(&result_var._eq(&body_z3));
+                        true
+                    }
+                    Err(_) => false,
+                },
+                Some(VarSort::Real) => match translator.translate_real(&def.body) {
+                    Ok(body_z3) => {
+                        let result_var = translator.get_real_var("result").unwrap().clone();
+                        solver.assert(&result_var._eq(&body_z3));
+                        true
+                    }
+                    Err(_) => false,
+                },
+                None => false,
+            },
+            _ => false,
+        };
+
         // Prove each :ensures clause
         let mut ensures_results = Vec::new();
         for ensures_expr in &def.ensures {
             let clause_source = ensures_expr.to_airl();
 
-            if clause_references_result(ensures_expr) {
+            if clause_references_result(ensures_expr) && !body_translated {
                 ensures_results.push((
                     clause_source,
                     VerifyResult::Unknown(
@@ -195,6 +230,7 @@ mod tests {
         ret_type: &str,
         requires: Vec<Expr>,
         ensures: Vec<Expr>,
+        body: Expr,
     ) -> FnDef {
         FnDef {
             name: name.into(),
@@ -210,7 +246,9 @@ mod tests {
             requires,
             ensures,
             invariants: vec![],
-            body: Expr { kind: ExprKind::IntLit(0), span: Span::dummy() },
+            is_pure: false,
+            is_total: false,
+            body,
             execute_on: None,
             priority: None,
             is_public: false,
@@ -232,19 +270,19 @@ mod tests {
         // (defn add [(a : i32) (b : i32) -> i32]
         //   :requires [(valid a) (valid b)]
         //   :ensures [(= result (+ a b))])
-        // The ensures clause references `result` — without body translation we cannot
-        // verify it, so it returns Unknown rather than a misleading Disproven.
+        // Body is (+ a b) — body translation binds result == a+b, so ensures is Proven.
         let def = make_fn("add",
             vec![("a", "i32"), ("b", "i32")], "i32",
             vec![call("valid", vec![sym("a")]), call("valid", vec![sym("b")])],
             vec![call("=", vec![sym("result"), call("+", vec![sym("a"), sym("b")])])],
+            call("+", vec![sym("a"), sym("b")]),
         );
         let prover = Z3Prover::new();
         let verification = prover.verify_function(&def);
         assert_eq!(verification.ensures_results.len(), 1);
         assert!(
-            matches!(&verification.ensures_results[0].1, VerifyResult::Unknown(msg) if msg.contains("body translation")),
-            "expected Unknown(body translation) for result postcondition, got: {:?}",
+            matches!(&verification.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for (= result (+ a b)) with body (+ a b), got: {:?}",
             verification,
         );
     }
@@ -254,65 +292,63 @@ mod tests {
         // (defn mul [(a : i32) (b : i32) -> i32]
         //   :requires [(valid a)]
         //   :ensures [(= result (+ a b))])  ← wrong! body is *, not +
-        // The ensures clause references `result` — without body translation we cannot
-        // verify it, so it returns Unknown rather than a misleading Disproven.
+        // Body is (* a b) — body translation binds result == a*b, ensures says result == a+b.
+        // Z3 finds a counterexample (e.g. a=2, b=3: 6 != 5).
         let def = make_fn("mul",
             vec![("a", "i32"), ("b", "i32")], "i32",
             vec![call("valid", vec![sym("a")])],
             vec![call("=", vec![sym("result"), call("+", vec![sym("a"), sym("b")])])],
+            call("*", vec![sym("a"), sym("b")]),
         );
         let prover = Z3Prover::new();
         let verification = prover.verify_function(&def);
         assert_eq!(verification.ensures_results.len(), 1);
         assert!(
-            matches!(&verification.ensures_results[0].1, VerifyResult::Unknown(msg) if msg.contains("body translation")),
-            "expected Unknown(body translation) for result postcondition, got: {:?}",
+            matches!(&verification.ensures_results[0].1, VerifyResult::Disproven { .. }),
+            "expected Disproven for (= result (+ a b)) with body (* a b), got: {:?}",
             verification,
         );
     }
 
     #[test]
     fn prove_valid_only_trivially() {
-        // :ensures [(valid result)] — references `result`, so returns Unknown
-        // (previously this was "proven" because valid() ignores its arg and returns true,
-        // but that was misleading — the clause references result which isn't bound to the body)
+        // Body is x (identity). result == x.
+        // :ensures [(valid result)] — valid() always returns true in Z3, so Proven.
         let def = make_fn("id",
             vec![("x", "i32")], "i32",
             vec![call("valid", vec![sym("x")])],
             vec![call("valid", vec![sym("result")])],
+            sym("x"),
         );
         let prover = Z3Prover::new();
         let verification = prover.verify_function(&def);
         assert_eq!(verification.ensures_results.len(), 1);
         assert!(
-            matches!(&verification.ensures_results[0].1, VerifyResult::Unknown(msg) if msg.contains("body translation")),
-            "expected Unknown(body translation) for result postcondition, got: {:?}",
+            matches!(&verification.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for (valid result) (valid is always true), got: {:?}",
             verification,
         );
     }
 
     #[test]
     fn prove_with_requires_constraint() {
-        // :requires [(>= a 0) (>= b 0) (= result (+ a b))]
-        // :ensures [(>= result 0)]
-        // The ensures clause references `result` — even though result is constrained in
-        // :requires, we emit Unknown because body translation is not yet implemented.
-        // The requires-based constraint pattern is documented but not yet exploited.
+        // Body is (+ a b). :requires [(>= a 0) (>= b 0)].
+        // :ensures [(>= result 0)] — proven because result == a+b >= 0 given preconditions.
         let def = make_fn("add_pos",
             vec![("a", "i32"), ("b", "i32")], "i32",
             vec![
                 call(">=", vec![sym("a"), int(0)]),
                 call(">=", vec![sym("b"), int(0)]),
-                call("=", vec![sym("result"), call("+", vec![sym("a"), sym("b")])]),
             ],
             vec![call(">=", vec![sym("result"), int(0)])],
+            call("+", vec![sym("a"), sym("b")]),
         );
         let prover = Z3Prover::new();
         let verification = prover.verify_function(&def);
         assert_eq!(verification.ensures_results.len(), 1);
         assert!(
-            matches!(&verification.ensures_results[0].1, VerifyResult::Unknown(msg) if msg.contains("body translation")),
-            "expected Unknown(body translation) for result postcondition, got: {:?}",
+            matches!(&verification.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for (>= result 0) with nonneg args and body (+ a b), got: {:?}",
             verification,
         );
     }
@@ -325,6 +361,7 @@ mod tests {
             vec![("a", "i32")], "i32",
             vec![],
             vec![call(">=", vec![call("*", vec![sym("a"), sym("a")]), int(0)])],
+            call("*", vec![sym("a"), sym("a")]),
         );
         let prover = Z3Prover::new();
         let verification = prover.verify_function(&def);
@@ -343,6 +380,7 @@ mod tests {
             vec![("a", "i32")], "i32",
             vec![],
             vec![call(">", vec![sym("a"), int(0)])],
+            sym("a"),
         );
         let prover = Z3Prover::new();
         let verification = prover.verify_function(&def);
@@ -362,6 +400,7 @@ mod tests {
             vec![("a", "i32")], "i32",
             vec![call(">=", vec![sym("a"), int(0)])],
             vec![call(">=", vec![sym("a"), int(0)])],
+            sym("a"),
         );
         let prover = Z3Prover::new();
         let verification = prover.verify_function(&def);
@@ -378,10 +417,128 @@ mod tests {
         let def = make_fn("greet",
             vec![("name", "String")], "String",
             vec![], vec![],
+            sym("name"),
         );
         let prover = Z3Prover::new();
         let result = prover.verify_function(&def);
         // Should return Unknown for all clauses (no clauses = trivially OK)
         assert!(result.ensures_results.is_empty() || !result.has_disproven());
+    }
+
+    // ── New tests for body translation feature ──────────────────────────────
+
+    #[test]
+    fn body_translation_proves_result_equals_sum() {
+        // (defn add [(a : i32) (b : i32) -> i32] (+ a b))
+        // :ensures [(= result (+ a b))]
+        // Body (+ a b) is translated; result == a+b is asserted → Proven.
+        let def = make_fn("add",
+            vec![("a", "i32"), ("b", "i32")], "i32",
+            vec![],
+            vec![call("=", vec![sym("result"), call("+", vec![sym("a"), sym("b")])])],
+            call("+", vec![sym("a"), sym("b")]),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn body_translation_proves_nonneg_result_from_nonneg_args() {
+        // (defn add_pos [(a : i32) (b : i32) -> i32]
+        //   :requires [(>= a 0) (>= b 0)]
+        //   :ensures [(>= result 0)])
+        // Body (+ a b) — Z3 proves result>=0 given a>=0, b>=0.
+        let def = make_fn("add_pos",
+            vec![("a", "i32"), ("b", "i32")], "i32",
+            vec![
+                call(">=", vec![sym("a"), int(0)]),
+                call(">=", vec![sym("b"), int(0)]),
+            ],
+            vec![call(">=", vec![sym("result"), int(0)])],
+            call("+", vec![sym("a"), sym("b")]),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn body_translation_disproves_false_postcondition() {
+        // (defn wrong_add [(a : i32) (b : i32) -> i32]
+        //   :ensures [(= result (* a b))])  ← wrong, body is +
+        // Body (+ a b), ensures (* a b) — Z3 finds counterexample.
+        let def = make_fn("wrong_add",
+            vec![("a", "i32"), ("b", "i32")], "i32",
+            vec![],
+            vec![call("=", vec![sym("result"), call("*", vec![sym("a"), sym("b")])])],
+            call("+", vec![sym("a"), sym("b")]),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Disproven { .. }),
+            "expected Disproven, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn body_translation_handles_if_ite() {
+        // (defn abs [(a : i32) -> i32]
+        //   (if (> a 0) a (- 0 a)))
+        // :ensures [(>= result 0)]
+        // Body uses if — translates to ite(a>0, a, -a).
+        let def = make_fn("abs",
+            vec![("a", "i32")], "i32",
+            vec![],
+            vec![call(">=", vec![sym("result"), int(0)])],
+            Expr {
+                kind: ExprKind::If(
+                    Box::new(call(">", vec![sym("a"), int(0)])),
+                    Box::new(sym("a")),
+                    Box::new(call("-", vec![int(0), sym("a")])),
+                ),
+                span: Span::dummy(),
+            },
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for abs result >= 0, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn body_translation_fallback_when_unsupported() {
+        // Body uses a construct that can't be translated (string literal in int context).
+        // result-referencing ensures should fall back to Unknown, not panic.
+        let unsupported_body = Expr {
+            kind: ExprKind::StrLit("hello".into()),
+            span: Span::dummy(),
+        };
+        let def = make_fn("opaque",
+            vec![("a", "i32")], "i32",
+            vec![],
+            vec![call("=", vec![sym("result"), int(42)])],
+            unsupported_body,
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Unknown(_)),
+            "expected Unknown fallback for untranslatable body, got: {:?}", v,
+        );
     }
 }
