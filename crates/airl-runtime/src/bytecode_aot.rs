@@ -1788,6 +1788,11 @@ impl BytecodeAot {
                     last_was_terminator = true;
                 }
 
+                Op::Release => {
+                    // No-op in unboxed path — unboxed functions use stack integers, not heap RtValue ptrs
+                    last_was_terminator = false;
+                }
+
                 // ── Contract assertions ──────────────────────────────
                 // Happy path: one conditional branch (predicted taken).
                 // Sad path: call runtime helper, return sentinel.
@@ -2655,6 +2660,16 @@ impl BytecodeAot {
                     }
                     builder.ins().jump(loop_block, &[]);
                     last_was_terminator = true;
+                }
+
+                // ── Memory management ─────────────────────────────────
+                // Release is a no-op in the boxed AOT path. The AOT memory model
+                // uses move semantics (no retain-on-Move), so Release opcodes would
+                // cause double-frees. Heap memory is reclaimed at process exit.
+                // Full AOT reference-count support requires retain-on-Move and
+                // retain-on-Call, which is a future project.
+                Op::Release => {
+                    last_was_terminator = false;
                 }
 
                 // ── CallBuiltin ───────────────────────────────────────

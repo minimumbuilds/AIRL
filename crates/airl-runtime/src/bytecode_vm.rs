@@ -34,7 +34,7 @@ fn is_simple_closure(func: &BytecodeFunc) -> bool {
             | Op::Return
             | Op::CallBuiltin
             | Op::MakeList
-            | Op::MarkMoved | Op::CheckNotMoved => {}
+            | Op::MarkMoved | Op::CheckNotMoved | Op::Release => {}
             _ => return false,
         }
     }
@@ -1194,6 +1194,10 @@ impl BytecodeVm {
                         // Actually the dispatch code does: if (instr.b as usize) < f.constants.len()
                         // so out-of-bounds b is handled gracefully — skip validation for b
                     }
+                    // a=reg (register to release)
+                    Op::Release => {
+                        check_reg(instr.a, "a")?;
+                    }
                 }
             }
         }
@@ -1873,6 +1877,18 @@ impl BytecodeVm {
                         return Ok(result);
                     }
                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, return_reg as usize, result);
+                }
+
+                Op::Release => {
+                    let reg_idx = instr.a as usize;
+                    let frame = self.call_stack.last_mut().expect("internal: call stack empty");
+                    if reg_idx < frame.registers.len() {
+                        let old = frame.registers[reg_idx];
+                        if !old.is_null() {
+                            airl_value_release(old);
+                            frame.registers[reg_idx] = std::ptr::null_mut();
+                        }
+                    }
                 }
 
                 Op::MakeClosure => {

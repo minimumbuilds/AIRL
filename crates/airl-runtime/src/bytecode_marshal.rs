@@ -97,6 +97,12 @@ fn int_to_op(n: u16) -> Result<Op, RuntimeError> {
         31 => Ok(Op::JumpIfNoMatch),
         32 => Ok(Op::MatchWild),
         33 => Ok(Op::TryUnwrap),
+        34 => Ok(Op::AssertRequires),
+        35 => Ok(Op::AssertEnsures),
+        36 => Ok(Op::AssertInvariant),
+        37 => Ok(Op::MarkMoved),
+        38 => Ok(Op::CheckNotMoved),
+        39 => Ok(Op::Release),
         _  => Err(type_err(&format!("unknown opcode: {}", n))),
     }
 }
@@ -518,7 +524,13 @@ mod tests {
         assert_eq!(int_to_op(5).unwrap(), Op::Add);
         assert_eq!(int_to_op(25).unwrap(), Op::Return);
         assert_eq!(int_to_op(33).unwrap(), Op::TryUnwrap);
-        assert!(int_to_op(34).is_err());
+        assert_eq!(int_to_op(34).unwrap(), Op::AssertRequires);
+        assert_eq!(int_to_op(35).unwrap(), Op::AssertEnsures);
+        assert_eq!(int_to_op(36).unwrap(), Op::AssertInvariant);
+        assert_eq!(int_to_op(37).unwrap(), Op::MarkMoved);
+        assert_eq!(int_to_op(38).unwrap(), Op::CheckNotMoved);
+        assert_eq!(int_to_op(39).unwrap(), Op::Release);
+        assert!(int_to_op(40).is_err());
     }
 
     #[test]

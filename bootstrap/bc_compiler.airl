@@ -51,6 +51,9 @@
 (defn op-mark-moved       :sig [-> Int] :requires [true] :ensures [(= result 37)] :body 37)
 (defn op-check-not-moved  :sig [-> Int] :requires [true] :ensures [(= result 38)] :body 38)
 
+;; Memory management
+(defn op-release          :sig [-> Int] :requires [true] :ensures [(= result 39)] :body 39)
+
 ;; ── Compiler state management ───────────────────────────
 ;; State is a map with keys: "instrs", "consts", "locals", "next-reg", "max-reg",
 ;; "lambdas", "lambda-ctr"
@@ -176,12 +179,27 @@
           (let (new-max : Int (if (> nr mx) nr mx))
             [(map-set (map-set st "next-reg" nr) "max-reg" new-max) r])))))
 
+(defn bc-emit-releases-loop
+  :sig [(st : _) (current : Int) (target : Int) -> _]
+  :intent "Emit Release for each register from (target) to (current-1) inclusive"
+  :requires [(valid st) (>= current target)]
+  :ensures [(valid result)]
+  :body
+    (if (<= current target)
+      st
+      (let (reg : Int (- current 1))
+        (let (st2 : _ (cs-emit st (op-release) 0 reg 0))
+          (bc-emit-releases-loop st2 reg target)))))
+
 (defn cs-free-reg-to
   :sig [(st : _) (r : Int) -> _]
-  :intent "Free registers back to r"
+  :intent "Emit Release for registers [r..next-reg) then mark them free"
   :requires [(valid st)]
   :ensures [(valid result)]
-  :body (map-set st "next-reg" r))
+  :body
+    (let (current : Int (cs-next-reg st))
+      (let (st2 : _ (bc-emit-releases-loop st current r))
+        (map-set st2 "next-reg" r))))
 
 (defn cs-set-local
   :sig [(st : _) (name : String) (reg : Int) -> _]

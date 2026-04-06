@@ -65,6 +65,9 @@ pub enum Op {
     // Ownership tracking
     MarkMoved,      // _, a(src_reg), _           -- mark register as moved
     CheckNotMoved,  // _, a(src_reg), b(name_idx) -- error if register was moved (name for error msg)
+
+    // Memory management
+    Release,        // _, a(reg), _               -- call airl_value_release on register a
 }
 
 /// A single bytecode instruction — fixed size for cache-friendly execution.
