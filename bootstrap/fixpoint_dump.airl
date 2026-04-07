@@ -1,0 +1,32 @@
+;; bootstrap/fixpoint_dump.airl — Dump Tier 3 bytecode for manual diffing
+;;
+;; Compiles the full bootstrap chain twice and writes each BCFunc list to a
+;; temp file so you can diff them yourself.
+;;
+;; Run with:
+;;   cat bootstrap/lexer.airl bootstrap/parser.airl bootstrap/bc_compiler.airl \
+;;       bootstrap/fixpoint_test.airl bootstrap/fixpoint_dump.airl > /tmp/fixpoint_dump_full.airl
+;;   RUST_MIN_STACK=67108864 timeout 180 target/release/airl-driver run /tmp/fixpoint_dump_full.airl
+;;   diff /tmp/fixpoint_bc1.txt /tmp/fixpoint_bc2.txt
+
+(print "── Tier 3 dump: writing bc1 and bc2 to /tmp/ ──")
+
+(let (t3-source : String
+       (+ (read-file "bootstrap/lexer.airl")
+          (+ "\n" (+ (read-file "bootstrap/parser.airl")
+             (+ "\n" (+ (read-file "bootstrap/bc_compiler.airl")
+                (+ "\n" (read-file "bootstrap/g3_compiler.airl"))))))))
+  (match (parse-source t3-source)
+    (Err e) (print "parse error:" e)
+    (Ok ast)
+      (match (bc-compile-program ast)
+        (Err e) (print "compile pass 1 error:" e)
+        (Ok bc1)
+          (match (bc-compile-program ast)
+            (Err e) (print "compile pass 2 error:" e)
+            (Ok bc2)
+              (do
+                (write-file "/tmp/fixpoint_bc1.txt" (str bc1))
+                (write-file "/tmp/fixpoint_bc2.txt" (str bc2))
+                (print "wrote /tmp/fixpoint_bc1.txt and /tmp/fixpoint_bc2.txt")
+                (print "run: diff /tmp/fixpoint_bc1.txt /tmp/fixpoint_bc2.txt"))))))
