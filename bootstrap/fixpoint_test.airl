@@ -68,4 +68,28 @@
          (read-file "bootstrap/bc_compiler.airl")))
   (print "Tier 2 done, result:" t2-result))
 
+;; ── Tier 3: Full chain fixpoint ────────────────────────
+;;
+;; Compile the entire bootstrap chain (lexer + parser + bc_compiler + g3_compiler,
+;; ~3,200 lines) via bc-compile-program twice.  This is the ultimate fixpoint proof:
+;; every function definition across all four bootstrap files must produce bitwise-
+;; identical BCFunc output on consecutive passes, proving the compiler is deterministic
+;; across its full self-hosted surface.
+;;
+;; g3_compiler.airl contains a top-level (let ...) that calls get-args/exit — safe to
+;; include because bc-compile-program only compiles the AST, never evaluates it.
+
+(print "── Tier 3: bc_compiler fixpoint on full bootstrap chain ──")
+
+(let (t3-source : String
+       (+ (read-file "bootstrap/lexer.airl")
+          (+ "\n" (+ (read-file "bootstrap/parser.airl")
+             (+ "\n" (+ (read-file "bootstrap/bc_compiler.airl")
+                (+ "\n" (read-file "bootstrap/g3_compiler.airl"))))))))
+     (t3-result : Bool
+       (run-fixpoint-test
+         "tier 3 fixpoint — full chain determinism (lexer+parser+bc_compiler+g3_compiler)"
+         t3-source))
+  (print "Tier 3 done, result:" t3-result))
+
 (print "fixpoint tests complete")
