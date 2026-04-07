@@ -12,7 +12,7 @@ AIRL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 export AIRL_STDLIB="${AIRL_STDLIB:-$AIRL_ROOT/stdlib}"
 
 STAGE1="$AIRL_ROOT/g3"
-STAGE2="/tmp/g3-v2"
+STAGE2="$(mktemp -u /tmp/g3-v2-XXXXXX)"
 
 # ── Pre-flight ───────────────────────────────────────────────────────────────
 
@@ -37,6 +37,8 @@ echo "[t-diagram] stage 1: $HASH1  $STAGE1 ($SIZE1)"
 # ── Stage 2: g3 compiles itself ──────────────────────────────────────────────
 
 echo "[t-diagram] running stage 2 (g3 compiles bootstrap chain)..."
+# g3 (self-hosted binary) takes source files as positional args after --
+# build-g3.sh uses airl-driver with --load flags; ./g3 has its own CLI
 "$STAGE1" -- \
     bootstrap/lexer.airl \
     bootstrap/parser.airl \
