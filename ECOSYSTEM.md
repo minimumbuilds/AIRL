@@ -208,6 +208,36 @@ Terminal UI framework built on a single premise: the UI is data. Scenes are S-ex
 
 ---
 
+## Persistence
+
+### AirWire -- Wire Protocol Primitives
+
+Shared library for binary protocol encoding and SCRAM-SHA-256 authentication. Two modules: `wire-binary` provides offset-threading big-endian int codecs (`encode/decode-int8/16/32/64`, `encode/decode-cstring`) and the `make-decoded` Map constructor used throughout the ecosystem. `wire-scram` provides the 10 pure SCRAM-SHA-256/512 functions from RFC 5802 — key derivation, proof computation, nonce exchange — shared between the Kafka SDK and PostgreSQL client without duplication.
+
+| | |
+|---|---|
+| **Location** | `../AirWire` |
+| **Size** | ~600 LOC (2 modules), 38 assertions (unit tests) |
+| **Version** | 0.2.0 |
+| **Status** | Functional. Wire-binary and wire-scram modules complete. |
+| **Depends on** | stdlib (bytes, base64, hmac, pbkdf2, sha256) |
+
+### AirDB -- PostgreSQL Client SDK
+
+PostgreSQL wire protocol v3 client implemented in pure AIRL. Full 5-layer stack: pg-wire (frame encode/decode, `pg-peek-message`), pg-protocol (all 10 frontend encoders + 15 backend decoders), pg-auth (SCRAM-SHA-256 via AirWire — md5 deliberately excluded), pg-conn (TCP state machine, startup handshake, ReadyForQuery), airdb (public API). Phases 1 and 2 complete: `airdb-connect`, `airdb-query`, `airdb-exec`, `airdb-prepare`, `airdb-execute`, transactions (`airdb-begin/commit/rollback`, `airdb-with-transaction`). Extended query protocol with `$1/$2` parameter binding. Coercion helpers: `airdb-int`, `airdb-bool`, `airdb-json`.
+
+Note: server must be configured for `scram-sha-256` auth (PostgreSQL 14+ default). md5 auth is not implemented (deprecated in PG 14, disabled by default in PG 17).
+
+| | |
+|---|---|
+| **Location** | `../AirDB` |
+| **Size** | ~1,000 LOC (5 modules), 75 assertions (unit tests) |
+| **Version** | 0.2.0 |
+| **Status** | Functional. Phases 1+2 complete. Unit tests pass. Integration tests require PostgreSQL 16. |
+| **Depends on** | AirWire, airline, stdlib (bytes, string, json) |
+
+---
+
 ## Tooling
 
 ### airlDelivery (aird) -- Package Manager
@@ -351,7 +381,9 @@ SSH client for AIRLOS. Implements the SSH-2 protocol from scratch: key exchange 
 | AIRL_bench | AIRL | 847 | 27 | Functional |
 | AirLog | AIRL | 649 | 1 | Functional |
 | AirLock | AIRL | 2,607 | 3 | Functional |
-| **Total** | | **~164,029** | **1,046** | |
+| AirWire | AIRL | 600 | 3 | v0.2.0 |
+| AirDB | AIRL | 1,000 | 3 | v0.2.0 |
+| **Total** | | **~165,629** | **1,052** | |
 
 ## Building
 
