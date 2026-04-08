@@ -666,18 +666,22 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "regex-split" => airl_rt::misc::airl_regex_split(a0!(), a1!()),
 
         // Crypto
-        // sha256, hmac-sha256 deregistered — AIRL stdlib equivalents take over
+        // sha256-bytes and hmac-sha256-bytes re-registered as C builtins (eliminates
+        // pure-AIRL SHA256 OOM at 4096 PBKDF2 iterations)
         // base64-encode, base64-decode, base64-encode-bytes, base64-decode-bytes
         // deregistered — AIRL stdlib equivalents in base64.airl take over
         "random-bytes" => airl_rt::misc::airl_random_bytes(a0!()),
+        "sha256" => airl_rt::misc::airl_sha256(a0!()),
+        "hmac-sha256" => airl_rt::misc::airl_hmac_sha256(a0!(), a1!()),
+        "sha256-bytes" => airl_rt::misc::airl_sha256_bytes(a0!()),
+        "hmac-sha256-bytes" => airl_rt::misc::airl_hmac_sha256_bytes(a0!(), a1!()),
         "sha512" => airl_rt::misc::airl_sha512(a0!()),
         "hmac-sha512" => airl_rt::misc::airl_hmac_sha512(a0!(), a1!()),
-        // sha256-bytes, hmac-sha256-bytes, pbkdf2-sha256
-        // deregistered — AIRL stdlib equivalents take over
         "sha512-bytes" => airl_rt::misc::airl_sha512_bytes(a0!()),
         "hmac-sha512-bytes" => airl_rt::misc::airl_hmac_sha512_bytes(a0!(), a1!()),
         "pbkdf2-sha512" => airl_rt::misc::airl_pbkdf2_sha512(a0!(), a1!(), a2!(), a3!()),
         "bytes-xor" => airl_rt::misc::airl_bytes_xor(a0!(), a1!()),
+        "bytes-xor-scalar" => airl_rt::misc::airl_bytes_xor_scalar(a0!(), a1!()),
         // base64-decode-bytes, base64-encode-bytes removed above
         "bitwise-xor" => airl_rt::misc::airl_bitwise_xor(a0!(), a1!()),
         "bitwise-and" => airl_rt::misc::airl_bitwise_and(a0!(), a1!()),
@@ -885,7 +889,10 @@ fn builtin_arity(name: &str) -> Option<usize> {
         // Math — binary
         "parse-int-radix" | "int-to-string-radix" | "format-time" => Some(2),
         // Bitwise — binary
-        "bitwise-xor" | "bitwise-and" | "bitwise-or" | "bitwise-shr" | "bitwise-shl" => Some(2),
+        "bitwise-xor" | "bitwise-and" | "bitwise-or" | "bitwise-shr" | "bitwise-shl"
+        | "bytes-xor" | "bytes-xor-scalar" => Some(2),
+        // Crypto — unary
+        "sha256" | "sha256-bytes" | "random-bytes" => Some(1),
         // Bytes — unary
         "bytes-alloc" | "bytes-length" | "bytes-new" | "bytes-from-int8" | "bytes-from-int16"
         | "bytes-from-int32" | "bytes-from-int64" | "bytes-from-string" | "bytes-concat-all"
@@ -895,12 +902,14 @@ fn builtin_arity(name: &str) -> Option<usize> {
         // Bytes — binary
         "bytes-get" | "bytes-to-int16" | "bytes-to-int32" | "bytes-to-int64"
         | "bytes-concat" | "regex-match" | "regex-find-all" | "regex-split"
-        | "sha512" | "hmac-sha512" | "sha512-bytes" | "hmac-sha512-bytes"
+        | "hmac-sha256" | "hmac-sha256-bytes" | "sha512" | "hmac-sha512"
+        | "sha512-bytes" | "hmac-sha512-bytes"
         | "shell-exec" | "assert" | "sleep" | "dns-resolve" | "icmp-ping" => {
             match name {
                 "bytes-get" | "bytes-to-int16" | "bytes-to-int32" | "bytes-to-int64"
                 | "bytes-concat" | "regex-match" | "regex-find-all" | "regex-split"
-                | "sha512" | "hmac-sha512" | "sha512-bytes" | "hmac-sha512-bytes"
+                | "hmac-sha256" | "hmac-sha256-bytes" | "sha512" | "hmac-sha512"
+                | "sha512-bytes" | "hmac-sha512-bytes"
                 | "shell-exec" | "assert" | "icmp-ping" => Some(2),
                 "sleep" | "dns-resolve" => Some(1),
                 _ => None,

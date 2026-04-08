@@ -842,6 +842,18 @@ pub extern "C" fn airl_bytes_xor(a: *mut RtValue, b: *mut RtValue) -> *mut RtVal
 
 #[cfg(not(target_os = "airlos"))]
 #[no_mangle]
+pub extern "C" fn airl_bytes_xor_scalar(buf: *mut RtValue, scalar: *mut RtValue) -> *mut RtValue {
+    let bytes = extract_bytes(buf);
+    let s = match unsafe { &(*scalar).data } {
+        RtData::Int(n) => (*n & 0xFF) as u8,
+        _ => rt_error("bytes-xor-scalar: scalar must be Int"),
+    };
+    let result: Vec<u8> = bytes.iter().map(|b| b ^ s).collect();
+    rt_bytes(result)
+}
+
+#[cfg(not(target_os = "airlos"))]
+#[no_mangle]
 pub extern "C" fn airl_hmac_sha512_bytes(key: *mut RtValue, data: *mut RtValue) -> *mut RtValue {
     use hmac::{Hmac, Mac};
     let k = unsafe { borrow_or_extract(key) };
