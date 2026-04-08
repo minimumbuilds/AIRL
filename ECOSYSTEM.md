@@ -206,6 +206,18 @@ Terminal UI framework built on a single premise: the UI is data. Scenes are S-ex
 | **Status** | Functional. Phase A+B complete (layout, rendering, diffing, interactive TUI). |
 | **Depends on** | 7 extern-c terminal I/O functions in AIRL runtime, stdlib (string, collections, sha256) |
 
+### AirMux -- Terminal Multiplexer
+
+tmux-like terminal multiplexer for the AIRL ecosystem. Manages named sessions of windows and panes, each backed by a PTY pair running ash. Built on Canopy TUI. Supports horizontal/vertical pane splitting, window tabs, detach/attach. Prefix key: Ctrl-a.
+
+| | |
+|---|---|
+| **Location** | `../AirMux` |
+| **Size** | ~1,100 LOC (3 AIRL modules + C runtime, 1 test suite) |
+| **Version** | 0.1.0 |
+| **Status** | PoC complete. 64 tests passing. Binary builds on Linux. |
+| **Depends on** | Canopy (TUI framework), AIRL stdlib (map, string, json), libutil (openpty) |
+
 ---
 
 ## Persistence
@@ -383,7 +395,8 @@ SSH client for AIRLOS. Implements the SSH-2 protocol from scratch: key exchange 
 | AirLock | AIRL | 2,607 | 3 | Functional |
 | AirWire | AIRL | 600 | 3 | v0.2.0 |
 | AirDB | AIRL | 1,000 | 3 | v0.2.0 |
-| **Total** | | **~165,629** | **1,052** | |
+| AirMux | AIRL + C | 1,100 | 2 | v0.1.0 PoC |
+| **Total** | | **~166,729** | **1,054** | |
 
 ## Building
 
