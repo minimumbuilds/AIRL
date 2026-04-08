@@ -830,6 +830,18 @@ pub extern "C" fn airl_hmac_sha256_bytes(key: *mut RtValue, data: *mut RtValue) 
 
 #[cfg(not(target_os = "airlos"))]
 #[no_mangle]
+pub extern "C" fn airl_bytes_xor(a: *mut RtValue, b: *mut RtValue) -> *mut RtValue {
+    let a_bytes = extract_bytes(a);
+    let b_bytes = extract_bytes(b);
+    if a_bytes.len() != b_bytes.len() {
+        rt_error("bytes-xor: length mismatch");
+    }
+    let result: Vec<u8> = a_bytes.iter().zip(b_bytes.iter()).map(|(x, y)| x ^ y).collect();
+    rt_bytes(result)
+}
+
+#[cfg(not(target_os = "airlos"))]
+#[no_mangle]
 pub extern "C" fn airl_hmac_sha512_bytes(key: *mut RtValue, data: *mut RtValue) -> *mut RtValue {
     use hmac::{Hmac, Mac};
     let k = unsafe { borrow_or_extract(key) };

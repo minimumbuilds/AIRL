@@ -206,6 +206,7 @@ pub struct RuntimeImports {
     pub sha512_bytes: FuncId,
     pub hmac_sha512_bytes: FuncId,
     pub pbkdf2_sha512: FuncId,
+    pub bytes_xor: FuncId,
     pub bitwise_xor: FuncId,
     pub bitwise_and: FuncId,
     pub bitwise_or: FuncId,
@@ -731,6 +732,7 @@ impl BytecodeAot {
         let sha512_bytes = declare_import(m, "airl_sha512_bytes", s1.clone());
         let hmac_sha512_bytes = declare_import(m, "airl_hmac_sha512_bytes", s2.clone());
         let pbkdf2_sha512 = declare_import(m, "airl_pbkdf2_sha512", sig_4_ptr(m, ptr));
+        let bytes_xor = declare_import(m, "airl_bytes_xor", s2.clone());
         let bitwise_xor = declare_import(m, "airl_bitwise_xor", s2.clone());
         let bitwise_and = declare_import(m, "airl_bitwise_and", s2.clone());
         let bitwise_or = declare_import(m, "airl_bitwise_or", s2.clone());
@@ -867,6 +869,7 @@ impl BytecodeAot {
             sha512, hmac_sha512, sha512_bytes,
             hmac_sha512_bytes,
             pbkdf2_sha512,
+            bytes_xor,
             bitwise_xor, bitwise_and, bitwise_or, bitwise_shr, bitwise_shl,
             bytes_alloc, bytes_get, bytes_set, bytes_length,
             bytes_new, bytes_from_int8, bytes_from_int16, bytes_from_int32, bytes_from_int64,
@@ -1042,6 +1045,7 @@ impl BytecodeAot {
         m.insert("sha512-bytes".into(),        rt.sha512_bytes);
         m.insert("hmac-sha512-bytes".into(),   rt.hmac_sha512_bytes);
         m.insert("pbkdf2-sha512".into(),       rt.pbkdf2_sha512);
+        m.insert("bytes-xor".into(),           rt.bytes_xor);
         m.insert("bitwise-xor".into(),         rt.bitwise_xor);
         m.insert("bitwise-and".into(),         rt.bitwise_and);
         m.insert("bitwise-or".into(),          rt.bitwise_or);

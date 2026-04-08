@@ -677,6 +677,7 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "sha512-bytes" => airl_rt::misc::airl_sha512_bytes(a0!()),
         "hmac-sha512-bytes" => airl_rt::misc::airl_hmac_sha512_bytes(a0!(), a1!()),
         "pbkdf2-sha512" => airl_rt::misc::airl_pbkdf2_sha512(a0!(), a1!(), a2!(), a3!()),
+        "bytes-xor" => airl_rt::misc::airl_bytes_xor(a0!(), a1!()),
         // base64-decode-bytes, base64-encode-bytes removed above
         "bitwise-xor" => airl_rt::misc::airl_bitwise_xor(a0!(), a1!()),
         "bitwise-and" => airl_rt::misc::airl_bitwise_and(a0!(), a1!()),
