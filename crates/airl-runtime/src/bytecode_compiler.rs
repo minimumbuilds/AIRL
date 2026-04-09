@@ -96,6 +96,9 @@ impl BytecodeCompiler {
         if let Some(&idx) = self.constant_index.get(&key) {
             return idx;
         }
+        if self.constants.len() >= u16::MAX as usize {
+            panic!("constant pool overflow: too many constants (limit {})", u16::MAX);
+        }
         let idx = self.constants.len() as u16;
         self.constant_index.insert(key, idx);
         self.constants.push(val);
@@ -1227,5 +1230,32 @@ mod tests {
         // Should use direct Add opcode, not CallBuiltin
         let has_add = c.instructions.iter().any(|i| i.op == Op::Add);
         assert!(has_add, "arithmetic should compile to direct opcode");
+    }
+
+    // ── SEC-16: Constant pool overflow guard ──
+
+    #[test]
+    fn test_constant_pool_dedup_does_not_overflow() {
+        // Adding the same constant u16::MAX times should reuse the slot, not overflow.
+        let mut c = BytecodeCompiler::new();
+        let first = c.add_constant(Value::Int(1));
+        for _ in 0..100 {
+            let idx = c.add_constant(Value::Int(1));
+            assert_eq!(idx, first, "dedup must return same index");
+        }
+        assert_eq!(c.constants.len(), 1, "dedup must not grow the pool");
+    }
+
+    #[test]
+    #[should_panic(expected = "constant pool overflow")]
+    fn test_constant_pool_overflow_panics() {
+        // Fill the constant pool to u16::MAX distinct entries, then add one more.
+        let mut c = BytecodeCompiler::new();
+        // Pre-fill to the limit with distinct string constants.
+        for i in 0..(u16::MAX as usize) {
+            c.add_constant(Value::Str(format!("__const_{}", i)));
+        }
+        // This next insertion must panic.
+        c.add_constant(Value::Str("overflow".into()));
     }
 }

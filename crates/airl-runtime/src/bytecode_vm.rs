@@ -1911,6 +1911,13 @@ impl BytecodeVm {
                     let capture_start = instr.b as usize;
                     let captured: Vec<Value> = {
                         let r = &self.call_stack.last().expect("internal: call stack empty").registers;
+                        let stack_len = r.len();
+                        if capture_start + capture_count > stack_len {
+                            return Err(RuntimeError::Custom(format!(
+                                "MakeClosure: capture range out of bounds (start={}, count={}, registers={})",
+                                capture_start, capture_count, stack_len
+                            )));
+                        }
                         (capture_start..capture_start + capture_count)
                             .map(|i| rt_to_value_no_release(reg_get(r, i)))
                             .collect()
@@ -2551,6 +2558,73 @@ mod tests {
                 assert!(msg.contains("register range"), "msg was: {}", msg);
             }
             other => panic!("expected BytecodeValidation, got: {:?}", other),
+        }
+    }
+
+    // ── SEC-16: MakeClosure capture bounds check ──
+
+    #[test]
+    fn test_make_closure_capture_out_of_bounds() {
+        // "inner_fn" has capture_count=3; __main__ only has 2 registers.
+        // MakeClosure with capture_start=0 → 0+3 > 2 must fail.
+        let inner_fn = BytecodeFunc {
+            name: "inner_fn".into(), arity: 0, register_count: 3, capture_count: 3,
+            instructions: vec![
+                Instruction::new(Op::LoadNil, 2, 0, 0),
+                Instruction::new(Op::Return, 0, 2, 0),
+            ],
+            constants: vec![],
+        };
+        let main_func = BytecodeFunc {
+            name: "__main__".into(), arity: 0, register_count: 2, capture_count: 0,
+            instructions: vec![
+                // MakeClosure dst=0, a=0(const "inner_fn"), b=0(capture_start)
+                Instruction::new(Op::MakeClosure, 0, 0, 0),
+                Instruction::new(Op::Return, 0, 0, 0),
+            ],
+            constants: vec![Value::Str("inner_fn".into())],
+        };
+        let mut vm = BytecodeVm::new();
+        vm.load_function(inner_fn);
+        vm.load_function(main_func);
+        match vm.exec_main() {
+            Err(RuntimeError::Custom(msg)) => {
+                assert!(msg.contains("MakeClosure"), "msg was: {}", msg);
+                assert!(msg.contains("out of bounds"), "msg was: {}", msg);
+            }
+            other => panic!("expected Custom error for capture OOB, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_make_closure_capture_in_bounds() {
+        // "inner_fn" has capture_count=1; __main__ has 3 registers; capture_start=1.
+        // 1+1=2 <= 3 — should succeed and return a closure value.
+        let inner_fn = BytecodeFunc {
+            name: "inner_fn".into(), arity: 0, register_count: 2, capture_count: 1,
+            instructions: vec![
+                Instruction::new(Op::Return, 0, 0, 0),
+            ],
+            constants: vec![],
+        };
+        let main_func = BytecodeFunc {
+            name: "__main__".into(), arity: 0, register_count: 3, capture_count: 0,
+            instructions: vec![
+                Instruction::new(Op::LoadNil, 0, 0, 0),
+                Instruction::new(Op::LoadNil, 1, 0, 0),
+                Instruction::new(Op::LoadNil, 2, 0, 0),
+                // MakeClosure dst=0, a=0(const "inner_fn"), b=1(capture_start)
+                Instruction::new(Op::MakeClosure, 0, 0, 1),
+                Instruction::new(Op::Return, 0, 0, 0),
+            ],
+            constants: vec![Value::Str("inner_fn".into())],
+        };
+        let mut vm = BytecodeVm::new();
+        vm.load_function(inner_fn);
+        vm.load_function(main_func);
+        match vm.exec_main() {
+            Ok(Value::BytecodeClosure(_)) => {} // expected
+            other => panic!("expected BytecodeClosure, got: {:?}", other),
         }
     }
 }
