@@ -35,6 +35,8 @@ pub struct Translator<'ctx> {
     int_vars: HashMap<String, ast::Int<'ctx>>,
     bool_vars: HashMap<String, ast::Bool<'ctx>>,
     real_vars: HashMap<String, ast::Real<'ctx>>,
+    /// Counter for generating unique quantifier-bound variable names when shadowing occurs.
+    quant_counter: usize,
 }
 
 impl<'ctx> Translator<'ctx> {
@@ -44,6 +46,7 @@ impl<'ctx> Translator<'ctx> {
             int_vars: HashMap::new(),
             bool_vars: HashMap::new(),
             real_vars: HashMap::new(),
+            quant_counter: 0,
         }
     }
 
@@ -347,15 +350,48 @@ impl<'ctx> Translator<'ctx> {
     pub fn translate_real(&mut self, expr: &Expr) -> Result<ast::Real<'ctx>, TranslateError> {
         match &expr.kind {
             ExprKind::FloatLit(v) => {
-                // Approximate: convert f64 to rational num/den via scaled integer
-                // For exact representation, we scale by 1_000_000 and use from_real
-                let scaled = (*v * 1_000_000.0).round() as i32;
-                Ok(ast::Real::from_real(self.ctx, scaled, 1_000_000))
+                let v = *v;
+                if v.is_nan() {
+                    return Err(TranslateError::UnsupportedExpression(
+                        "NaN cannot be represented as a Z3 Real".into(),
+                    ));
+                }
+                if v.is_infinite() {
+                    return Err(TranslateError::UnsupportedExpression(
+                        "Infinity cannot be represented as a Z3 Real".into(),
+                    ));
+                }
+                // Scale by 1_000_000 for 6 decimal places of precision.
+                // Use i64 to detect overflow before casting to i32 (i32 overflows at ~2147).
+                const SCALE: i64 = 1_000_000;
+                let scaled = (v * SCALE as f64).round() as i64;
+                if scaled >= i32::MIN as i64 && scaled <= i32::MAX as i64 {
+                    Ok(ast::Real::from_real(self.ctx, scaled as i32, SCALE as i32))
+                } else {
+                    // Value exceeds 6-decimal range; fall back to integer approximation.
+                    let approx = v.round() as i64;
+                    if approx >= i32::MIN as i64 && approx <= i32::MAX as i64 {
+                        Ok(ast::Real::from_real(self.ctx, approx as i32, 1))
+                    } else {
+                        Err(TranslateError::UnsupportedExpression(format!(
+                            "float literal {} is too large to represent as Z3 Real",
+                            v
+                        )))
+                    }
+                }
             }
 
             ExprKind::IntLit(v) => {
-                // Allow int literals in real context
-                Ok(ast::Real::from_real(self.ctx, *v as i32, 1))
+                // Allow int literals in real context.
+                let v = *v;
+                if v >= i32::MIN as i64 && v <= i32::MAX as i64 {
+                    Ok(ast::Real::from_real(self.ctx, v as i32, 1))
+                } else {
+                    Err(TranslateError::UnsupportedExpression(format!(
+                        "integer literal {} is too large for Z3 Real context",
+                        v
+                    )))
+                }
             }
 
             ExprKind::SymbolRef(name) => {
@@ -433,51 +469,80 @@ impl<'ctx> Translator<'ctx> {
     }
 
     /// Translate an equality/inequality comparison, trying Int then Real.
+    /// If one side is Int and the other is Real, coerce the Int side with `to_real()`.
     fn translate_cmp_eq(
         &mut self,
         lhs: &Expr,
         rhs: &Expr,
         negate: bool,
     ) -> Result<ast::Bool<'ctx>, TranslateError> {
-        // Try Int first
+        // Both Int
         if let (Ok(l), Ok(r)) = (self.translate_int(lhs), self.translate_int(rhs)) {
             let eq = l._eq(&r);
             return Ok(if negate { eq.not() } else { eq });
         }
-        // Try Real
+        // Both Real
         if let (Ok(l), Ok(r)) = (self.translate_real(lhs), self.translate_real(rhs)) {
             let eq = l._eq(&r);
+            return Ok(if negate { eq.not() } else { eq });
+        }
+        // Mixed: Int lhs + Real rhs → coerce lhs to Real
+        if let (Ok(l_int), Ok(r_real)) = (self.translate_int(lhs), self.translate_real(rhs)) {
+            let l_real = l_int.to_real();
+            let eq = l_real._eq(&r_real);
+            return Ok(if negate { eq.not() } else { eq });
+        }
+        // Mixed: Real lhs + Int rhs → coerce rhs to Real
+        if let (Ok(l_real), Ok(r_int)) = (self.translate_real(lhs), self.translate_int(rhs)) {
+            let r_real = r_int.to_real();
+            let eq = l_real._eq(&r_real);
             return Ok(if negate { eq.not() } else { eq });
         }
         Err(TranslateError::UnsupportedExpression("cannot translate comparison operands".into()))
     }
 
     /// Translate an ordering comparison (lt/le/gt/ge), trying Int then Real.
+    /// If one side is Int and the other is Real, coerce the Int side with `to_real()`.
     fn translate_cmp_ord(
         &mut self,
         lhs: &Expr,
         rhs: &Expr,
         op: &str,
     ) -> Result<ast::Bool<'ctx>, TranslateError> {
-        // Try Int first
+        let apply_ord_real = |l: ast::Real<'ctx>, r: ast::Real<'ctx>| -> ast::Bool<'ctx> {
+            match op {
+                "lt" => l.lt(&r),
+                "le" => l.le(&r),
+                "gt" => l.gt(&r),
+                "ge" => l.ge(&r),
+                _ => unreachable!("translate_cmp_ord: unknown op {}", op),
+            }
+        };
+        let apply_ord_int = |l: ast::Int<'ctx>, r: ast::Int<'ctx>| -> ast::Bool<'ctx> {
+            match op {
+                "lt" => l.lt(&r),
+                "le" => l.le(&r),
+                "gt" => l.gt(&r),
+                "ge" => l.ge(&r),
+                _ => unreachable!("translate_cmp_ord: unknown op {}", op),
+            }
+        };
+
+        // Both Int
         if let (Ok(l), Ok(r)) = (self.translate_int(lhs), self.translate_int(rhs)) {
-            return Ok(match op {
-                "lt" => l.lt(&r),
-                "le" => l.le(&r),
-                "gt" => l.gt(&r),
-                "ge" => l.ge(&r),
-                _ => unreachable!(),
-            });
+            return Ok(apply_ord_int(l, r));
         }
-        // Try Real
+        // Both Real
         if let (Ok(l), Ok(r)) = (self.translate_real(lhs), self.translate_real(rhs)) {
-            return Ok(match op {
-                "lt" => l.lt(&r),
-                "le" => l.le(&r),
-                "gt" => l.gt(&r),
-                "ge" => l.ge(&r),
-                _ => unreachable!(),
-            });
+            return Ok(apply_ord_real(l, r));
+        }
+        // Mixed: Int lhs + Real rhs
+        if let (Ok(l_int), Ok(r_real)) = (self.translate_int(lhs), self.translate_real(rhs)) {
+            return Ok(apply_ord_real(l_int.to_real(), r_real));
+        }
+        // Mixed: Real lhs + Int rhs
+        if let (Ok(l_real), Ok(r_int)) = (self.translate_real(lhs), self.translate_int(rhs)) {
+            return Ok(apply_ord_real(l_real, r_int.to_real()));
         }
         Err(TranslateError::UnsupportedExpression(
             format!("cannot translate {} operands", op)
@@ -487,6 +552,11 @@ impl<'ctx> Translator<'ctx> {
     /// Translate a quantified expression (forall/exists) to Z3.
     /// Creates a fresh Z3 constant for the bound variable, temporarily adds it to
     /// the variable maps, builds the body formula, then removes it.
+    ///
+    /// If the bound variable name shadows an outer binding (i.e. a variable with
+    /// the same name already exists in the relevant sort map), a unique Z3 name
+    /// `{name}_q{n}` is used to avoid Z3 treating the bound variable as the same
+    /// constant as the outer free variable.
     fn translate_quantifier(
         &mut self,
         param: &airl_syntax::ast::Param,
@@ -506,7 +576,15 @@ impl<'ctx> Translator<'ctx> {
         // Create fresh Z3 constant for the bound variable
         match sort {
             VarSort::Int => {
-                let bound_var = ast::Int::new_const(self.ctx, var_name.as_str());
+                // Use a fresh Z3 name if the variable shadows an outer binding.
+                let z3_name = if self.int_vars.contains_key(var_name) {
+                    let n = self.quant_counter;
+                    self.quant_counter += 1;
+                    format!("{}_q{}", var_name, n)
+                } else {
+                    var_name.clone()
+                };
+                let bound_var = ast::Int::new_const(self.ctx, z3_name.as_str());
                 // Save and replace any existing variable
                 let prev = self.int_vars.insert(var_name.clone(), bound_var.clone());
 
@@ -545,7 +623,14 @@ impl<'ctx> Translator<'ctx> {
                 Ok(result)
             }
             VarSort::Bool => {
-                let bound_var = ast::Bool::new_const(self.ctx, var_name.as_str());
+                let z3_name = if self.bool_vars.contains_key(var_name) {
+                    let n = self.quant_counter;
+                    self.quant_counter += 1;
+                    format!("{}_q{}", var_name, n)
+                } else {
+                    var_name.clone()
+                };
+                let bound_var = ast::Bool::new_const(self.ctx, z3_name.as_str());
                 let prev = self.bool_vars.insert(var_name.clone(), bound_var.clone());
 
                 let body_bool = self.translate_bool(body)?;
@@ -575,7 +660,14 @@ impl<'ctx> Translator<'ctx> {
                 Ok(result)
             }
             VarSort::Real => {
-                let bound_var = ast::Real::new_const(self.ctx, var_name.as_str());
+                let z3_name = if self.real_vars.contains_key(var_name) {
+                    let n = self.quant_counter;
+                    self.quant_counter += 1;
+                    format!("{}_q{}", var_name, n)
+                } else {
+                    var_name.clone()
+                };
+                let bound_var = ast::Real::new_const(self.ctx, z3_name.as_str());
                 let prev = self.real_vars.insert(var_name.clone(), bound_var.clone());
 
                 let body_bool = self.translate_bool(body)?;
@@ -715,5 +807,38 @@ mod tests {
         assert!(matches!(Translator::sort_from_type_name("f32"), Some(VarSort::Real)));
         assert!(matches!(Translator::sort_from_type_name("f64"), Some(VarSort::Real)));
         assert!(Translator::sort_from_type_name("String").is_none());
+    }
+
+    #[test]
+    fn translate_real_nan_and_inf_return_err() {
+        let ctx = make_ctx();
+        let mut t = Translator::new(&ctx);
+        let nan = Expr { kind: ExprKind::FloatLit(f64::NAN), span: airl_syntax::Span::dummy() };
+        assert!(t.translate_real(&nan).is_err(), "NaN should return Err");
+        let inf = Expr { kind: ExprKind::FloatLit(f64::INFINITY), span: airl_syntax::Span::dummy() };
+        assert!(t.translate_real(&inf).is_err(), "Infinity should return Err");
+    }
+
+    #[test]
+    fn translate_real_large_float_no_overflow() {
+        let ctx = make_ctx();
+        let mut t = Translator::new(&ctx);
+        // 3000.5 exceeds the i32-scaled range at 1e6 precision; falls back to integer approx
+        let expr = Expr { kind: ExprKind::FloatLit(3000.5), span: airl_syntax::Span::dummy() };
+        assert!(t.translate_real(&expr).is_ok(), "large float should succeed via integer fallback");
+    }
+
+    #[test]
+    fn translate_cmp_mixed_int_real() {
+        let ctx = make_ctx();
+        let mut t = Translator::new(&ctx);
+        t.declare_int("n");
+        t.declare_real("x");
+        // (= n x) — one side Int, other Real; should coerce and succeed
+        let callee = Expr { kind: ExprKind::SymbolRef("=".into()), span: airl_syntax::Span::dummy() };
+        let n = Expr { kind: ExprKind::SymbolRef("n".into()), span: airl_syntax::Span::dummy() };
+        let x = Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() };
+        let expr = Expr { kind: ExprKind::FnCall(Box::new(callee), vec![n, x]), span: airl_syntax::Span::dummy() };
+        assert!(t.translate_bool(&expr).is_ok(), "mixed Int/Real comparison should succeed via coercion");
     }
 }
