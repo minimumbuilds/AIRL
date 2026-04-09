@@ -116,27 +116,33 @@ impl Z3Prover {
         let body_translated = match &def.return_type.kind {
             AstTypeKind::Named(type_name) => match Translator::sort_from_type_name(type_name) {
                 Some(VarSort::Int) => match translator.translate_int(&def.body) {
-                    Ok(body_z3) => {
-                        let result_var = translator.get_int_var("result").unwrap().clone();
-                        solver.assert(&result_var._eq(&body_z3));
-                        true
-                    }
+                    Ok(body_z3) => match translator.get_int_var("result") {
+                        Some(result_var) => {
+                            solver.assert(&result_var.clone()._eq(&body_z3));
+                            true
+                        }
+                        None => false, // "result" was not declared; skip body binding
+                    },
                     Err(_) => false,
                 },
                 Some(VarSort::Bool) => match translator.translate_bool(&def.body) {
-                    Ok(body_z3) => {
-                        let result_var = translator.get_bool_var("result").unwrap().clone();
-                        solver.assert(&result_var._eq(&body_z3));
-                        true
-                    }
+                    Ok(body_z3) => match translator.get_bool_var("result") {
+                        Some(result_var) => {
+                            solver.assert(&result_var.clone()._eq(&body_z3));
+                            true
+                        }
+                        None => false,
+                    },
                     Err(_) => false,
                 },
                 Some(VarSort::Real) => match translator.translate_real(&def.body) {
-                    Ok(body_z3) => {
-                        let result_var = translator.get_real_var("result").unwrap().clone();
-                        solver.assert(&result_var._eq(&body_z3));
-                        true
-                    }
+                    Ok(body_z3) => match translator.get_real_var("result") {
+                        Some(result_var) => {
+                            solver.assert(&result_var.clone()._eq(&body_z3));
+                            true
+                        }
+                        None => false,
+                    },
                     Err(_) => false,
                 },
                 None => false,
@@ -188,7 +194,16 @@ impl Z3Prover {
                                                     }
                                                 }
                                             }
-                                            _ => {}
+                                            Some(VarSort::Bool) => {
+                                                if let Some(var) = translator.get_bool_var(&param.name) {
+                                                    if let Some(val) = model.eval(var, true) {
+                                                        if let Some(b) = val.as_bool() {
+                                                            counterexample.push((param.name.clone(), b.to_string()));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            None => {}
                                         }
                                     }
                                 }
@@ -539,6 +554,25 @@ mod tests {
         assert!(
             matches!(&v.ensures_results[0].1, VerifyResult::Unknown(_)),
             "expected Unknown fallback for untranslatable body, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn disprove_bool_param_false_ensures() {
+        // (defn always_true [(b : bool) -> bool]
+        //   :ensures [(= b true)])  -- b could be false, so disproven
+        let def = make_fn("always_true",
+            vec![("b", "bool")], "bool",
+            vec![],
+            vec![call("=", vec![sym("b"), Expr { kind: ExprKind::BoolLit(true), span: Span::dummy() }])],
+            sym("b"),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Disproven { counterexample } if !counterexample.is_empty()),
+            "expected Disproven with Bool counterexample, got: {:?}", v,
         );
     }
 }
