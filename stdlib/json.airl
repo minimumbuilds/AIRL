@@ -48,34 +48,30 @@
 
 ;; ── json-stringify-list-loop : stringify list elements with commas ──
 (defn json-stringify-list-loop
-  :sig [(lst : List) (i : i64) (len : i64) -> String]
-  :intent "Stringify list elements separated by commas"
-  :requires [(>= i 0)]
+  :sig [(lst : List) (first? : Bool) -> String]
+  :intent "Stringify list elements separated by commas using head/tail recursion"
+  :requires [(valid lst)]
   :ensures [(valid result)]
-  :body (if (= i len)
+  :body (if (empty? lst)
           ""
-          (let (elem : String (json-stringify (at lst i)))
-               (rest : String (json-stringify-list-loop lst (+ i 1) len))
-            (if (= i (- len 1))
-              elem
-              (str elem "," rest)))))
+          (let (prefix : String (if first? "" ","))
+            (join [prefix (json-stringify (head lst))
+                   (json-stringify-list-loop (tail lst) false)] ""))))
 
 ;; ── json-stringify-map-loop : stringify map entries ──
 (defn json-stringify-map-loop
-  :sig [(entries : List) (i : i64) (len : i64) -> String]
-  :intent "Stringify map key-value pairs separated by commas"
-  :requires [(>= i 0)]
+  :sig [(entries : List) (first? : Bool) -> String]
+  :intent "Stringify map key-value pairs separated by commas using head/tail recursion"
+  :requires [(valid entries)]
   :ensures [(valid result)]
-  :body (if (= i len)
+  :body (if (empty? entries)
           ""
-          (let (pair : List (at entries i))
+          (let (pair : List (head entries))
                (key : String (str "\"" (json-escape (str (head pair))) "\""))
                (val : String (json-stringify (at pair 1)))
                (entry : String (str key ":" val))
-               (rest : String (json-stringify-map-loop entries (+ i 1) len))
-            (if (= i (- len 1))
-              entry
-              (str entry "," rest)))))
+               (prefix : String (if first? "" ","))
+            (join [prefix entry (json-stringify-map-loop (tail entries) false)] ""))))
 
 ;; ── json-stringify : convert any AIRL value to JSON string ──
 (defn json-stringify
@@ -95,10 +91,10 @@
                   (if (= t "string")
                     (str "\"" (json-escape val) "\"")
                     (if (= t "list")
-                      (str "[" (json-stringify-list-loop val 0 (length val)) "]")
+                      (str "[" (json-stringify-list-loop val true) "]")
                       (if (= t "map")
                         (let (entries : List (map-entries val))
-                          (str "{" (json-stringify-map-loop entries 0 (length entries)) "}"))
+                          (str "{" (json-stringify-map-loop entries true) "}"))
                         (str "\"<" t ">\""))))))))))
 
 ;; ══════════════════════════════════════════════════
