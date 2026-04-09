@@ -222,7 +222,18 @@ impl TensorJit {
     /// Compile a triple-nested matmul loop to native code.
     /// Signature: `fn(a_ptr: i64, b_ptr: i64, out_ptr: i64, m: i64, k: i64, n: i64)`
     ///
-    /// Computes C[i,j] = sum_p A[i*k+p] * B[p*n+j] for all i in 0..M, j in 0..N.
+    /// Computes C[i,j] = sum_p A[i*K+p] * B[p*N+j] for all i in 0..M, j in 0..N, p in 0..K.
+    ///
+    /// Loop order: **i-j-p** (outer to inner).
+    /// - i (row of A / row of C): outermost
+    /// - j (col of B / col of C): middle — C[i,j] is fixed per (i,j) pair, kept in a
+    ///   register accumulator across all p iterations
+    /// - p (contraction index): innermost — A[i*K+p] is sequential (cache-friendly for A
+    ///   in row-major layout); C[i,j] is written back exactly once after the inner loop
+    ///
+    /// This order avoids read-modify-write on C in the inner loop: `sum` is accumulated
+    /// in a register and stored to memory only once per (i,j) pair, eliminating the
+    /// store-load round-trip that the i-p-j order would require for C[i,j].
     fn compile_matmul(&mut self) -> Result<*const u8, String> {
         let mut sig = self.module.make_signature();
         for _ in 0..6 {
@@ -257,7 +268,12 @@ impl TensorJit {
             let zero_i = builder.ins().iconst(types::I64, 0);
             let zero_f = builder.ins().f64const(0.0);
 
-            // Blocks for triple loop
+            // Blocks for i-j-p triple loop:
+            //   i_header  — outer: rows of A / rows of C
+            //   j_header  — middle: cols of B / cols of C; resets p=0 and sum=0 per (i,j)
+            //   k_header  — inner: contraction index p; carries (p, sum) as block params
+            //   k_body    — inner body: sum += A[i*K+p] * B[p*N+j]
+            //   j_store   — write accumulated sum to C[i*N+j], then advance j
             let i_header = builder.create_block();
             let j_header = builder.create_block();
             let k_header = builder.create_block();
@@ -482,5 +498,122 @@ mod tests {
         let mut out = vec![0.0];
         jit.matmul(&a, &b, &mut out, 1, 1, 1).unwrap();
         assert_eq!(out, vec![12.0]);
+    }
+
+    /// 1xK * Kx1 — single output cell, tests that all p-contributions are summed.
+    #[test]
+    fn tensor_matmul_1xk_kx1() {
+        let mut jit = TensorJit::new().unwrap();
+        // A = [1, 2, 3, 4] (1x4)
+        let a = vec![1.0, 2.0, 3.0, 4.0];
+        // B = [5, 6, 7, 8]^T (4x1)
+        let b = vec![5.0, 6.0, 7.0, 8.0];
+        // C = 1*5 + 2*6 + 3*7 + 4*8 = 5+12+21+32 = 70
+        let mut out = vec![0.0];
+        jit.matmul(&a, &b, &mut out, 1, 4, 1).unwrap();
+        assert_eq!(out, vec![70.0]);
+    }
+
+    /// MxK with K=1 — effectively a column vector times a row vector (outer product).
+    #[test]
+    fn tensor_matmul_outer_product() {
+        let mut jit = TensorJit::new().unwrap();
+        // A = [[1],[2],[3]] (3x1)
+        let a = vec![1.0, 2.0, 3.0];
+        // B = [[4, 5, 6]] (1x3)
+        let b = vec![4.0, 5.0, 6.0];
+        // C (3x3): [[4,5,6],[8,10,12],[12,15,18]]
+        let mut out = vec![0.0; 9];
+        jit.matmul(&a, &b, &mut out, 3, 1, 3).unwrap();
+        assert_eq!(out, vec![4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 12.0, 15.0, 18.0]);
+    }
+
+    /// Non-square: wide A, tall B — exercises M != N != K.
+    /// This test is particularly sensitive to i-p-j vs i-j-p loop order bugs
+    /// because the asymmetric dimensions would produce wrong results if j and p
+    /// were swapped in the index arithmetic.
+    #[test]
+    fn tensor_matmul_asymmetric_dims() {
+        let mut jit = TensorJit::new().unwrap();
+        // A = [[1,2],[3,4],[5,6]] (3x2, M=3 K=2)
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        // B = [[1,0,1],[0,1,1]] (2x3, K=2 N=3)
+        let b = vec![1.0, 0.0, 1.0, 0.0, 1.0, 1.0];
+        // C = A*B (3x3):
+        //   row0: [1*1+2*0, 1*0+2*1, 1*1+2*1] = [1, 2, 3]
+        //   row1: [3*1+4*0, 3*0+4*1, 3*1+4*1] = [3, 4, 7]
+        //   row2: [5*1+6*0, 5*0+6*1, 5*1+6*1] = [5, 6, 11]
+        let mut out = vec![0.0; 9];
+        jit.matmul(&a, &b, &mut out, 3, 2, 3).unwrap();
+        assert_eq!(out, vec![1.0, 2.0, 3.0, 3.0, 4.0, 7.0, 5.0, 6.0, 11.0]);
+    }
+
+    /// Scalar multiplication: 1x1 matrices with several values.
+    #[test]
+    fn tensor_matmul_scalar_cases() {
+        let mut jit = TensorJit::new().unwrap();
+        for (x, y) in [(0.0f64, 5.0), (2.0, 3.0), (-1.0, 4.0), (1.5, 2.0)] {
+            let mut out = vec![0.0];
+            jit.matmul(&[x], &[y], &mut out, 1, 1, 1).unwrap();
+            assert!((out[0] - x * y).abs() < 1e-12, "expected {} * {} = {}, got {}", x, y, x*y, out[0]);
+        }
+    }
+
+    // ── Matmul sad-path tests ────────────────────────────────────────
+
+    #[test]
+    fn tensor_matmul_zero_m() {
+        // m=0 → early return with no work
+        let mut jit = TensorJit::new().unwrap();
+        let mut out: Vec<f64> = vec![];
+        jit.matmul(&[], &[1.0, 2.0], &mut out, 0, 1, 2).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn tensor_matmul_wrong_a_len() {
+        let mut jit = TensorJit::new().unwrap();
+        let a = vec![1.0, 2.0]; // should be 3*2=6 for m=3, k=2
+        let b = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let mut out = vec![0.0; 9];
+        let err = jit.matmul(&a, &b, &mut out, 3, 2, 3).unwrap_err();
+        assert!(err.contains("matmul: a has"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn tensor_matmul_wrong_b_len() {
+        let mut jit = TensorJit::new().unwrap();
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let b = vec![1.0, 2.0]; // should be 2*3=6 for k=2, n=3
+        let mut out = vec![0.0; 9];
+        let err = jit.matmul(&a, &b, &mut out, 3, 2, 3).unwrap_err();
+        assert!(err.contains("matmul: b has"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn tensor_matmul_wrong_out_len() {
+        let mut jit = TensorJit::new().unwrap();
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let b = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let mut out = vec![0.0; 4]; // should be 3*3=9
+        let err = jit.matmul(&a, &b, &mut out, 3, 2, 3).unwrap_err();
+        assert!(err.contains("matmul: out has"), "unexpected error: {}", err);
+    }
+
+    // ── Element-wise sad-path tests ──────────────────────────────────
+
+    #[test]
+    fn tensor_add_length_mismatch_b() {
+        let mut jit = TensorJit::new().unwrap();
+        let err = jit.add(&[1.0, 2.0], &[3.0], &mut [0.0, 0.0]).unwrap_err();
+        assert!(err.contains("length mismatch"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn tensor_mul_length_mismatch_out() {
+        let mut jit = TensorJit::new().unwrap();
+        let mut out = vec![0.0; 3];
+        let err = jit.mul(&[1.0, 2.0], &[3.0, 4.0], &mut out).unwrap_err();
+        assert!(err.contains("length mismatch"), "unexpected error: {}", err);
     }
 }
