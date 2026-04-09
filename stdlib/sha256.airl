@@ -186,34 +186,37 @@
           (cons (be32-get block (+ base (* i 4)))
                 (sha256-schedule-init block base (+ i 1)))))
 
-(defn sha256-schedule-extend-step
-  :sig [(w : List) (i : i64) -> List]
-  :intent "Extend message schedule by one word using sigma functions"
-  :requires [(>= i 16)]
-  :ensures [(valid result)]
-  :body (let (w2 : i64 (list-nth w (- i 2)))
-             (w7 : i64 (list-nth w (- i 7)))
-             (w15 : i64 (list-nth w (- i 15)))
-             (w16 : i64 (list-nth w (- i 16)))
-             (s0 : i64 (sha256-ssig0 w15))
-             (s1 : i64 (sha256-ssig1 w2))
-             (new-w : i64 (u32 (+ s1 (+ w7 (+ s0 w16)))))
-          (concat w [new-w])))
-
+;; sha256-schedule-extend: use a 16-element sliding window so list-nth
+;; is always O(16)=O(1), giving O(N) total instead of O(N²).
+;; window: last 16 words [w[i-16]..w[i-1]]; result-rev: extension words in reverse.
 (defn sha256-schedule-extend
-  :sig [(w : List) (i : i64) -> List]
-  :intent "Extend message schedule from 16 to 64 words"
+  :sig [(window : List) (result-rev : List) (i : i64) -> List]
+  :intent "Build W[16..63] extension words using a 16-word sliding window"
   :requires [(>= i 16)]
   :ensures [(valid result)]
-  :body (if (= i 64) w
-          (sha256-schedule-extend (sha256-schedule-extend-step w i) (+ i 1))))
+  :body
+    (if (= i 64)
+      (reverse result-rev)
+      (let (w16 : i64 (list-nth window 0))   ;; w[i-16] — oldest in window
+           (w15 : i64 (list-nth window 1))   ;; w[i-15]
+           (w7  : i64 (list-nth window 9))   ;; w[i-7]  (offset 9 from oldest)
+           (w2  : i64 (list-nth window 14))  ;; w[i-2]  (offset 14 from oldest)
+           (s0  : i64 (sha256-ssig0 w15))
+           (s1  : i64 (sha256-ssig1 w2))
+           (new-w : i64 (u32 (+ s1 (+ w7 (+ s0 w16)))))
+        (sha256-schedule-extend
+          (concat (tail window) [new-w])
+          (cons new-w result-rev)
+          (+ i 1)))))
 
 (defn sha256-schedule
   :sig [(block : Bytes) (base : i64) -> List]
   :intent "Build full 64-word message schedule from a 64-byte block"
   :requires [(>= base 0)]
   :ensures [(valid result)]
-  :body (sha256-schedule-extend (sha256-schedule-init block base 0) 16))
+  :body
+    (let (w0 : List (sha256-schedule-init block base 0))
+      (concat w0 (sha256-schedule-extend w0 [] 16))))
 
 ;; ── Compression ──
 
