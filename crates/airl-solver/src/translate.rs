@@ -214,8 +214,13 @@ impl<'ctx> Translator<'ctx> {
                             Ok(inner.not())
                         }
                         "valid" => {
-                            // valid(x) is always true in Z3 context
-                            Ok(ast::Bool::from_bool(self.ctx, true))
+                            // valid() carries semantic precondition meaning that cannot be
+                            // vacuously assumed true — doing so silently proves all contracts
+                            // that depend on it.  Return Unsupported so callers get an honest
+                            // Unknown rather than a spurious Proven.
+                            Err(TranslateError::UnsupportedExpression(
+                                "valid() is not yet translatable to Z3".into(),
+                            ))
                         }
                         _ => Err(TranslateError::UnsupportedExpression(
                             format!("boolean context: {}", op)
@@ -782,14 +787,19 @@ mod tests {
     }
 
     #[test]
-    fn translate_valid_is_true() {
+    fn translate_valid_returns_unsupported_err() {
+        // valid() must not silently return Z3 true — that would vacuously prove all
+        // contracts that use it as a precondition.
         let ctx = make_ctx();
         let mut t = Translator::new(&ctx);
         t.declare_int("x");
         let callee = Expr { kind: ExprKind::SymbolRef("valid".into()), span: airl_syntax::Span::dummy() };
         let x = Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() };
         let expr = Expr { kind: ExprKind::FnCall(Box::new(callee), vec![x]), span: airl_syntax::Span::dummy() };
-        assert!(t.translate_bool(&expr).is_ok());
+        assert!(
+            t.translate_bool(&expr).is_err(),
+            "valid() should return Err(UnsupportedExpression), not a vacuous Z3 true"
+        );
     }
 
     #[test]

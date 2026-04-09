@@ -283,12 +283,12 @@ mod tests {
     #[test]
     fn prove_addition_contract() {
         // (defn add [(a : i32) (b : i32) -> i32]
-        //   :requires [(valid a) (valid b)]
+        //   :requires []          ← no valid() so Z3 can run
         //   :ensures [(= result (+ a b))])
         // Body is (+ a b) — body translation binds result == a+b, so ensures is Proven.
         let def = make_fn("add",
             vec![("a", "i32"), ("b", "i32")], "i32",
-            vec![call("valid", vec![sym("a")]), call("valid", vec![sym("b")])],
+            vec![], // valid() in requires would make Z3 bail with "cannot translate requires"
             vec![call("=", vec![sym("result"), call("+", vec![sym("a"), sym("b")])])],
             call("+", vec![sym("a"), sym("b")]),
         );
@@ -305,13 +305,13 @@ mod tests {
     #[test]
     fn disprove_wrong_contract() {
         // (defn mul [(a : i32) (b : i32) -> i32]
-        //   :requires [(valid a)]
+        //   :requires []          ← no valid() requires so Z3 has no untranslatable clauses
         //   :ensures [(= result (+ a b))])  ← wrong! body is *, not +
         // Body is (* a b) — body translation binds result == a*b, ensures says result == a+b.
         // Z3 finds a counterexample (e.g. a=2, b=3: 6 != 5).
         let def = make_fn("mul",
             vec![("a", "i32"), ("b", "i32")], "i32",
-            vec![call("valid", vec![sym("a")])],
+            vec![], // no requires — valid() would prevent Z3 from running
             vec![call("=", vec![sym("result"), call("+", vec![sym("a"), sym("b")])])],
             call("*", vec![sym("a"), sym("b")]),
         );
@@ -326,12 +326,13 @@ mod tests {
     }
 
     #[test]
-    fn prove_valid_only_trivially() {
-        // Body is x (identity). result == x.
-        // :ensures [(valid result)] — valid() always returns true in Z3, so Proven.
+    fn valid_ensures_yields_translation_error() {
+        // valid() no longer translates to Z3 true — it returns Unsupported.
+        // Ensures clauses using valid() should produce TranslationError, not a
+        // spurious Proven.
         let def = make_fn("id",
             vec![("x", "i32")], "i32",
-            vec![call("valid", vec![sym("x")])],
+            vec![],
             vec![call("valid", vec![sym("result")])],
             sym("x"),
         );
@@ -339,8 +340,8 @@ mod tests {
         let verification = prover.verify_function(&def);
         assert_eq!(verification.ensures_results.len(), 1);
         assert!(
-            matches!(&verification.ensures_results[0].1, VerifyResult::Proven),
-            "expected Proven for (valid result) (valid is always true), got: {:?}",
+            matches!(&verification.ensures_results[0].1, VerifyResult::TranslationError(_)),
+            "expected TranslationError for (valid result) ensures — valid() is unsupported, got: {:?}",
             verification,
         );
     }
