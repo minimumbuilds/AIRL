@@ -96,32 +96,49 @@ pub fn parse_task(input: &str) -> Result<TaskMessage, String> {
             match kw {
                 "from" => {
                     i += 1;
-                    if let Some(SExpr::Atom(a)) = list.get(i) {
-                        if let AtomKind::Str(s) = &a.kind {
-                            from = s.clone();
-                        }
+                    match list.get(i) {
+                        Some(SExpr::Atom(a)) => match &a.kind {
+                            AtomKind::Str(s) => from = s.clone(),
+                            _ => return Err("expected string value after :from".into()),
+                        },
+                        Some(_) => return Err("expected string value after :from".into()),
+                        None => return Err("missing value after :from".into()),
                     }
                 }
                 "call" => {
                     i += 1;
-                    if let Some(SExpr::Atom(a)) = list.get(i) {
-                        if let AtomKind::Str(s) = &a.kind {
-                            call = s.clone();
-                        }
+                    match list.get(i) {
+                        Some(SExpr::Atom(a)) => match &a.kind {
+                            AtomKind::Str(s) => call = s.clone(),
+                            _ => return Err("expected string value after :call".into()),
+                        },
+                        Some(_) => return Err("expected string value after :call".into()),
+                        None => return Err("missing value after :call".into()),
                     }
                 }
                 "args" => {
                     i += 1;
-                    if let Some(SExpr::BracketList(items, _)) = list.get(i) {
-                        for item in items {
-                            args.push(sexpr_to_value(item)?);
+                    match list.get(i) {
+                        Some(SExpr::BracketList(items, _)) => {
+                            for item in items {
+                                args.push(sexpr_to_value(item)?);
+                            }
                         }
+                        Some(_) => return Err("expected bracket list after :args".into()),
+                        None => return Err("missing value after :args".into()),
                     }
                 }
                 _ => {} // skip unknown keywords
             }
         }
         i += 1;
+    }
+
+    if call.is_empty() {
+        return Err("task missing required :call field".into());
+    }
+    if from.is_empty() {
+        return Err("task missing required :from field".into());
     }
 
     Ok(TaskMessage { id, from, call, args })
@@ -161,22 +178,27 @@ pub fn parse_result(input: &str) -> Result<ResultMessage, String> {
             match kw {
                 "status" => {
                     i += 1;
-                    if let Some(s) = list.get(i).and_then(|s| s.as_keyword()) {
-                        success = s == "complete";
+                    match list.get(i).and_then(|s| s.as_keyword()) {
+                        Some(s) => success = s == "complete",
+                        None => return Err("expected keyword value after :status".into()),
                     }
                 }
                 "payload" => {
                     i += 1;
-                    if let Some(expr) = list.get(i) {
-                        payload = Some(sexpr_to_value(expr)?);
+                    match list.get(i) {
+                        Some(expr) => payload = Some(sexpr_to_value(expr)?),
+                        None => return Err("missing value after :payload".into()),
                     }
                 }
                 "message" => {
                     i += 1;
-                    if let Some(SExpr::Atom(a)) = list.get(i) {
-                        if let AtomKind::Str(s) = &a.kind {
-                            error = Some(s.clone());
-                        }
+                    match list.get(i) {
+                        Some(SExpr::Atom(a)) => match &a.kind {
+                            AtomKind::Str(s) => error = Some(s.clone()),
+                            _ => return Err("expected string value after :message".into()),
+                        },
+                        Some(_) => return Err("expected string value after :message".into()),
+                        None => return Err("missing value after :message".into()),
                     }
                 }
                 _ => {} // skip unknown keywords

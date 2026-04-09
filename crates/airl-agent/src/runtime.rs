@@ -20,6 +20,7 @@ pub enum AgentError {
     Transport(TransportError),
     TaskNotFound(String),
     Protocol(String),
+    StdlibLoad(&'static str, String),
 }
 
 impl std::fmt::Display for AgentError {
@@ -28,6 +29,7 @@ impl std::fmt::Display for AgentError {
             AgentError::Transport(e) => write!(f, "agent transport error: {}", e),
             AgentError::TaskNotFound(id) => write!(f, "task not found: {}", id),
             AgentError::Protocol(msg) => write!(f, "protocol error: {}", msg),
+            AgentError::StdlibLoad(name, e) => write!(f, "stdlib {} load failed: {}", name, e),
         }
     }
 }
@@ -283,7 +285,7 @@ fn compile_top_level(top: &airl_syntax::ast::TopLevel) -> IRNode {
     }
 }
 
-fn create_stdlib_vm() -> BytecodeVm {
+fn create_stdlib_vm() -> Result<BytecodeVm, AgentError> {
     const COLLECTIONS_SOURCE: &str = include_str!("../../../stdlib/prelude.airl");
     const MATH_SOURCE: &str = include_str!("../../../stdlib/math.airl");
     const RESULT_SOURCE: &str = include_str!("../../../stdlib/result.airl");
@@ -303,9 +305,9 @@ fn create_stdlib_vm() -> BytecodeVm {
         (IO_SOURCE, "io"),
     ] {
         load_source_into_vm(&mut vm, src, name)
-            .unwrap_or_else(|e| panic!("stdlib {} load failed: {}", name, e));
+            .map_err(|e| AgentError::StdlibLoad(*name, format!("{}", e)))?;
     }
-    vm
+    Ok(vm)
 }
 
 fn load_source_into_vm(vm: &mut BytecodeVm, source: &str, name: &str) -> Result<(), AgentError> {
@@ -320,7 +322,7 @@ fn load_source_into_vm(vm: &mut BytecodeVm, source: &str, name: &str) -> Result<
     for sexpr in &sexprs {
         match airl_syntax::parser::parse_top_level(sexpr, &mut diags) {
             Ok(top) => tops.push(top),
-            Err(_) => {}
+            Err(e) => eprintln!("Warning: parse error in {}: {}", name, e.message),
         }
     }
 
@@ -344,7 +346,7 @@ pub fn run_agent_loop(module_path: &str, endpoint: &Endpoint) -> Result<(), Agen
     let source = std::fs::read_to_string(module_path)
         .map_err(|e| AgentError::Protocol(format!("cannot read {}: {}", module_path, e)))?;
 
-    let mut vm = create_stdlib_vm();
+    let mut vm = create_stdlib_vm()?;
     load_module(&source, &mut vm)?;
 
     eprintln!("Agent loaded: {}", module_path);
@@ -627,7 +629,7 @@ mod tests {
               :ensures [(valid result)]
               :body (* x 2))
         "#;
-        let mut vm = create_stdlib_vm();
+        let mut vm = create_stdlib_vm().unwrap();
         load_module(source, &mut vm).unwrap();
         let result = vm.call_by_name("double", vec![Value::Int(21)]).unwrap();
         assert_eq!(result, Value::Int(42));
