@@ -61,7 +61,10 @@ fn cmd_run(args: &[String]) {
                     preloads.push(args[i + 1].clone());
                     i += 2;
                 }
-                "--bytecode" => { i += 1; } // ignored, compile path only
+                "--bytecode" => {
+                    eprintln!("warning: --bytecode is deprecated and has no effect; airl run is AOT-only");
+                    i += 1;
+                }
                 "--" => { past_separator = true; user_args.push("--".to_string()); i += 1; }
                 _ => {
                     if main_file.is_none() {
