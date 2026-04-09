@@ -6,7 +6,6 @@
 (defn add-one
   :sig [(x : i32) -> i32]
   :intent "increment x by one"
-  :requires [(valid x)]
   :ensures [(= result (+ x 1))]
   :body (+ x 1))
 (add-one 5)

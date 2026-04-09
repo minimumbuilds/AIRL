@@ -214,8 +214,11 @@ impl<'ctx> Translator<'ctx> {
                             Ok(inner.not())
                         }
                         "valid" => {
-                            // valid(x) is always true in Z3 context
-                            Ok(ast::Bool::from_bool(self.ctx, true))
+                            // valid() cannot be encoded as a Z3 predicate — ownership
+                            // semantics require a separate checker, not SMT encoding.
+                            return Err(TranslateError::UnsupportedExpression(
+                                "valid() predicate is not yet encoded — contracts using valid() are unverified".into()
+                            ));
                         }
                         _ => Err(TranslateError::UnsupportedExpression(
                             format!("boolean context: {}", op)
@@ -468,7 +471,7 @@ impl<'ctx> Translator<'ctx> {
         }
     }
 
-    /// Translate an equality/inequality comparison, trying Int then Real.
+    /// Translate an equality/inequality comparison, trying Bool, Int, then Real.
     /// If one side is Int and the other is Real, coerce the Int side with `to_real()`.
     fn translate_cmp_eq(
         &mut self,
@@ -476,6 +479,21 @@ impl<'ctx> Translator<'ctx> {
         rhs: &Expr,
         negate: bool,
     ) -> Result<ast::Bool<'ctx>, TranslateError> {
+        // Both Bool (e.g. (= b true) where b is a bool param)
+        if let (Ok(l), Ok(r)) = (self.translate_bool(lhs), self.translate_bool(rhs)) {
+            // Avoid infinite recursion: BoolLit and SymbolRef(bool) are fine here,
+            // but FnCall comparisons could recurse. We check that neither operand is a
+            // comparison operator call before proceeding.
+            let is_cmp_call = |e: &Expr| matches!(&e.kind,
+                ExprKind::FnCall(callee, _) if matches!(&callee.kind,
+                    ExprKind::SymbolRef(op) if matches!(op.as_str(), "=" | "!=" | "<" | ">" | "<=" | ">=")
+                )
+            );
+            if !is_cmp_call(lhs) && !is_cmp_call(rhs) {
+                let eq = l._eq(&r);
+                return Ok(if negate { eq.not() } else { eq });
+            }
+        }
         // Both Int
         if let (Ok(l), Ok(r)) = (self.translate_int(lhs), self.translate_int(rhs)) {
             let eq = l._eq(&r);
@@ -784,14 +802,15 @@ mod tests {
     }
 
     #[test]
-    fn translate_valid_is_true() {
+    fn translate_valid_returns_error() {
+        // valid() is not encodable as Z3 — must return an error, not vacuous true.
         let ctx = make_ctx();
         let mut t = Translator::new(&ctx);
         t.declare_int("x");
         let callee = Expr { kind: ExprKind::SymbolRef("valid".into()), span: airl_syntax::Span::dummy() };
         let x = Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() };
         let expr = Expr { kind: ExprKind::FnCall(Box::new(callee), vec![x]), span: airl_syntax::Span::dummy() };
-        assert!(t.translate_bool(&expr).is_ok());
+        assert!(t.translate_bool(&expr).is_err(), "valid() should return an error");
     }
 
     #[test]
