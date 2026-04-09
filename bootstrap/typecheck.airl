@@ -169,7 +169,7 @@
                       (if (check-arg-types arg-tys param-tys)
                         (Ok ret-ty)
                         (Err "argument type mismatch in function call"))
-                      (Ok ret-ty))))
+                      (Err (join ["wrong number of arguments: expected " (str (length param-tys)) ", got " (str (length arg-tys))] "")))))
             ;; TyVar means polymorphic/unknown — allow the call
             (TyVar _) (match (check-args args env reg)
               (Err e) (Err e)
