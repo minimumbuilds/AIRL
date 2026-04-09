@@ -5,7 +5,9 @@
 # Test files use a header to declare dependencies:
 #   ;; EXPECT: expected output
 #   ;; DEPS: bootstrap/lexer.airl bootstrap/parser.airl
+#   ;; REQUIRES_ENV: VAR=value VAR2=value2
 # If no DEPS line, the test is standalone (just stdlib).
+# REQUIRES_ENV sets environment variables for that binary's process only.
 #
 # Compiled binaries are cached in tests/aot/cache/. To force recompile, delete the cache dir.
 set -euo pipefail
@@ -35,6 +37,13 @@ for test in tests/aot/round*.airl; do
   deps=""
   if echo "$deps_line" | grep -q '^;; DEPS:'; then
     deps=$(echo "$deps_line" | sed 's/^;; DEPS: //')
+  fi
+
+  # Extract REQUIRES_ENV: env var assignments for the run step (any line)
+  env_prefix=""
+  if grep -q '^;; REQUIRES_ENV:' "$test"; then
+    env_vars=$(grep '^;; REQUIRES_ENV:' "$test" | sed 's/^;; REQUIRES_ENV: //')
+    env_prefix="$env_vars "
   fi
 
   bin="${CACHE_DIR}/${name}"
@@ -76,8 +85,8 @@ for test in tests/aot/round*.airl; do
     fi
   fi
 
-  # Run the native binary
-  actual=$("$bin" 2>&1) || true
+  # Run the native binary (with any required env vars)
+  actual=$(eval "${env_prefix}\"$bin\"" 2>&1) || true
 
   if [ "$actual" = "$expected" ]; then
     echo "PASS: $name"

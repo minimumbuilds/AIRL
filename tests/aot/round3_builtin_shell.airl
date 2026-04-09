@@ -1,4 +1,5 @@
 ;; EXPECT: echo:ok|true:ok|false:ok|args:ok
+;; REQUIRES_ENV: AIRL_ALLOW_EXEC=echo,true,false
 (let (r1 : _ (shell-exec "echo" ["hello"]))
      (prop1 : String (match r1 (Ok m) (if (contains (map-get m "stdout") "hello") "ok" "FAIL:no-hello") (Err e) (str "FAIL:" e)))
      (r2 : _ (shell-exec "true" []))
