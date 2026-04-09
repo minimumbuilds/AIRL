@@ -84,9 +84,17 @@ $AIRL_BIN run \
 # Arch-specific symlink — safe to coexist with the other arch on shared filesystem
 ln -sf "builds/$(basename "$BUILD_PATH")" "${AIRL_ROOT}/g3-${G3_ARCH}"
 
-# Keep unadorned g3 symlink pointing to the arch-specific one for local convenience
-# (scripts that haven't been updated yet will use this as fallback)
-ln -sf "g3-${G3_ARCH}" "${AIRL_ROOT}/g3"
+# Update unadorned g3 symlink only if:
+# (a) it doesn't exist yet, OR
+# (b) it already points to this arch's binary (we're updating our own)
+# Never clobber a symlink pointing to a different arch — multi-host shared FS safety.
+CURRENT_G3_TARGET="$(readlink "${AIRL_ROOT}/g3" 2>/dev/null || true)"
+if [[ -z "$CURRENT_G3_TARGET" || "$CURRENT_G3_TARGET" == "g3-${G3_ARCH}" || "$CURRENT_G3_TARGET" == g3-${G3_ARCH}-* ]]; then
+    ln -sf "g3-${G3_ARCH}" "${AIRL_ROOT}/g3"
+    echo "[build-g3] Updated g3 symlink -> g3-${G3_ARCH}"
+else
+    echo "[build-g3] Skipping g3 symlink update (currently -> ${CURRENT_G3_TARGET}, preserving other arch)"
+fi
 
 SIZE=$(ls -lh "$BUILD_PATH" | awk '{print $5}')
 echo "[build-g3] Done: ${SIZE} -> ${BUILD_PATH}"
