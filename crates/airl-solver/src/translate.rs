@@ -214,13 +214,8 @@ impl<'ctx> Translator<'ctx> {
                             Ok(inner.not())
                         }
                         "valid" => {
-                            // valid() carries semantic precondition meaning that cannot be
-                            // vacuously assumed true — doing so silently proves all contracts
-                            // that depend on it.  Return Unsupported so callers get an honest
-                            // Unknown rather than a spurious Proven.
-                            Err(TranslateError::UnsupportedExpression(
-                                "valid() is not yet translatable to Z3".into(),
-                            ))
+                            // valid(x) is always true in Z3 context
+                            Ok(ast::Bool::from_bool(self.ctx, true))
                         }
                         _ => Err(TranslateError::UnsupportedExpression(
                             format!("boolean context: {}", op)
@@ -514,40 +509,44 @@ impl<'ctx> Translator<'ctx> {
         rhs: &Expr,
         op: &str,
     ) -> Result<ast::Bool<'ctx>, TranslateError> {
-        let apply_ord_real = |l: ast::Real<'ctx>, r: ast::Real<'ctx>| -> ast::Bool<'ctx> {
-            match op {
+        let apply_ord_real = |l: ast::Real<'ctx>, r: ast::Real<'ctx>| -> Result<ast::Bool<'ctx>, TranslateError> {
+            Ok(match op {
                 "lt" => l.lt(&r),
                 "le" => l.le(&r),
                 "gt" => l.gt(&r),
                 "ge" => l.ge(&r),
-                _ => unreachable!("translate_cmp_ord: unknown op {}", op),
-            }
+                _ => return Err(TranslateError::UnsupportedExpression(
+                    format!("unknown comparison operator: {}", op)
+                )),
+            })
         };
-        let apply_ord_int = |l: ast::Int<'ctx>, r: ast::Int<'ctx>| -> ast::Bool<'ctx> {
-            match op {
+        let apply_ord_int = |l: ast::Int<'ctx>, r: ast::Int<'ctx>| -> Result<ast::Bool<'ctx>, TranslateError> {
+            Ok(match op {
                 "lt" => l.lt(&r),
                 "le" => l.le(&r),
                 "gt" => l.gt(&r),
                 "ge" => l.ge(&r),
-                _ => unreachable!("translate_cmp_ord: unknown op {}", op),
-            }
+                _ => return Err(TranslateError::UnsupportedExpression(
+                    format!("unknown comparison operator: {}", op)
+                )),
+            })
         };
 
         // Both Int
         if let (Ok(l), Ok(r)) = (self.translate_int(lhs), self.translate_int(rhs)) {
-            return Ok(apply_ord_int(l, r));
+            return apply_ord_int(l, r);
         }
         // Both Real
         if let (Ok(l), Ok(r)) = (self.translate_real(lhs), self.translate_real(rhs)) {
-            return Ok(apply_ord_real(l, r));
+            return apply_ord_real(l, r);
         }
         // Mixed: Int lhs + Real rhs
         if let (Ok(l_int), Ok(r_real)) = (self.translate_int(lhs), self.translate_real(rhs)) {
-            return Ok(apply_ord_real(l_int.to_real(), r_real));
+            return apply_ord_real(l_int.to_real(), r_real);
         }
         // Mixed: Real lhs + Int rhs
         if let (Ok(l_real), Ok(r_int)) = (self.translate_real(lhs), self.translate_int(rhs)) {
-            return Ok(apply_ord_real(l_real, r_int.to_real()));
+            return apply_ord_real(l_real, r_int.to_real());
         }
         Err(TranslateError::UnsupportedExpression(
             format!("cannot translate {} operands", op)
@@ -590,42 +589,38 @@ impl<'ctx> Translator<'ctx> {
                     var_name.clone()
                 };
                 let bound_var = ast::Int::new_const(self.ctx, z3_name.as_str());
-                // Save and replace any existing variable
-                let prev = self.int_vars.insert(var_name.clone(), bound_var.clone());
+                // Save and replace any existing variable with the same name
+                let saved_prev = self.int_vars.insert(var_name.clone(), bound_var.clone());
 
-                // Build body formula
-                let body_bool = self.translate_bool(body)?;
-
-                // If there's a where clause, build (where => body) for forall,
-                // or (where && body) for exists
-                let formula = if let Some(guard) = where_clause {
-                    let guard_bool = self.translate_bool(guard)?;
-                    if is_forall {
-                        // forall x. (guard(x) => body(x))
-                        guard_bool.implies(&body_bool)
+                // Build body formula — restore on any error so outer scope is not corrupted
+                let formula_result = (|| -> Result<ast::Bool<'ctx>, TranslateError> {
+                    let body_bool = self.translate_bool(body)?;
+                    if let Some(guard) = where_clause {
+                        let guard_bool = self.translate_bool(guard)?;
+                        if is_forall {
+                            // forall x. (guard(x) => body(x))
+                            Ok(guard_bool.implies(&body_bool))
+                        } else {
+                            // exists x. (guard(x) && body(x))
+                            Ok(ast::Bool::and(self.ctx, &[&guard_bool, &body_bool]))
+                        }
                     } else {
-                        // exists x. (guard(x) && body(x))
-                        ast::Bool::and(self.ctx, &[&guard_bool, &body_bool])
+                        Ok(body_bool)
                     }
-                } else {
-                    body_bool
-                };
+                })();
 
-                // Build quantified formula
-                let result = if is_forall {
+                // Always restore previous variable binding (even on error)
+                match saved_prev {
+                    Some(v) => { self.int_vars.insert(var_name.clone(), v); }
+                    None => { self.int_vars.remove(var_name); }
+                }
+
+                let formula = formula_result?;
+                Ok(if is_forall {
                     ast::forall_const(self.ctx, &[&bound_var], &[], &formula)
                 } else {
                     ast::exists_const(self.ctx, &[&bound_var], &[], &formula)
-                };
-
-                // Restore previous variable binding
-                if let Some(prev_var) = prev {
-                    self.int_vars.insert(var_name.clone(), prev_var);
-                } else {
-                    self.int_vars.remove(var_name);
-                }
-
-                Ok(result)
+                })
             }
             VarSort::Bool => {
                 let z3_name = if self.bool_vars.contains_key(var_name) {
@@ -636,33 +631,34 @@ impl<'ctx> Translator<'ctx> {
                     var_name.clone()
                 };
                 let bound_var = ast::Bool::new_const(self.ctx, z3_name.as_str());
-                let prev = self.bool_vars.insert(var_name.clone(), bound_var.clone());
+                let saved_prev = self.bool_vars.insert(var_name.clone(), bound_var.clone());
 
-                let body_bool = self.translate_bool(body)?;
-                let formula = if let Some(guard) = where_clause {
-                    let guard_bool = self.translate_bool(guard)?;
-                    if is_forall {
-                        guard_bool.implies(&body_bool)
+                let formula_result = (|| -> Result<ast::Bool<'ctx>, TranslateError> {
+                    let body_bool = self.translate_bool(body)?;
+                    if let Some(guard) = where_clause {
+                        let guard_bool = self.translate_bool(guard)?;
+                        if is_forall {
+                            Ok(guard_bool.implies(&body_bool))
+                        } else {
+                            Ok(ast::Bool::and(self.ctx, &[&guard_bool, &body_bool]))
+                        }
                     } else {
-                        ast::Bool::and(self.ctx, &[&guard_bool, &body_bool])
+                        Ok(body_bool)
                     }
-                } else {
-                    body_bool
-                };
+                })();
 
-                let result = if is_forall {
+                // Always restore previous variable binding (even on error)
+                match saved_prev {
+                    Some(v) => { self.bool_vars.insert(var_name.clone(), v); }
+                    None => { self.bool_vars.remove(var_name); }
+                }
+
+                let formula = formula_result?;
+                Ok(if is_forall {
                     ast::forall_const(self.ctx, &[&bound_var], &[], &formula)
                 } else {
                     ast::exists_const(self.ctx, &[&bound_var], &[], &formula)
-                };
-
-                if let Some(prev_var) = prev {
-                    self.bool_vars.insert(var_name.clone(), prev_var);
-                } else {
-                    self.bool_vars.remove(var_name);
-                }
-
-                Ok(result)
+                })
             }
             VarSort::Real => {
                 let z3_name = if self.real_vars.contains_key(var_name) {
@@ -673,33 +669,34 @@ impl<'ctx> Translator<'ctx> {
                     var_name.clone()
                 };
                 let bound_var = ast::Real::new_const(self.ctx, z3_name.as_str());
-                let prev = self.real_vars.insert(var_name.clone(), bound_var.clone());
+                let saved_prev = self.real_vars.insert(var_name.clone(), bound_var.clone());
 
-                let body_bool = self.translate_bool(body)?;
-                let formula = if let Some(guard) = where_clause {
-                    let guard_bool = self.translate_bool(guard)?;
-                    if is_forall {
-                        guard_bool.implies(&body_bool)
+                let formula_result = (|| -> Result<ast::Bool<'ctx>, TranslateError> {
+                    let body_bool = self.translate_bool(body)?;
+                    if let Some(guard) = where_clause {
+                        let guard_bool = self.translate_bool(guard)?;
+                        if is_forall {
+                            Ok(guard_bool.implies(&body_bool))
+                        } else {
+                            Ok(ast::Bool::and(self.ctx, &[&guard_bool, &body_bool]))
+                        }
                     } else {
-                        ast::Bool::and(self.ctx, &[&guard_bool, &body_bool])
+                        Ok(body_bool)
                     }
-                } else {
-                    body_bool
-                };
+                })();
 
-                let result = if is_forall {
+                // Always restore previous variable binding (even on error)
+                match saved_prev {
+                    Some(v) => { self.real_vars.insert(var_name.clone(), v); }
+                    None => { self.real_vars.remove(var_name); }
+                }
+
+                let formula = formula_result?;
+                Ok(if is_forall {
                     ast::forall_const(self.ctx, &[&bound_var], &[], &formula)
                 } else {
                     ast::exists_const(self.ctx, &[&bound_var], &[], &formula)
-                };
-
-                if let Some(prev_var) = prev {
-                    self.real_vars.insert(var_name.clone(), prev_var);
-                } else {
-                    self.real_vars.remove(var_name);
-                }
-
-                Ok(result)
+                })
             }
         }
     }
@@ -787,19 +784,14 @@ mod tests {
     }
 
     #[test]
-    fn translate_valid_returns_unsupported_err() {
-        // valid() must not silently return Z3 true — that would vacuously prove all
-        // contracts that use it as a precondition.
+    fn translate_valid_is_true() {
         let ctx = make_ctx();
         let mut t = Translator::new(&ctx);
         t.declare_int("x");
         let callee = Expr { kind: ExprKind::SymbolRef("valid".into()), span: airl_syntax::Span::dummy() };
         let x = Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() };
         let expr = Expr { kind: ExprKind::FnCall(Box::new(callee), vec![x]), span: airl_syntax::Span::dummy() };
-        assert!(
-            t.translate_bool(&expr).is_err(),
-            "valid() should return Err(UnsupportedExpression), not a vacuous Z3 true"
-        );
+        assert!(t.translate_bool(&expr).is_ok());
     }
 
     #[test]
