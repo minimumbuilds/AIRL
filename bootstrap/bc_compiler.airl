@@ -438,36 +438,41 @@
   :requires [(valid st)]
   :ensures [(valid result)]
   :body
-    ;; Compile condition to temp register
-    (let (pair : List (cs-alloc-reg st))
-      (let (st2 : _ (at pair 0))
-        (let (cond-reg : Int (at pair 1))
-          (match (bc-compile-expr st2 cond cond-reg)
-            (Err e) (Err e)
-            (Ok st3)
-              ;; Emit JumpIfFalse (will be patched)
-              (let (jump-to-else-idx : Int (cs-instr-count st3))
-                (let (st4 : _ (cs-emit st3 (op-jump-if-false) 0 cond-reg 0))
-                  ;; Free cond temp: reclaim only the condition register itself.
-                  ;; Never free below cond-reg — registers before it may hold let-bound variables.
-                  (let (free-to : Int cond-reg)
-                    (let (st5 : _ (cs-free-reg-to st4 free-to))
-                      ;; Compile then branch
-                      (match (bc-compile-expr st5 then-br dst)
-                        (Err e) (Err e)
-                        (Ok st6)
-                          ;; Emit Jump to end (will be patched)
-                          (let (jump-to-end-idx : Int (cs-instr-count st6))
-                            (let (st7 : _ (cs-emit st6 (op-jump) 0 0 0))
-                              (let (else-start : Int (cs-instr-count st7))
-                                ;; Compile else branch
-                                (match (bc-compile-expr st7 else-br dst)
-                                  (Err e) (Err e)
-                                  (Ok st8)
-                                    (let (end-idx : Int (cs-instr-count st8))
-                                      ;; Patch both jumps
-                                      (let (st9 : _ (cs-patch-jump st8 jump-to-else-idx "b" (- (- else-start jump-to-else-idx) 1)))
-                                        (Ok (cs-patch-jump st9 jump-to-end-idx "a" (- (- end-idx jump-to-end-idx) 1)))))))))))))))))))
+    ;; Save tail? flag — branches inherit it, but condition does not
+    (let (parent-tail? : Bool (map-get-or st "in-tail?" false))
+      ;; Compile condition to temp register (not in tail position)
+      (let (st : _ (map-set st "in-tail?" false))
+        (let (pair : List (cs-alloc-reg st))
+          (let (st2 : _ (at pair 0))
+            (let (cond-reg : Int (at pair 1))
+              (match (bc-compile-expr st2 cond cond-reg)
+                (Err e) (Err e)
+                (Ok st3)
+                  ;; Restore tail? for branches, then emit JumpIfFalse
+                  (let (st3 : _ (map-set st3 "in-tail?" parent-tail?))
+                    (let (jump-to-else-idx : Int (cs-instr-count st3))
+                      (let (st4 : _ (cs-emit st3 (op-jump-if-false) 0 cond-reg 0))
+                        ;; Free cond temp
+                        (let (free-to : Int cond-reg)
+                          (let (st5 : _ (cs-free-reg-to st4 free-to))
+                            ;; Compile then branch (tail? = parent-tail?)
+                            (match (bc-compile-expr st5 then-br dst)
+                              (Err e) (Err e)
+                              (Ok st6)
+                                ;; Emit Jump to end (will be patched)
+                                (let (jump-to-end-idx : Int (cs-instr-count st6))
+                                  (let (st7 : _ (cs-emit st6 (op-jump) 0 0 0))
+                                    ;; Restore tail? for else branch
+                                    (let (st7 : _ (map-set st7 "in-tail?" parent-tail?))
+                                      (let (else-start : Int (cs-instr-count st7))
+                                        ;; Compile else branch
+                                        (match (bc-compile-expr st7 else-br dst)
+                                          (Err e) (Err e)
+                                          (Ok st8)
+                                            (let (end-idx : Int (cs-instr-count st8))
+                                              ;; Patch both jumps
+                                              (let (st9 : _ (cs-patch-jump st8 jump-to-else-idx "b" (- (- else-start jump-to-else-idx) 1)))
+                                                (Ok (cs-patch-jump st9 jump-to-end-idx "a" (- (- end-idx jump-to-end-idx) 1)))))))))))))))))))))))
 
 ;; ── Do block compilation ────────────────────────────────
 
@@ -490,19 +495,24 @@
   :ensures [(valid result)]
   :body
     (if (= (length exprs) 1)
-      ;; Last expression -> compile to dst, then free temps
+      ;; Last expression -> compile to dst, then free temps (inherits tail? from st)
       (match (bc-compile-expr st (head exprs) dst)
         (Err e) (Err e)
         (Ok st2)
           (let (free-to : Int (if (> save-reg (+ dst 1)) save-reg (+ dst 1)))
             (Ok (cs-free-reg-to st2 free-to))))
-      ;; Not last -> compile to temp, discard
-      (let (pair : List (cs-alloc-reg st))
-        (let (st2 : _ (at pair 0))
-          (let (tmp : Int (at pair 1))
-            (match (bc-compile-expr st2 (head exprs) tmp)
-              (Err e) (Err e)
-              (Ok st3) (bc-compile-do-loop st3 (tail exprs) dst save-reg)))))))
+      ;; Not last -> compile to temp, discard (not in tail position)
+      (let (parent-tail? : Bool (map-get-or st "in-tail?" false))
+        (let (st-no-tail : _ (map-set st "in-tail?" false))
+          (let (pair : List (cs-alloc-reg st-no-tail))
+            (let (st2 : _ (at pair 0))
+              (let (tmp : Int (at pair 1))
+                (match (bc-compile-expr st2 (head exprs) tmp)
+                  (Err e) (Err e)
+                  ;; Restore tail? before recursing to next expr
+                  (Ok st3)
+                    (let (st3 : _ (map-set st3 "in-tail?" parent-tail?))
+                      (bc-compile-do-loop st3 (tail exprs) dst save-reg)))))))))))
 
 ;; ── Let compilation ─────────────────────────────────────
 
@@ -511,21 +521,25 @@
   :requires [(valid st)]
   :ensures [(valid result)]
   :body
-    (let (save-reg : Int (cs-next-reg st))
-      ;; Ensure we allocate above dst
-      (let (st2 : _ (cs-ensure-above-dst st dst))
-        (match (bc-compile-let-bindings st2 bindings)
-          (Err e) (Err e)
-          (Ok pair)
-            (let (st3 : _ (at pair 0))
-              (let (bound-names : List (at pair 1))
-                (match (bc-compile-expr st3 body dst)
-                  (Err e) (Err e)
-                  (Ok st4)
-                    ;; Remove bindings from locals
-                    (let (st5 : _ (bc-unbind-let st4 bound-names))
-                      (let (free-to : Int (if (> save-reg (+ dst 1)) save-reg (+ dst 1)))
-                        (Ok (cs-free-reg-to st5 free-to)))))))))))
+    ;; Save tail? — body inherits it, binding values do not
+    (let (parent-tail? : Bool (map-get-or st "in-tail?" false))
+      (let (save-reg : Int (cs-next-reg st))
+        ;; Clear tail? for binding value compilation, ensure we allocate above dst
+        (let (st2 : _ (cs-ensure-above-dst (map-set st "in-tail?" false) dst))
+          (match (bc-compile-let-bindings st2 bindings)
+            (Err e) (Err e)
+            (Ok pair)
+              (let (st3 : _ (at pair 0))
+                (let (bound-names : List (at pair 1))
+                  ;; Restore tail? for body compilation
+                  (let (st3 : _ (map-set st3 "in-tail?" parent-tail?))
+                    (match (bc-compile-expr st3 body dst)
+                      (Err e) (Err e)
+                      (Ok st4)
+                        ;; Remove bindings from locals
+                        (let (st5 : _ (bc-unbind-let st4 bound-names))
+                          (let (free-to : Int (if (> save-reg (+ dst 1)) save-reg (+ dst 1)))
+                            (Ok (cs-free-reg-to st5 free-to))))))))))))))))
 
 (defn bc-compile-let-bindings
   :sig [(st : _) (bindings : List) -> _]
@@ -636,28 +650,35 @@
 
 (defn bc-compile-call-named
   :sig [(st : _) (name : String) (args : List) (dst : Int) -> _]
-  :intent "Compile Call dst name_idx argc with args in dst+1..dst+argc"
+  :intent "Compile Call dst name_idx argc with args in dst+1..dst+argc. Emits TailCall for self-tail-calls."
   :requires [(valid st)]
   :ensures [(valid result)]
   :body
-    (let (save : Int (cs-next-reg st))
-      ;; Compile args to temp registers first
-      (match (bc-compile-args-to-temps st args)
-        (Err e) (Err e)
-        (Ok pair)
-          (let (st2 : _ (at pair 0))
-            (let (tmp-regs : List (at pair 1))
-              ;; Move temps into call slots [dst+1..]
-              (let (st3 : _ (bc-move-to-slots st2 tmp-regs dst 0))
-                (let (name-pair : List (cs-add-const st3 name))
-                  (let (st4 : _ (at name-pair 0))
-                    (let (name-idx : Int (at name-pair 1))
-                      (let (argc : Int (length args))
-                        ;; Ensure max-reg covers call slots
-                        (let (st4a : _ (bc-ensure-call-slots st4 dst argc))
-                          (let (st5 : _ (cs-emit st4a (op-call) dst name-idx argc))
-                            (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
-                              (Ok (cs-free-reg-to st5 free-to)))))))))))))))
+    ;; Check if this is a self-tail-call before clearing tail? for arg compilation
+    (let (is-self-tail? : Bool (and (map-get-or st "in-tail?" false)
+                                    (= name (map-get-or st "func-name" ""))))
+      ;; Clear tail? for arg compilation (args are not in tail position)
+      (let (st : _ (map-set st "in-tail?" false))
+        (let (save : Int (cs-next-reg st))
+          ;; Compile args to temp registers first
+          (match (bc-compile-args-to-temps st args)
+            (Err e) (Err e)
+            (Ok pair)
+              (let (st2 : _ (at pair 0))
+                (let (tmp-regs : List (at pair 1))
+                  ;; Move temps into call slots [dst+1..]
+                  (let (st3 : _ (bc-move-to-slots st2 tmp-regs dst 0))
+                    (let (name-pair : List (cs-add-const st3 name))
+                      (let (st4 : _ (at name-pair 0))
+                        (let (name-idx : Int (at name-pair 1))
+                          (let (argc : Int (length args))
+                            ;; Ensure max-reg covers call slots
+                            (let (st4a : _ (bc-ensure-call-slots st4 dst argc))
+                              ;; Emit TailCall for self-recursion in tail position, else Call
+                              (let (opcode : Int (if is-self-tail? (op-tail-call) (op-call)))
+                                (let (st5 : _ (cs-emit st4a opcode dst name-idx argc))
+                                  (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
+                                    (Ok (cs-free-reg-to st5 free-to))))))))))))))))))
 
 (defn bc-compile-call-local
   :sig [(st : _) (name : String) (callee-reg : Int) (args : List) (dst : Int) -> _]
@@ -1370,7 +1391,8 @@
                 (match (bc-emit-contract-assertions st3 name requires-clauses (op-assert-requires) dst-reg)
                   (Err e) (Err e)
                   (Ok st4)
-                    ;; Compile body
+                    ;; Compile body with tail-call detection enabled for self-recursive calls
+                    (let (st4 : _ (map-set (map-set st4 "in-tail?" true) "func-name" name))
                     (match (bc-compile-expr st4 body dst-reg)
                       (Err e) (Err (str "in function '" name "': " e))
                       (Ok st5)
@@ -1384,7 +1406,7 @@
                               (let (st8 : _ (cs-emit st7 (op-return) 0 dst-reg 0))
                                 ;; Build BCFunc
                                 (let (func : _ (BCFunc name arity (cs-max-reg st8) capture-count (cs-consts st8) (cs-instrs st8)))
-                                  (Ok [func (cs-lambdas st8) (cs-lambda-ctr st8)]))))))))))))))
+                                  (Ok [func (cs-lambdas st8) (cs-lambda-ctr st8)])))))))))))))))
 
 (defn bc-emit-contract-assertions
   :sig [(st : _) (fn-name : String) (clauses : List) (assert-op : Int) (dst-reg : Int) -> _]
