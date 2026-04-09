@@ -5,8 +5,6 @@ use crate::nostd_prelude::*;
 use std::collections::HashMap;
 #[cfg(target_os = "airlos")]
 use alloc::collections::BTreeMap as HashMap;
-use core::sync::atomic::Ordering;
-
 use crate::error::rt_error;
 use crate::memory::{airl_value_retain, airl_value_release};
 use crate::value::{rt_bool, rt_int, rt_list, rt_map, rt_nil, rt_str, RtData, RtValue};
@@ -97,10 +95,9 @@ pub extern "C" fn airl_map_get_or(
     }
 }
 
-/// Return a new map with key→val inserted. The original map is unchanged
-/// (unless rc == 1, in which case the map is mutated in place as a COW
-/// optimisation — O(1) instead of O(N)).
-/// All existing values are retained in the new map; val is retained.
+/// Return a new map with key→val inserted. The original map is always
+/// unchanged — always clones (functional semantics). All existing values are
+/// retained in the new map; val is retained.
 #[no_mangle]
 pub extern "C" fn airl_map_set(
     m: *mut RtValue,
@@ -113,32 +110,10 @@ pub extern "C" fn airl_map_set(
         _ => rt_error("airl_map_set: key must be a Str"),
     };
 
-    // COW fast path: sole owner → mutate in place (O(1) instead of O(N)).
-    // Read rc through the raw pointer first to avoid forming &mut when rc > 1.
-    // SAFETY: `m` is a valid, live RtValue (the AIRL calling convention retains
-    // it before calling this builtin). We only form `&mut` when rc == 1,
-    // guaranteeing exclusive ownership — no other alias can exist.
-    if unsafe { (*m).rc.load(Ordering::Relaxed) } == 1 {
-        let v = unsafe { &mut *m };
-        match &mut v.data {
-            RtData::Map(map) => {
-                // Avoid key allocation when key already exists — update value in place
-                airl_value_retain(val);
-                if let Some(slot) = map.get_mut(k_str) {
-                    airl_value_release(*slot);
-                    *slot = val;
-                } else {
-                    map.insert(k_str.to_string(), val);
-                }
-                airl_value_retain(m); // caller expects +1 ref on returned map
-                return m;
-            }
-            _ => rt_error("airl_map_set: first argument must be a Map"),
-        }
-    }
-
-    // rc > 1: clone — use shared reference only.
-    // SAFETY: `m` is a valid, live RtValue with rc > 1 (shared).
+    // Always clone — the AOT/JIT calling convention does not retain arguments
+    // before calling builtins, so rc==1 does not imply sole AIRL-level
+    // ownership (the caller's binding still lives). Mutating in place would
+    // violate functional semantics (the original binding would be altered).
     let v = unsafe { &*m };
     match &v.data {
         RtData::Map(map) => {
@@ -173,36 +148,17 @@ pub extern "C" fn airl_map_has(m: *mut RtValue, key: *mut RtValue) -> *mut RtVal
     }
 }
 
-/// Remove a key from the map. When rc == 1 (sole owner), the key is removed
-/// in place and the removed value is released. When rc > 1, returns a new map
-/// without the key (the removed value is not retained in the copy).
+/// Remove a key from the map. Always returns a new map without the key
+/// (functional semantics — the original map is never mutated).
 #[no_mangle]
 pub extern "C" fn airl_map_remove(m: *mut RtValue, key: *mut RtValue) -> *mut RtValue {
     let key_v = unsafe { &*key };
-    // Borrow as &str — HashMap::remove accepts &str via Borrow<str>.
-    // (airl_map_set clones to an owned String because HashMap::insert requires it.)
     let k = match &key_v.data {
         RtData::Str(s) => s.as_str(),
         _ => rt_error("airl_map_remove: key must be a Str"),
     };
 
-    // COW fast path: sole owner → mutate in place.
-    // SAFETY: Same pattern as airl_map_set — only form &mut when rc == 1.
-    if unsafe { (*m).rc.load(Ordering::Relaxed) } == 1 {
-        let v = unsafe { &mut *m };
-        match &mut v.data {
-            RtData::Map(map) => {
-                if let Some(old_val) = map.remove(k) {
-                    airl_value_release(old_val);
-                }
-                airl_value_retain(m); // caller expects +1 ref
-                return m;
-            }
-            _ => rt_error("airl_map_remove: first argument must be a Map"),
-        }
-    }
-
-    // rc > 1: clone without the removed key — shared reference only.
+    // Always clone — same reasoning as airl_map_set.
     let v = unsafe { &*m };
     match &v.data {
         RtData::Map(map) => {
@@ -220,32 +176,36 @@ pub extern "C" fn airl_map_remove(m: *mut RtValue, key: *mut RtValue) -> *mut Rt
     }
 }
 
-/// Return a list of key strings (unordered — AIRL maps are semantically unordered).
+/// Return a list of key strings sorted lexicographically.
+/// Sorted order is stable and deterministic across runs.
 #[no_mangle]
 pub extern "C" fn airl_map_keys(m: *mut RtValue) -> *mut RtValue {
     let map_v = unsafe { &*m };
     match &map_v.data {
         RtData::Map(map) => {
-            let mut items = Vec::with_capacity(map.len());
-            for k in map.keys() { items.push(rt_str(k.clone())); }
+            let mut keys: Vec<&str> = map.keys().map(|s| s.as_str()).collect();
+            keys.sort_unstable();
+            let items: Vec<*mut RtValue> = keys.iter().map(|&k| rt_str(k.to_string())).collect();
             rt_list(items)
         }
         _ => rt_error("airl_map_keys: argument must be a Map"),
     }
 }
 
-/// Return a list of values (unordered — AIRL maps are semantically unordered).
+/// Return a list of values in lexicographic key order.
 /// Each value is retained.
 #[no_mangle]
 pub extern "C" fn airl_map_values(m: *mut RtValue) -> *mut RtValue {
     let map_v = unsafe { &*m };
     match &map_v.data {
         RtData::Map(map) => {
-            let mut items = Vec::with_capacity(map.len());
-            for &val in map.values() {
-                airl_value_retain(val);
-                items.push(val);
-            }
+            let mut pairs: Vec<(&str, *mut RtValue)> =
+                map.iter().map(|(k, &v)| (k.as_str(), v)).collect();
+            pairs.sort_unstable_by_key(|(k, _)| *k);
+            let items: Vec<*mut RtValue> = pairs.into_iter().map(|(_, v)| {
+                airl_value_retain(v);
+                v
+            }).collect();
             rt_list(items)
         }
         _ => rt_error("airl_map_values: argument must be a Map"),
@@ -568,14 +528,18 @@ mod tests {
     }
 
     #[test]
-    fn map_set_cow_returns_same_pointer() {
+    fn map_set_always_clones() {
         unsafe {
             let m = airl_map_new(); // rc=1
             let k = mk_key("a");
             let v = rt_int(10);
             let m2 = airl_map_set(m, k, v);
-            // COW: sole owner, should mutate in place
-            assert_eq!(m2, m, "map_set with rc=1 should return the same pointer");
+            // Always clones — original map is never mutated.
+            assert_ne!(m2, m, "map_set must always return a new map");
+            // m is still the original empty map (unmodified)
+            let sz_orig = airl_map_size(m);
+            assert_eq!((*sz_orig).as_int(), 0, "original map must be unchanged");
+            airl_value_release(sz_orig);
             airl_value_release(v);
             airl_value_release(k);
             airl_value_release(m2);
@@ -584,63 +548,28 @@ mod tests {
     }
 
     #[test]
-    fn map_set_clone_when_shared() {
+    fn map_remove_always_clones() {
         unsafe {
             let m = airl_map_new();
-            airl_value_retain(m); // rc=2
-            let k = mk_key("b");
-            let v = rt_int(20);
-            let m2 = airl_map_set(m, k, v);
-            // Shared: should clone
-            assert_ne!(m2, m, "map_set with rc>1 should return a different pointer");
-            airl_value_release(v);
-            airl_value_release(k);
-            airl_value_release(m2);
-            airl_value_release(m); // release the extra retain
-            airl_value_release(m); // release original
-        }
-    }
-
-    #[test]
-    fn map_remove_cow_returns_same_pointer() {
-        unsafe {
-            let m = airl_map_new(); // rc=1
             let k = mk_key("a");
             let v = rt_int(5);
             let m2 = airl_map_set(m, k, v);
-            // m2 == m (COW path), map_set retained m so rc=2 now.
-            // Release once to get rc back to 1 for the remove COW test.
-            airl_value_release(m2);
             let k_rm = mk_key("a");
-            let m3 = airl_map_remove(m, k_rm);
-            assert_eq!(m3, m, "map_remove with rc=1 should return the same pointer");
-            airl_value_release(k_rm);
-            airl_value_release(v);
-            airl_value_release(k);
-            airl_value_release(m3);
-            airl_value_release(m);
-        }
-    }
-
-    #[test]
-    fn map_remove_clone_when_shared() {
-        unsafe {
-            let m = airl_map_new();
-            let k = mk_key("c");
-            let v = rt_int(30);
-            let m2 = airl_map_set(m, k, v);
-            // m2 == m (COW path, rc was 1). Now retain to make rc>1.
-            airl_value_retain(m2);
-            let k_rm = mk_key("c");
             let m3 = airl_map_remove(m2, k_rm);
-            assert_ne!(m3, m2, "map_remove with rc>1 should return a different pointer");
+            // Always clones — original map is never mutated.
+            assert_ne!(m3, m2, "map_remove must always return a new map");
+            // m2 still has the key
+            let k_check = mk_key("a");
+            let got = airl_map_get(m2, k_check);
+            assert_eq!((*got).as_int(), 5, "original map must be unchanged after remove");
+            airl_value_release(got);
+            airl_value_release(k_check);
             airl_value_release(k_rm);
             airl_value_release(v);
             airl_value_release(k);
             airl_value_release(m3);
-            airl_value_release(m2); // release extra retain
-            airl_value_release(m2); // release map_set retain
-            airl_value_release(m);  // release original
+            airl_value_release(m2);
+            airl_value_release(m);
         }
     }
 }
