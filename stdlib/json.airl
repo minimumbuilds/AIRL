@@ -228,15 +228,20 @@
             (json-has-dot src (+ start 1) end))))
 
 ;; ── json-parse-int : parse integer from bytes ──
+;; Returns (Ok i64) or (Err "number too large") on overflow.
 (defn json-parse-int-loop
-  :sig [(src : Bytes) (pos : i64) (end : i64) (acc : i64) (neg : bool) -> i64]
-  :intent "Accumulate digits into an integer"
+  :sig [(src : Bytes) (pos : i64) (end : i64) (acc : i64) (neg : bool) -> _]
+  :intent "Accumulate digits into an integer, returning Err on i64 overflow"
   :requires [(>= pos 0)]
   :ensures [(valid result)]
   :body (if (>= pos end)
-          (if neg (- 0 acc) acc)
+          (Ok (if neg (- 0 acc) acc))
           (let (b : i64 (at src pos))
-            (json-parse-int-loop src (+ pos 1) end (+ (* acc 10) (- b 48)) neg))))
+               (digit : i64 (- b 48))
+            ;; Guard: if acc > max_i64/10, next multiply will overflow
+            (if (> acc 922337203685477580)
+              (Err "number too large")
+              (json-parse-int-loop src (+ pos 1) end (+ (* acc 10) digit) neg)))))
 
 ;; ── json-parse-number : parse a JSON number ──
 (defn json-parse-number
@@ -249,10 +254,12 @@
           (if (json-has-dot src pos end)
             ;; Float — use AIRL's built-in float parsing
             [(match (string-to-float num-str) (Ok v) v (Err _) 0) end]
-            ;; Integer
+            ;; Integer — propagate overflow Err
             (let (neg : bool (= (at src pos) 45))
                  (start : i64 (if neg (+ pos 1) pos))
-              [(json-parse-int-loop src start end 0 neg) end]))))
+              [(match (json-parse-int-loop src start end 0 neg)
+                 (Err e) (Err e)
+                 (Ok v)  v) end]))))
 
 ;; ── json-parse-array-loop : parse array elements ──
 (defn json-parse-array-loop
