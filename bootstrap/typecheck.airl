@@ -31,6 +31,7 @@
          (listA : List (TyList tv))
          (mapT : List (TyVar "Map"))
          (fnT : List (TyVar "fn"))
+         (bytesT : List (TyVar "Bytes"))
                       (bind-builtins (type-env-new 0)
                         [;; Arithmetic
                          "+" (TyFunc [tv tv] tv)
@@ -102,6 +103,25 @@
                          ;; Result
                          "is-ok?" (TyFunc [tv] boolT)
                          "is-err?" (TyFunc [tv] boolT)
+                         ;; Bitwise
+                         "bitwise-and" (TyFunc [intT intT] intT)
+                         "bitwise-or"  (TyFunc [intT intT] intT)
+                         "bitwise-xor" (TyFunc [intT intT] intT)
+                         "bitwise-shl" (TyFunc [intT intT] intT)
+                         "bitwise-shr" (TyFunc [intT intT] intT)
+                         ;; Bytes
+                         "bytes-from-string"  (TyFunc [strT] bytesT)
+                         "bytes-to-string"    (TyFunc [bytesT intT intT] strT)
+                         "bytes-from-int8"    (TyFunc [intT] bytesT)
+                         "bytes-concat"       (TyFunc [bytesT bytesT] bytesT)
+                         "bytes-concat-all"   (TyFunc [listA] bytesT)
+                         ;; Conversions
+                         "str"            (TyFunc [tv] strT)
+                         "string-to-float" (TyFunc [strT] tv)
+                         ;; Extended list/map
+                         "list-contains?" (TyFunc [listA tv] boolT)
+                         "map-entries"    (TyFunc [mapT] listA)
+                         "map-map"        (TyFunc [fnT mapT] mapT)
                          ])))
 
 ;; ─── Core Expression Type Checking ──────────────────
