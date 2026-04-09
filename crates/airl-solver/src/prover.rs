@@ -4,6 +4,11 @@ use airl_syntax::ast::{Expr, ExprKind, FnDef, AstTypeKind};
 use crate::translate::{Translator, VarSort};
 use crate::{VerifyResult, FunctionVerification};
 
+// KNOWN LIMITATION: Linear ownership constraints are currently not encoded in Z3.
+// Contracts on owned/borrowed parameters are verified structurally but not for linearity.
+// The `.ownership` field on parameters is intentionally unused here — it requires
+// a separate ownership checker, not Z3 SMT encoding.
+
 /// Returns true if the expression (or any sub-expression) references the symbol "result".
 /// Used to detect ensures clauses that cannot be verified without body translation.
 fn clause_references_result(expr: &Expr) -> bool {

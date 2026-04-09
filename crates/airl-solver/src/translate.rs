@@ -255,6 +255,14 @@ impl<'ctx> Translator<'ctx> {
                 self.translate_quantifier(param, where_clause.as_deref(), body, false)
             }
 
+            ExprKind::Lambda(_, _) => Err(TranslateError::UnsupportedExpression(
+                "lambda expressions cannot appear in Z3 contracts".into()
+            )),
+
+            ExprKind::Match(_, _) => Err(TranslateError::UnsupportedExpression(
+                "match expressions in contracts require explicit encoding — use if/cond instead".into()
+            )),
+
             _ => Err(TranslateError::UnsupportedExpression(
                 format!("{:?}", expr.kind)
             )),
@@ -342,6 +350,14 @@ impl<'ctx> Translator<'ctx> {
             ExprKind::Do(exprs) => exprs.last()
                 .ok_or_else(|| TranslateError::UnsupportedExpression("empty do block".into()))
                 .and_then(|e| self.translate_int(e)),
+
+            ExprKind::Lambda(_, _) => Err(TranslateError::UnsupportedExpression(
+                "lambda expressions cannot appear in Z3 contracts".into()
+            )),
+
+            ExprKind::Match(_, _) => Err(TranslateError::UnsupportedExpression(
+                "match expressions in contracts require explicit encoding — use if/cond instead".into()
+            )),
 
             _ => Err(TranslateError::UnsupportedExpression(
                 format!("int context: {:?}", expr.kind)
@@ -464,6 +480,14 @@ impl<'ctx> Translator<'ctx> {
             ExprKind::Do(exprs) => exprs.last()
                 .ok_or_else(|| TranslateError::UnsupportedExpression("empty do block".into()))
                 .and_then(|e| self.translate_real(e)),
+
+            ExprKind::Lambda(_, _) => Err(TranslateError::UnsupportedExpression(
+                "lambda expressions cannot appear in Z3 contracts".into()
+            )),
+
+            ExprKind::Match(_, _) => Err(TranslateError::UnsupportedExpression(
+                "match expressions in contracts require explicit encoding — use if/cond instead".into()
+            )),
 
             _ => Err(TranslateError::UnsupportedExpression(
                 format!("real context: {:?}", expr.kind)
