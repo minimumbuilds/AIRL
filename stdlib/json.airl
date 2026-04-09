@@ -174,7 +174,9 @@
                     (let (escaped : Bytes (if (= next 110) (bytes-from-int8 10)   ;; \n
                                             (if (= next 116) (bytes-from-int8 9)  ;; \t
                                               (if (= next 114) (bytes-from-int8 13) ;; \r
-                                                (bytes-from-int8 next)))))          ;; \\ \" etc
+                                                (if (= next 98) (bytes-from-int8 8)  ;; \b
+                                                  (if (= next 102) (bytes-from-int8 12) ;; \f
+                                                    (bytes-from-int8 next)))))))        ;; \\ \" etc
                          (rest : List (json-parse-string-loop src (+ pos 2) len))
                       [(concat [escaped] (at rest 0)) (at rest 1)])))
                 (let (rest : List (json-parse-string-loop src (+ pos 1) len))
