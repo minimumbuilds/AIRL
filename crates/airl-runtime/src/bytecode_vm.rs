@@ -255,6 +255,13 @@ struct CallFrame {
     return_reg: u16,
     match_flag: bool,
     moved: Vec<bool>,
+    /// Cached pointer to the function's instruction slice.
+    /// Valid for the lifetime of the VM execution (functions are never removed
+    /// or mutated during `run_rt_with_min_depth`). Using a raw pointer avoids
+    /// a HashMap lookup on every dispatch loop iteration.
+    instr_ptr: *const [Instruction],
+    /// Cached pointer to the function's constant pool.
+    consts_ptr: *const [Value],
 }
 
 // ── Thread/channel globals ──────────────────────────────────────────
@@ -1232,6 +1239,11 @@ impl BytecodeVm {
         }
 
         let reg_count = func.register_count as usize;
+        // Cache raw pointers to the instruction and constant slices.
+        // SAFETY: `functions` is not mutated during VM execution, so these
+        // pointers remain valid for the lifetime of the call frame.
+        let instr_ptr: *const [Instruction] = func.instructions.as_slice();
+        let consts_ptr: *const [Value] = func.constants.as_slice();
         let mut registers: Vec<*mut RtValue> = Vec::with_capacity(reg_count);
         for _ in 0..reg_count { registers.push(rt_nil()); }
         for (i, arg) in args.iter().enumerate() {
@@ -1248,6 +1260,8 @@ impl BytecodeVm {
             return_reg,
             match_flag: false,
             moved: vec![false; reg_count],
+            instr_ptr,
+            consts_ptr,
         });
         Ok(())
     }
@@ -1264,6 +1278,10 @@ impl BytecodeVm {
         }
 
         let reg_count = func.register_count as usize;
+        // Cache raw pointers to the instruction and constant slices.
+        // SAFETY: `functions` is not mutated during VM execution.
+        let instr_ptr: *const [Instruction] = func.instructions.as_slice();
+        let consts_ptr: *const [Value] = func.constants.as_slice();
         let mut registers: Vec<*mut RtValue> = Vec::with_capacity(reg_count);
         for _ in 0..reg_count { registers.push(rt_nil()); }
         for (i, &arg) in args.iter().enumerate() {
@@ -1281,6 +1299,8 @@ impl BytecodeVm {
             return_reg,
             match_flag: false,
             moved: vec![false; reg_count],
+            instr_ptr,
+            consts_ptr,
         });
         Ok(())
     }
@@ -1295,15 +1315,17 @@ impl BytecodeVm {
     /// Main VM loop. Returns *mut RtValue with rc >= 1 (caller must release).
     fn run_rt_with_min_depth(&mut self, min_depth: usize) -> Result<*mut RtValue, RuntimeError> {
         loop {
-            // Single HashMap lookup per iteration: fetch instruction or detect end-of-function.
-            // Avoids the previous pattern of cloning func_name + 2-3 separate lookups.
-            let (func_name, instr_or_end) = {
+            // Use cached instruction pointer — no HashMap lookup per iteration.
+            // instr_ptr/consts_ptr are set when the frame is pushed and remain valid
+            // because `self.functions` is never mutated during execution.
+            let instr_or_end = {
                 let frame = self.call_stack.last().expect("internal: call stack empty");
-                let func = self.functions.get(&frame.func_name).expect("internal: function not in map");
-                if frame.ip < func.instructions.len() {
-                    (frame.func_name.clone(), Some(func.instructions[frame.ip]))
+                // SAFETY: instr_ptr points into self.functions which is not mutated here.
+                let instrs = unsafe { &*frame.instr_ptr };
+                if frame.ip < instrs.len() {
+                    Some(instrs[frame.ip])
                 } else {
-                    (frame.func_name.clone(), None)
+                    None
                 }
             };
 
@@ -1326,7 +1348,12 @@ impl BytecodeVm {
 
             match instr.op {
                 Op::LoadConst => {
-                    let val = value_to_rt(&self.functions.get(&func_name).expect("internal: function not in map").constants[instr.a as usize]);
+                    // SAFETY: consts_ptr points into self.functions which is not mutated here.
+                    let val = {
+                        let frame = self.call_stack.last().expect("internal: call stack empty");
+                        let consts = unsafe { &*frame.consts_ptr };
+                        value_to_rt(&consts[instr.a as usize])
+                    };
                     let frame = self.call_stack.last_mut().expect("internal: call stack empty");
                     reg_set(&mut frame.registers, instr.dst as usize, val);
                 }
@@ -1551,9 +1578,14 @@ impl BytecodeVm {
                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, list);
                 }
                 Op::MakeVariant => {
-                    let tag = match &self.functions.get(&func_name).expect("internal: function not in map").constants[instr.a as usize] {
-                        Value::Str(s) => s.clone(),
-                        _ => return Err(RuntimeError::TypeError("variant tag must be string".into())),
+                    let tag = {
+                        let frame = self.call_stack.last().expect("internal: call stack empty");
+                        // SAFETY: consts_ptr is valid for the frame's lifetime.
+                        let consts = unsafe { &*frame.consts_ptr };
+                        match &consts[instr.a as usize] {
+                            Value::Str(s) => s.clone(),
+                            _ => return Err(RuntimeError::TypeError("variant tag must be string".into())),
+                        }
                     };
                     let inner = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.b as usize);
                     airl_value_retain(inner);
@@ -1561,9 +1593,13 @@ impl BytecodeVm {
                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, variant);
                 }
                 Op::MakeVariant0 => {
-                    let tag = match &self.functions.get(&func_name).expect("internal: function not in map").constants[instr.a as usize] {
-                        Value::Str(s) => s.clone(),
-                        _ => return Err(RuntimeError::TypeError("variant tag must be string".into())),
+                    let tag = {
+                        let frame = self.call_stack.last().expect("internal: call stack empty");
+                        let consts = unsafe { &*frame.consts_ptr };
+                        match &consts[instr.a as usize] {
+                            Value::Str(s) => s.clone(),
+                            _ => return Err(RuntimeError::TypeError("variant tag must be string".into())),
+                        }
                     };
                     let variant = rt_variant(tag, rt_nil());
                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, variant);
@@ -1571,9 +1607,13 @@ impl BytecodeVm {
 
                 // ── Pattern matching ──
                 Op::MatchTag => {
-                    let tag = match &self.functions.get(&func_name).expect("internal: function not in map").constants[instr.b as usize] {
-                        Value::Str(s) => s.clone(),
-                        _ => return Err(RuntimeError::TypeError("match tag must be string".into())),
+                    let tag = {
+                        let frame = self.call_stack.last().expect("internal: call stack empty");
+                        let consts = unsafe { &*frame.consts_ptr };
+                        match &consts[instr.b as usize] {
+                            Value::Str(s) => s.clone(),
+                            _ => return Err(RuntimeError::TypeError("match tag must be string".into())),
+                        }
                     };
                     let scr = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
                     let v_scr = unsafe { rt_ref(scr) };
@@ -1625,13 +1665,15 @@ impl BytecodeVm {
                 Op::AssertRequires | Op::AssertEnsures | Op::AssertInvariant => {
                     let bool_val = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
                     if !rt_is_bool_true(bool_val) {
-                        let f = self.functions.get(&func_name).expect("internal: function not in map");
-                        let fn_name_str = match &f.constants[instr.dst as usize] {
-                            Value::Str(s) => s.clone(),
-                            _ => func_name.clone(),
+                        let frame = self.call_stack.last().expect("internal: call stack empty");
+                        // SAFETY: consts_ptr is valid for the frame's lifetime.
+                        let consts = unsafe { &*frame.consts_ptr };
+                        let fn_name_str = match consts.get(instr.dst as usize) {
+                            Some(Value::Str(s)) => s.clone(),
+                            _ => frame.func_name.clone(),
                         };
-                        let clause_source = match &f.constants[instr.b as usize] {
-                            Value::Str(s) => s.clone(),
+                        let clause_source = match consts.get(instr.b as usize) {
+                            Some(Value::Str(s)) => s.clone(),
                             _ => "?".into(),
                         };
                         let contract_kind = match instr.op {
@@ -1639,8 +1681,7 @@ impl BytecodeVm {
                             Op::AssertEnsures => airl_contracts::violation::ContractKind::Ensures,
                             _ => airl_contracts::violation::ContractKind::Invariant,
                         };
-                        let frame = self.call_stack.last().expect("internal: call stack empty");
-                        let arity = f.arity as usize;
+                        let arity = self.functions.get(&frame.func_name).map(|f| f.arity as usize).unwrap_or(0);
                         let bindings: Vec<(String, String)> = (0..arity)
                             .filter(|&i| i < frame.registers.len())
                             .map(|i| (format!("arg{}", i), rt_display(frame.registers[i])))
@@ -1665,9 +1706,10 @@ impl BytecodeVm {
                     let reg = instr.a as usize;
                     let frame = self.call_stack.last().expect("internal: call stack empty");
                     if reg < frame.moved.len() && frame.moved[reg] {
-                        let f = self.functions.get(&func_name).expect("internal: function not in map");
-                        let msg = if (instr.b as usize) < f.constants.len() {
-                            match &f.constants[instr.b as usize] {
+                        // SAFETY: consts_ptr is valid for the frame's lifetime.
+                        let consts = unsafe { &*frame.consts_ptr };
+                        let msg = if let Some(c) = consts.get(instr.b as usize) {
+                            match c {
                                 Value::Str(s) if s.contains(' ') => s.clone(),
                                 Value::Str(s) => format!("use of moved value: `{}` was already moved", s),
                                 other => format!("use of moved value: `{}` was already moved", other),
@@ -1681,9 +1723,14 @@ impl BytecodeVm {
 
                 // ── Function calls ──
                 Op::Call => {
-                    let name = match &self.functions.get(&func_name).expect("internal: function not in map").constants[instr.a as usize] {
-                        Value::Str(s) => s.clone(),
-                        _ => return Err(RuntimeError::TypeError("call: func name must be string".into())),
+                    let name = {
+                        let frame = self.call_stack.last().expect("internal: call stack empty");
+                        // SAFETY: consts_ptr is valid for the frame's lifetime.
+                        let consts = unsafe { &*frame.consts_ptr };
+                        match &consts[instr.a as usize] {
+                            Value::Str(s) => s.clone(),
+                            _ => return Err(RuntimeError::TypeError("call: func name must be string".into())),
+                        }
                     };
                     let argc = instr.b as usize;
                     let rt_args: Vec<*mut RtValue> = {
@@ -1737,9 +1784,13 @@ impl BytecodeVm {
                 }
 
                 Op::CallBuiltin => {
-                    let name = match &self.functions.get(&func_name).expect("internal: function not in map").constants[instr.a as usize] {
-                        Value::Str(s) => s.clone(),
-                        _ => return Err(RuntimeError::TypeError("callbuiltin: name must be string".into())),
+                    let name = {
+                        let frame = self.call_stack.last().expect("internal: call stack empty");
+                        let consts = unsafe { &*frame.consts_ptr };
+                        match &consts[instr.a as usize] {
+                            Value::Str(s) => s.clone(),
+                            _ => return Err(RuntimeError::TypeError("callbuiltin: name must be string".into())),
+                        }
                     };
                     let argc = instr.b as usize;
                     let rt_args: Vec<*mut RtValue> = {
@@ -1902,9 +1953,13 @@ impl BytecodeVm {
                 }
 
                 Op::MakeClosure => {
-                    let func_name_const = match &self.functions.get(&func_name).expect("internal: function not in map").constants[instr.a as usize] {
-                        Value::Str(s) => s.clone(),
-                        _ => return Err(RuntimeError::TypeError("closure: func name must be string".into())),
+                    let func_name_const = {
+                        let frame = self.call_stack.last().expect("internal: call stack empty");
+                        let consts = unsafe { &*frame.consts_ptr };
+                        match &consts[instr.a as usize] {
+                            Value::Str(s) => s.clone(),
+                            _ => return Err(RuntimeError::TypeError("closure: func name must be string".into())),
+                        }
                     };
                     let capture_count = self.functions.get(&func_name_const)
                         .map(|f| f.capture_count as usize).unwrap_or(0);

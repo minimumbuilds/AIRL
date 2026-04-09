@@ -92,6 +92,9 @@ impl BytecodeCompiler {
     }
 
     fn add_constant(&mut self, val: Value) -> u16 {
+        // Clone only to build the lookup key. On cache hit the clone is discarded;
+        // on miss the clone is moved into the index and the original val is pushed
+        // into the constants pool — no double-clone on the miss path.
         let key = ConstantKey(val.clone());
         if let Some(&idx) = self.constant_index.get(&key) {
             return idx;

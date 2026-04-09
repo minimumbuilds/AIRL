@@ -443,6 +443,10 @@ pub struct BytecodeAot {
     /// Functions referenced by MakeClosure — must be compiled boxed
     /// because airl_call_closure invokes them with *mut RtValue args.
     closure_targets: HashSet<String>,
+    /// Precomputed call graph: caller → list of direct callees (deduplicated).
+    /// Populated in compile_all pre-pass; used by compile_with_deps to avoid
+    /// re-scanning instruction lists on every dependency walk.
+    call_graph: HashMap<String, Vec<String>>,
 }
 
 
@@ -517,6 +521,7 @@ impl BytecodeAot {
             eligible_funcs: HashSet::new(),
             eligible_return_hints: HashMap::new(),
             closure_targets: HashSet::new(),
+            call_graph: HashMap::new(),
         })
     }
 
@@ -1169,28 +1174,68 @@ impl BytecodeAot {
     // ──────────────────────────────────────────────────────────────────────
 
     /// Compile all bytecode functions into the object module.
+    /// Pre-pass: build closure_targets set and call_graph map from all functions.
+    /// Called once before the main compilation loop to avoid repeated instruction scans.
+    fn pre_scan_functions(&mut self, all_functions: &HashMap<String, BytecodeFunc>) {
+        for func in all_functions.values() {
+            let mut callees: Vec<String> = Vec::new();
+            let mut seen_callees: HashSet<&str> = HashSet::new();
+            for instr in &func.instructions {
+                if instr.op == Op::MakeClosure {
+                    if let Some(Value::Str(target)) = func.constants.get(instr.a as usize) {
+                        self.closure_targets.insert(target.clone());
+                        if target != &func.name && seen_callees.insert(target.as_str()) {
+                            callees.push(target.clone());
+                        }
+                    }
+                }
+                if instr.op == Op::LoadConst {
+                    if let Some(Value::IRFuncRef(target)) = func.constants.get(instr.a as usize) {
+                        self.closure_targets.insert(target.clone());
+                        if target != &func.name && seen_callees.insert(target.as_str()) {
+                            callees.push(target.clone());
+                        }
+                    }
+                }
+                if instr.op == Op::Call {
+                    if let Some(Value::Str(callee_name)) = func.constants.get(instr.a as usize) {
+                        if callee_name != &func.name && seen_callees.insert(callee_name.as_str()) {
+                            callees.push(callee_name.clone());
+                        }
+                    }
+                }
+            }
+            self.call_graph.insert(func.name.clone(), callees);
+        }
+    }
+
     pub fn compile_all(
         &mut self,
         funcs: &[BytecodeFunc],
         all_functions: &HashMap<String, BytecodeFunc>,
     ) -> Result<(), String> {
-        // Pre-scan: identify functions referenced by MakeClosure or IRFuncRef.
-        // These must be compiled boxed (airl_call_closure uses RtValue* ABI).
-        for func in all_functions.values() {
-            for instr in &func.instructions {
-                if instr.op == Op::MakeClosure {
-                    if let Some(Value::Str(target)) = func.constants.get(instr.a as usize) {
-                        self.closure_targets.insert(target.clone());
-                    }
-                }
-                // IRFuncRef loaded via LoadConst — function used as a value
-                if instr.op == Op::LoadConst {
-                    if let Some(Value::IRFuncRef(target)) = func.constants.get(instr.a as usize) {
-                        self.closure_targets.insert(target.clone());
-                    }
-                }
+        // Pre-pass: build closure_targets and call_graph in one scan.
+        self.pre_scan_functions(all_functions);
+        let mut in_progress = HashSet::new();
+        let mut eligible_cache = HashSet::new();
+        let mut ineligible_cache = HashSet::new();
+        for func in funcs {
+            if !self.compiled_funcs.contains_key(&func.name) {
+                self.compile_with_deps(func, all_functions, &mut in_progress, &mut eligible_cache, &mut ineligible_cache)?;
             }
         }
+        Ok(())
+    }
+
+    /// Like compile_all but accepts references to avoid cloning when the caller
+    /// already owns the BytecodeFunc values in a HashMap.
+    pub fn compile_all_refs(
+        &mut self,
+        funcs: &[&BytecodeFunc],
+        all_functions: &HashMap<String, BytecodeFunc>,
+    ) -> Result<(), String> {
+        // Pre-pass: build closure_targets and call_graph in one scan.
+        self.pre_scan_functions(all_functions);
         let mut in_progress = HashSet::new();
         let mut eligible_cache = HashSet::new();
         let mut ineligible_cache = HashSet::new();
@@ -1222,27 +1267,39 @@ impl BytecodeAot {
         }
         in_progress.insert(name.clone());
 
-        // Compile call dependencies first.
-        for instr in &func.instructions {
-            if instr.op == Op::Call || instr.op == Op::MakeClosure {
-                if let Value::Str(callee_name) = &func.constants[instr.a as usize] {
-                    if callee_name != &func.name
-                        && !self.compiled_funcs.contains_key(callee_name)
-                    {
-                        if let Some(callee) = all_functions.get(callee_name).cloned() {
-                            self.compile_with_deps(&callee, all_functions, in_progress, eligible_cache, ineligible_cache)?;
-                        }
+        // Compile call dependencies first using the precomputed call graph.
+        // This avoids rescanning all instructions on every recursive call.
+        if let Some(callees) = self.call_graph.get(&name).cloned() {
+            for callee_name in &callees {
+                if !self.compiled_funcs.contains_key(callee_name) {
+                    if let Some(callee) = all_functions.get(callee_name) {
+                        let callee = callee.clone();
+                        self.compile_with_deps(&callee, all_functions, in_progress, eligible_cache, ineligible_cache)?;
                     }
                 }
             }
-            // IRFuncRef loaded via LoadConst — function used as a value (higher-order)
-            if instr.op == Op::LoadConst {
-                if let Some(Value::IRFuncRef(callee_name)) = func.constants.get(instr.a as usize) {
-                    if callee_name != &func.name
-                        && !self.compiled_funcs.contains_key(callee_name)
-                    {
-                        if let Some(callee) = all_functions.get(callee_name).cloned() {
-                            self.compile_with_deps(&callee, all_functions, in_progress, eligible_cache, ineligible_cache)?;
+        } else {
+            // Fallback: call_graph not populated (e.g. compile_with_deps called directly).
+            for instr in &func.instructions {
+                if instr.op == Op::Call || instr.op == Op::MakeClosure {
+                    if let Value::Str(callee_name) = &func.constants[instr.a as usize] {
+                        if callee_name != &func.name
+                            && !self.compiled_funcs.contains_key(callee_name)
+                        {
+                            if let Some(callee) = all_functions.get(callee_name).cloned() {
+                                self.compile_with_deps(&callee, all_functions, in_progress, eligible_cache, ineligible_cache)?;
+                            }
+                        }
+                    }
+                }
+                if instr.op == Op::LoadConst {
+                    if let Some(Value::IRFuncRef(callee_name)) = func.constants.get(instr.a as usize) {
+                        if callee_name != &func.name
+                            && !self.compiled_funcs.contains_key(callee_name)
+                        {
+                            if let Some(callee) = all_functions.get(callee_name).cloned() {
+                                self.compile_with_deps(&callee, all_functions, in_progress, eligible_cache, ineligible_cache)?;
+                            }
                         }
                     }
                 }
@@ -3314,17 +3371,23 @@ pub fn compile_to_executable_impl(
     all_funcs.push(main_func);
 
     // 3. AOT compile
-    let func_map: HashMap<String, BytecodeFunc> = all_funcs.iter()
-        .map(|f| (f.name.clone(), f.clone()))
+    // Build func_map for dependency resolution. We take ownership of all_funcs
+    // into the map to avoid cloning each BytecodeFunc; compile_all receives both
+    // a slice of all functions and the map (same contents, no extra copy needed).
+    let func_map: HashMap<String, BytecodeFunc> = all_funcs
+        .into_iter()
+        .map(|f| (f.name.clone(), f))
         .collect();
 
     let mut aot = BytecodeAot::new()?;
     for ext in stdlib_extern_c_decls.iter().chain(&extern_c_decls) {
         aot.register_extern_c(&ext.c_name, ext.arity);
     }
-    for func in &all_funcs {
-        let _ = aot.compile_all(std::slice::from_ref(func), &func_map);
-    }
+    // Compile all functions in a single pass; compile_with_deps handles ordering
+    // and skips already-compiled functions, so iterating once is equivalent to
+    // the previous per-function loop.
+    let all_funcs_vec: Vec<&BytecodeFunc> = func_map.values().collect();
+    let _ = aot.compile_all_refs(&all_funcs_vec, &func_map);
     aot.emit_entry_point()?;
     let obj_bytes = aot.finish();
 
@@ -3336,7 +3399,7 @@ pub fn compile_to_executable_impl(
     // 5. Find libraries and link
     // Only link libairl_runtime.a if the program uses builtins that need it
     // (run-bytecode, compile-to-executable). Normal programs only need libairl_rt.a.
-    let needs_runtime = all_funcs.iter().any(|f| {
+    let needs_runtime = func_map.values().any(|f| {
         f.constants.iter().any(|c| matches!(c,
             Value::Str(s) if s == "run-bytecode" || s == "compile-to-executable"))
     });
