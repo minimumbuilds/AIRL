@@ -50,22 +50,24 @@
 ;; ── pad-left : pad string to width on left ──
 (defn pad-left
   :sig [(s : String) (width : i64) (ch : String) -> String]
-  :intent "Pad string to width by prepending ch characters"
+  :intent "Pad string to width by prepending ch characters — O(N) via repeat-str"
   :requires [(>= width 0)]
   :ensures [(valid result)]
-  :body (if (>= (char-count s) width)
-          s
-          (pad-left (+ ch s) width ch)))
+  :body (let (slen : i64 (char-count s))
+          (if (>= slen width)
+            s
+            (+ (repeat-str ch (- width slen)) s))))
 
 ;; ── pad-right : pad string to width on right ──
 (defn pad-right
   :sig [(s : String) (width : i64) (ch : String) -> String]
-  :intent "Pad string to width by appending ch characters"
+  :intent "Pad string to width by appending ch characters — O(N) via repeat-str"
   :requires [(>= width 0)]
   :ensures [(valid result)]
-  :body (if (>= (char-count s) width)
-          s
-          (pad-right (+ s ch) width ch)))
+  :body (let (slen : i64 (char-count s))
+          (if (>= slen width)
+            s
+            (+ s (repeat-str ch (- width slen))))))
 
 ;; ── is-empty-str : check if string is empty ──
 (defn is-empty-str
