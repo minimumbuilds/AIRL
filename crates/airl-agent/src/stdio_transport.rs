@@ -6,6 +6,7 @@ use crate::transport::{Transport, TransportError, write_frame, read_frame};
 /// using the length-prefixed framing protocol.
 pub struct StdioTransport {
     child: Child,
+    closed: bool,
 }
 
 impl StdioTransport {
@@ -18,7 +19,7 @@ impl StdioTransport {
             .stderr(Stdio::null())
             .spawn()
             .map_err(TransportError::Io)?;
-        Ok(Self { child })
+        Ok(Self { child, closed: false })
     }
 }
 
@@ -45,14 +46,17 @@ impl Transport for StdioTransport {
         // Drop stdin to signal EOF, then wait for the child to exit.
         drop(self.child.stdin.take());
         self.child.wait().map_err(TransportError::Io)?;
+        self.closed = true;
         Ok(())
     }
 }
 
 impl Drop for StdioTransport {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if !self.closed {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 

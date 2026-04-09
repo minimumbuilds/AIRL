@@ -1,11 +1,12 @@
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
 /// Unique identity for an agent in the AIRL multi-agent system.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentId {
     pub name: String,
-    pub capabilities: Vec<Capability>,
+    pub capabilities: HashSet<Capability>,
     pub trust_level: TrustLevel,
     pub endpoint: Endpoint,
 }
@@ -41,12 +42,13 @@ pub enum Endpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn agent_id_equality() {
         let a = AgentId {
             name: "worker-1".into(),
-            capabilities: vec![Capability::ComputeCpu],
+            capabilities: [Capability::ComputeCpu].into_iter().collect::<HashSet<_>>(),
             trust_level: TrustLevel::Verified,
             endpoint: Endpoint::Stdio,
         };

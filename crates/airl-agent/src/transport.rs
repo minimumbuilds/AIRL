@@ -43,7 +43,8 @@ pub fn write_frame(writer: &mut dyn Write, payload: &str) -> io::Result<()> {
     writer.flush()
 }
 
-const MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
+// 4MB max frame size — 64MB was excessive and created DoS risk via large-payload attacks
+const MAX_FRAME_SIZE: usize = 4 * 1024 * 1024;
 
 /// Read a length-prefixed frame and return the UTF-8 payload.
 pub fn read_frame(reader: &mut dyn Read) -> io::Result<String> {

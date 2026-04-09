@@ -484,11 +484,12 @@ fn handle_stdio_connection(
 mod tests {
     use super::*;
     use crate::identity::*;
+    use std::collections::HashSet;
 
     fn test_identity() -> AgentId {
         AgentId {
             name: "test-agent".into(),
-            capabilities: vec![Capability::ComputeCpu],
+            capabilities: [Capability::ComputeCpu].into_iter().collect::<HashSet<_>>(),
             trust_level: TrustLevel::Verified,
             endpoint: Endpoint::Stdio,
         }
@@ -536,7 +537,7 @@ mod tests {
         let mut rt = AgentRuntime::new(test_identity());
         let peer = AgentId {
             name: "gpu-worker".into(),
-            capabilities: vec![Capability::ComputeGpu],
+            capabilities: [Capability::ComputeGpu].into_iter().collect::<HashSet<_>>(),
             trust_level: TrustLevel::Verified,
             endpoint: Endpoint::Tcp("127.0.0.1:9000".parse().unwrap()),
         };
