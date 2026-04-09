@@ -35,12 +35,17 @@
 ;; ── repeat-str : repeat a string n times ──
 (defn repeat-str
   :sig [(s : String) (n : i64) -> String]
-  :intent "Repeat a string n times"
+  :intent "Repeat a string n times using binary doubling — O(N log N), O(log N) stack depth"
   :requires [(>= n 0)]
   :ensures [(valid result)]
   :body (if (= n 0)
           ""
-          (+ s (repeat-str s (- n 1)))))
+          (if (= n 1)
+            s
+            (let (half : String (repeat-str s (/ n 2)))
+              (if (= (% n 2) 0)
+                (+ half half)
+                (+ half (+ half s)))))))
 
 ;; ── pad-left : pad string to width on left ──
 (defn pad-left
