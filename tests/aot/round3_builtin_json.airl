@@ -1,4 +1,5 @@
 ;; EXPECT: s1:ok|s2:ok|s3:ok
+;; DEPS: stdlib/json.airl
 (let (s1 : String (json-stringify 42))
      (s2 : String (json-stringify "hello"))
      (s3 : String (json-stringify [1 2 3]))
