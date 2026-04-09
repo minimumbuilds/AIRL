@@ -2316,6 +2316,7 @@ mod tests {
 
     #[test]
     fn test_tcp_accept_tls_already_tls() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         // Write test cert/key to temp files
         let dir = std::env::temp_dir().join(format!("airl_tls_test_{}", NEXT_TCP_HANDLE.load(Ordering::SeqCst)));
         std::fs::create_dir_all(&dir).unwrap();
