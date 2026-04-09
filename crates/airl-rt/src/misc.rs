@@ -357,11 +357,14 @@ pub extern "C" fn airl_concat_lists(a: *mut RtValue, b: *mut RtValue) -> *mut Rt
 pub extern "C" fn airl_range(start: *mut RtValue, end: *mut RtValue) -> *mut RtValue {
     let s = match unsafe { &(*start).data } { RtData::Int(n) => *n, _ => return rt_list(vec![]) };
     let e = match unsafe { &(*end).data } { RtData::Int(n) => *n, _ => return rt_list(vec![]) };
-    if s >= e { return rt_list(vec![]); }
-    if (e - s) > 10_000_000 {
-        rt_error(&format!("range: size {} exceeds 10,000,000 element limit", e - s));
+    let len = match e.checked_sub(s) {
+        Some(n) if n > 0 => n,
+        _ => return rt_list(vec![]),
+    };
+    if len > 10_000_000 {
+        rt_error(&format!("range: size {} exceeds 10,000,000 element limit", len));
     }
-    let mut items = Vec::with_capacity((e - s) as usize);
+    let mut items = Vec::with_capacity(len as usize);
     for i in s..e { items.push(rt_int(i)); }
     rt_list(items)
 }
@@ -2854,5 +2857,56 @@ mod tests {
             crate::memory::airl_value_release(list);
             crate::memory::airl_value_release(result);
         }
+    }
+
+    // ── airl_range arithmetic safety tests ──
+
+    fn range_len(result: *mut RtValue) -> usize {
+        let rv = unsafe { &*result };
+        match &rv.data {
+            RtData::List { items, .. } => items.len(),
+            _ => panic!("expected list"),
+        }
+    }
+
+    #[test]
+    fn test_range_happy_path() {
+        let s = rt_int(0);
+        let e = rt_int(5);
+        let result = airl_range(s, e);
+        assert_eq!(range_len(result), 5);
+    }
+
+    #[test]
+    fn test_range_empty_when_start_equals_end() {
+        let s = rt_int(3);
+        let e = rt_int(3);
+        let result = airl_range(s, e);
+        assert_eq!(range_len(result), 0, "range(n,n) should be empty");
+    }
+
+    #[test]
+    fn test_range_empty_when_start_greater_than_end() {
+        let s = rt_int(10);
+        let e = rt_int(3);
+        let result = airl_range(s, e);
+        assert_eq!(range_len(result), 0, "range(10,3) should be empty — no underflow");
+    }
+
+    #[test]
+    fn test_range_empty_on_negative_end_less_than_start() {
+        // e - s would underflow as usize without the checked_sub guard
+        let s = rt_int(i64::MAX);
+        let e = rt_int(0);
+        let result = airl_range(s, e);
+        assert_eq!(range_len(result), 0, "range(i64::MAX, 0) should be empty");
+    }
+
+    #[test]
+    fn test_range_wrong_type_returns_empty() {
+        let s = rt_str("not-an-int".to_string());
+        let e = rt_int(5);
+        let result = airl_range(s, e);
+        assert_eq!(range_len(result), 0, "non-Int start should return empty list");
     }
 }
