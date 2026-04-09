@@ -265,7 +265,7 @@ impl GpuContext {
                 .launch(max_cfg)
                 .map_err(|e| format!("GPU softmax max: {:?}", e))?;
         }
-        self.stream.synchronize().map_err(|e| format!("{:?}", e))?;
+        self.stream.synchronize().map_err(|e| format!("{:?}", e))?;  // Wait for all block maxes to be written before reading d_scratch
 
         // Find global max on host
         let scratch_host = self.stream.clone_dtoh(&d_scratch).map_err(|e| format!("{:?}", e))?;
@@ -284,7 +284,7 @@ impl GpuContext {
                 .launch(exp_cfg)
                 .map_err(|e| format!("GPU softmax exp: {:?}", e))?;
         }
-        self.stream.synchronize().map_err(|e| format!("{:?}", e))?;
+        self.stream.synchronize().map_err(|e| format!("{:?}", e))?;  // Ensure all atomicAdd calls complete before division
 
         let sum_host = self.stream.clone_dtoh(&d_sum).map_err(|e| format!("{:?}", e))?;
         let sum_val = sum_host[0];
