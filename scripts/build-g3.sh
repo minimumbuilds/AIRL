@@ -14,6 +14,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AIRL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 export AIRL_STDLIB="${AIRL_STDLIB:-$AIRL_ROOT/stdlib}"
 
+# Arch normalization (same as workflow's lib/user.sh)
+_build_arch="$(uname -m)"
+case "$_build_arch" in
+    x86_64)           G3_ARCH="x86_64" ;;
+    arm64|aarch64)    G3_ARCH="arm64"  ;;
+    *)                G3_ARCH="$_build_arch" ;;
+esac
+
+# Isolate build artifacts per arch so Linux x86_64 and macOS arm64
+# don't stomp each other on a shared filesystem.
+export CARGO_TARGET_DIR="${AIRL_ROOT}/target-${G3_ARCH}"
+
 BUILDS_DIR="builds"
 mkdir -p "$BUILDS_DIR"
 
@@ -49,7 +61,7 @@ fi
 
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-BUILD_NAME="g3-${COMMIT}-${TIMESTAMP}"
+BUILD_NAME="g3-${G3_ARCH}-${COMMIT}-${TIMESTAMP}"
 BUILD_PATH="${BUILDS_DIR}/${BUILD_NAME}"
 
 AIRL_BIN="${AIRL_BIN:-cargo run --release --features aot --}"
@@ -69,10 +81,15 @@ $AIRL_BIN run \
   bootstrap/g3_compiler.airl \
   -o "$BUILD_PATH"
 
-# Symlink g3 → latest build
-ln -sf "$BUILD_PATH" g3
+# Arch-specific symlink — safe to coexist with the other arch on shared filesystem
+ln -sf "builds/$(basename "$BUILD_PATH")" "${AIRL_ROOT}/g3-${G3_ARCH}"
+
+# Keep unadorned g3 symlink pointing to the arch-specific one for local convenience
+# (scripts that haven't been updated yet will use this as fallback)
+ln -sf "g3-${G3_ARCH}" "${AIRL_ROOT}/g3"
 
 SIZE=$(ls -lh "$BUILD_PATH" | awk '{print $5}')
 echo "[build-g3] Done: ${SIZE} -> ${BUILD_PATH}"
-echo "[build-g3] g3 -> ${BUILD_PATH}"
+echo "Arch: ${G3_ARCH} — symlink: g3-${G3_ARCH} -> builds/$(basename "$BUILD_PATH")"
+echo "CARGO_TARGET_DIR: $CARGO_TARGET_DIR"
 ./"$BUILD_PATH" -- --version 2>/dev/null || true
