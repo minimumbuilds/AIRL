@@ -198,8 +198,12 @@
   :intent "Group elements by key function into a map of lists"
   :requires [(valid f)]
   :ensures [(valid result)]
-  :body (fold (fn [acc x]
-    (let (k : _ (f x))
-         (existing : List (map-get-or acc k []))
-      (map-set acc k (append existing x))))
-    (map-new) xs))
+  :body
+    ;; Build groups in reverse with cons (O(1) per element), then
+    ;; reverse each group's list with map-map so order is preserved.
+    (map-map (fn [_k v] (reverse v))
+      (fold (fn [acc x]
+              (let (k : _ (f x))
+                   (existing : List (map-get-or acc k []))
+                (map-set acc (str k) (cons x existing))))
+            (map-new) xs)))
