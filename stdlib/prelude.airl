@@ -66,7 +66,12 @@
   :intent "Flatten a list of lists into a single list"
   :requires [(valid xss)]
   :ensures [(valid result)]
-  :body (fold (fn [acc xs] (concat acc xs)) [] xss))
+  :body
+    ;; Build in reverse with cons (O(1) per element), then reverse once.
+    ;; Avoids O(N²) concat traversal of growing accumulator.
+    (reverse (fold (fn [acc xs]
+                     (fold (fn [a x] (cons x a)) acc xs))
+                   [] xss)))
 
 ;; ── range : generate integers [start, end) ──
 (defn range
