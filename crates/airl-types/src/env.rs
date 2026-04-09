@@ -68,10 +68,14 @@ impl TypeEnv {
         self.depth -= 1;
     }
 
-    /// Bind a name in the current scope. Accepts a string name, interns it,
-    /// and inserts into the flat shadow index.
-    pub fn bind(&mut self, name: Symbol, ty: Ty) {
-        let id = self.interner.intern(&name);
+    /// Bind a SymbolId in the current scope. Symbol = SymbolId so this is the primary bind.
+    pub fn bind(&mut self, id: Symbol, ty: Ty) {
+        self.bind_id(id, ty);
+    }
+
+    /// Convenience: intern a name string and bind it in the current scope.
+    pub fn bind_str(&mut self, name: &str, ty: Ty) {
+        let id = self.interner.intern(name);
         self.bind_id(id, ty);
     }
 
@@ -105,11 +109,17 @@ impl TypeEnv {
     }
 
     pub fn register_type(&mut self, name: Symbol, params: Vec<Symbol>, ty: Ty) {
-        self.types.insert(name.clone(), RegisteredType { name, params, ty });
+        self.types.insert(name, RegisteredType { name, params, ty });
     }
 
     pub fn lookup_type(&self, name: &str) -> Option<&RegisteredType> {
-        self.types.get(name)
+        let id = self.interner.get(name)?;
+        self.types.get(&id)
+    }
+
+    /// Look up a registered type by its interned SymbolId. O(1).
+    pub fn lookup_type_id(&self, id: SymbolId) -> Option<&RegisteredType> {
+        self.types.get(&id)
     }
 
     /// Current scope depth.
@@ -126,7 +136,7 @@ mod tests {
     #[test]
     fn binding_and_lookup() {
         let mut env = TypeEnv::new();
-        env.bind("x".into(), Ty::Prim(PrimTy::I32));
+        env.bind_str("x", Ty::Prim(PrimTy::I32));
         assert_eq!(env.lookup("x"), Some(&Ty::Prim(PrimTy::I32)));
         assert_eq!(env.lookup("y"), None);
     }
@@ -134,9 +144,9 @@ mod tests {
     #[test]
     fn scoping_shadows() {
         let mut env = TypeEnv::new();
-        env.bind("x".into(), Ty::Prim(PrimTy::I32));
+        env.bind_str("x", Ty::Prim(PrimTy::I32));
         env.push_scope();
-        env.bind("x".into(), Ty::Prim(PrimTy::F64));
+        env.bind_str("x", Ty::Prim(PrimTy::F64));
         assert_eq!(env.lookup("x"), Some(&Ty::Prim(PrimTy::F64)));
         env.pop_scope();
         assert_eq!(env.lookup("x"), Some(&Ty::Prim(PrimTy::I32)));
@@ -145,7 +155,7 @@ mod tests {
     #[test]
     fn inner_scope_sees_outer() {
         let mut env = TypeEnv::new();
-        env.bind("x".into(), Ty::Prim(PrimTy::I32));
+        env.bind_str("x", Ty::Prim(PrimTy::I32));
         env.push_scope();
         assert_eq!(env.lookup("x"), Some(&Ty::Prim(PrimTy::I32)));
     }
@@ -153,11 +163,10 @@ mod tests {
     #[test]
     fn register_and_lookup_type() {
         let mut env = TypeEnv::new();
-        env.register_type(
-            "Result".into(),
-            vec!["T".into(), "E".into()],
-            Ty::Sum(vec![]),
-        );
+        let result_id = env.intern("Result");
+        let t_id = env.intern("T");
+        let e_id = env.intern("E");
+        env.register_type(result_id, vec![t_id, e_id], Ty::Sum(vec![]));
         assert!(env.lookup_type("Result").is_some());
         assert!(env.lookup_type("Option").is_none());
     }
@@ -167,12 +176,12 @@ mod tests {
     #[test]
     fn multiple_scopes_restore_correctly() {
         let mut env = TypeEnv::new();
-        env.bind("a".into(), Ty::Prim(PrimTy::I32));
+        env.bind_str("a", Ty::Prim(PrimTy::I32));
         env.push_scope();
-        env.bind("a".into(), Ty::Prim(PrimTy::F64));
-        env.bind("b".into(), Ty::Prim(PrimTy::Bool));
+        env.bind_str("a", Ty::Prim(PrimTy::F64));
+        env.bind_str("b", Ty::Prim(PrimTy::Bool));
         env.push_scope();
-        env.bind("a".into(), Ty::Prim(PrimTy::Str));
+        env.bind_str("a", Ty::Prim(PrimTy::Str));
         assert_eq!(env.lookup("a"), Some(&Ty::Prim(PrimTy::Str)));
         assert_eq!(env.lookup("b"), Some(&Ty::Prim(PrimTy::Bool)));
 
@@ -188,7 +197,7 @@ mod tests {
     #[test]
     fn pop_global_scope_is_noop() {
         let mut env = TypeEnv::new();
-        env.bind("x".into(), Ty::Prim(PrimTy::I32));
+        env.bind_str("x", Ty::Prim(PrimTy::I32));
         env.pop_scope(); // should not panic or remove the binding
         assert_eq!(env.lookup("x"), Some(&Ty::Prim(PrimTy::I32)));
     }
@@ -205,8 +214,8 @@ mod tests {
     #[test]
     fn shadow_same_scope_overwrites() {
         let mut env = TypeEnv::new();
-        env.bind("x".into(), Ty::Prim(PrimTy::I32));
-        env.bind("x".into(), Ty::Prim(PrimTy::F64));
+        env.bind_str("x", Ty::Prim(PrimTy::I32));
+        env.bind_str("x", Ty::Prim(PrimTy::F64));
         assert_eq!(env.lookup("x"), Some(&Ty::Prim(PrimTy::F64)));
     }
 
@@ -227,10 +236,10 @@ mod tests {
     #[test]
     fn same_name_rebind_in_scope_restores_on_pop() {
         let mut env = TypeEnv::new();
-        env.bind("x".into(), Ty::Prim(PrimTy::I32));   // depth 0
-        env.push_scope();                                // depth 1
-        env.bind("x".into(), Ty::Prim(PrimTy::F64));   // first rebind in scope 1
-        env.bind("x".into(), Ty::Prim(PrimTy::Str));   // second rebind in scope 1
+        env.bind_str("x", Ty::Prim(PrimTy::I32));   // depth 0
+        env.push_scope();                              // depth 1
+        env.bind_str("x", Ty::Prim(PrimTy::F64));   // first rebind in scope 1
+        env.bind_str("x", Ty::Prim(PrimTy::Str));   // second rebind in scope 1
         assert_eq!(env.lookup("x"), Some(&Ty::Prim(PrimTy::Str)));
         env.pop_scope();
         // Must restore the depth-0 binding, not a phantom from forward iteration

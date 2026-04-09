@@ -1,5 +1,7 @@
-// TODO: type Symbol = SymbolId (u32 index into intern table) for O(1) comparisons
-pub type Symbol = String;
+// Symbol is now an interned ID — O(1) copy, hash, and compare.
+// All string-to-symbol conversions must go through a SymbolInterner.
+pub use crate::interner::SymbolId;
+pub type Symbol = SymbolId;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ty {
@@ -108,7 +110,7 @@ impl std::fmt::Display for Ty {
                 }
             }
             Ty::Sum(variants) => {
-                let vs: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
+                let vs: Vec<String> = variants.iter().map(|v| format!("{}", v.name)).collect();
                 write!(f, "({})", vs.join(" | "))
             }
             Ty::Product(fields) => {

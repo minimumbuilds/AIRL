@@ -23,10 +23,10 @@ pub fn unify_dim(a: &DimExpr, b: &DimExpr, subst: &mut DimSubst) -> Result<(), S
             }
             // Apply substitutions to other before occurs check to detect indirect cycles
             let other_substituted = apply_subst(other, subst);
-            if occurs(v, &other_substituted) {
+            if occurs(*v, &other_substituted) {
                 return Err(format!("circular dimension: {} occurs in {:?}", v, other_substituted));
             }
-            subst.insert(v.clone(), other_substituted);
+            subst.insert(*v, other_substituted);
             Ok(())
         }
         // BinOp — try structural match
@@ -80,9 +80,9 @@ pub fn eval_dim(dim: &DimExpr) -> Option<u64> {
     }
 }
 
-fn occurs(var: &str, dim: &DimExpr) -> bool {
+fn occurs(var: Symbol, dim: &DimExpr) -> bool {
     match dim {
-        DimExpr::Var(v) => v == var,
+        DimExpr::Var(v) => *v == var,
         DimExpr::Lit(_) => false,
         DimExpr::BinOp(_, l, r) => occurs(var, l) || occurs(var, r),
     }
@@ -91,6 +91,12 @@ fn occurs(var: &str, dim: &DimExpr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interner::SymbolInterner;
+
+    /// Helper: create a DimSubst and SymbolInterner together for tests.
+    fn make_interner() -> SymbolInterner {
+        SymbolInterner::new()
+    }
 
     #[test]
     fn unify_equal_lits() {
@@ -106,37 +112,46 @@ mod tests {
 
     #[test]
     fn unify_var_with_lit() {
+        let mut interner = make_interner();
+        let m = interner.intern("M");
         let mut s = DimSubst::new();
-        unify_dim(&DimExpr::Var("M".into()), &DimExpr::Lit(64), &mut s).unwrap();
-        assert_eq!(s.get("M"), Some(&DimExpr::Lit(64)));
+        unify_dim(&DimExpr::Var(m), &DimExpr::Lit(64), &mut s).unwrap();
+        assert_eq!(s.get(&m), Some(&DimExpr::Lit(64)));
     }
 
     #[test]
     fn unify_shared_dimension() {
         // Matrix multiply: tensor[f32 M K] * tensor[f32 K N]
         // K must unify across both
+        let mut interner = make_interner();
+        let k = interner.intern("K");
         let mut s = DimSubst::new();
         // First call: K unifies with Lit(32)
-        unify_dim(&DimExpr::Var("K".into()), &DimExpr::Lit(32), &mut s).unwrap();
+        unify_dim(&DimExpr::Var(k), &DimExpr::Lit(32), &mut s).unwrap();
         // Second call: K (now 32) must match Lit(32)
-        unify_dim(&DimExpr::Var("K".into()), &DimExpr::Lit(32), &mut s).unwrap();
-        assert_eq!(s.get("K"), Some(&DimExpr::Lit(32)));
+        unify_dim(&DimExpr::Var(k), &DimExpr::Lit(32), &mut s).unwrap();
+        assert_eq!(s.get(&k), Some(&DimExpr::Lit(32)));
     }
 
     #[test]
     fn unify_shared_dimension_mismatch() {
+        let mut interner = make_interner();
+        let k = interner.intern("K");
         let mut s = DimSubst::new();
-        unify_dim(&DimExpr::Var("K".into()), &DimExpr::Lit(32), &mut s).unwrap();
+        unify_dim(&DimExpr::Var(k), &DimExpr::Lit(32), &mut s).unwrap();
         // K is now 32, trying to unify with 64 should fail
-        assert!(unify_dim(&DimExpr::Var("K".into()), &DimExpr::Lit(64), &mut s).is_err());
+        assert!(unify_dim(&DimExpr::Var(k), &DimExpr::Lit(64), &mut s).is_err());
     }
 
     #[test]
     fn unify_two_vars() {
+        let mut interner = make_interner();
+        let m = interner.intern("M");
+        let n = interner.intern("N");
         let mut s = DimSubst::new();
-        unify_dim(&DimExpr::Var("M".into()), &DimExpr::Var("N".into()), &mut s).unwrap();
+        unify_dim(&DimExpr::Var(m), &DimExpr::Var(n), &mut s).unwrap();
         // M → N or N → M
-        assert!(s.contains_key("M") || s.contains_key("N"));
+        assert!(s.contains_key(&m) || s.contains_key(&n));
     }
 
     #[test]
@@ -147,6 +162,8 @@ mod tests {
 
     #[test]
     fn eval_with_var_returns_none() {
-        assert_eq!(eval_dim(&DimExpr::Var("M".into())), None);
+        let mut interner = make_interner();
+        let m = interner.intern("M");
+        assert_eq!(eval_dim(&DimExpr::Var(m)), None);
     }
 }

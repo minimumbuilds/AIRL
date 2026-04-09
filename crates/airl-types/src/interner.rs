@@ -1,8 +1,16 @@
 use std::collections::HashMap;
 
 /// Compact identifier for an interned string. Cheap to copy, hash, and compare.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SymbolId(pub u32);
+
+impl std::fmt::Display for SymbolId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Without interner context we show the numeric ID.
+        // Use Ty::display_with(interner) for human-readable output.
+        write!(f, "#{}", self.0)
+    }
+}
 
 /// Interns strings so that repeated lookups use a u32 key instead of hashing
 /// the full string each time. Cost is paid once per unique name; all subsequent

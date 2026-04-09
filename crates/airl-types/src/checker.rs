@@ -12,25 +12,45 @@ pub struct TypeChecker {
     pub env: TypeEnv,
     pub dim_subst: DimSubst,
     diags: Diagnostics,
+    /// Pre-interned common symbols for O(1) TypeVar construction and comparison.
+    sym_wildcard: crate::ty::SymbolId,  // "_"
+    sym_builtin: crate::ty::SymbolId,   // "builtin"
 }
 
 impl TypeChecker {
     pub fn new() -> Self {
+        let mut env = TypeEnv::new();
+        let sym_wildcard = env.intern("_");
+        let sym_builtin  = env.intern("builtin");
         let mut tc = Self {
-            env: TypeEnv::new(),
+            env,
             dim_subst: DimSubst::new(),
             diags: Diagnostics::new(),
+            sym_wildcard,
+            sym_builtin,
         };
         tc.register_builtins();
         tc
+    }
+
+    /// Intern a string through the shared environment interner.
+    #[inline]
+    fn intern(&mut self, s: &str) -> crate::ty::SymbolId {
+        self.env.intern(s)
+    }
+
+    /// Wildcard type: compatible with everything (inference placeholder).
+    #[inline]
+    fn ty_wildcard(&self) -> Ty {
+        Ty::TypeVar(self.sym_wildcard)
     }
 
     /// Register built-in arithmetic and comparison operators.
     fn register_builtins(&mut self) {
         // Arithmetic: (+ a b), (- a b), (* a b), (/ a b)
         for op in &["+", "-", "*", "/", "%"] {
-            self.env.bind(
-                op.to_string(),
+            self.env.bind_str(
+                op,
                 Ty::Func {
                     params: vec![Ty::Prim(PrimTy::I64), Ty::Prim(PrimTy::I64)],
                     ret: Box::new(Ty::Prim(PrimTy::I64)),
@@ -39,8 +59,8 @@ impl TypeChecker {
         }
         // Comparison: (< a b), (> a b), (<= a b), (>= a b), (= a b), (!= a b)
         for op in &["<", ">", "<=", ">=", "=", "!="] {
-            self.env.bind(
-                op.to_string(),
+            self.env.bind_str(
+                op,
                 Ty::Func {
                     params: vec![Ty::Prim(PrimTy::I64), Ty::Prim(PrimTy::I64)],
                     ret: Box::new(Ty::Prim(PrimTy::Bool)),
@@ -49,16 +69,16 @@ impl TypeChecker {
         }
         // Boolean ops
         for op in &["and", "or"] {
-            self.env.bind(
-                op.to_string(),
+            self.env.bind_str(
+                op,
                 Ty::Func {
                     params: vec![Ty::Prim(PrimTy::Bool), Ty::Prim(PrimTy::Bool)],
                     ret: Box::new(Ty::Prim(PrimTy::Bool)),
                 },
             );
         }
-        self.env.bind(
-            "not".to_string(),
+        self.env.bind_str(
+            "not",
             Ty::Func {
                 params: vec![Ty::Prim(PrimTy::Bool)],
                 ret: Box::new(Ty::Prim(PrimTy::Bool)),
@@ -146,7 +166,8 @@ impl TypeChecker {
             // Container runtime (aircon) — AIRLOS-only IPC stubs
             "aircon_create", "aircon_start", "aircon_stop", "aircon_status", "aircon_list",
         ] {
-            self.env.bind(name.to_string(), Ty::TypeVar("builtin".to_string()));
+            let builtin_sym = self.sym_builtin;
+            self.env.bind_str(name, Ty::TypeVar(builtin_sym));
         }
     }
 
@@ -156,32 +177,33 @@ impl TypeChecker {
     /// `types_compatible`), so these signatures enforce arity and structural
     /// shape while remaining polymorphic.
     fn register_typed_builtins(&mut self) {
-        let t = Ty::TypeVar("_".to_string());
+        let t = self.ty_wildcard();
+        let list_name = self.intern("List");
         let list_t = Ty::Named {
-            name: "List".to_string(),
+            name: list_name,
             args: vec![TyArg::Type(t.clone())],
         };
 
         // head : List[T] -> T
-        self.env.bind("head".to_string(), Ty::Func {
+        self.env.bind_str("head", Ty::Func {
             params: vec![list_t.clone()],
             ret: Box::new(t.clone()),
         });
 
         // tail : List[T] -> List[T]
-        self.env.bind("tail".to_string(), Ty::Func {
+        self.env.bind_str("tail", Ty::Func {
             params: vec![list_t.clone()],
             ret: Box::new(list_t.clone()),
         });
 
         // cons : T -> List[T] -> List[T]
-        self.env.bind("cons".to_string(), Ty::Func {
+        self.env.bind_str("cons", Ty::Func {
             params: vec![t.clone(), list_t.clone()],
             ret: Box::new(list_t.clone()),
         });
 
         // empty? : List[T] -> Bool
-        self.env.bind("empty?".to_string(), Ty::Func {
+        self.env.bind_str("empty?", Ty::Func {
             params: vec![list_t.clone()],
             ret: Box::new(Ty::Prim(PrimTy::Bool)),
         });
@@ -190,16 +212,16 @@ impl TypeChecker {
         // T and U are distinct wildcards: the function may return a different type than its input.
         // We use TypeVar("_") for both since our checker treats any TypeVar("_") as compatible
         // with anything — giving arity checking without requiring full HM unification.
-        let u = Ty::TypeVar("_".to_string());
+        let u = self.ty_wildcard();
         let list_u = Ty::Named {
-            name: "List".to_string(),
+            name: list_name,
             args: vec![TyArg::Type(u.clone())],
         };
         let fn_t_u = Ty::Func {
             params: vec![t.clone()],
             ret: Box::new(u.clone()),
         };
-        self.env.bind("map".to_string(), Ty::Func {
+        self.env.bind_str("map", Ty::Func {
             params: vec![fn_t_u, list_t.clone()],
             ret: Box::new(list_u),
         });
@@ -209,7 +231,7 @@ impl TypeChecker {
             params: vec![t.clone()],
             ret: Box::new(Ty::Prim(PrimTy::Bool)),
         };
-        self.env.bind("filter".to_string(), Ty::Func {
+        self.env.bind_str("filter", Ty::Func {
             params: vec![fn_t_bool, list_t.clone()],
             ret: Box::new(list_t.clone()),
         });
@@ -219,13 +241,13 @@ impl TypeChecker {
             params: vec![t.clone(), t.clone()],
             ret: Box::new(t.clone()),
         };
-        self.env.bind("fold".to_string(), Ty::Func {
+        self.env.bind_str("fold", Ty::Func {
             params: vec![fn_u_t_u, t.clone(), list_t.clone()],
             ret: Box::new(t.clone()),
         });
 
         // str : T -> String  (polymorphic — accepts anything)
-        self.env.bind("str".to_string(), Ty::Func {
+        self.env.bind_str("str", Ty::Func {
             params: vec![t.clone()],
             ret: Box::new(Ty::Prim(PrimTy::Str)),
         });
@@ -257,7 +279,7 @@ impl TypeChecker {
             ast::AstTypeKind::Named(name) => {
                 // "_" is an inferred type placeholder — we return a special marker
                 if name == "_" {
-                    return Ok(Ty::TypeVar("_".to_string()));
+                    return Ok(self.ty_wildcard());
                 }
                 self.resolve_type_name(name)
             }
@@ -268,73 +290,76 @@ impl TypeChecker {
                         return Err(());
                     }
                     let elem = self.resolve_type(&args[0])?;
-                    let shape = args[1..]
-                        .iter()
-                        .map(|a| self.resolve_dim(a))
-                        .collect::<Result<_, _>>()?;
+                    let mut shape = Vec::new();
+                    for a in &args[1..] {
+                        shape.push(self.resolve_dim(a)?);
+                    }
                     Ok(Ty::Tensor {
                         elem: Box::new(elem),
                         shape,
                     })
                 } else {
                     // Named type application: Result[i32, DivError]
-                    let resolved_args = args
-                        .iter()
-                        .map(|a| self.resolve_type(a).map(TyArg::Type))
-                        .collect::<Result<_, _>>()?;
+                    let mut resolved_args = Vec::new();
+                    for a in args {
+                        resolved_args.push(self.resolve_type(a).map(TyArg::Type)?);
+                    }
+                    let name_id = self.intern(name);
                     Ok(Ty::Named {
-                        name: name.clone(),
+                        name: name_id,
                         args: resolved_args,
                     })
                 }
             }
             ast::AstTypeKind::Func(params, ret) => {
-                let param_tys = params
-                    .iter()
-                    .map(|p| self.resolve_type(p))
-                    .collect::<Result<_, _>>()?;
+                let mut param_tys = Vec::new();
+                for p in params {
+                    param_tys.push(self.resolve_type(p)?);
+                }
                 let ret_ty = self.resolve_type(ret)?;
                 Ok(Ty::Func {
                     params: param_tys,
                     ret: Box::new(ret_ty),
                 })
             }
-            ast::AstTypeKind::Nat(nat) => Ok(Ty::Nat(Self::ast_nat_to_dim(nat))),
+            ast::AstTypeKind::Nat(nat) => Ok(Ty::Nat(self.ast_nat_to_dim(nat))),
         }
     }
 
     /// Resolve an AST type node used in a dimension position to a DimExpr.
     fn resolve_dim(&mut self, ast_ty: &ast::AstType) -> Result<DimExpr, ()> {
         match &ast_ty.kind {
-            ast::AstTypeKind::Nat(nat) => Ok(Self::ast_nat_to_dim(nat)),
+            ast::AstTypeKind::Nat(nat) => Ok(self.ast_nat_to_dim(nat)),
             ast::AstTypeKind::Named(name) => {
                 // Could be a dimension variable or a literal
                 if let Ok(n) = name.parse::<u64>() {
                     Ok(DimExpr::Lit(n))
                 } else {
-                    Ok(DimExpr::Var(name.clone()))
+                    let id = self.intern(name);
+                    Ok(DimExpr::Var(id))
                 }
             }
             _ => Err(()),
         }
     }
 
-    /// Convert an AST NatExpr to a DimExpr.
-    fn ast_nat_to_dim(nat: &ast::NatExpr) -> DimExpr {
+    /// Convert an AST NatExpr to a DimExpr, interning variable names.
+    fn ast_nat_to_dim(&mut self, nat: &ast::NatExpr) -> DimExpr {
         match nat {
             ast::NatExpr::Lit(v) => DimExpr::Lit(*v),
-            ast::NatExpr::Var(s) => DimExpr::Var(s.clone()),
+            ast::NatExpr::Var(s) => {
+                let id = self.intern(s);
+                DimExpr::Var(id)
+            }
             ast::NatExpr::BinOp(op, l, r) => {
                 let dim_op = match op {
                     ast::NatOp::Add => DimOp::Add,
                     ast::NatOp::Sub => DimOp::Sub,
                     ast::NatOp::Mul => DimOp::Mul,
                 };
-                DimExpr::BinOp(
-                    dim_op,
-                    Box::new(Self::ast_nat_to_dim(l)),
-                    Box::new(Self::ast_nat_to_dim(r)),
-                )
+                let l_dim = self.ast_nat_to_dim(l);
+                let r_dim = self.ast_nat_to_dim(r);
+                DimExpr::BinOp(dim_op, Box::new(l_dim), Box::new(r_dim))
             }
         }
     }
@@ -390,7 +415,8 @@ impl TypeChecker {
                     let actual = self.check_expr(&b.value)?;
                     let declared = self.resolve_type(&b.ty)?;
                     // If declared type is inferred placeholder, use actual
-                    let bound_ty = if declared == Ty::TypeVar("_".to_string()) {
+                    let wc = self.sym_wildcard;
+                    let bound_ty = if declared == Ty::TypeVar(wc) {
                         actual
                     } else {
                         // Check that actual is assignable to declared
@@ -407,7 +433,8 @@ impl TypeChecker {
                         }
                         declared
                     };
-                    self.env.bind(b.name.clone(), bound_ty);
+                    let b_id = self.intern(&b.name);
+                    self.env.bind(b_id, bound_ty);
                 }
                 let body_ty = self.check_expr(body)?;
                 self.env.pop_scope();
@@ -464,7 +491,7 @@ impl TypeChecker {
                         for arg in args {
                             let _ = self.check_expr(arg);
                         }
-                        Ok(Ty::TypeVar("_".to_string()))
+                        Ok(self.ty_wildcard())
                     }
                     _ => {
                         self.diags.add(Diagnostic::error(
@@ -513,14 +540,16 @@ impl TypeChecker {
                 for p in params {
                     let ty = self.resolve_type(&p.ty)?;
                     // For untyped lambda params (ty = "_"), default to inferred
-                    let bound_ty = if ty == Ty::TypeVar("_".to_string()) {
+                    let param_id = self.intern(&p.name);
+                    let wc = self.sym_wildcard;
+                    let bound_ty = if ty == Ty::TypeVar(wc) {
                         // Without full inference, we cannot determine the type,
                         // so we keep it as a type variable
-                        Ty::TypeVar(p.name.clone())
+                        Ty::TypeVar(param_id)
                     } else {
                         ty
                     };
-                    self.env.bind(p.name.clone(), bound_ty.clone());
+                    self.env.bind(param_id, bound_ty.clone());
                     param_tys.push(bound_ty);
                 }
                 let body_ty = self.check_expr(body)?;
@@ -535,7 +564,9 @@ impl TypeChecker {
                 let inner_ty = self.check_expr(inner)?;
                 // If inner returns Named("Result", [T, E]), result type is T
                 match inner_ty {
-                    Ty::Named { ref name, ref args } if name == "Result" && args.len() == 2 => {
+                    Ty::Named { ref name, ref args }
+                        if self.env.resolve(*name) == "Result" && args.len() == 2 =>
+                    {
                         if let TyArg::Type(ref t) = args[0] {
                             Ok(t.clone())
                         } else {
@@ -580,8 +611,9 @@ impl TypeChecker {
                     for arg in args {
                         arg_tys.push(TyArg::Type(self.check_expr(arg)?));
                     }
+                    let name_id = self.intern(name);
                     Ok(Ty::Named {
-                        name: name.clone(),
+                        name: name_id,
                         args: arg_tys,
                     })
                 }
@@ -591,8 +623,9 @@ impl TypeChecker {
                 let mut field_tys = Vec::new();
                 for (fname, fexpr) in fields {
                     let ty = self.check_expr(fexpr)?;
+                    let fname_id = self.intern(fname);
                     field_tys.push(TyField {
-                        name: fname.clone(),
+                        name: fname_id,
                         ty,
                     });
                 }
@@ -601,10 +634,11 @@ impl TypeChecker {
 
             ast::ExprKind::ListLit(items) => {
                 // All items must have the same type
+                let list_id = self.intern("List");
                 if items.is_empty() {
                     return Ok(Ty::Named {
-                        name: "List".to_string(),
-                        args: vec![TyArg::Type(Ty::TypeVar("_".to_string()))],
+                        name: list_id,
+                        args: vec![TyArg::Type(self.ty_wildcard())],
                     });
                 }
                 let first_ty = self.check_expr(&items[0])?;
@@ -622,7 +656,7 @@ impl TypeChecker {
                     }
                 }
                 Ok(Ty::Named {
-                    name: "List".to_string(),
+                    name: list_id,
                     args: vec![TyArg::Type(first_ty)],
                 })
             }
@@ -640,7 +674,8 @@ impl TypeChecker {
         match &pattern.kind {
             ast::PatternKind::Wildcard => Ok(()),
             ast::PatternKind::Binding(name) => {
-                self.env.bind(name.clone(), scrut_ty.clone());
+                let name_id = self.intern(name);
+                self.env.bind(name_id, scrut_ty.clone());
                 Ok(())
             }
             ast::PatternKind::Literal(_) => {
@@ -682,7 +717,8 @@ impl TypeChecker {
             ast::PatternKind::Wildcard => Ok(()),
             ast::PatternKind::Binding(name) => {
                 // Without full variant type info, bind as a type variable
-                self.env.bind(name.clone(), Ty::TypeVar(name.clone()));
+                let name_id = self.intern(name);
+                self.env.bind(name_id, Ty::TypeVar(name_id));
                 Ok(())
             }
             ast::PatternKind::Literal(_) => Ok(()),
@@ -732,7 +768,8 @@ impl TypeChecker {
                     params: param_tys,
                     ret: Box::new(ret_ty),
                 };
-                self.env.bind(decl.c_name.clone(), fn_ty);
+                let c_name_id = self.intern(&decl.c_name);
+                self.env.bind(c_name_id, fn_ty);
                 Ok(())
             }
             ast::TopLevel::Import { .. } => Ok(()),
@@ -745,15 +782,19 @@ impl TypeChecker {
         let mut param_tys = Vec::new();
         for p in &f.params {
             let ty = self.resolve_type(&p.ty)?;
-            self.env.bind(p.name.clone(), ty.clone());
+            let p_id = self.intern(&p.name);
+            self.env.bind(p_id, ty.clone());
             param_tys.push(ty);
         }
         let declared_ret = self.resolve_type(&f.return_type)?;
 
         // Pre-bind the function name so recursive calls can resolve.
         // Use the declared return type if available, otherwise a fresh type variable.
-        let preliminary_ret = if declared_ret == Ty::TypeVar("_".to_string()) {
-            Ty::TypeVar(format!("__ret_{}", f.name))
+        let wc = self.sym_wildcard;
+        let f_name_id = self.intern(&f.name);
+        let preliminary_ret = if declared_ret == Ty::TypeVar(wc) {
+            let ret_sym = self.intern(&format!("__ret_{}", f.name));
+            Ty::TypeVar(ret_sym)
         } else {
             declared_ret.clone()
         };
@@ -761,7 +802,7 @@ impl TypeChecker {
             params: param_tys.clone(),
             ret: Box::new(preliminary_ret),
         };
-        self.env.bind(f.name.clone(), preliminary_fn_ty);
+        self.env.bind(f_name_id, preliminary_fn_ty);
 
         let body_ty = self.check_expr(&f.body)?;
         // Check body_ty is assignable to declared_ret
@@ -771,13 +812,15 @@ impl TypeChecker {
             params: param_tys,
             ret: Box::new(declared_ret),
         };
-        self.env.bind(f.name.clone(), fn_ty.clone());
+        self.env.bind(f_name_id, fn_ty.clone());
         Ok(fn_ty)
     }
 
     /// Register a type definition in the environment.
     fn register_type_def(&mut self, td: &ast::TypeDef) -> Result<(), ()> {
-        let param_names: Vec<String> = td.type_params.iter().map(|p| p.name.clone()).collect();
+        let param_names: Vec<Symbol> = td.type_params.iter()
+            .map(|p| self.intern(&p.name))
+            .collect();
         let ty = match &td.body {
             ast::TypeDefBody::Sum(variants) => {
                 let mut ty_variants = Vec::new();
@@ -795,8 +838,9 @@ impl TypeChecker {
                             }
                         }
                     }
+                    let v_name_id = self.intern(&v.name);
                     ty_variants.push(TyVariant {
-                        name: v.name.clone(),
+                        name: v_name_id,
                         fields,
                     });
                 }
@@ -806,10 +850,13 @@ impl TypeChecker {
                 let mut ty_fields = Vec::new();
                 for f in fields {
                     match self.resolve_type(&f.ty) {
-                        Ok(ty) => ty_fields.push(TyField {
-                            name: f.name.clone(),
-                            ty,
-                        }),
+                        Ok(ty) => {
+                            let f_name_id = self.intern(&f.name);
+                            ty_fields.push(TyField {
+                                name: f_name_id,
+                                ty,
+                            });
+                        }
                         Err(()) => {
                             self.diags.add(Diagnostic::error(
                                 format!("unresolved type in field `{}`", f.name),
@@ -823,7 +870,8 @@ impl TypeChecker {
             }
             ast::TypeDefBody::Alias(ast_ty) => self.resolve_type(ast_ty)?,
         };
-        self.env.register_type(td.name.clone(), param_names, ty);
+        let td_name_id = self.intern(&td.name);
+        self.env.register_type(td_name_id, param_names, ty);
         Ok(())
     }
 
@@ -857,8 +905,9 @@ impl TypeChecker {
     /// Check if two types are compatible, including dimension unification.
     fn types_compatible(&mut self, actual: &Ty, expected: &Ty) -> bool {
         // TypeVar("_") is compatible with anything (inference placeholder)
-        if matches!(actual, Ty::TypeVar(n) if n == "_")
-            || matches!(expected, Ty::TypeVar(n) if n == "_")
+        let wc = self.sym_wildcard;
+        if matches!(actual, Ty::TypeVar(n) if *n == wc)
+            || matches!(expected, Ty::TypeVar(n) if *n == wc)
         {
             return true;
         }
@@ -929,7 +978,7 @@ impl TypeChecker {
         match scrut_ty {
             Ty::Sum(variants) => {
                 for v in variants {
-                    if v.name == variant_name {
+                    if self.env.resolve(v.name) == variant_name {
                         return Some(v.fields.clone());
                     }
                 }
@@ -937,7 +986,7 @@ impl TypeChecker {
             }
             Ty::Named { name, .. } => {
                 // Look up the registered type definition to get the sum variants
-                if let Some(reg) = self.env.lookup_type(name) {
+                if let Some(reg) = self.env.lookup_type_id(*name) {
                     self.lookup_variant_fields(&reg.ty.clone(), variant_name)
                 } else {
                     None
@@ -1174,8 +1223,8 @@ mod tests {
     fn check_fn_call_wrong_arg_count() {
         let mut checker = TypeChecker::new();
         // Register a function manually
-        checker.env.bind(
-            "foo".to_string(),
+        checker.env.bind_str(
+            "foo",
             Ty::Func {
                 params: vec![Ty::Prim(PrimTy::I32)],
                 ret: Box::new(Ty::Prim(PrimTy::I32)),
@@ -1194,8 +1243,8 @@ mod tests {
     #[test]
     fn check_fn_call_wrong_arg_type() {
         let mut checker = TypeChecker::new();
-        checker.env.bind(
-            "foo".to_string(),
+        checker.env.bind_str(
+            "foo",
             Ty::Func {
                 params: vec![Ty::Prim(PrimTy::I32)],
                 ret: Box::new(Ty::Prim(PrimTy::I32)),
@@ -1301,7 +1350,9 @@ mod tests {
                 assert_eq!(params.len(), 2, "map must have 2 params");
                 // Return type must be a List, not a bare TypeVar
                 match *ret {
-                    Ty::Named { ref name, .. } => assert_eq!(name, "List"),
+                    Ty::Named { ref name, .. } => {
+                        assert_eq!(checker.env.resolve(*name), "List")
+                    }
                     other => panic!("map return type should be List, got {:?}", other),
                 }
                 // The callback (first param) must have a DIFFERENT return TypeVar from
@@ -1344,11 +1395,10 @@ mod tests {
     fn polymorphic_builtin_sufficient_arity_ok() {
         // `sort` with one list arg — no parser support for complex expressions here,
         // so we test via the checker directly.
-        let mut checker = TypeChecker::new();
+        let _checker = TypeChecker::new();
         // `reverse` needs 1 arg — call it with a list literal
         let result = parse_and_check("(reverse [1 2 3])");
         assert!(result.is_ok(), "reverse with one list arg should succeed: {:?}", result);
-        let _ = checker; // silence unused warning
     }
 
     // ── issue-014: Fix 3 — no typed builtins in wildcard list ────
@@ -1370,12 +1420,13 @@ mod tests {
         // after TypeChecker::new(), the type of each typed builtin must be Ty::Func,
         // not Ty::TypeVar("builtin").
         let checker = TypeChecker::new();
+        let builtin_sym = checker.sym_builtin;
         for name in &typed_builtins {
             let ty = checker.env.lookup(name).cloned();
             assert!(ty.is_some(), "builtin `{}` must be registered", name);
             match ty.unwrap() {
                 Ty::Func { .. } => {} // correct — explicit typed signature
-                Ty::TypeVar(ref v) if v == "builtin" => {
+                Ty::TypeVar(v) if v == builtin_sym => {
                     panic!(
                         "builtin `{}` is registered as TypeVar(\"builtin\") but should have \
                          an explicit Ty::Func signature. It was likely added to the wildcard \
