@@ -24,9 +24,19 @@ fn escape_str(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Serialize a Value to a safe wire representation.
+/// For strings, properly escapes interior quotes/backslashes.
+/// For all other types, uses the Display representation directly.
+fn value_to_wire(v: &Value) -> String {
+    match v {
+        Value::Str(s) => format!("\"{}\"", escape_str(s)),
+        other => format!("{}", other),
+    }
+}
+
 /// Serialize a task message to an AIRL S-expression string.
 pub fn serialize_task(msg: &TaskMessage) -> String {
-    let args_str: Vec<String> = msg.args.iter().map(|v| format!("{}", v)).collect();
+    let args_str: Vec<String> = msg.args.iter().map(value_to_wire).collect();
     format!(
         r#"(task "{}" :from "{}" :call "{}" :args [{}])"#,
         escape_str(&msg.id), escape_str(&msg.from), escape_str(&msg.call), args_str.join(" ")
@@ -37,7 +47,7 @@ pub fn serialize_task(msg: &TaskMessage) -> String {
 pub fn serialize_result(msg: &ResultMessage) -> String {
     if msg.success {
         let payload_str = msg.payload.as_ref()
-            .map(|v| format!("{}", v))
+            .map(value_to_wire)
             .unwrap_or_else(|| "nil".into());
         format!(
             r#"(result "{}" :status :complete :payload {})"#,
@@ -55,9 +65,10 @@ pub fn serialize_result(msg: &ResultMessage) -> String {
 /// Parse a task message from an AIRL S-expression string.
 pub fn parse_task(input: &str) -> Result<TaskMessage, String> {
     let sexprs = lex_and_parse(input)?;
-    let list = match &sexprs[0] {
-        SExpr::List(items, _) => items,
-        _ => return Err("expected list".into()),
+    let list = match sexprs.get(0) {
+        Some(SExpr::List(items, _)) => items,
+        Some(_) => return Err("expected list".into()),
+        None => return Err("empty input".into()),
     };
 
     // First element should be symbol "task"
@@ -119,9 +130,10 @@ pub fn parse_task(input: &str) -> Result<TaskMessage, String> {
 /// Parse a result message from an AIRL S-expression string.
 pub fn parse_result(input: &str) -> Result<ResultMessage, String> {
     let sexprs = lex_and_parse(input)?;
-    let list = match &sexprs[0] {
-        SExpr::List(items, _) => items,
-        _ => return Err("expected list".into()),
+    let list = match sexprs.get(0) {
+        Some(SExpr::List(items, _)) => items,
+        Some(_) => return Err("expected list".into()),
+        None => return Err("empty input".into()),
     };
 
     // First element should be symbol "result"
@@ -314,5 +326,29 @@ mod tests {
     #[test]
     fn sexpr_to_value_bool() {
         assert_eq!(sexpr_to_value_str("true").unwrap(), Value::Bool(true));
+    }
+
+    #[test]
+    fn serialize_task_escapes_string_args() {
+        let msg = TaskMessage {
+            id: "t-esc".into(),
+            from: "cli".into(),
+            call: "echo".into(),
+            args: vec![Value::Str("hello \"world\"".into())],
+        };
+        let s = serialize_task(&msg);
+        // The string arg should be safely escaped on the wire
+        let parsed = parse_task(&s).unwrap();
+        assert_eq!(parsed.args[0], Value::Str("hello \"world\"".into()));
+    }
+
+    #[test]
+    fn parse_task_empty_input_returns_err() {
+        assert!(parse_task("").is_err());
+    }
+
+    #[test]
+    fn parse_result_empty_input_returns_err() {
+        assert!(parse_result("").is_err());
     }
 }
