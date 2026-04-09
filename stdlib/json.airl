@@ -27,7 +27,12 @@
                     (concat [(bytes-from-string "\\r")] rest)
                     (if (= b 9)  ;; tab
                       (concat [(bytes-from-string "\\t")] rest)
-                      (concat [(bytes-from-int8 b)] rest)))))))))
+                      (if (= b 8)  ;; backspace
+                        (concat [(bytes-from-string "\\b")] rest)
+                        (if (= b 12)  ;; form feed
+                          (concat [(bytes-from-string "\\f")] rest)
+                          (concat [(bytes-from-int8 b)] rest))))))))))
+
 
 ;; ── json-escape : escape a string for JSON ──
 (defn json-escape
