@@ -460,10 +460,10 @@
       (match sig
         (ASTSig params ret-name)
           (match (bind-fn-param-types params reg [])
-            (Err e) (Ok [env reg])
+            (Err e) (Err e)
             (Ok param-tys)
               (match (resolve-type-name ret-name reg)
-                (Err e) (Ok [env reg])
+                (Err e) (Err e)
                 (Ok ret-ty)
                   (let (fn-ty : List (TyFunc param-tys ret-ty))
                     (Ok [(type-env-bind env name fn-ty) reg]))))
