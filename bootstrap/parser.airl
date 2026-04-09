@@ -51,12 +51,16 @@
 
 ;; ── Phase 1: Token → S-Expression grouping ────────
 
+(def MAX-PARSE-DEPTH 1000)
+
 (defn parse-sexpr
-  :sig [(tokens : List) (pos : i64) -> List]
+  :sig [(tokens : List) (pos : i64) (depth : i64) -> List]
   :intent "Parse one S-expression from token list at pos, return (Ok [sexpr new-pos]) or (Err ...)"
   :requires [(valid tokens)]
   :ensures [(valid result)]
   :body
+    (if (> depth MAX-PARSE-DEPTH)
+      (Err (ParseError "max nesting depth exceeded" 0 0))
     (if (>= pos (length tokens))
       (Err (ParseError "unexpected end of input" 0 0))
       (let (tok : List (at tokens pos))
@@ -64,7 +68,7 @@
           (Token kind value line col)
             (if (= kind "lparen")
               ;; Parse list contents until rparen
-              (match (parse-sexprs tokens (+ pos 1) "rparen")
+              (match (parse-sexprs tokens (+ pos 1) "rparen" (+ depth 1))
                 (Ok result)
                   (let (items : List (at result 0))
                        (end-pos : i64 (at result 1))
@@ -80,7 +84,7 @@
                 (Err e) (Err e))
               (if (= kind "lbracket")
                 ;; Parse bracket contents until rbracket
-                (match (parse-sexprs tokens (+ pos 1) "rbracket")
+                (match (parse-sexprs tokens (+ pos 1) "rbracket" (+ depth 1))
                   (Ok result)
                     (let (items : List (at result 0))
                          (end-pos : i64 (at result 1))
@@ -100,10 +104,10 @@
                     (if (= kind "eof")
                       (Err (ParseError "unexpected end of input" line col))
                       ;; Any other token is an atom
-                      (Ok [(SAtom tok) (+ pos 1)]))))))))))
+                      (Ok [(SAtom tok) (+ pos 1)])))))))))))))
 
 (defn parse-sexprs
-  :sig [(tokens : List) (pos : i64) (stop-kind : String) -> List]
+  :sig [(tokens : List) (pos : i64) (stop-kind : String) (depth : i64) -> List]
   :intent "Parse S-expressions until stop token or EOF, return (Ok [sexprs pos])"
   :requires [(valid tokens)]
   :ensures [(valid result)]
@@ -120,11 +124,11 @@
                 ;; EOF — return what we have
                 (Ok [[] pos])
                 ;; Parse one sexpr, then continue
-                (match (parse-sexpr tokens pos)
+                (match (parse-sexpr tokens pos depth)
                   (Ok result)
                     (let (sexpr : List (at result 0))
                          (new-pos : i64 (at result 1))
-                        (match (parse-sexprs tokens new-pos stop-kind)
+                        (match (parse-sexprs tokens new-pos stop-kind depth)
                           (Ok rest-result)
                             (let (rest-sexprs : List (at rest-result 0))
                                  (final-pos : i64 (at rest-result 1))
@@ -138,7 +142,7 @@
   :requires [(valid tokens)]
   :ensures [(valid result)]
   :body
-    (match (parse-sexprs tokens 0 "eof")
+    (match (parse-sexprs tokens 0 "eof" 0)
       (Ok result) (Ok (at result 0))
       (Err e) (Err e)))
 
