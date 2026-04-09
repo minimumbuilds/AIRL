@@ -390,7 +390,8 @@ pub extern "C" fn airl_fold(
     acc
 }
 
-/// sort: insertion sort with comparison closure
+/// sort: timsort (via Rust's sort_by) with comparison closure.
+/// The AIRL closure is a less-than predicate: `(closure a b)` returns Bool(true) iff a < b.
 #[no_mangle]
 pub extern "C" fn airl_sort(closure: *mut RtValue, list: *mut RtValue) -> *mut RtValue {
     let items = unsafe {
@@ -404,24 +405,32 @@ pub extern "C" fn airl_sort(closure: *mut RtValue, list: *mut RtValue) -> *mut R
         return list;
     }
     let mut vec = items;
-    for i in 1..vec.len() {
-        let mut j = i;
-        while j > 0 {
-            airl_value_retain(vec[j - 1]);
-            airl_value_retain(vec[j]);
-            let args: [*mut RtValue; 2] = [vec[j - 1], vec[j]];
-            let cmp = airl_call_closure(closure, args.as_ptr(), 2);
-            // SAFETY: cmp is a freshly allocated RtValue from the closure call (rc=1).
-            let is_less = unsafe { matches!(&(*cmp).data, RtData::Bool(true)) };
-            airl_value_release(cmp);
-            if !is_less {
-                vec.swap(j - 1, j);
-                j -= 1;
-            } else {
-                break;
-            }
+    vec.sort_by(|&a, &b| {
+        // Ask the closure: is a < b?
+        airl_value_retain(a);
+        airl_value_retain(b);
+        let args_ab: [*mut RtValue; 2] = [a, b];
+        let cmp_ab = airl_call_closure(closure, args_ab.as_ptr(), 2);
+        // SAFETY: cmp_ab is a freshly allocated RtValue from the closure call (rc=1).
+        let a_lt_b = unsafe { matches!(&(*cmp_ab).data, RtData::Bool(true)) };
+        airl_value_release(cmp_ab);
+        if a_lt_b {
+            return core::cmp::Ordering::Less;
         }
-    }
+        // Ask the closure: is b < a?
+        airl_value_retain(b);
+        airl_value_retain(a);
+        let args_ba: [*mut RtValue; 2] = [b, a];
+        let cmp_ba = airl_call_closure(closure, args_ba.as_ptr(), 2);
+        // SAFETY: cmp_ba is a freshly allocated RtValue from the closure call (rc=1).
+        let b_lt_a = unsafe { matches!(&(*cmp_ba).data, RtData::Bool(true)) };
+        airl_value_release(cmp_ba);
+        if b_lt_a {
+            core::cmp::Ordering::Greater
+        } else {
+            core::cmp::Ordering::Equal
+        }
+    });
     for &item in &vec { airl_value_retain(item); }
     rt_list(vec)
 }

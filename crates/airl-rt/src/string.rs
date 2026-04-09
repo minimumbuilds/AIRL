@@ -19,11 +19,12 @@ pub extern "C" fn airl_char_at(s: *mut RtValue, idx: *mut RtValue) -> *mut RtVal
         RtData::Int(n) => *n,
         _ => rt_error("char-at: second argument must be an Int"),
     };
+    let char_len = str_val.chars().count();
     if index < 0 {
         rt_error(&format!(
             "char-at: index {} out of bounds for string of length {}",
             index,
-            str_val.chars().count()
+            char_len
         ));
     }
     let i = index as usize;
@@ -32,7 +33,7 @@ pub extern "C" fn airl_char_at(s: *mut RtValue, idx: *mut RtValue) -> *mut RtVal
         None => rt_error(&format!(
             "char-at: index {} out of bounds for string of length {}",
             index,
-            str_val.chars().count()
+            char_len
         )),
     }
 }
