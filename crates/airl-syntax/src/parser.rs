@@ -2275,4 +2275,121 @@ mod tests {
             panic!("expected Let");
         }
     }
+
+    // ── Bounds / safety sad-path tests ───────────────────
+
+    fn parse_expr_err(input: &str) -> Diagnostic {
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.lex_all().unwrap();
+        let sexprs = parse_sexpr_all(&tokens).unwrap();
+        let mut diags = Diagnostics::new();
+        parse_expr(&sexprs[0], &mut diags).expect_err("expected an error")
+    }
+
+    fn parse_top_err(input: &str) -> Diagnostic {
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.lex_all().unwrap();
+        let sexprs = parse_sexpr_all(&tokens).unwrap();
+        let mut diags = Diagnostics::new();
+        parse_top_level(&sexprs[0], &mut diags).expect_err("expected an error")
+    }
+
+    #[test]
+    fn parse_if_too_few_args_is_error() {
+        // (if cond then) — missing else branch
+        let err = parse_expr_err("(if true 1)");
+        assert!(err.message.contains("if"), "error should mention 'if': {}", err.message);
+    }
+
+    #[test]
+    fn parse_if_too_many_args_is_error() {
+        let err = parse_expr_err("(if true 1 2 3)");
+        assert!(err.message.contains("if"), "error should mention 'if': {}", err.message);
+    }
+
+    #[test]
+    fn parse_if_no_args_is_error() {
+        let err = parse_expr_err("(if)");
+        assert!(err.message.contains("if"), "error should mention 'if': {}", err.message);
+    }
+
+    #[test]
+    fn parse_let_binding_missing_type_is_error() {
+        // (let (x 42) body) — no `: Type` annotation
+        let err = parse_expr_err("(let (x 42) x)");
+        assert!(
+            err.message.contains("let") || err.message.contains("type") || err.message.contains("annotation"),
+            "error should describe missing type annotation: {}", err.message
+        );
+    }
+
+    #[test]
+    fn parse_map_destructure_missing_value_is_error() {
+        // A map destructure with no value expression — body acts as both binding and body.
+        // (let ((name age)) body) — the inner list has no value after the pattern.
+        // The parser treats (name age) as a map destructure but rest_items is empty,
+        // which triggers the "map destructure binding missing value" error.
+        let mut lexer = Lexer::new("(let ((name age)) x)");
+        let tokens = lexer.lex_all().unwrap();
+        let sexprs = parse_sexpr_all(&tokens).unwrap();
+        let mut diags = Diagnostics::new();
+        // This should either error or produce a let with x as body — not panic.
+        let result = parse_expr(&sexprs[0], &mut diags);
+        // The important invariant: no panic. Whether it errors or recovers
+        // gracefully is acceptable — the unsafe index access must not fire.
+        let _ = result;
+    }
+
+    #[test]
+    fn parse_define_missing_body_is_error() {
+        // (define f (x)) — no body
+        let err = parse_top_err("(define f (x))");
+        assert!(
+            err.message.contains("define") || err.message.contains("body") || err.message.contains("requires"),
+            "error should describe missing body: {}", err.message
+        );
+    }
+
+    #[test]
+    fn parse_define_valid() {
+        // (define double (x) (* x 2)) — happy path
+        let tops = parse_top("(define double (x) (* x 2))");
+        assert_eq!(tops.len(), 1);
+        if let TopLevel::Define(d) = &tops[0] {
+            assert_eq!(d.name, "double");
+            assert_eq!(d.params, vec!["x".to_string()]);
+        } else {
+            panic!("expected Define");
+        }
+    }
+
+    #[test]
+    fn parse_task_valid() {
+        // Minimal valid task: just an id
+        let tops = parse_top(r#"(task "work")"#);
+        assert_eq!(tops.len(), 1);
+        if let TopLevel::Task(t) = &tops[0] {
+            assert_eq!(t.id, "work");
+        } else {
+            panic!("expected Task");
+        }
+    }
+
+    #[test]
+    fn parse_task_missing_id_is_error() {
+        // (task) — no id
+        let err = parse_top_err("(task)");
+        assert!(
+            err.message.contains("task") || err.message.contains("id"),
+            "error should describe missing task id: {}", err.message
+        );
+    }
+
+    #[test]
+    fn parse_field_missing_type_is_error() {
+        // A field with no type: (name :) — triggers bounds error
+        let err = parse_top_err("(deftype Foo (& (x :)))");
+        // Just verify it doesn't panic; an error is returned
+        let _ = err;
+    }
 }

@@ -139,7 +139,9 @@ impl<'src> Lexer<'src> {
                         value.push(other as char);
                         self.advance();
                     } else {
-                        // Multi-byte UTF-8: decode the full character
+                        // Multi-byte UTF-8: use Rust's chars() iterator for safe decoding.
+                        // from_utf8 validates the byte sequence; chars().next() is then safe
+                        // because we check for Some rather than unwrapping.
                         let seq_len = if other & 0xE0 == 0xC0 { 2 }
                             else if other & 0xF0 == 0xE0 { 3 }
                             else if other & 0xF8 == 0xF0 { 4 }
@@ -147,10 +149,20 @@ impl<'src> Lexer<'src> {
                         let end = (self.pos + seq_len).min(self.source.len());
                         match std::str::from_utf8(&self.source[self.pos..end]) {
                             Ok(s) => {
-                                let ch = s.chars().next().unwrap();
-                                value.push(ch);
-                                for _ in 0..ch.len_utf8() {
-                                    self.advance();
+                                match s.chars().next() {
+                                    Some(ch) => {
+                                        value.push(ch);
+                                        for _ in 0..ch.len_utf8() {
+                                            self.advance();
+                                        }
+                                    }
+                                    None => {
+                                        // Empty slice after from_utf8 — treat as invalid byte.
+                                        return Err(Diagnostic::error(
+                                            format!("invalid UTF-8 byte: 0x{:02X}", other),
+                                            Span::new(self.pos, self.pos + 1, self.line, self.col),
+                                        ));
+                                    }
                                 }
                             }
                             Err(_) => {
@@ -186,7 +198,8 @@ impl<'src> Lexer<'src> {
                     while self.pos < self.source.len() && self.source[self.pos].is_ascii_hexdigit() {
                         self.advance();
                     }
-                    let hex_str = std::str::from_utf8(&self.source[hex_start..self.pos]).unwrap();
+                    let hex_str = std::str::from_utf8(&self.source[hex_start..self.pos])
+                        .unwrap_or(""); // slice contains only ASCII hex digits; UTF-8 always valid here
                     let val = i64::from_str_radix(hex_str, 16).map_err(|_| {
                         Diagnostic::error("invalid hex literal", Span::new(start, self.pos, start_line, start_col))
                     })?;
@@ -198,7 +211,8 @@ impl<'src> Lexer<'src> {
                     while self.pos < self.source.len() && (self.source[self.pos] == b'0' || self.source[self.pos] == b'1') {
                         self.advance();
                     }
-                    let bin_str = std::str::from_utf8(&self.source[bin_start..self.pos]).unwrap();
+                    let bin_str = std::str::from_utf8(&self.source[bin_start..self.pos])
+                        .unwrap_or(""); // slice contains only ASCII binary digits; UTF-8 always valid here
                     let val = i64::from_str_radix(bin_str, 2).map_err(|_| {
                         Diagnostic::error("invalid binary literal", Span::new(start, self.pos, start_line, start_col))
                     })?;
@@ -244,7 +258,8 @@ impl<'src> Lexer<'src> {
             }
         }
 
-        let text = std::str::from_utf8(&self.source[start..self.pos]).unwrap();
+        let text = std::str::from_utf8(&self.source[start..self.pos])
+            .unwrap_or(""); // slice contains only ASCII digits/dots; UTF-8 always valid here
         if is_float {
             let parse_text = if let Some(idx) = text.find('f') {
                 &text[..idx]
@@ -270,7 +285,9 @@ impl<'src> Lexer<'src> {
             while self.pos < self.source.len() && is_symbol_char(self.source[self.pos]) {
                 self.advance();
             }
-            let name = std::str::from_utf8(&self.source[start..self.pos]).unwrap().to_string();
+            let name = std::str::from_utf8(&self.source[start..self.pos])
+                .unwrap_or("") // slice contains only ASCII symbol chars; UTF-8 always valid here
+                .to_string();
             TokenKind::Keyword(name)
         } else {
             TokenKind::Colon
@@ -290,7 +307,8 @@ impl<'src> Lexer<'src> {
             }
             self.advance();
         }
-        let text = std::str::from_utf8(&self.source[start..self.pos]).unwrap();
+        let text = std::str::from_utf8(&self.source[start..self.pos])
+            .unwrap_or(""); // slice contains only ASCII symbol chars; UTF-8 always valid here
         match text {
             "true" => TokenKind::Bool(true),
             "false" => TokenKind::Bool(false),
@@ -504,6 +522,60 @@ mod tests {
     #[test]
     fn lex_error_unterminated_string() {
         let mut lexer = Lexer::new(r#""hello"#);
+        assert!(lexer.lex_all().is_err());
+    }
+
+    // ── Safety / bounds tests ─────────────────────────────
+
+    #[test]
+    fn lex_utf8_multibyte_in_string() {
+        // Two-byte sequence (U+00E9 = é)
+        let input = "\"\u{00E9}\"";
+        assert_eq!(lex(input), vec![TokenKind::Str("\u{00E9}".into())]);
+    }
+
+    #[test]
+    fn lex_utf8_three_byte_in_string() {
+        // Three-byte sequence (U+4E2D = 中)
+        let input = "\"\u{4E2D}\"";
+        assert_eq!(lex(input), vec![TokenKind::Str("\u{4E2D}".into())]);
+    }
+
+    #[test]
+    fn lex_utf8_four_byte_in_string() {
+        // Four-byte sequence (U+1F600 = 😀)
+        let input = "\"\u{1F600}\"";
+        assert_eq!(lex(input), vec![TokenKind::Str("\u{1F600}".into())]);
+    }
+
+    #[test]
+    fn lex_invalid_utf8_byte_in_string_is_error() {
+        // 0xFF is not a valid UTF-8 start byte — should produce an error, not panic.
+        let raw: Vec<u8> = vec![b'"', 0xFF, b'"'];
+        let s = unsafe { std::str::from_utf8_unchecked(&raw) };
+        let mut lexer = Lexer::new(s);
+        assert!(lexer.lex_all().is_err());
+    }
+
+    #[test]
+    fn lex_hex_literal_safety() {
+        // Ensure hex parsing works and does not panic
+        assert_eq!(lex("0x0"), vec![TokenKind::Integer(0)]);
+        assert_eq!(lex("0xDEADBEEF"), vec![TokenKind::Integer(0xDEAD_BEEF)]);
+    }
+
+    #[test]
+    fn lex_binary_literal_safety() {
+        assert_eq!(lex("0b0"), vec![TokenKind::Integer(0)]);
+        assert_eq!(lex("0b11111111"), vec![TokenKind::Integer(255)]);
+    }
+
+    #[test]
+    fn lex_error_unexpected_char() {
+        // A bare non-symbol byte (like 0x01) outside a string should produce an error.
+        let raw: Vec<u8> = vec![0x01];
+        let s = unsafe { std::str::from_utf8_unchecked(&raw) };
+        let mut lexer = Lexer::new(s);
         assert!(lexer.lex_all().is_err());
     }
 }
