@@ -3,15 +3,20 @@
 //! Uses NVRTC (runtime compilation) to compile CUDA C kernel strings to PTX,
 //! then the CUDA driver API to load, launch, and manage device memory.
 
-use cudarc::driver::{CudaContext, CudaFunction, CudaStream, LaunchConfig, PushKernelArg};
+use cudarc::driver::{CudaContext, CudaFunction, CudaSlice, CudaStream, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// GPU backend context for CUDA tensor operations.
 pub struct GpuContext {
     stream: Arc<CudaStream>,
     kernels: HashMap<&'static str, CudaFunction>,
+    /// Free-list pool of device buffers, keyed by element count.
+    /// Avoids per-call CUDA malloc/free by reusing previously allocated slices.
+    buf_pool: Mutex<HashMap<usize, Vec<CudaSlice<f64>>>>,
+    /// NVRTC target architecture string, queried at startup.
+    compute_arch: &'static str,
 }
 
 // ─── CUDA C kernel sources ──────────────────────────────────────────────────
@@ -30,18 +35,38 @@ extern "C" __global__ void tensor_mul(const double* a, const double* b, double* 
 }
 "#;
 
+/// Tiled 16×16 shared-memory matmul.  Replaces the naive triple-loop kernel.
+/// Using shared memory tiles eliminates redundant global memory reads and
+/// dramatically reduces latency for large matrices.
 const KERNEL_MATMUL: &str = r#"
+#define TILE 16
 extern "C" __global__ void tensor_matmul(const double* a, const double* b, double* out,
                                           int m, int k, int n) {
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-    if (row < m && col < n) {
-        double sum = 0.0;
-        for (int p = 0; p < k; p++) {
-            sum += a[row * k + p] * b[p * n + col];
+    __shared__ double tileA[TILE][TILE];
+    __shared__ double tileB[TILE][TILE];
+
+    int row = blockIdx.y * TILE + threadIdx.y;
+    int col = blockIdx.x * TILE + threadIdx.x;
+    double sum = 0.0;
+
+    int numTiles = (k + TILE - 1) / TILE;
+    for (int t = 0; t < numTiles; t++) {
+        int aCol = t * TILE + threadIdx.x;
+        int bRow = t * TILE + threadIdx.y;
+
+        tileA[threadIdx.y][threadIdx.x] = (row < m && aCol < k) ? a[row * k + aCol] : 0.0;
+        tileB[threadIdx.y][threadIdx.x] = (bRow < k && col < n) ? b[bRow * n + col] : 0.0;
+
+        __syncthreads();
+
+        for (int i = 0; i < TILE; i++) {
+            sum += tileA[threadIdx.y][i] * tileB[i][threadIdx.x];
         }
-        out[row * n + col] = sum;
+
+        __syncthreads();
     }
+
+    if (row < m && col < n) out[row * n + col] = sum;
 }
 "#;
 
@@ -95,12 +120,15 @@ impl GpuContext {
     /// Try to create a GPU context. Returns None if no CUDA GPU is available.
     pub fn try_new() -> Option<Self> {
         let ctx = CudaContext::new(0).ok()?;
+        let compute_arch = Self::query_compute_arch(&ctx);
         let stream = ctx.default_stream();
         let mut gpu = Self {
             stream,
             kernels: HashMap::new(),
+            buf_pool: Mutex::new(HashMap::new()),
+            compute_arch,
         };
-        // Pre-compile all kernels
+        // Pre-compile all kernels; log and bail if any fail.
         if gpu.compile_kernel("tensor_add", KERNEL_ADD).is_err()
             || gpu.compile_kernel("tensor_mul", KERNEL_MUL).is_err()
             || gpu.compile_kernel("tensor_matmul", KERNEL_MATMUL).is_err()
@@ -119,20 +147,40 @@ impl GpuContext {
         self.stream.context()
     }
 
-    fn nvrtc_opts() -> CompileOptions {
-        // TODO: query the GPU's compute capability at runtime via cuDeviceGetAttribute
-        // instead of hardcoding. compute_86 targets Ampere (RTX 3xxx / A-series).
+    /// Query the GPU's compute capability and return the matching arch string.
+    /// Falls back to `compute_86` (Ampere) on any error.
+    fn query_compute_arch(ctx: &Arc<CudaContext>) -> &'static str {
+        let cap = ctx.compute_capability().unwrap_or((8, 6));
+        match cap {
+            (7, 0) => "compute_70",
+            (7, 5) => "compute_75",
+            (8, 0) => "compute_80",
+            (8, 6) => "compute_86",
+            (8, 9) => "compute_89",
+            (9, 0) => "compute_90",
+            (9, _) => "compute_90",  // Ada/Hopper variants
+            _ => "compute_86",        // conservative fallback
+        }
+    }
+
+    fn nvrtc_opts(&self) -> CompileOptions {
         CompileOptions {
-            arch: Some("compute_86"),
+            arch: Some(self.compute_arch),
             ..Default::default()
         }
     }
 
     fn compile_kernel(&mut self, name: &'static str, source: &str) -> Result<(), String> {
-        let ptx = compile_ptx_with_opts(source, Self::nvrtc_opts())
-            .map_err(|e| format!("NVRTC compile '{}': {:?}", name, e))?;
+        let ptx = compile_ptx_with_opts(source, self.nvrtc_opts())
+            .map_err(|e| {
+                eprintln!("NVRTC compile error for '{}': {:?}\nPTX source:\n{}", name, e, source);
+                format!("NVRTC compile '{}': {:?}", name, e)
+            })?;
         let module = self.ctx().load_module(ptx)
-            .map_err(|e| format!("Load module '{}': {:?}", name, e))?;
+            .map_err(|e| {
+                eprintln!("CUDA load module error for '{}': {:?}", name, e);
+                format!("Load module '{}': {:?}", name, e)
+            })?;
         let func = module.load_function(name)
             .map_err(|e| format!("Load function '{}': {:?}", name, e))?;
         self.kernels.insert(name, func);
@@ -144,10 +192,16 @@ impl GpuContext {
         names: &[&'static str],
         source: &str,
     ) -> Result<(), String> {
-        let ptx = compile_ptx_with_opts(source, Self::nvrtc_opts())
-            .map_err(|e| format!("NVRTC compile multi: {:?}", e))?;
+        let ptx = compile_ptx_with_opts(source, self.nvrtc_opts())
+            .map_err(|e| {
+                eprintln!("NVRTC multi-compile error: {:?}\nPTX source:\n{}", e, source);
+                format!("NVRTC compile multi: {:?}", e)
+            })?;
         let module = self.ctx().load_module(ptx)
-            .map_err(|e| format!("Load module multi: {:?}", e))?;
+            .map_err(|e| {
+                eprintln!("CUDA load module error (multi): {:?}", e);
+                format!("Load module multi: {:?}", e)
+            })?;
         for &name in names {
             let func = module.load_function(name)
                 .map_err(|e| format!("Load function '{}': {:?}", name, e))?;
@@ -176,12 +230,49 @@ impl GpuContext {
         }
     }
 
+    /// Launch config for tiled matmul: 16×16 blocks with shared memory for two tiles.
+    fn cfg_matmul(m: usize, n: usize) -> LaunchConfig {
+        const TILE: u32 = 16;
+        // Two TILE×TILE tiles of f64 (8 bytes each)
+        let shared_bytes = 2 * TILE * TILE * 8;
+        LaunchConfig {
+            grid_dim: (((n as u32) + TILE - 1) / TILE, ((m as u32) + TILE - 1) / TILE, 1),
+            block_dim: (TILE, TILE, 1),
+            shared_mem_bytes: shared_bytes,
+        }
+    }
+
+    // ─── Buffer pool ─────────────────────────────────────────────────────────
+
+    /// Acquire a device buffer of `n` f64 elements from the pool, or allocate
+    /// a fresh one if the pool is empty for that size.
+    fn acquire_buf(&self, n: usize) -> Result<CudaSlice<f64>, String> {
+        let mut pool = self.buf_pool.lock().expect("buf_pool lock poisoned");
+        if let Some(bufs) = pool.get_mut(&n) {
+            if let Some(buf) = bufs.pop() {
+                return Ok(buf);
+            }
+        }
+        drop(pool);
+        self.stream.alloc_zeros::<f64>(n).map_err(|e| format!("GPU alloc({}): {:?}", n, e))
+    }
+
+    /// Return a device buffer back to the pool for reuse.
+    fn release_buf(&self, buf: CudaSlice<f64>, n: usize) {
+        let mut pool = self.buf_pool.lock().expect("buf_pool lock poisoned");
+        pool.entry(n).or_default().push(buf);
+    }
+
+    // ─── Operations ──────────────────────────────────────────────────────────
+
     /// Element-wise add on GPU.
     pub fn add(&self, a: &[f64], b: &[f64], out: &mut [f64]) -> Result<(), String> {
         let len = a.len();
-        let d_a = self.stream.clone_htod(a).map_err(|e| format!("{:?}", e))?;
-        let d_b = self.stream.clone_htod(b).map_err(|e| format!("{:?}", e))?;
-        let mut d_out = self.stream.alloc_zeros::<f64>(len).map_err(|e| format!("{:?}", e))?;
+        let mut d_a = self.acquire_buf(len)?;
+        self.stream.memcpy_htod(a, &mut d_a).map_err(|e| format!("H2D a: {:?}", e))?;
+        let mut d_b = self.acquire_buf(len)?;
+        self.stream.memcpy_htod(b, &mut d_b).map_err(|e| format!("H2D b: {:?}", e))?;
+        let mut d_out = self.acquire_buf(len)?;
 
         let func = self.kernels.get("tensor_add").ok_or("tensor_add not loaded")?;
         unsafe {
@@ -193,15 +284,21 @@ impl GpuContext {
         self.stream.synchronize().map_err(|e| format!("{:?}", e))?;
         let result = self.stream.clone_dtoh(&d_out).map_err(|e| format!("{:?}", e))?;
         out.copy_from_slice(&result);
+
+        self.release_buf(d_a, len);
+        self.release_buf(d_b, len);
+        self.release_buf(d_out, len);
         Ok(())
     }
 
     /// Element-wise mul on GPU.
     pub fn mul(&self, a: &[f64], b: &[f64], out: &mut [f64]) -> Result<(), String> {
         let len = a.len();
-        let d_a = self.stream.clone_htod(a).map_err(|e| format!("{:?}", e))?;
-        let d_b = self.stream.clone_htod(b).map_err(|e| format!("{:?}", e))?;
-        let mut d_out = self.stream.alloc_zeros::<f64>(len).map_err(|e| format!("{:?}", e))?;
+        let mut d_a = self.acquire_buf(len)?;
+        self.stream.memcpy_htod(a, &mut d_a).map_err(|e| format!("H2D a: {:?}", e))?;
+        let mut d_b = self.acquire_buf(len)?;
+        self.stream.memcpy_htod(b, &mut d_b).map_err(|e| format!("H2D b: {:?}", e))?;
+        let mut d_out = self.acquire_buf(len)?;
 
         let func = self.kernels.get("tensor_mul").ok_or("tensor_mul not loaded")?;
         unsafe {
@@ -213,29 +310,39 @@ impl GpuContext {
         self.stream.synchronize().map_err(|e| format!("{:?}", e))?;
         let result = self.stream.clone_dtoh(&d_out).map_err(|e| format!("{:?}", e))?;
         out.copy_from_slice(&result);
+
+        self.release_buf(d_a, len);
+        self.release_buf(d_b, len);
+        self.release_buf(d_out, len);
         Ok(())
     }
 
-    /// Matrix multiply on GPU.
+    /// Matrix multiply on GPU using tiled shared-memory kernel.
     pub fn matmul(
         &self, a: &[f64], b: &[f64], out: &mut [f64],
         m: usize, k: usize, n: usize,
     ) -> Result<(), String> {
-        let d_a = self.stream.clone_htod(a).map_err(|e| format!("{:?}", e))?;
-        let d_b = self.stream.clone_htod(b).map_err(|e| format!("{:?}", e))?;
-        let mut d_out = self.stream.alloc_zeros::<f64>(m * n).map_err(|e| format!("{:?}", e))?;
+        let mut d_a = self.acquire_buf(m * k)?;
+        self.stream.memcpy_htod(a, &mut d_a).map_err(|e| format!("H2D a: {:?}", e))?;
+        let mut d_b = self.acquire_buf(k * n)?;
+        self.stream.memcpy_htod(b, &mut d_b).map_err(|e| format!("H2D b: {:?}", e))?;
+        let mut d_out = self.acquire_buf(m * n)?;
 
         let func = self.kernels.get("tensor_matmul").ok_or("tensor_matmul not loaded")?;
         unsafe {
             self.stream.launch_builder(func)
                 .arg(&d_a).arg(&d_b).arg(&mut d_out)
                 .arg(&(m as i32)).arg(&(k as i32)).arg(&(n as i32))
-                .launch(Self::cfg_2d(m, n))
+                .launch(Self::cfg_matmul(m, n))
                 .map_err(|e| format!("GPU matmul: {:?}", e))?;
         }
         self.stream.synchronize().map_err(|e| format!("{:?}", e))?;
         let result = self.stream.clone_dtoh(&d_out).map_err(|e| format!("{:?}", e))?;
         out.copy_from_slice(&result);
+
+        self.release_buf(d_a, m * k);
+        self.release_buf(d_b, k * n);
+        self.release_buf(d_out, m * n);
         Ok(())
     }
 
@@ -245,10 +352,11 @@ impl GpuContext {
         let block_size = 256usize;
         let grid_size = (len + block_size - 1) / block_size;
 
-        let d_input = self.stream.clone_htod(input).map_err(|e| format!("{:?}", e))?;
-        let mut d_output = self.stream.alloc_zeros::<f64>(len).map_err(|e| format!("{:?}", e))?;
-        let mut d_scratch = self.stream.alloc_zeros::<f64>(grid_size).map_err(|e| format!("{:?}", e))?;
-        let mut d_sum = self.stream.alloc_zeros::<f64>(1).map_err(|e| format!("{:?}", e))?;
+        let mut d_input = self.acquire_buf(len)?;
+        self.stream.memcpy_htod(input, &mut d_input).map_err(|e| format!("H2D input: {:?}", e))?;
+        let mut d_output = self.acquire_buf(len)?;
+        let mut d_scratch = self.acquire_buf(grid_size)?;
+        let mut d_sum = self.acquire_buf(1)?;
 
         let shared_bytes = (block_size * std::mem::size_of::<f64>()) as u32;
 
@@ -301,6 +409,11 @@ impl GpuContext {
 
         let result = self.stream.clone_dtoh(&d_output).map_err(|e| format!("{:?}", e))?;
         out.copy_from_slice(&result);
+
+        self.release_buf(d_input, len);
+        self.release_buf(d_output, len);
+        self.release_buf(d_scratch, grid_size);
+        self.release_buf(d_sum, 1);
         Ok(())
     }
 
@@ -309,8 +422,10 @@ impl GpuContext {
         &self, input: &[f64], out: &mut [f64],
         rows: usize, cols: usize,
     ) -> Result<(), String> {
-        let d_input = self.stream.clone_htod(input).map_err(|e| format!("{:?}", e))?;
-        let mut d_out = self.stream.alloc_zeros::<f64>(rows * cols).map_err(|e| format!("{:?}", e))?;
+        let n = rows * cols;
+        let mut d_input = self.acquire_buf(n)?;
+        self.stream.memcpy_htod(input, &mut d_input).map_err(|e| format!("H2D input: {:?}", e))?;
+        let mut d_out = self.acquire_buf(n)?;
 
         let func = self.kernels.get("tensor_transpose").ok_or("transpose not loaded")?;
         unsafe {
@@ -323,6 +438,9 @@ impl GpuContext {
 
         let result = self.stream.clone_dtoh(&d_out).map_err(|e| format!("{:?}", e))?;
         out.copy_from_slice(&result);
+
+        self.release_buf(d_input, n);
+        self.release_buf(d_out, n);
         Ok(())
     }
 }
@@ -401,5 +519,23 @@ mod tests {
         for i in 0..n {
             assert_eq!(out[i], n as f64);
         }
+    }
+
+    #[test]
+    fn test_buf_pool_reuse() {
+        // Call add twice with same size; second call should reuse pooled buffers.
+        let ctx = gpu();
+        let a = [1.0, 2.0, 3.0];
+        let b = [4.0, 5.0, 6.0];
+        let mut out = [0.0f64; 3];
+        ctx.add(&a, &b, &mut out).unwrap();
+        assert_eq!(out, [5.0, 7.0, 9.0]);
+        // Pool should now have buffers; second call reuses them.
+        let mut out2 = [0.0f64; 3];
+        ctx.add(&a, &b, &mut out2).unwrap();
+        assert_eq!(out2, [5.0, 7.0, 9.0]);
+        // Verify pool is non-empty after operations
+        let pool = ctx.buf_pool.lock().unwrap();
+        assert!(!pool.is_empty(), "pool should contain reusable buffers");
     }
 }

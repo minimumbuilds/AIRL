@@ -11,6 +11,13 @@ use context::MlirContext;
 use jit::CompiledModule;
 use lower::ElementwiseOp;
 
+/// Entry in the compiled-kernel cache, together with a last-access generation
+/// for LRU eviction.
+struct CacheEntry {
+    module: CompiledModule,
+    last_access: u64,
+}
+
 /// Cache key for compiled kernels: operation kind + shape signature.
 ///
 /// Unlike Cranelift's `TensorJit` which compiles shape-generic loops (passing
@@ -38,7 +45,11 @@ enum CacheKey {
 /// 4. Cache the compiled module keyed by (op, shape)
 pub struct MlirTensorJit {
     mlir_ctx: MlirContext,
-    cache: HashMap<CacheKey, CompiledModule>,
+    /// LRU-managed cache: each entry records the compiled module and the
+    /// generation at which it was last accessed.
+    cache: HashMap<CacheKey, CacheEntry>,
+    /// Monotonically increasing access counter used for LRU eviction decisions.
+    generation: u64,
     #[cfg(feature = "cuda")]
     gpu: Option<gpu::GpuContext>,
 }
@@ -51,6 +62,7 @@ impl MlirTensorJit {
         Ok(Self {
             mlir_ctx,
             cache: HashMap::new(),
+            generation: 0,
             #[cfg(feature = "cuda")]
             gpu: gpu::GpuContext::try_new(),
         })
@@ -62,6 +74,16 @@ impl MlirTensorJit {
         { self.gpu.is_some() }
         #[cfg(not(feature = "cuda"))]
         { false }
+    }
+
+    /// Dispatch an operation to the GPU if available.
+    /// Returns `Some(result)` if GPU ran it, `None` to fall through to MLIR JIT.
+    #[cfg(feature = "cuda")]
+    fn try_gpu<R, F: FnOnce(&gpu::GpuContext) -> Result<R, String>>(
+        &self,
+        f: F,
+    ) -> Option<Result<R, String>> {
+        self.gpu.as_ref().map(f)
     }
 
     /// Element-wise add: `out[i] = a[i] + b[i]` for all `i` in `0..len`.
@@ -76,8 +98,8 @@ impl MlirTensorJit {
         }
 
         #[cfg(feature = "cuda")]
-        if let Some(ref gpu) = self.gpu {
-            return gpu.add(a, b, out);
+        if let Some(result) = self.try_gpu(|gpu| gpu.add(a, b, out)) {
+            return result;
         }
 
         let key = CacheKey::Elementwise {
@@ -85,7 +107,7 @@ impl MlirTensorJit {
             len,
         };
         self.ensure_compiled(&key)?;
-        let compiled = self.cache.get(&key).unwrap();
+        let compiled = &self.cache.get(&key).unwrap().module;
         compiled.call_elementwise("tensor_add", a, b, out)
     }
 
@@ -101,8 +123,8 @@ impl MlirTensorJit {
         }
 
         #[cfg(feature = "cuda")]
-        if let Some(ref gpu) = self.gpu {
-            return gpu.mul(a, b, out);
+        if let Some(result) = self.try_gpu(|gpu| gpu.mul(a, b, out)) {
+            return result;
         }
 
         let key = CacheKey::Elementwise {
@@ -110,7 +132,7 @@ impl MlirTensorJit {
             len,
         };
         self.ensure_compiled(&key)?;
-        let compiled = self.cache.get(&key).unwrap();
+        let compiled = &self.cache.get(&key).unwrap().module;
         compiled.call_elementwise("tensor_mul", a, b, out)
     }
 
@@ -148,13 +170,13 @@ impl MlirTensorJit {
         }
 
         #[cfg(feature = "cuda")]
-        if let Some(ref gpu) = self.gpu {
-            return gpu.matmul(a, b, out, m, k, n);
+        if let Some(result) = self.try_gpu(|gpu| gpu.matmul(a, b, out, m, k, n)) {
+            return result;
         }
 
         let key = CacheKey::Matmul { m, k, n };
         self.ensure_compiled(&key)?;
-        let compiled = self.cache.get(&key).unwrap();
+        let compiled = &self.cache.get(&key).unwrap().module;
         compiled.call_matmul("tensor_matmul", a, b, out, m, k, n)
     }
 
@@ -174,13 +196,13 @@ impl MlirTensorJit {
         }
 
         #[cfg(feature = "cuda")]
-        if let Some(ref gpu) = self.gpu {
-            return gpu.softmax(input, out);
+        if let Some(result) = self.try_gpu(|gpu| gpu.softmax(input, out)) {
+            return result;
         }
 
         let key = CacheKey::Softmax { len };
         self.ensure_compiled(&key)?;
-        let compiled = self.cache.get(&key).unwrap();
+        let compiled = &self.cache.get(&key).unwrap().module;
         compiled.call_softmax("tensor_softmax", input, out)
     }
 
@@ -207,29 +229,42 @@ impl MlirTensorJit {
         }
 
         #[cfg(feature = "cuda")]
-        if let Some(ref gpu) = self.gpu {
-            return gpu.transpose(input, out, rows, cols);
+        if let Some(result) = self.try_gpu(|gpu| gpu.transpose(input, out, rows, cols)) {
+            return result;
         }
 
         let key = CacheKey::Transpose { rows, cols };
         self.ensure_compiled(&key)?;
-        let compiled = self.cache.get(&key).unwrap();
+        let compiled = &self.cache.get(&key).unwrap().module;
         compiled.call_transpose("tensor_transpose", input, out, rows, cols)
     }
 
-    /// Maximum number of cached compiled kernels before eviction.
+    /// Maximum number of cached compiled kernels before LRU eviction kicks in.
     const MAX_CACHE_SIZE: usize = 256;
 
     /// Compile and cache a kernel if not already present.
+    ///
+    /// Access tracking: bumps `self.generation` and updates the entry's
+    /// `last_access` on every hit and insert.  On overflow, evicts only the
+    /// least-recently-used entry rather than clearing the entire cache.
     fn ensure_compiled(&mut self, key: &CacheKey) -> Result<(), String> {
-        if self.cache.contains_key(key) {
+        let gen = self.generation;
+        self.generation = self.generation.wrapping_add(1);
+
+        if let Some(entry) = self.cache.get_mut(key) {
+            entry.last_access = gen;
             return Ok(());
         }
 
-        // Evict entire cache when it exceeds the size limit.
-        // A full LRU would be more precise but this is simple and bounded.
+        // Evict the single LRU entry when at capacity.
         if self.cache.len() >= Self::MAX_CACHE_SIZE {
-            self.cache.clear();
+            if let Some(lru_key) = self.cache
+                .iter()
+                .min_by_key(|(_, e)| e.last_access)
+                .map(|(k, _)| k.clone())
+            {
+                self.cache.remove(&lru_key);
+            }
         }
 
         let mut module = self.mlir_ctx.new_module();
@@ -255,7 +290,7 @@ impl MlirTensorJit {
 
         optimize::run_lowering_pipeline(self.mlir_ctx.context(), &mut module)?;
         let compiled = CompiledModule::new(&module)?;
-        self.cache.insert(key.clone(), compiled);
+        self.cache.insert(key.clone(), CacheEntry { module: compiled, last_access: gen });
         Ok(())
     }
 }
