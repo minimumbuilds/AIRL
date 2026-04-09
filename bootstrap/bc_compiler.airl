@@ -512,7 +512,8 @@
                   ;; Restore tail? before recursing to next expr
                   (Ok st3)
                     (let (st3 : _ (map-set st3 "in-tail?" parent-tail?))
-                      (bc-compile-do-loop st3 (tail exprs) dst save-reg)))))))))))
+                      (bc-compile-do-loop st3 (tail exprs) dst save-reg))))))))))
+
 
 ;; ── Let compilation ─────────────────────────────────────
 
@@ -539,7 +540,8 @@
                         ;; Remove bindings from locals
                         (let (st5 : _ (bc-unbind-let st4 bound-names))
                           (let (free-to : Int (if (> save-reg (+ dst 1)) save-reg (+ dst 1)))
-                            (Ok (cs-free-reg-to st5 free-to))))))))))))))))
+                            (Ok (cs-free-reg-to st5 free-to)))))))))))))
+
 
 (defn bc-compile-let-bindings
   :sig [(st : _) (bindings : List) -> _]

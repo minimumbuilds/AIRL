@@ -51,16 +51,15 @@
 
 ;; ── Phase 1: Token → S-Expression grouping ────────
 
-(def MAX-PARSE-DEPTH 1000)
-
 ;; Internal depth-aware implementations — not part of public API.
+;; MAX-PARSE-DEPTH = 1000 inlined to avoid def-constant type issues.
 (defn parse-sexpr-d
   :sig [(tokens : List) (pos : i64) (depth : i64) -> List]
   :intent "parse-sexpr with depth guard — internal; use parse-sexpr for external callers"
   :requires [(valid tokens)]
   :ensures [(valid result)]
   :body
-    (if (> depth MAX-PARSE-DEPTH)
+    (if (> depth 1000)
       (Err (ParseError "max nesting depth exceeded" 0 0))
     (if (>= pos (length tokens))
       (Err (ParseError "unexpected end of input" 0 0))
@@ -105,7 +104,7 @@
                     (if (= kind "eof")
                       (Err (ParseError "unexpected end of input" line col))
                       ;; Any other token is an atom
-                      (Ok [(SAtom tok) (+ pos 1)])))))))))))))
+                      (Ok [(SAtom tok) (+ pos 1)]))))))))))
 
 (defn parse-sexprs-d
   :sig [(tokens : List) (pos : i64) (stop-kind : String) (depth : i64) -> List]
