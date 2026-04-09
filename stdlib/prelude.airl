@@ -164,16 +164,20 @@
 ;; ── unique : remove duplicate elements (preserves first occurrence) ──
 (defn unique
   :sig [(xs : List) -> List]
-  :intent "Remove duplicate elements from a list"
+  :intent "Remove duplicate elements from a list, preserving first occurrence"
   :requires [(valid xs)]
   :ensures [(valid result)]
-  :body (if (empty? xs)
-          []
-          (let (h : _ (head xs))
-               (rest : List (unique (tail xs)))
-            (if (list-contains? rest h)
-              rest
-              (cons h rest)))))
+  :body
+    ;; Forward pass with seen-map accumulator: [seen-map result-reversed]
+    ;; Avoids O(N²) list-contains? by using map lookup (O(log N))
+    (let (pair : List (fold (fn [acc x]
+                               (let (seen : Map (at acc 0))
+                                    (lst : List (at acc 1))
+                                 (if (map-has seen (str x))
+                                   acc
+                                   [(map-set seen (str x) true) (cons x lst)])))
+                            [(map-new) []] xs))
+      (reverse (at pair 1))))
 
 ;; ── enumerate : pair each element with its index ──
 (defn enumerate
