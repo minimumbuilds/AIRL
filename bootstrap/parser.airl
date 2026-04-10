@@ -59,7 +59,7 @@
   :requires [(valid tokens)]
   :ensures [(valid result)]
   :body
-    (if (> depth 1000)
+    (if (>= depth 1001)
       (Err (ParseError "max nesting depth exceeded" 0 0))
     (if (>= pos (length tokens))
       (Err (ParseError "unexpected end of input" 0 0))

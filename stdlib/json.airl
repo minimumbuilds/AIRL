@@ -31,7 +31,7 @@
                         (concat [(bytes-from-string "\\b")] rest)
                         (if (= b 12)  ;; form feed
                           (concat [(bytes-from-string "\\f")] rest)
-                          (concat [(bytes-from-int8 b)] rest))))))))))
+                          (concat [(bytes-from-int8 b)] rest)))))))))))
 
 
 ;; ── json-escape : escape a string for JSON ──
