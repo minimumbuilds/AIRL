@@ -495,7 +495,7 @@
   :ensures [(valid result)]
   :body
     (if (= (length exprs) 1)
-      ;; Last expression -> compile to dst, then free temps (inherits tail? from st)
+      ;; Last expression -> compile to dst, then free temps
       (match (bc-compile-expr st (head exprs) dst)
         (Err e) (Err e)
         (Ok st2)
@@ -513,7 +513,6 @@
                   (Ok st3)
                     (let (st3 : _ (map-set st3 "in-tail?" parent-tail?))
                       (bc-compile-do-loop st3 (tail exprs) dst save-reg))))))))))
-
 
 ;; ── Let compilation ─────────────────────────────────────
 
@@ -541,7 +540,6 @@
                         (let (st5 : _ (bc-unbind-let st4 bound-names))
                           (let (free-to : Int (if (> save-reg (+ dst 1)) save-reg (+ dst 1)))
                             (Ok (cs-free-reg-to st5 free-to)))))))))))))
-
 
 (defn bc-compile-let-bindings
   :sig [(st : _) (bindings : List) -> _]
@@ -676,8 +674,8 @@
                           (let (argc : Int (length args))
                             ;; Ensure max-reg covers call slots
                             (let (st4a : _ (bc-ensure-call-slots st4 dst argc))
-                              ;; Emit TailCall for self-recursion in tail position, else Call
-                              (let (opcode : Int (if is-self-tail? (op-tail-call) (op-call)))
+                              ;; Always emit Call — TailCall AOT support pending correct param-reg setup
+                              (let (opcode : Int (op-call))
                                 (let (st5 : _ (cs-emit st4a opcode dst name-idx argc))
                                   (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
                                     (Ok (cs-free-reg-to st5 free-to))))))))))))))))))
@@ -1395,20 +1393,20 @@
                   (Ok st4)
                     ;; Compile body with tail-call detection enabled for self-recursive calls
                     (let (st4 : _ (map-set (map-set st4 "in-tail?" true) "func-name" name))
-                    (match (bc-compile-expr st4 body dst-reg)
-                      (Err e) (Err (str "in function '" name "': " e))
-                      (Ok st5)
-                        ;; Bind "result" to dst-reg for ensures clauses
-                        (let (st6 : _ (cs-set-local st5 "result" dst-reg))
-                          ;; Emit ensures assertions (after body)
-                          (match (bc-emit-contract-assertions st6 name ensures-clauses (op-assert-ensures) dst-reg)
-                            (Err e) (Err e)
-                            (Ok st7)
-                              ;; Emit return
-                              (let (st8 : _ (cs-emit st7 (op-return) 0 dst-reg 0))
-                                ;; Build BCFunc
-                                (let (func : _ (BCFunc name arity (cs-max-reg st8) capture-count (cs-consts st8) (cs-instrs st8)))
-                                  (Ok [func (cs-lambdas st8) (cs-lambda-ctr st8)])))))))))))))))
+                      (match (bc-compile-expr st4 body dst-reg)
+                        (Err e) (Err (str "in function '" name "': " e))
+                        (Ok st5)
+                          ;; Bind "result" to dst-reg for ensures clauses
+                          (let (st6 : _ (cs-set-local st5 "result" dst-reg))
+                            ;; Emit ensures assertions (after body)
+                            (match (bc-emit-contract-assertions st6 name ensures-clauses (op-assert-ensures) dst-reg)
+                              (Err e) (Err e)
+                              (Ok st7)
+                                ;; Emit return
+                                (let (st8 : _ (cs-emit st7 (op-return) 0 dst-reg 0))
+                                  ;; Build BCFunc
+                                  (let (func : _ (BCFunc name arity (cs-max-reg st8) capture-count (cs-consts st8) (cs-instrs st8)))
+                                    (Ok [func (cs-lambdas st8) (cs-lambda-ctr st8)])))))))))))))))
 
 (defn bc-emit-contract-assertions
   :sig [(st : _) (fn-name : String) (clauses : List) (assert-op : Int) (dst-reg : Int) -> _]
@@ -1607,3 +1605,4 @@
                 (match (bc-compile-program ast-nodes)
                   (Err e) (Err e)
                   (Ok bc-funcs) (Ok (run-bytecode bc-funcs)))))))
+

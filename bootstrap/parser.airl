@@ -104,7 +104,7 @@
                     (if (= kind "eof")
                       (Err (ParseError "unexpected end of input" line col))
                       ;; Any other token is an atom
-                      (Ok [(SAtom tok) (+ pos 1)]))))))))))
+                      (Ok [(SAtom tok) (+ pos 1)])))))))))))
 
 (defn parse-sexprs-d
   :sig [(tokens : List) (pos : i64) (stop-kind : String) (depth : i64) -> List]

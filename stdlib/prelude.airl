@@ -200,8 +200,8 @@
   :ensures [(valid result)]
   :body
     ;; Build groups in reverse with cons (O(1) per element), then
-    ;; reverse each group's list with map-map so order is preserved.
-    (map-map (fn [_k v] (reverse v))
+    ;; reverse each group's list with map-map-values so order is preserved.
+    (map-map-values (fn [v] (reverse v))
       (fold (fn [acc x]
               (let (k : _ (f x))
                    (existing : List (map-get-or acc k []))

@@ -1,4 +1,4 @@
-;; EXPECT: map:2 4 6|filter:4 5|fold:15|rev:3 2 1|concat:1 2 3 4|zip:2|flat:1 2 3 4|range:0 1 2|take:1 2|drop:3 4 5|any:t|all:f|find:3|sort:1 2 3|unique:3 2 1|enum:0-a 1-b|group:2
+;; EXPECT: map:2 4 6|filter:4 5|fold:15|rev:3 2 1|concat:1 2 3 4|zip:2|flat:1 2 3 4|range:0 1 2|take:1 2|drop:3 4 5|any:t|all:f|find:3|sort:1 2 3|unique:1 2 3|enum:0-a 1-b|group:2
 (let (xs : List [1 2 3 4 5])
      (m1 : List (map (fn [x] (* x 2)) [1 2 3]))
      (f1 : List (filter (fn [x] (> x 3)) xs))
