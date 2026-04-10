@@ -961,6 +961,23 @@ pub struct BytecodeVm {
     max_call_depth: usize,
 }
 
+impl Drop for BytecodeVm {
+    /// Release all retained register values on any remaining call-stack frames.
+    ///
+    /// In the normal (success) path every frame is popped and its registers are
+    /// released inside `run_rt_with_min_depth`. On error return paths the `?`
+    /// operator unwinds past the dispatch loop, leaving frames with live
+    /// `*mut RtValue` registers on the stack. Rust's default drop for
+    /// `Vec<*mut RtValue>` frees the Vec's backing allocation but does NOT call
+    /// `airl_value_release` on each element — this impl fills that gap so no
+    /// heap-allocated values (strings, lists, closures) are leaked on errors.
+    fn drop(&mut self) {
+        for frame in &mut self.call_stack {
+            release_registers(&mut frame.registers);
+        }
+    }
+}
+
 impl BytecodeVm {
     pub fn new() -> Self {
         BytecodeVm {

@@ -19,8 +19,11 @@ pub extern "C" fn airl_value_retain(ptr: *mut RtValue) {
         return;
     }
     // SAFETY: Caller guarantees `ptr` is a valid, live RtValue. The null check
-    // above handles the only expected invalid input. Non-atomic increment is
-    // safe because the AIRL threading model forbids concurrent mutation.
+    // above handles the only expected invalid input. The increment is atomic
+    // (fetch_add). Relaxed ordering is sufficient: each RtValue is owned by
+    // exactly one VM's register bank, and Arc<BytecodeFunc> gives each
+    // invocation its own isolated register space — no two threads retain or
+    // release the same RtValue concurrently.
     unsafe {
         let old = (*ptr).rc.fetch_add(1, Ordering::Relaxed);
         // SEC-2: If we just incremented past the immortal threshold,
