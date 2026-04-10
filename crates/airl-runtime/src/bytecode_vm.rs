@@ -5,6 +5,7 @@
 // handlers for thread-spawn, fn-metadata, thread-join, channel-*, compile-*, run-bytecode.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use crate::bytecode::*;
 use crate::value::Value;
@@ -255,13 +256,12 @@ struct CallFrame {
     return_reg: u16,
     match_flag: bool,
     moved: Vec<bool>,
-    /// Cached pointer to the function's instruction slice.
-    /// Valid for the lifetime of the VM execution (functions are never removed
-    /// or mutated during `run_rt_with_min_depth`). Using a raw pointer avoids
-    /// a HashMap lookup on every dispatch loop iteration.
-    instr_ptr: *const [Instruction],
-    /// Cached pointer to the function's constant pool.
-    consts_ptr: *const [Value],
+    /// Arc reference to the compiled function. Keeps the BytecodeFunc alive
+    /// for the frame's lifetime and provides safe access to instructions and
+    /// constants without raw pointers. Multiple concurrent VMs may share
+    /// the same Arc<BytecodeFunc> cloned from STDLIB_CACHE — reads are safe
+    /// because BytecodeFunc is immutable after compilation.
+    func_ref: Arc<BytecodeFunc>,
 }
 
 // ── Thread/channel globals ──────────────────────────────────────────
@@ -943,15 +943,18 @@ fn builtin_arity(name: &str) -> Option<usize> {
 // SAFETY: BytecodeVm contains `*mut RtValue` pointers in CallFrame registers.
 // These are owned (each register holds a retained reference) and never shared
 // across threads — `spawn_child()` creates a fresh VM with an empty call stack,
-// not a clone of the parent's registers. The `functions` HashMap contains only
-// bytecode (no raw pointers), so it is inherently Send.
+// not a clone of the parent's registers. The `functions` HashMap contains
+// Arc<BytecodeFunc> values (no raw pointers), making it inherently Send.
+// CallFrame.func_ref is an Arc<BytecodeFunc>, whose contents are immutable —
+// multiple threads may concurrently hold Arcs to the same BytecodeFunc for
+// read-only access, which is safe.
 unsafe impl Send for BytecodeVm {}
 
 /// Default maximum call depth for the VM (SEC-11).
 const DEFAULT_MAX_CALL_DEPTH: usize = 10_000;
 
 pub struct BytecodeVm {
-    pub functions: HashMap<String, BytecodeFunc>,
+    pub functions: HashMap<String, Arc<BytecodeFunc>>,
     fn_metadata: HashMap<String, crate::bytecode::FnDefMetadata>,
     call_stack: Vec<CallFrame>,
     recursion_depth: usize,
@@ -986,7 +989,7 @@ impl BytecodeVm {
     }
 
     pub fn load_function(&mut self, func: BytecodeFunc) {
-        self.functions.insert(func.name.clone(), func);
+        self.functions.insert(func.name.clone(), Arc::new(func));
     }
 
     pub fn store_fn_metadata(&mut self, meta: crate::bytecode::FnDefMetadata) {
@@ -1229,8 +1232,9 @@ impl BytecodeVm {
 
     /// Push a frame with Value args (converts to RtValue).
     fn push_frame(&mut self, name: &str, args: &[Value], return_reg: u16) -> Result<(), RuntimeError> {
-        let func = self.functions.get(name)
-            .ok_or_else(|| RuntimeError::UndefinedSymbol(name.to_string()))?;
+        let func_ref = self.functions.get(name)
+            .ok_or_else(|| RuntimeError::UndefinedSymbol(name.to_string()))?
+            .clone(); // cheap Arc clone
 
         self.recursion_depth += 1;
         if self.call_stack.len() >= self.max_call_depth || self.recursion_depth > self.max_call_depth {
@@ -1238,12 +1242,7 @@ impl BytecodeVm {
             return Err(RuntimeError::StackOverflow { depth: self.max_call_depth });
         }
 
-        let reg_count = func.register_count as usize;
-        // Cache raw pointers to the instruction and constant slices.
-        // SAFETY: `functions` is not mutated during VM execution, so these
-        // pointers remain valid for the lifetime of the call frame.
-        let instr_ptr: *const [Instruction] = func.instructions.as_slice();
-        let consts_ptr: *const [Value] = func.constants.as_slice();
+        let reg_count = func_ref.register_count as usize;
         let mut registers: Vec<*mut RtValue> = Vec::with_capacity(reg_count);
         for _ in 0..reg_count { registers.push(rt_nil()); }
         for (i, arg) in args.iter().enumerate() {
@@ -1260,16 +1259,16 @@ impl BytecodeVm {
             return_reg,
             match_flag: false,
             moved: vec![false; reg_count],
-            instr_ptr,
-            consts_ptr,
+            func_ref,
         });
         Ok(())
     }
 
     /// Push a frame with RtValue args (retains each arg).
     fn push_frame_rt(&mut self, name: &str, args: &[*mut RtValue], return_reg: u16) -> Result<(), RuntimeError> {
-        let func = self.functions.get(name)
-            .ok_or_else(|| RuntimeError::UndefinedSymbol(name.to_string()))?;
+        let func_ref = self.functions.get(name)
+            .ok_or_else(|| RuntimeError::UndefinedSymbol(name.to_string()))?
+            .clone(); // cheap Arc clone
 
         self.recursion_depth += 1;
         if self.call_stack.len() >= self.max_call_depth || self.recursion_depth > self.max_call_depth {
@@ -1277,11 +1276,7 @@ impl BytecodeVm {
             return Err(RuntimeError::StackOverflow { depth: self.max_call_depth });
         }
 
-        let reg_count = func.register_count as usize;
-        // Cache raw pointers to the instruction and constant slices.
-        // SAFETY: `functions` is not mutated during VM execution.
-        let instr_ptr: *const [Instruction] = func.instructions.as_slice();
-        let consts_ptr: *const [Value] = func.constants.as_slice();
+        let reg_count = func_ref.register_count as usize;
         let mut registers: Vec<*mut RtValue> = Vec::with_capacity(reg_count);
         for _ in 0..reg_count { registers.push(rt_nil()); }
         for (i, &arg) in args.iter().enumerate() {
@@ -1299,8 +1294,7 @@ impl BytecodeVm {
             return_reg,
             match_flag: false,
             moved: vec![false; reg_count],
-            instr_ptr,
-            consts_ptr,
+            func_ref,
         });
         Ok(())
     }
@@ -1315,13 +1309,12 @@ impl BytecodeVm {
     /// Main VM loop. Returns *mut RtValue with rc >= 1 (caller must release).
     fn run_rt_with_min_depth(&mut self, min_depth: usize) -> Result<*mut RtValue, RuntimeError> {
         loop {
-            // Use cached instruction pointer — no HashMap lookup per iteration.
-            // instr_ptr/consts_ptr are set when the frame is pushed and remain valid
-            // because `self.functions` is never mutated during execution.
+            // Access instructions via Arc<BytecodeFunc> stored in the frame.
+            // No raw pointers — safe concurrent access for any number of threads
+            // running independent VMs that share the same Arc<BytecodeFunc> from STDLIB_CACHE.
             let instr_or_end = {
                 let frame = self.call_stack.last().expect("internal: call stack empty");
-                // SAFETY: instr_ptr points into self.functions which is not mutated here.
-                let instrs = unsafe { &*frame.instr_ptr };
+                let instrs = &frame.func_ref.instructions;
                 if frame.ip < instrs.len() {
                     Some(instrs[frame.ip])
                 } else {
@@ -1348,11 +1341,9 @@ impl BytecodeVm {
 
             match instr.op {
                 Op::LoadConst => {
-                    // SAFETY: consts_ptr points into self.functions which is not mutated here.
                     let val = {
                         let frame = self.call_stack.last().expect("internal: call stack empty");
-                        let consts = unsafe { &*frame.consts_ptr };
-                        value_to_rt(&consts[instr.a as usize])
+                        value_to_rt(&frame.func_ref.constants[instr.a as usize])
                     };
                     let frame = self.call_stack.last_mut().expect("internal: call stack empty");
                     reg_set(&mut frame.registers, instr.dst as usize, val);
@@ -1580,9 +1571,7 @@ impl BytecodeVm {
                 Op::MakeVariant => {
                     let tag = {
                         let frame = self.call_stack.last().expect("internal: call stack empty");
-                        // SAFETY: consts_ptr is valid for the frame's lifetime.
-                        let consts = unsafe { &*frame.consts_ptr };
-                        match &consts[instr.a as usize] {
+                        match &frame.func_ref.constants[instr.a as usize] {
                             Value::Str(s) => s.clone(),
                             _ => return Err(RuntimeError::TypeError("variant tag must be string".into())),
                         }
@@ -1595,8 +1584,7 @@ impl BytecodeVm {
                 Op::MakeVariant0 => {
                     let tag = {
                         let frame = self.call_stack.last().expect("internal: call stack empty");
-                        let consts = unsafe { &*frame.consts_ptr };
-                        match &consts[instr.a as usize] {
+                        match &frame.func_ref.constants[instr.a as usize] {
                             Value::Str(s) => s.clone(),
                             _ => return Err(RuntimeError::TypeError("variant tag must be string".into())),
                         }
@@ -1609,8 +1597,7 @@ impl BytecodeVm {
                 Op::MatchTag => {
                     let tag = {
                         let frame = self.call_stack.last().expect("internal: call stack empty");
-                        let consts = unsafe { &*frame.consts_ptr };
-                        match &consts[instr.b as usize] {
+                        match &frame.func_ref.constants[instr.b as usize] {
                             Value::Str(s) => s.clone(),
                             _ => return Err(RuntimeError::TypeError("match tag must be string".into())),
                         }
@@ -1666,13 +1653,11 @@ impl BytecodeVm {
                     let bool_val = reg_get(&self.call_stack.last().expect("internal: call stack empty").registers, instr.a as usize);
                     if !rt_is_bool_true(bool_val) {
                         let frame = self.call_stack.last().expect("internal: call stack empty");
-                        // SAFETY: consts_ptr is valid for the frame's lifetime.
-                        let consts = unsafe { &*frame.consts_ptr };
-                        let fn_name_str = match consts.get(instr.dst as usize) {
+                        let fn_name_str = match frame.func_ref.constants.get(instr.dst as usize) {
                             Some(Value::Str(s)) => s.clone(),
                             _ => frame.func_name.clone(),
                         };
-                        let clause_source = match consts.get(instr.b as usize) {
+                        let clause_source = match frame.func_ref.constants.get(instr.b as usize) {
                             Some(Value::Str(s)) => s.clone(),
                             _ => "?".into(),
                         };
@@ -1706,9 +1691,7 @@ impl BytecodeVm {
                     let reg = instr.a as usize;
                     let frame = self.call_stack.last().expect("internal: call stack empty");
                     if reg < frame.moved.len() && frame.moved[reg] {
-                        // SAFETY: consts_ptr is valid for the frame's lifetime.
-                        let consts = unsafe { &*frame.consts_ptr };
-                        let msg = if let Some(c) = consts.get(instr.b as usize) {
+                        let msg = if let Some(c) = frame.func_ref.constants.get(instr.b as usize) {
                             match c {
                                 Value::Str(s) if s.contains(' ') => s.clone(),
                                 Value::Str(s) => format!("use of moved value: `{}` was already moved", s),
@@ -1725,9 +1708,7 @@ impl BytecodeVm {
                 Op::Call => {
                     let name = {
                         let frame = self.call_stack.last().expect("internal: call stack empty");
-                        // SAFETY: consts_ptr is valid for the frame's lifetime.
-                        let consts = unsafe { &*frame.consts_ptr };
-                        match &consts[instr.a as usize] {
+                        match &frame.func_ref.constants[instr.a as usize] {
                             Value::Str(s) => s.clone(),
                             _ => return Err(RuntimeError::TypeError("call: func name must be string".into())),
                         }
@@ -1786,8 +1767,7 @@ impl BytecodeVm {
                 Op::CallBuiltin => {
                     let name = {
                         let frame = self.call_stack.last().expect("internal: call stack empty");
-                        let consts = unsafe { &*frame.consts_ptr };
-                        match &consts[instr.a as usize] {
+                        match &frame.func_ref.constants[instr.a as usize] {
                             Value::Str(s) => s.clone(),
                             _ => return Err(RuntimeError::TypeError("callbuiltin: name must be string".into())),
                         }
@@ -1877,8 +1857,8 @@ impl BytecodeVm {
                             let name = closure.func_name.clone();
                             if let Some(func) = self.functions.get(&name) {
                                 if is_simple_closure(func) {
-                                    let func = func.clone();
-                                    let result_val = self.eval_simple(&func, full_args)?;
+                                    let func = func.clone(); // cheap Arc clone
+                                    let result_val = self.eval_simple(func.as_ref(), full_args)?;
                                     reg_set(&mut self.call_stack.last_mut().expect("internal: call stack empty").registers, instr.dst as usize, value_to_rt(&result_val));
                                     continue;
                                 }
@@ -1955,8 +1935,7 @@ impl BytecodeVm {
                 Op::MakeClosure => {
                     let func_name_const = {
                         let frame = self.call_stack.last().expect("internal: call stack empty");
-                        let consts = unsafe { &*frame.consts_ptr };
-                        match &consts[instr.a as usize] {
+                        match &frame.func_ref.constants[instr.a as usize] {
                             Value::Str(s) => s.clone(),
                             _ => return Err(RuntimeError::TypeError("closure: func name must be string".into())),
                         }

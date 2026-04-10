@@ -1,14 +1,11 @@
-# airl-driver test environment settings (issue-057)
+# airl-driver test environment settings (issue-057, issue-058)
 #
 # AIRL_ALLOW_EXEC: SEC-6 — fixture tests need shell-exec permission. Set here so
 #   the value is present before the test binary spawns any threads, eliminating
 #   the set_var data race. force=false lets callers override for integration testing.
 #
-# RUST_TEST_THREADS: the AIRL runtime uses raw-pointer-based data structures that
-#   are not Sync-safe across parallel pipeline invocations. Serial test execution
-#   prevents heap corruption in test binaries that run multiple pipeline calls
-#   concurrently. Callers can override with a higher value if the runtime is later
-#   made thread-safe.
+# RUST_TEST_THREADS workaround removed (issue-058): the runtime now uses
+#   Arc<BytecodeFunc> in CallFrame instead of raw pointers, making concurrent
+#   pipeline invocations safe. Parallel test execution is restored.
 [env]
 AIRL_ALLOW_EXEC    = { value = "*", force = false }
-RUST_TEST_THREADS  = { value = "1", force = false }
