@@ -1,0 +1,10 @@
+;; Fixpoint smoke test — compiled and run by build-g3.sh Stage 3.
+;; Exercises three failure modes that past regressions hit:
+;;   - TCO (fold uses tail calls internally — b67caa6 TCO regression caused OOM here)
+;;   - let-binding with nested dependent bindings
+;;   - String ops (str, str concatenation)
+;;
+;; EXPECT: sum:55|rev:cba
+(let (n : i64 (fold (fn [a i] (+ a i)) 0 (range 1 11)))
+     (rev : String (reverse-str "abc"))
+  (print (str "sum:" n "|rev:" rev)))

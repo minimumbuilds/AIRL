@@ -24,7 +24,17 @@ esac
 
 # Isolate build artifacts per arch so Linux x86_64 and macOS arm64
 # don't stomp each other on a shared filesystem.
-export CARGO_TARGET_DIR="${AIRL_ROOT}/target-${G3_ARCH}"
+#
+# Worktree paths can contain colons (e.g. role:project:instance naming).
+# Cargo constructs LD_LIBRARY_PATH from CARGO_TARGET_DIR; if that path
+# contains colons it treats them as separators and errors. Redirect to /tmp.
+if [[ "$AIRL_ROOT" == *:* ]]; then
+    export CARGO_TARGET_DIR="/tmp/g3-build-${G3_ARCH}"
+    _G3_COLON_PATH=1
+else
+    export CARGO_TARGET_DIR="${AIRL_ROOT}/target-${G3_ARCH}"
+    _G3_COLON_PATH=0
+fi
 
 BUILDS_DIR="builds"
 mkdir -p "$BUILDS_DIR"
@@ -67,7 +77,22 @@ BUILD_PATH="${BUILDS_DIR}/${BUILD_NAME}"
 AIRL_BIN="${AIRL_BIN:-cargo run --release --features aot --}"
 
 echo "[build-g3] Building host binary..."
+if [[ "${_G3_COLON_PATH:-0}" -eq 1 ]]; then
+    # Fresh build order: airl-rt must be compiled before airl-runtime embeds it.
+    # Required when CARGO_TARGET_DIR is new (e.g. /tmp path for colon-path worktrees).
+    echo "[build-g3] Fresh build order (colon worktree path — CARGO_TARGET_DIR=$CARGO_TARGET_DIR)..."
+    cargo build --release -p airl-rt
+    cargo clean -p airl-runtime
+fi
 cargo build --release --features aot
+
+if [[ "${_G3_COLON_PATH:-0}" -eq 1 ]]; then
+    # find_lib() in bytecode_aot.rs uses CWD-relative paths (target/release/lib*.a).
+    # Since CARGO_TARGET_DIR is in /tmp, symlink libraries to the expected location.
+    mkdir -p "${AIRL_ROOT}/target/release"
+    ln -sf "${CARGO_TARGET_DIR}/release/libairl_rt.a" "${AIRL_ROOT}/target/release/libairl_rt.a"
+    ln -sf "${CARGO_TARGET_DIR}/release/libairl_runtime.a" "${AIRL_ROOT}/target/release/libairl_runtime.a"
+fi
 
 echo "[build-g3] Compiling G3 -> ${BUILD_PATH}..."
 $AIRL_BIN run \
@@ -101,3 +126,43 @@ echo "[build-g3] Done: ${SIZE} -> ${BUILD_PATH}"
 echo "Arch: ${G3_ARCH} — symlink: g3-${G3_ARCH} -> builds/$(basename "$BUILD_PATH")"
 echo "CARGO_TARGET_DIR: $CARGO_TARGET_DIR"
 ./"$BUILD_PATH" -- --version 2>/dev/null || true
+
+# --- Stage 3: Fixpoint test ---
+# Use the new g3 binary (not cargo/Rust interpreter) to compile and run a
+# non-trivial AIRL test. Catches OOM/TCO regressions that AOT tests miss
+# because those tests still run via the Rust interpreter.
+echo "=== Stage 3: Fixpoint test ==="
+FIXPOINT_SRC="${AIRL_ROOT}/tests/fixpoint/fixpoint_smoke.airl"
+FIXPOINT_BIN="/tmp/g3-fixpoint-smoke-$$"
+FIXPOINT_EXPECTED="sum:55|rev:cba"
+
+if [[ ! -f "$FIXPOINT_SRC" ]]; then
+    echo "FIXPOINT FAIL: test source not found: $FIXPOINT_SRC"
+    exit 1
+fi
+
+timeout 60 "$BUILD_PATH" -- "$FIXPOINT_SRC" -o "$FIXPOINT_BIN" \
+    > /tmp/g3-fixpoint-compile.log 2>&1 \
+    || {
+        rc=$?
+        if [[ $rc -eq 124 ]]; then
+            echo "FIXPOINT FAIL: g3 compile timed out after 60s (likely OOM or infinite loop)"
+        else
+            echo "FIXPOINT FAIL: g3 could not compile fixpoint smoke test (exit $rc)"
+        fi
+        cat /tmp/g3-fixpoint-compile.log
+        exit 1
+    }
+
+ACTUAL=$(timeout 10 "$FIXPOINT_BIN" 2>&1) || {
+    echo "FIXPOINT FAIL: compiled binary crashed or timed out"
+    exit 1
+}
+
+if [[ "$ACTUAL" != "$FIXPOINT_EXPECTED" ]]; then
+    echo "FIXPOINT FAIL: expected '$FIXPOINT_EXPECTED' got '$ACTUAL'"
+    exit 1
+fi
+
+echo "Stage 3 OK — fixpoint smoke: $ACTUAL"
+rm -f "$FIXPOINT_BIN" /tmp/g3-fixpoint-compile.log
