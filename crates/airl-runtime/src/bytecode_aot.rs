@@ -3265,6 +3265,7 @@ pub const STRING_SOURCE: &str = include_str!("../../../stdlib/string.airl");
 pub const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
 pub const SET_SOURCE: &str = include_str!("../../../stdlib/set.airl");
 pub const IO_SOURCE: &str = include_str!("../../../stdlib/io.airl");
+pub const PATH_SOURCE: &str = include_str!("../../../stdlib/path.airl");
 
 /// An extern-c declaration extracted from source: C symbol name + arity.
 #[derive(Debug, Clone)]
@@ -3347,10 +3348,12 @@ pub fn compile_to_executable_impl(
         all_funcs.extend(funcs);
     }
 
-    // 1b. Compile stdlib with extern-c declarations (io.airl)
+    // 1b. Compile stdlib with extern-c declarations (io.airl) and
+    //     path.airl which depends on getenv from io.airl.
     let mut stdlib_extern_c_decls: Vec<ExternCInfo> = Vec::new();
     for (src, name) in &[
         (IO_SOURCE, "io"),
+        (PATH_SOURCE, "path"),
     ] {
         let (funcs, _stdlib_main, externs) = compile_source_to_bytecode_with_externs(src, name)?;
         all_funcs.extend(funcs);

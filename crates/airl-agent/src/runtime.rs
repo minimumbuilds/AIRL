@@ -293,6 +293,7 @@ fn create_stdlib_vm() -> Result<BytecodeVm, AgentError> {
     const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
     const SET_SOURCE: &str = include_str!("../../../stdlib/set.airl");
     const IO_SOURCE: &str = include_str!("../../../stdlib/io.airl");
+    const PATH_SOURCE: &str = include_str!("../../../stdlib/path.airl");
 
     let mut vm = BytecodeVm::new();
     for (src, name) in &[
@@ -303,6 +304,7 @@ fn create_stdlib_vm() -> Result<BytecodeVm, AgentError> {
         (MAP_SOURCE, "map"),
         (SET_SOURCE, "set"),
         (IO_SOURCE, "io"),
+        (PATH_SOURCE, "path"),
     ] {
         load_source_into_vm(&mut vm, src, name)
             .map_err(|e| AgentError::StdlibLoad(*name, format!("{}", e)))?;

@@ -19,6 +19,7 @@ const STRING_SOURCE: &str = include_str!("../../../stdlib/string.airl");
 const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
 const SET_SOURCE: &str = include_str!("../../../stdlib/set.airl");
 const IO_SOURCE: &str = include_str!("../../../stdlib/io.airl");
+const PATH_SOURCE: &str = include_str!("../../../stdlib/path.airl");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineMode {
@@ -704,6 +705,7 @@ const STDLIB_PATHS: &[&str] = &[
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/map.airl"),
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/set.airl"),
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/io.airl"),
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/path.airl"),
 ];
 
 /// Compute a hash of the embedded stdlib sources to detect changes.
@@ -718,6 +720,7 @@ fn stdlib_embed_hash() -> u64 {
     MAP_SOURCE.hash(&mut hasher);
     SET_SOURCE.hash(&mut hasher);
     IO_SOURCE.hash(&mut hasher);
+    PATH_SOURCE.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -754,6 +757,7 @@ fn compile_stdlib_all() -> Result<Vec<(Vec<BytecodeFunc>, BytecodeFunc)>, Pipeli
         (MAP_SOURCE, "map"),
         (SET_SOURCE, "set"),
         (IO_SOURCE, "io"),
+        (PATH_SOURCE, "path"),
     ];
     let mut result = Vec::new();
     for (src, name) in stdlib_modules {

@@ -77,3 +77,16 @@
   :requires [(valid path)]
   :ensures [(valid result)]
   :body (starts-with path "/"))
+
+;; ── path-expand-home: expand leading ~ to $HOME ──
+(defn path-expand-home
+  :sig [(path : String) -> String]
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body
+    (let (home : String (getenv "HOME"))
+      (if (= path "~")
+        home
+        (if (starts-with path "~/")
+          (str home "/" (substring path 2 (length path)))
+          path))))

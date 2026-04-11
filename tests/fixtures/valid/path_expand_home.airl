@@ -1,0 +1,9 @@
+;; EXPECT: "tilde OK home-slash OK passthrough OK ALL PASSED"
+;; Test path-expand-home: tilde expansion via getenv HOME
+
+(do
+  (let (home : String (getenv "HOME"))
+    (let (r1 : String (if (= (path-expand-home "~") home) "tilde OK " "tilde FAIL "))
+      (let (r2 : String (if (= (path-expand-home "~/docs") (str home "/docs")) "home-slash OK " "home-slash FAIL "))
+        (let (r3 : String (if (= (path-expand-home "/usr/bin") "/usr/bin") "passthrough OK " "passthrough FAIL "))
+          (str r1 r2 r3 "ALL PASSED"))))))
