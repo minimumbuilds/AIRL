@@ -775,6 +775,7 @@ fn compile_stdlib_all() -> Result<Vec<(Vec<BytecodeFunc>, BytecodeFunc)>, Pipeli
         (MAP_SOURCE, "map"),
         (SET_SOURCE, "set"),
         (IO_SOURCE, "io"),
+        (PATH_SOURCE, "path"),
         (SQLITE_SOURCE, "sqlite"),
     ];
     let mut result = Vec::new();
@@ -1415,16 +1416,18 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
         (STRING_SOURCE, "string"),
         (MAP_SOURCE, "map"),
         (SET_SOURCE, "set"),
+        (PATH_SOURCE, "path"),
     ] {
         let (funcs, _stdlib_main) = compile_source_to_bytecode(src, name)?;
         // Only take named functions, skip the __main__ (which just returns nil)
         all_funcs.extend(funcs);
     }
 
-    // 1b. Compile stdlib with extern-c declarations (io.airl)
+    // 1b. Compile stdlib with extern-c declarations (io.airl, sqlite.airl)
     let mut stdlib_extern_c_decls: Vec<airl_runtime::bytecode_aot::ExternCInfo> = Vec::new();
     for (src, name) in &[
         (IO_SOURCE, "io"),
+        (SQLITE_SOURCE, "sqlite"),
     ] {
         let (funcs, _stdlib_main, externs) = compile_source_to_bytecode_with_externs(src, name)?;
         all_funcs.extend(funcs);
@@ -1498,15 +1501,17 @@ pub fn compile_to_object_with_imports(entry_path: &str, target: Option<&str>) ->
         (STRING_SOURCE, "string"),
         (MAP_SOURCE, "map"),
         (SET_SOURCE, "set"),
+        (PATH_SOURCE, "path"),
     ] {
         let (funcs, _stdlib_main) = compile_source_to_bytecode(src, name)?;
         all_funcs.extend(funcs);
     }
 
-    // 1b. Compile stdlib with extern-c declarations (io.airl)
+    // 1b. Compile stdlib with extern-c declarations (io.airl, sqlite.airl)
     let mut extern_c_decls: Vec<airl_runtime::bytecode_aot::ExternCInfo> = Vec::new();
     for (src, name) in &[
         (IO_SOURCE, "io"),
+        (SQLITE_SOURCE, "sqlite"),
     ] {
         let (funcs, _stdlib_main, externs) = compile_source_to_bytecode_with_externs(src, name)?;
         all_funcs.extend(funcs);
