@@ -11,6 +11,8 @@ jobs:
       - run: cargo clean -p airl-runtime
       - run: cargo build --features aot
       - run: cargo test -p airl-syntax -p airl-types -p airl-contracts -p airl-runtime -p airl-agent -p airl-driver
+        env:
+          AIRL_ALLOW_EXEC: "1"
 
   build-mynameisairl:
     runs-on: ubuntu-latest
