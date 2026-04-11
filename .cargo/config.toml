@@ -1,0 +1,18 @@
+# airl-driver test environment settings (issue-057, issue-058)
+#
+# AIRL_ALLOW_EXEC: SEC-6 — fixture tests need shell-exec permission. Set here so
+#   the value is present before the test binary spawns any threads, eliminating
+#   the set_var data race. force=false lets callers override for integration testing.
+#
+# RUST_TEST_THREADS workaround removed (issue-058): the runtime now uses
+#   Arc<BytecodeFunc> in CallFrame instead of raw pointers, making concurrent
+#   pipeline invocations safe. Parallel test execution is restored.
+#
+# Z3 paths (issue-085): hermetic build — point linker and compiler at the
+#   system Z3 installation so `cargo build` succeeds without requiring the
+#   caller to export LIBRARY_PATH / CPATH manually.  The `force = false`
+#   policy lets CI or developer overrides take precedence.
+[env]
+AIRL_ALLOW_EXEC    = { value = "*", force = false }
+LIBRARY_PATH       = { value = "/usr/lib/x86_64-linux-gnu", force = false }
+CPATH              = { value = "/usr/include", force = false }

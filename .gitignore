@@ -33,7 +33,9 @@ crates/airl-syntax/fuzz/target/
 !tla/*.log
 
 # Local tool and personal config directories — never commit these
-.cargo/
+# .cargo/config.toml is project-level (hermetic build paths) — exempt from ignore
+.cargo/*
+!.cargo/config.toml
 .claude/
 .rustup/
 .local/
