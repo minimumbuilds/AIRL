@@ -52,7 +52,7 @@ fn format_atom(atom: &Atom) -> String {
 pub fn format_source(source: &str) -> Result<String, String> {
     let mut lexer = airl_syntax::Lexer::new(source);
     let tokens = lexer.lex_all().map_err(|d| d.message)?;
-    let sexprs = airl_syntax::parse_sexpr_all(&tokens).map_err(|d| d.message)?;
+    let sexprs = airl_syntax::parse_sexpr_all(tokens).map_err(|d| d.message)?;
     let mut output = String::new();
     for (i, sexpr) in sexprs.iter().enumerate() {
         if i > 0 {

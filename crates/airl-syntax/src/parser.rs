@@ -1667,7 +1667,7 @@ mod tests {
     fn parse_top(input: &str) -> Vec<TopLevel> {
         let mut lexer = Lexer::new(input);
         let tokens = lexer.lex_all().unwrap();
-        let sexprs = parse_sexpr_all(&tokens).unwrap();
+        let sexprs = parse_sexpr_all(tokens).unwrap();
         let mut diags = Diagnostics::new();
         let tops: Vec<_> = sexprs.iter().map(|s| parse_top_level(s, &mut diags)).collect::<Result<_, _>>().unwrap();
         assert!(!diags.has_errors(), "unexpected errors: {:?}", diags);
@@ -1677,7 +1677,7 @@ mod tests {
     fn parse_expr_str(input: &str) -> Expr {
         let mut lexer = Lexer::new(input);
         let tokens = lexer.lex_all().unwrap();
-        let sexprs = parse_sexpr_all(&tokens).unwrap();
+        let sexprs = parse_sexpr_all(tokens).unwrap();
         let mut diags = Diagnostics::new();
         parse_expr(&sexprs[0], &mut diags).unwrap()
     }
@@ -1974,7 +1974,7 @@ mod tests {
         let input = r#"(defn bad :sig [(x : i32) -> i32] :body x)"#;
         let mut lexer = Lexer::new(input);
         let tokens = lexer.lex_all().unwrap();
-        let sexprs = parse_sexpr_all(&tokens).unwrap();
+        let sexprs = parse_sexpr_all(tokens).unwrap();
         let mut diags = Diagnostics::new();
         let _ = parse_top_level(&sexprs[0], &mut diags);
         assert!(diags.has_errors(), "expected error for missing contracts");
@@ -2103,7 +2103,7 @@ mod tests {
     fn parse_thread_first_error_no_args() {
         let mut lexer = Lexer::new("(->)");
         let tokens = lexer.lex_all().unwrap();
-        let sexprs = parse_sexpr_all(&tokens).unwrap();
+        let sexprs = parse_sexpr_all(tokens).unwrap();
         let mut diags = Diagnostics::new();
         let result = parse_expr(&sexprs[0], &mut diags);
         assert!(result.is_err(), "expected error for empty ->");
@@ -2285,7 +2285,7 @@ mod tests {
     fn parse_expr_err(input: &str) -> Diagnostic {
         let mut lexer = Lexer::new(input);
         let tokens = lexer.lex_all().unwrap();
-        let sexprs = parse_sexpr_all(&tokens).unwrap();
+        let sexprs = parse_sexpr_all(tokens).unwrap();
         let mut diags = Diagnostics::new();
         parse_expr(&sexprs[0], &mut diags).expect_err("expected an error")
     }
@@ -2293,7 +2293,7 @@ mod tests {
     fn parse_top_err(input: &str) -> Diagnostic {
         let mut lexer = Lexer::new(input);
         let tokens = lexer.lex_all().unwrap();
-        let sexprs = parse_sexpr_all(&tokens).unwrap();
+        let sexprs = parse_sexpr_all(tokens).unwrap();
         let mut diags = Diagnostics::new();
         parse_top_level(&sexprs[0], &mut diags).expect_err("expected an error")
     }
@@ -2335,7 +2335,7 @@ mod tests {
         // which triggers the "map destructure binding missing value" error.
         let mut lexer = Lexer::new("(let ((name age)) x)");
         let tokens = lexer.lex_all().unwrap();
-        let sexprs = parse_sexpr_all(&tokens).unwrap();
+        let sexprs = parse_sexpr_all(tokens).unwrap();
         let mut diags = Diagnostics::new();
         // This should either error or produce a let with x as body — not panic.
         let result = parse_expr(&sexprs[0], &mut diags);

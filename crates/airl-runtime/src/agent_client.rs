@@ -48,7 +48,7 @@ pub fn parse_result_message(response: &str) -> Result<Value, String> {
     // Parse as S-expression
     let mut lexer = airl_syntax::Lexer::new(response);
     let tokens = lexer.lex_all().map_err(|d| d.message)?;
-    let sexprs = airl_syntax::parse_sexpr_all(&tokens).map_err(|d| d.message)?;
+    let sexprs = airl_syntax::parse_sexpr_all(tokens).map_err(|d| d.message)?;
 
     if sexprs.is_empty() {
         return Err("empty response".into());

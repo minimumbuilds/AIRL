@@ -21,7 +21,7 @@ fn repl_type_check(input: &str, tc: &mut TypeChecker) {
         Ok(t) => t,
         Err(d) => { eprintln!("error: {}", d.message); return; }
     };
-    let sexprs = match airl_syntax::parse_sexpr_all(&tokens) {
+    let sexprs = match airl_syntax::parse_sexpr_all(tokens) {
         Ok(s) => s,
         Err(d) => { eprintln!("error: {}", d.message); return; }
     };

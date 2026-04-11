@@ -257,7 +257,7 @@ pub fn sexpr_to_value_str(input: &str) -> Result<Value, String> {
 fn lex_and_parse(input: &str) -> Result<Vec<SExpr>, String> {
     let mut lexer = Lexer::new(input);
     let tokens = lexer.lex_all().map_err(|d| d.message)?;
-    parse_sexpr_all(&tokens).map_err(|d| d.message)
+    parse_sexpr_all(tokens).map_err(|d| d.message)
 }
 
 #[cfg(test)]

@@ -3293,7 +3293,7 @@ pub fn compile_source_to_bytecode_with_externs(
 
     let mut lexer = Lexer::new(source);
     let tokens = lexer.lex_all().map_err(|d| format!("lex: {}", d.message))?;
-    let sexprs = parse_sexpr_all(&tokens).map_err(|d| format!("parse: {}", d.message))?;
+    let sexprs = parse_sexpr_all(tokens).map_err(|d| format!("parse: {}", d.message))?;
     let mut diags = Diagnostics::new();
 
     let mut tops = Vec::new();

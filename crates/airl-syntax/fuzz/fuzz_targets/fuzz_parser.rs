@@ -8,7 +8,7 @@ fuzz_target!(|data: &[u8]| {
             Ok(t) => t,
             Err(_) => return,
         };
-        let sexprs = match airl_syntax::sexpr::parse_sexpr_all(&tokens) {
+        let sexprs = match airl_syntax::sexpr::parse_sexpr_all(tokens) {
             Ok(s) => s,
             Err(_) => return,
         };

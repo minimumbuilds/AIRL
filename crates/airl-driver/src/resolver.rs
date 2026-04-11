@@ -196,7 +196,7 @@ fn parse_file(source: &str) -> Result<Vec<TopLevel>, ResolveError> {
     let tokens = lexer
         .lex_all()
         .map_err(|e| ResolveError::Parse(format!("lex error: {}", e.message)))?;
-    let sexprs = parse_sexpr_all(&tokens)
+    let sexprs = parse_sexpr_all(tokens)
         .map_err(|e| ResolveError::Parse(format!("s-expr error: {}", e.message)))?;
 
     let mut diags = Diagnostics::new();

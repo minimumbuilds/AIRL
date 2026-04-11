@@ -316,7 +316,7 @@ fn load_source_into_vm(vm: &mut BytecodeVm, source: &str, name: &str) -> Result<
     let mut lexer = airl_syntax::Lexer::new(source);
     let tokens = lexer.lex_all()
         .map_err(|d| AgentError::Protocol(format!("{} lex error: {}", name, d.message)))?;
-    let sexprs = airl_syntax::parse_sexpr_all(&tokens)
+    let sexprs = airl_syntax::parse_sexpr_all(tokens)
         .map_err(|d| AgentError::Protocol(format!("{} parse error: {}", name, d.message)))?;
     let mut diags = airl_syntax::Diagnostics::new();
 

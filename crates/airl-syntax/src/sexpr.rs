@@ -57,67 +57,78 @@ impl SExpr {
 const MAX_PARSE_DEPTH: usize = 1000;
 
 /// Parse a token stream into a list of top-level S-expressions.
-pub fn parse_sexpr_all(tokens: &[Token]) -> Result<Vec<SExpr>, Diagnostic> {
+/// Takes `tokens` by value and moves strings out of tokens into atoms,
+/// eliminating the clone at the token→SExpr boundary.
+pub fn parse_sexpr_all(tokens: Vec<Token>) -> Result<Vec<SExpr>, Diagnostic> {
+    let mut slots: Vec<Option<Token>> = tokens.into_iter().map(Some).collect();
     let mut pos = 0;
     let mut exprs = Vec::new();
-    while pos < tokens.len() && tokens[pos].kind != TokenKind::Eof {
-        let (expr, next) = parse_sexpr(tokens, pos, 0)?;
+    while pos < slots.len() {
+        if slots[pos].as_ref().map_or(true, |t| t.kind == TokenKind::Eof) {
+            break;
+        }
+        let (expr, next) = parse_sexpr(&mut slots, pos, 0)?;
         exprs.push(expr);
         pos = next;
     }
     Ok(exprs)
 }
 
-fn parse_sexpr(tokens: &[Token], pos: usize, depth: usize) -> Result<(SExpr, usize), Diagnostic> {
+fn parse_sexpr(tokens: &mut [Option<Token>], pos: usize, depth: usize) -> Result<(SExpr, usize), Diagnostic> {
     if depth > MAX_PARSE_DEPTH {
-        let span = if pos < tokens.len() { tokens[pos].span } else { Span::dummy() };
+        let span = tokens.get(pos).and_then(|s| s.as_ref()).map(|t| t.span).unwrap_or(Span::dummy());
         return Err(Diagnostic::error(
             format!("maximum nesting depth exceeded ({})", MAX_PARSE_DEPTH),
             span,
         ));
     }
 
-    if pos >= tokens.len() {
+    if pos >= tokens.len() || tokens[pos].is_none() {
         return Err(Diagnostic::error("unexpected end of input", Span::dummy()));
     }
 
-    let token = &tokens[pos];
-    match &token.kind {
-        TokenKind::LParen => parse_list(tokens, pos, TokenKind::LParen, TokenKind::RParen, false, depth),
-        TokenKind::LBracket => parse_list(tokens, pos, TokenKind::LBracket, TokenKind::RBracket, true, depth),
-        _ => {
-            let atom = token_to_atom(token)?;
-            Ok((SExpr::Atom(atom), pos + 1))
-        }
+    // Peek at kind via borrow (borrow ends before any take())
+    let is_lparen   = matches!(tokens[pos].as_ref().unwrap().kind, TokenKind::LParen);
+    let is_lbracket = matches!(tokens[pos].as_ref().unwrap().kind, TokenKind::LBracket);
+
+    if is_lparen {
+        let start_span = tokens[pos].take().unwrap().span;
+        parse_list(tokens, pos + 1, false, depth, start_span)
+    } else if is_lbracket {
+        let start_span = tokens[pos].take().unwrap().span;
+        parse_list(tokens, pos + 1, true, depth, start_span)
+    } else {
+        let token = tokens[pos].take().unwrap();
+        let atom = token_to_atom(token)?;
+        Ok((SExpr::Atom(atom), pos + 1))
     }
 }
 
 fn parse_list(
-    tokens: &[Token],
-    pos: usize,
-    _open: TokenKind,
-    close: TokenKind,
+    tokens: &mut [Option<Token>],
+    mut pos: usize,
     is_bracket: bool,
     depth: usize,
+    start_span: Span,
 ) -> Result<(SExpr, usize), Diagnostic> {
-    let start_span = tokens[pos].span;
-    let mut pos = pos + 1; // skip opener
+    let close = if is_bracket { TokenKind::RBracket } else { TokenKind::RParen };
     let mut items = Vec::new();
 
     loop {
-        if pos >= tokens.len() || tokens[pos].kind == TokenKind::Eof {
+        if pos >= tokens.len() || tokens[pos].as_ref().map_or(true, |t| t.kind == TokenKind::Eof) {
             return Err(Diagnostic::error(
                 "unclosed delimiter",
                 start_span,
             ));
         }
         // Skip commas in bracket lists (type parameter separators)
-        if tokens[pos].kind == TokenKind::Comma {
+        if matches!(tokens[pos].as_ref().unwrap().kind, TokenKind::Comma) {
+            tokens[pos].take();
             pos += 1;
             continue;
         }
-        if tokens[pos].kind == close {
-            let end_span = tokens[pos].span;
+        if tokens[pos].as_ref().unwrap().kind == close {
+            let end_span = tokens[pos].take().unwrap().span;
             let span = start_span.merge(end_span);
             let expr = if is_bracket {
                 SExpr::BracketList(items, span)
@@ -132,17 +143,15 @@ fn parse_list(
     }
 }
 
-// TODO: take tokens by value (Vec<Token> + swap) to move strings into atoms
-// instead of cloning at the token→sexpr boundary. Parser should also consume
-// SExprs by value to avoid the second clone at sexpr→ast.
-fn token_to_atom(token: &Token) -> Result<Atom, Diagnostic> {
-    let kind = match &token.kind {
-        TokenKind::Integer(v) => AtomKind::Integer(*v),
-        TokenKind::Float(v) => AtomKind::Float(*v),
-        TokenKind::Str(v) => AtomKind::Str(v.clone()),
-        TokenKind::Symbol(v) => AtomKind::Symbol(v.clone()),
-        TokenKind::Keyword(v) => AtomKind::Keyword(v.clone()),
-        TokenKind::Bool(v) => AtomKind::Bool(*v),
+fn token_to_atom(token: Token) -> Result<Atom, Diagnostic> {
+    let span = token.span;
+    let kind = match token.kind {
+        TokenKind::Integer(v) => AtomKind::Integer(v),
+        TokenKind::Float(v) => AtomKind::Float(v),
+        TokenKind::Str(v) => AtomKind::Str(v),       // moved, no clone
+        TokenKind::Symbol(v) => AtomKind::Symbol(v), // moved, no clone
+        TokenKind::Keyword(v) => AtomKind::Keyword(v), // moved, no clone
+        TokenKind::Bool(v) => AtomKind::Bool(v),
         TokenKind::Nil => AtomKind::Nil,
         TokenKind::Arrow => AtomKind::Arrow,
         TokenKind::Version(major, minor, patch) => AtomKind::Version(*major, *minor, *patch),
@@ -150,11 +159,11 @@ fn token_to_atom(token: &Token) -> Result<Atom, Diagnostic> {
         other => {
             return Err(Diagnostic::error(
                 format!("unexpected token: {:?}", other),
-                token.span,
+                span,
             ));
         }
     };
-    Ok(Atom { kind, span: token.span })
+    Ok(Atom { kind, span })
 }
 
 #[cfg(test)]
@@ -165,7 +174,7 @@ mod tests {
     fn parse(input: &str) -> Vec<SExpr> {
         let mut lexer = Lexer::new(input);
         let tokens = lexer.lex_all().unwrap();
-        parse_sexpr_all(&tokens).unwrap()
+        parse_sexpr_all(tokens).unwrap()
     }
 
     #[test]
@@ -240,7 +249,7 @@ mod tests {
     fn parse_unclosed_paren_error() {
         let mut lexer = Lexer::new("(+ 1 2");
         let tokens = lexer.lex_all().unwrap();
-        assert!(parse_sexpr_all(&tokens).is_err());
+        assert!(parse_sexpr_all(tokens).is_err());
     }
 
     #[test]
@@ -264,7 +273,7 @@ mod tests {
                 let input = "(".repeat(depth) + "x" + &")".repeat(depth);
                 let mut lexer = Lexer::new(&input);
                 let tokens = lexer.lex_all().unwrap();
-                parse_sexpr_all(&tokens)
+                parse_sexpr_all(tokens)
             })
             .unwrap()
             .join()
@@ -299,7 +308,7 @@ mod tests {
                 let input = "[".repeat(depth) + "x" + &"]".repeat(depth);
                 let mut lexer = Lexer::new(&input);
                 let tokens = lexer.lex_all().unwrap();
-                parse_sexpr_all(&tokens)
+                parse_sexpr_all(tokens)
             })
             .unwrap()
             .join()
@@ -312,5 +321,22 @@ mod tests {
             "expected depth error, got: {}",
             err.message,
         );
+    }
+
+    #[test]
+    fn parse_strings_moved_not_cloned() {
+        // Verifies string ownership works correctly after move-based parsing
+        let tokens = Lexer::new(r#""hello world""#).lex_all().unwrap();
+        let exprs = parse_sexpr_all(tokens).unwrap();
+        assert_eq!(exprs.len(), 1);
+        assert!(matches!(&exprs[0], SExpr::Atom(Atom { kind: AtomKind::Str(s), .. }) if s == "hello world"));
+    }
+
+    #[test]
+    fn parse_symbol_moved_not_cloned() {
+        let tokens = Lexer::new("foo-bar").lex_all().unwrap();
+        let exprs = parse_sexpr_all(tokens).unwrap();
+        assert_eq!(exprs.len(), 1);
+        assert!(matches!(&exprs[0], SExpr::Atom(Atom { kind: AtomKind::Symbol(s), .. }) if s == "foo-bar"));
     }
 }

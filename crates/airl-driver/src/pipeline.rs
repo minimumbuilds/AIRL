@@ -36,7 +36,7 @@ pub enum PipelineMode {
 fn parse_source(source: &str) -> Result<(Vec<airl_syntax::ast::TopLevel>, Diagnostics), PipelineError> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
-    let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
+    let sexprs = parse_sexpr_all(tokens).map_err(PipelineError::Syntax)?;
     let mut diags = Diagnostics::new();
 
     let mut tops = Vec::new();
@@ -61,7 +61,7 @@ fn parse_source(source: &str) -> Result<(Vec<airl_syntax::ast::TopLevel>, Diagno
 fn parse_source_strict(source: &str) -> Result<Vec<airl_syntax::ast::TopLevel>, PipelineError> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
-    let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
+    let sexprs = parse_sexpr_all(tokens).map_err(PipelineError::Syntax)?;
     let mut diags = Diagnostics::new();
 
     let mut tops = Vec::new();
@@ -82,7 +82,7 @@ fn parse_source_strict(source: &str) -> Result<Vec<airl_syntax::ast::TopLevel>, 
 fn parse_source_stdlib(source: &str, name: &str) -> Result<Vec<airl_syntax::ast::TopLevel>, PipelineError> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
-    let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
+    let sexprs = parse_sexpr_all(tokens).map_err(PipelineError::Syntax)?;
     let mut diags = Diagnostics::new();
 
     let mut tops = Vec::new();
@@ -1263,7 +1263,7 @@ mod tests {
         let mut lin = LinearityChecker::new();
         let mut lexer = Lexer::new(source);
         let tokens = lexer.lex_all().unwrap();
-        let sexprs = parse_sexpr_all(&tokens).unwrap();
+        let sexprs = parse_sexpr_all(tokens).unwrap();
         let mut diags = Diagnostics::new();
         for sexpr in &sexprs {
             if let Ok(airl_syntax::ast::TopLevel::Defn(f)) = parser::parse_top_level(sexpr, &mut diags) {
@@ -1290,7 +1290,7 @@ mod tests {
         let mut lin = LinearityChecker::new();
         let mut lexer = Lexer::new(source);
         let tokens = lexer.lex_all().unwrap();
-        let sexprs = parse_sexpr_all(&tokens).unwrap();
+        let sexprs = parse_sexpr_all(tokens).unwrap();
         let mut diags = Diagnostics::new();
         for sexpr in &sexprs {
             if let Ok(airl_syntax::ast::TopLevel::Defn(f)) = parser::parse_top_level(sexpr, &mut diags) {
@@ -1619,7 +1619,7 @@ fn compile_source_to_bytecode_with_externs(
 ) -> Result<(Vec<airl_runtime::bytecode::BytecodeFunc>, airl_runtime::bytecode::BytecodeFunc, Vec<airl_runtime::bytecode_aot::ExternCInfo>), PipelineError> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
-    let sexprs = parse_sexpr_all(&tokens).map_err(PipelineError::Syntax)?;
+    let sexprs = parse_sexpr_all(tokens).map_err(PipelineError::Syntax)?;
     let mut diags = Diagnostics::new();
 
     let mut tops = Vec::new();

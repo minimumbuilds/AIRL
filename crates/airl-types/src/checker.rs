@@ -1089,7 +1089,7 @@ mod tests {
     fn parse_and_check(input: &str) -> Result<Ty, String> {
         let mut lexer = airl_syntax::Lexer::new(input);
         let tokens = lexer.lex_all().map_err(|d| d.message)?;
-        let sexprs = airl_syntax::parse_sexpr_all(&tokens).map_err(|d| d.message)?;
+        let sexprs = airl_syntax::parse_sexpr_all(tokens).map_err(|d| d.message)?;
         if sexprs.is_empty() {
             return Err("no expressions parsed".to_string());
         }
@@ -1204,7 +1204,7 @@ mod tests {
         let input = r#"(defn add :sig [(a : i32) (b : i32) -> i32] :requires [(>= a 0)] :body (+ a b))"#;
         let mut lexer = airl_syntax::Lexer::new(input);
         let tokens = lexer.lex_all().unwrap();
-        let sexprs = airl_syntax::parse_sexpr_all(&tokens).unwrap();
+        let sexprs = airl_syntax::parse_sexpr_all(tokens).unwrap();
         let mut diags = Diagnostics::new();
         let top = airl_syntax::parse_top_level(&sexprs[0], &mut diags).unwrap();
         checker.check_top_level(&top).unwrap();
@@ -1213,7 +1213,7 @@ mod tests {
         let call_input = "(add 1 2)";
         let mut lexer2 = airl_syntax::Lexer::new(call_input);
         let tokens2 = lexer2.lex_all().unwrap();
-        let sexprs2 = airl_syntax::parse_sexpr_all(&tokens2).unwrap();
+        let sexprs2 = airl_syntax::parse_sexpr_all(tokens2).unwrap();
         let call_expr = airl_syntax::parser::parse_expr(&sexprs2[0], &mut diags).unwrap();
         let result = checker.check_expr(&call_expr).unwrap();
         assert_eq!(result, Ty::Prim(PrimTy::I32));
@@ -1234,7 +1234,7 @@ mod tests {
         let input = "(foo 1 2)";
         let mut lexer = airl_syntax::Lexer::new(input);
         let tokens = lexer.lex_all().unwrap();
-        let sexprs = airl_syntax::parse_sexpr_all(&tokens).unwrap();
+        let sexprs = airl_syntax::parse_sexpr_all(tokens).unwrap();
         let mut diags = Diagnostics::new();
         let expr = airl_syntax::parser::parse_expr(&sexprs[0], &mut diags).unwrap();
         assert!(checker.check_expr(&expr).is_err());
@@ -1253,7 +1253,7 @@ mod tests {
         let input = r#"(foo "hello")"#;
         let mut lexer = airl_syntax::Lexer::new(input);
         let tokens = lexer.lex_all().unwrap();
-        let sexprs = airl_syntax::parse_sexpr_all(&tokens).unwrap();
+        let sexprs = airl_syntax::parse_sexpr_all(tokens).unwrap();
         let mut diags = Diagnostics::new();
         let expr = airl_syntax::parser::parse_expr(&sexprs[0], &mut diags).unwrap();
         assert!(checker.check_expr(&expr).is_err());
