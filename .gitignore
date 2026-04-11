@@ -32,6 +32,18 @@ crates/airl-syntax/fuzz/target/
 *.log
 !tla/*.log
 
+# Local tool and personal config directories — never commit these
+.cargo/
+.claude/
+.rustup/
+.local/
+.npm/
+.node_modules/
+.venv/
+.env
+.envrc
+.direnv/
+
 # Editor/OS junk
 *.swp
 *.swo
