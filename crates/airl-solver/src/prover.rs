@@ -1,8 +1,13 @@
+use std::sync::Mutex;
 use z3::{Config, Context, SatResult, Solver};
 use z3::ast::Ast;
 use airl_syntax::ast::{Expr, ExprKind, FnDef, AstTypeKind};
 use crate::translate::{Translator, VarSort};
 use crate::{VerifyResult, FunctionVerification};
+
+/// Z3's C library uses non-thread-safe global state during context creation.
+/// Concurrent `Context::new()` calls SIGSEGV in CI. Serialize all Z3 access.
+static Z3_LOCK: Mutex<()> = Mutex::new(());
 
 // KNOWN LIMITATION: Linear ownership constraints are currently not encoded in Z3.
 // Contracts on owned/borrowed parameters are verified structurally but not for linearity.
@@ -55,6 +60,7 @@ impl Z3Prover {
 
     /// Verify all :ensures clauses of a function given its :requires.
     pub fn verify_function(&self, def: &FnDef) -> FunctionVerification {
+        let _guard = Z3_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = Config::new();
         let ctx = Context::new(&cfg);
         let solver = Solver::new(&ctx);
