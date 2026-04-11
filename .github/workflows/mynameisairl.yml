@@ -9,9 +9,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: true
-          ssh-key: ${{ secrets.AIRTRAFFIC_DEPLOY_KEY }}
+
+      - name: Checkout AirTraffic submodule
+        env:
+          AT_KEY: ${{ secrets.AIRTRAFFIC_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$AT_KEY" > ~/.ssh/airtraffic_key
+          chmod 600 ~/.ssh/airtraffic_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/airtraffic_key -o StrictHostKeyChecking=no" \
+            git submodule update --init AirTraffic
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -61,9 +69,17 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: true
-          ssh-key: ${{ secrets.AIRTRAFFIC_DEPLOY_KEY }}
+
+      - name: Checkout AirTraffic submodule
+        env:
+          AT_KEY: ${{ secrets.AIRTRAFFIC_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$AT_KEY" > ~/.ssh/airtraffic_key
+          chmod 600 ~/.ssh/airtraffic_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/airtraffic_key -o StrictHostKeyChecking=no" \
+            git submodule update --init AirTraffic
 
       - uses: dtolnay/rust-toolchain@stable
 
