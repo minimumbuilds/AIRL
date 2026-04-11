@@ -102,15 +102,11 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Checkout AirTraffic submodule
-        env:
-          AT_KEY: ${{ secrets.AIRTRAFFIC_DEPLOY_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          echo "$AT_KEY" > ~/.ssh/airtraffic_key
-          chmod 600 ~/.ssh/airtraffic_key
-          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/airtraffic_key -o StrictHostKeyChecking=no" \
-            git submodule update --init AirTraffic
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository_owner }}/AirTraffic
+          path: AirTraffic
+          token: ${{ secrets.GH_TOKEN }}
 
       - uses: dtolnay/rust-toolchain@stable
 
