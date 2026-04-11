@@ -200,3 +200,38 @@
   :requires [(valid fmt)]
   :ensures [(valid result)]
   :body (airl_format_time ms fmt))
+
+;; ════════════════════════════════════════════════════════════════
+;; Directory Walking (issue-061)
+;; ════════════════════════════════════════════════════════════════
+
+;; walk-dir-acc: tail-recursive helper — processes entries one at a time.
+;; Avoids closure-captures-outer-fn pattern that breaks AOT compilation.
+(defn walk-dir-acc
+  :sig [(root-path : String) (skip-patterns : List) (entries : List) (acc : List) -> List]
+  :requires [(valid root-path)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? entries)
+      acc
+      (let (name : String (head entries))
+        (if (list-contains? skip-patterns name)
+          (walk-dir-acc root-path skip-patterns (tail entries) acc)
+          (let (full-path : String (str root-path "/" name))
+            (if (is-dir? full-path)
+              (walk-dir-acc root-path skip-patterns (tail entries)
+                (concat acc (walk-dir full-path skip-patterns)))
+              (walk-dir-acc root-path skip-patterns (tail entries)
+                (append acc full-path))))))))
+
+;; walk-dir: recursively collect full paths of all files under root-path.
+;; skip-patterns: list of entry names to skip (exact match on filename component).
+;; Returns empty list if root-path does not exist or is not a directory.
+(defn walk-dir :pub
+  :sig [(root-path : String) (skip-patterns : List) -> List]
+  :requires [(valid root-path)]
+  :ensures [(valid result)]
+  :body
+    (if (not (is-dir? root-path))
+      []
+      (walk-dir-acc root-path skip-patterns (read-dir root-path) [])))

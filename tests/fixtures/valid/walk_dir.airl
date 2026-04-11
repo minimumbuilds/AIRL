@@ -1,0 +1,21 @@
+;; EXPECT: "flat OK nested OK skip OK nonexistent OK ALL PASSED"
+(do
+  (let (root : String (temp-dir "walk-test"))
+    (do
+      (write-file (str root "/a.txt") "a")
+      (write-file (str root "/b.txt") "b")
+      (create-dir (str root "/sub"))
+      (write-file (str root "/sub/c.txt") "c")
+      (let (r1 : String
+             (let (flat : List (walk-dir root ["sub"]))
+               (if (= (length flat) 2) "flat OK " "flat FAIL ")))
+        (let (r2 : String
+               (let (all : List (walk-dir root []))
+                 (if (= (length all) 3) "nested OK " "nested FAIL ")))
+          (let (r3 : String
+                 (let (skipped : List (walk-dir root ["sub"]))
+                   (if (= (length skipped) 2) "skip OK " "skip FAIL ")))
+            (let (r4 : String
+                   (let (missing : List (walk-dir "/nonexistent-xyz-123" []))
+                     (if (= (length missing) 0) "nonexistent OK " "nonexistent FAIL ")))
+              (str r1 r2 r3 r4 "ALL PASSED"))))))))
