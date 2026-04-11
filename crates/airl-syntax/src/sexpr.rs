@@ -154,7 +154,7 @@ fn token_to_atom(token: Token) -> Result<Atom, Diagnostic> {
         TokenKind::Bool(v) => AtomKind::Bool(v),
         TokenKind::Nil => AtomKind::Nil,
         TokenKind::Arrow => AtomKind::Arrow,
-        TokenKind::Version(major, minor, patch) => AtomKind::Version(*major, *minor, *patch),
+        TokenKind::Version(major, minor, patch) => AtomKind::Version(major, minor, patch),
         TokenKind::Colon => AtomKind::Symbol(":".into()),
         other => {
             return Err(Diagnostic::error(
