@@ -183,6 +183,19 @@ Structured logging library for AIRL applications. Level-based filtering (debug, 
 | **Status** | Functional. Core API and file output complete. |
 | **Depends on** | stdlib (json, string, io) |
 
+### AirNexus -- AI Agent Framework
+
+Multi-provider AI agent framework for building LLM-powered applications in AIRL. Unified API across OpenAI, Anthropic, Gemini, and Ollama. Streaming support, structured JSON output with schema validation, tool use with call tracking, orchestration primitives (pipeline and parallel composition), and pluggable output handlers (text, JSON, callback). Built on AIReqL for HTTP transport and AirLog for structured logging.
+
+| | |
+|---|---|
+| **Location** | `../airnexus` |
+| **Size** | ~1,630 LOC (10 core modules, 4 provider modules, 6 examples, 5 test suites) |
+| **Commits** | 7 |
+| **Version** | 0.1.0 |
+| **Status** | Functional. All providers, streaming, tool use, and orchestration complete. 33 tests passing. |
+| **Depends on** | AIReqL (HTTP transport), AirLog, AirTraffic, stdlib (json, base64) |
+
 ### mynameisAIRL -- MCP Prompt Server + Code Indexer
 
 MCP prompt server that serves AIRL-LLM-Guide.md to LLMs as a `teach_airl` prompt, plus the AirMunch code indexer providing 10 MCP tools: `index_project`, `file_tree`, `file_outline`, `get_symbol`, `search_symbols`, `get_content`, `repo_outline`, `find_callers`, `dependency_graph`, `blast_radius`. Built on the AirTraffic framework. Supports CLI, environment variable, and Docker volume-mount guide path resolution. Stdio transport.
@@ -396,7 +409,8 @@ SSH client for AIRLOS. Implements the SSH-2 protocol from scratch: key exchange 
 | AirWire | AIRL | 600 | 3 | v0.2.0 |
 | AirDB | AIRL | 1,000 | 3 | v0.2.0 |
 | AirMux | AIRL + C | 1,100 | 2 | v0.1.0 PoC |
-| **Total** | | **~166,729** | **1,054** | |
+| AirNexus | AIRL | 1,630 | 7 | v0.1.0 Functional |
+| **Total** | | **~168,359** | **1,061** | |
 
 ## Building
 
