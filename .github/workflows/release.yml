@@ -107,6 +107,7 @@ jobs:
           repository: ${{ github.repository_owner }}/AirTraffic
           path: AirTraffic
           token: ${{ secrets.GH_TOKEN }}
+          ref: main
 
       - uses: dtolnay/rust-toolchain@stable
 
