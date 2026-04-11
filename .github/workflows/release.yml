@@ -100,12 +100,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-
-      - name: Checkout AirTraffic
-        uses: actions/checkout@v5
         with:
-          repository: ${{ github.repository_owner }}/AirTraffic
-          path: AirTraffic
+          submodules: true
+          ssh-key: ${{ secrets.AIRTRAFFIC_DEPLOY_KEY }}
 
       - uses: dtolnay/rust-toolchain@stable
 

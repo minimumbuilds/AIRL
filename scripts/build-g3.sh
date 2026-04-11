@@ -25,10 +25,23 @@ esac
 # Isolate build artifacts per arch so Linux x86_64 and macOS arm64
 # don't stomp each other on a shared filesystem.
 #
-# Worktree paths can contain colons (e.g. role:project:instance naming).
-# Cargo constructs LD_LIBRARY_PATH from CARGO_TARGET_DIR; if that path
-# contains colons it treats them as separators and errors. Redirect to /tmp.
-if [[ "$AIRL_ROOT" == *:* ]]; then
+# Redirect CARGO_TARGET_DIR to /tmp when:
+#   (a) path contains colons — Cargo treats them as LD_LIBRARY_PATH separators, or
+#   (b) running on macOS — repo is likely NFS-mounted; writing Rust artifacts
+#       over NFS causes spurious "No such file or directory" errors on rmeta writes.
+# macOS ships without GNU timeout; use gtimeout (brew install coreutils) or a fallback.
+_build_os="$(uname -s)"
+if [[ "$_build_os" == "Darwin" ]]; then
+    if command -v gtimeout >/dev/null 2>&1; then
+        timeout() { gtimeout "$@"; }
+    else
+        # No timeout available — define a no-op passthrough.
+        # Runaway processes won't be killed, but the build won't fail on a missing command.
+        timeout() { local _t="$1"; shift; "$@"; }
+    fi
+fi
+
+if [[ "$AIRL_ROOT" == *:* || "$_build_os" == "Darwin" ]]; then
     export CARGO_TARGET_DIR="/tmp/g3-build-${G3_ARCH}"
     _G3_COLON_PATH=1
 else

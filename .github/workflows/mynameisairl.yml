@@ -9,13 +9,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-
-      - name: Checkout AirTraffic
-        continue-on-error: true
-        uses: actions/checkout@v5
         with:
-          repository: ${{ github.repository_owner }}/AirTraffic
-          path: AirTraffic
+          submodules: true
+          ssh-key: ${{ secrets.AIRTRAFFIC_DEPLOY_KEY }}
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -65,13 +61,9 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v5
-
-      - name: Checkout AirTraffic
-        continue-on-error: true
-        uses: actions/checkout@v5
         with:
-          repository: ${{ github.repository_owner }}/AirTraffic
-          path: AirTraffic
+          submodules: true
+          ssh-key: ${{ secrets.AIRTRAFFIC_DEPLOY_KEY }}
 
       - uses: dtolnay/rust-toolchain@stable
 

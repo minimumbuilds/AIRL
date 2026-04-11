@@ -1,0 +1,3 @@
+[submodule "AirTraffic"]
+	path = AirTraffic
+	url = git@github.com:minimumbuilds/AirTraffic.git
