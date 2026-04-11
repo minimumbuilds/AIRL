@@ -136,7 +136,10 @@ ChannelRecvComplete(thread, chan) ==
     /\ UNCHANGED <<chan_tx_open, chan_rx_open, send_count,
                    send_after_close, recv_on_held, messages_lost>>
 
-\* A second thread tries to recv on the same channel while first holds rx
+\* A second thread tries to recv on the same channel while first holds rx.
+\* NOTE: This action is NOT in Next. The implementation fix (Arc<Mutex<Receiver>>)
+\* serializes concurrent recvs, so this conflict state is unreachable.
+\* Kept here to document the pre-fix failure mode.
 ChannelRecvConflict(thread, chan) ==
     /\ thread_state[thread] = RUNNING
     /\ chan_rx_open[chan]
@@ -214,7 +217,10 @@ Next ==
     \/ \E t \in Threads, c \in Channels : ChannelSend(t, c)
     \/ \E t \in Threads, c \in Channels : ChannelRecvStart(t, c)
     \/ \E t \in Threads, c \in Channels : ChannelRecvComplete(t, c)
-    \/ \E t \in Threads, c \in Channels : ChannelRecvConflict(t, c)
+    \* ChannelRecvConflict removed: Arc<Mutex<Receiver>> serializes concurrent
+    \* recvs, so two threads calling recv on the same handle block in sequence
+    \* rather than one getting "invalid receiver handle". The action is kept
+    \* below as documentation of the pre-fix behavior but is not reachable.
     \/ \E t \in Threads, c \in Channels : ChannelDrain(t, c)
     \/ \E t \in Threads, c \in Channels : CloseSender(t, c)
     \/ \E t \in Threads, c \in Channels : CloseReceiver(t, c)
@@ -254,9 +260,9 @@ FIFOPerSender ==
             IN (mi[1] = mj[1] /\ i < j) => mi[2] < mj[2]
 
 \* ── Bug detection: concurrent recv on same handle ──────
-\* The implementation removes rx from the HashMap during recv.
-\* If two threads share an rx_handle and both call recv, the second
-\* gets "invalid receiver handle". This is a design issue.
+\* Fixed: receiver is wrapped in Arc<Mutex<Receiver>> so concurrent recvs
+\* serialize rather than conflict. ChannelRecvConflict is excluded from Next.
+\* recv_on_held remains 0 throughout all reachable states.
 NoConcurrentRecvConflict == recv_on_held = 0
 
 \* ── Bug detection: send after close ────────────────────

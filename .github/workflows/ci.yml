@@ -18,17 +18,22 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Checkout AirTraffic
+        id: checkout-at
+        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: ${{ github.repository_owner }}/AirTraffic
           path: AirTraffic
 
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.checkout-at.outcome == 'success'
 
       - name: Install system dependencies
+        if: steps.checkout-at.outcome == 'success'
         run: sudo apt-get update && sudo apt-get install -y libz3-dev libcurl4-openssl-dev libssl-dev
 
       - name: Cache cargo
+        if: steps.checkout-at.outcome == 'success'
         uses: actions/cache@v4
         with:
           path: |
@@ -39,9 +44,11 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Build host binary
+        if: steps.checkout-at.outcome == 'success'
         run: cargo build --release --features aot
 
       - name: Compile g3
+        if: steps.checkout-at.outcome == 'success'
         env:
           AIRL_STDLIB: ${{ github.workspace }}/stdlib
         run: |
@@ -57,6 +64,7 @@ jobs:
             -o g3
 
       - name: Compile mynameisairl
+        if: steps.checkout-at.outcome == 'success'
         env:
           AIRL_DIR: ${{ github.workspace }}
           G3: ${{ github.workspace }}/g3
@@ -66,6 +74,12 @@ jobs:
           bash servers/mynameisairl/build.sh servers/mynameisairl/mynameisairl
           chmod +x servers/mynameisairl/mynameisairl
           echo "mynameisairl built successfully: $(du -sh servers/mynameisairl/mynameisairl)"
+
+      - name: Skip (AirTraffic unavailable)
+        if: steps.checkout-at.outcome != 'success'
+        run: |
+          echo "::warning::AirTraffic repo is unavailable — skipping mynameisairl build."
+          echo "Grant the Actions token read access to ${{ github.repository_owner }}/AirTraffic to enable this job."
 
   tlc-model-check:
     runs-on: ubuntu-latest
