@@ -357,6 +357,13 @@ pub fn compile_bytecode_to_executable_with_target(funcs: &[Value], output_path: 
         bc_funcs.push(value_to_bytecode_func(f)?);
     }
 
+    // Dedup by name with first-wins to match AIRL's first-def-wins semantics.
+    // Prevents lambda name mismatch when stdlib files are also passed as user files.
+    {
+        let mut seen = std::collections::HashSet::new();
+        bc_funcs.retain(|f| seen.insert(f.name.clone()));
+    }
+
     // Build function map for cross-reference resolution
     let func_map: HashMap<String, BytecodeFunc> = bc_funcs.iter()
         .map(|f| (f.name.clone(), f.clone()))

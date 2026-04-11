@@ -42,7 +42,6 @@ echo "Generated _generated.airl (version ${VERSION}), copied guide ($(wc -l < "$
 # but before mynameisairl.airl (the entry point, which must be LAST).
 "$G3" -- \
     "$AIRL_DIR/stdlib/json.airl" \
-    "$AIRL_DIR/stdlib/string.airl" \
     "$AIRL_DIR/stdlib/sha256.airl" \
     "$AIRL_DIR/stdlib/path.airl" \
     "$AT_ROOT/src/transport.airl" \
