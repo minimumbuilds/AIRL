@@ -20,6 +20,8 @@ const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
 const SET_SOURCE: &str = include_str!("../../../stdlib/set.airl");
 const IO_SOURCE: &str = include_str!("../../../stdlib/io.airl");
 const PATH_SOURCE: &str = include_str!("../../../stdlib/path.airl");
+#[cfg(not(target_os = "airlos"))]
+const SQLITE_SOURCE: &str = include_str!("../../../stdlib/sqlite.airl");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineMode {
@@ -706,6 +708,8 @@ const STDLIB_PATHS: &[&str] = &[
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/set.airl"),
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/io.airl"),
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/path.airl"),
+    #[cfg(not(target_os = "airlos"))]
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/sqlite.airl"),
 ];
 
 /// Compute a hash of the embedded stdlib sources to detect changes.
@@ -721,6 +725,8 @@ fn stdlib_embed_hash() -> u64 {
     SET_SOURCE.hash(&mut hasher);
     IO_SOURCE.hash(&mut hasher);
     PATH_SOURCE.hash(&mut hasher);
+    #[cfg(not(target_os = "airlos"))]
+    SQLITE_SOURCE.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -749,6 +755,7 @@ fn stdlib_disk_hash() -> Option<u64> {
 static STDLIB_CACHE: OnceLock<(u64, Vec<(Vec<BytecodeFunc>, BytecodeFunc)>)> = OnceLock::new();
 
 fn compile_stdlib_all() -> Result<Vec<(Vec<BytecodeFunc>, BytecodeFunc)>, PipelineError> {
+    #[cfg(target_os = "airlos")]
     let stdlib_modules: &[(&str, &str)] = &[
         (COLLECTIONS_SOURCE, "collections"),
         (MATH_SOURCE, "math"),
@@ -758,6 +765,17 @@ fn compile_stdlib_all() -> Result<Vec<(Vec<BytecodeFunc>, BytecodeFunc)>, Pipeli
         (SET_SOURCE, "set"),
         (IO_SOURCE, "io"),
         (PATH_SOURCE, "path"),
+    ];
+    #[cfg(not(target_os = "airlos"))]
+    let stdlib_modules: &[(&str, &str)] = &[
+        (COLLECTIONS_SOURCE, "collections"),
+        (MATH_SOURCE, "math"),
+        (RESULT_SOURCE, "result"),
+        (STRING_SOURCE, "string"),
+        (MAP_SOURCE, "map"),
+        (SET_SOURCE, "set"),
+        (IO_SOURCE, "io"),
+        (SQLITE_SOURCE, "sqlite"),
     ];
     let mut result = Vec::new();
     for (src, name) in stdlib_modules {

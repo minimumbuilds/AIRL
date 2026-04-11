@@ -1,0 +1,72 @@
+;; ── AIRL Standard Library: SQLite ────────────────────────────────────
+;;
+;; Wraps airl-rt SQLite stubs via extern-c declarations.
+;; Handles are opaque i64 values (raw pointer casts on 64-bit platforms).
+;; All functions are non-AIRLOS only (SQLite not available on AIRLOS).
+
+(extern-c "airl_sqlite_open"         [(path : String) -> i64])
+(extern-c "airl_sqlite_prepare"      [(db : i64) (sql : String) -> i64])
+(extern-c "airl_sqlite_step"         [(stmt : i64) -> i64])
+(extern-c "airl_sqlite_column_text"  [(stmt : i64) (col : i64) -> String])
+(extern-c "airl_sqlite_column_int"   [(stmt : i64) (col : i64) -> i64])
+(extern-c "airl_sqlite_column_count" [(stmt : i64) -> i64])
+(extern-c "airl_sqlite_finalize"     [(stmt : i64) -> i64])
+(extern-c "airl_sqlite_close"        [(db : i64) -> i64])
+(extern-c "airl_sqlite_errmsg"       [(db : i64) -> String])
+
+;; ── sqlite-open: open database, panic on failure ──
+(defn sqlite-open :pub
+  :sig [(path : String) -> i64]
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body
+    (let (db : i64 (airl_sqlite_open path))
+      (if (= db 0)
+        (panic (str "sqlite-open failed: " path))
+        db)))
+
+;; ── sqlite-exec: execute non-query SQL (CREATE TABLE, INSERT, etc.) ──
+(defn sqlite-exec :pub
+  :sig [(db : i64) (sql : String) -> Nil]
+  :requires [(valid sql)]
+  :ensures [(valid result)]
+  :body
+    (let (stmt : i64 (airl_sqlite_prepare db sql))
+      (do
+        (airl_sqlite_step stmt)
+        (airl_sqlite_finalize stmt)
+        nil)))
+
+;; Helper: collect rows from a stepped statement recursively.
+;; Each row is a List of String column values.
+(defn collect-rows
+  :sig [(stmt : i64) (ncols : i64) (acc : List) -> List]
+  :body
+    (if (= (airl_sqlite_step stmt) 100)
+      (let (row : List (map (fn [i] (airl_sqlite_column_text stmt i)) (range 0 ncols)))
+        (collect-rows stmt ncols (append acc row)))
+      acc))
+
+;; ── sqlite-query: execute SELECT, return list of rows ──
+;; Each row is a List of String column values.
+(defn sqlite-query :pub
+  :sig [(db : i64) (sql : String) -> List]
+  :requires [(valid sql)]
+  :ensures [(valid result)]
+  :body
+    (let (stmt : i64 (airl_sqlite_prepare db sql))
+      (let (ncols : i64 (airl_sqlite_column_count stmt))
+        (let (rows : List (collect-rows stmt ncols []))
+          (do
+            (airl_sqlite_finalize stmt)
+            rows)))))
+
+;; ── sqlite-close: close database connection ──
+(defn sqlite-close :pub
+  :sig [(db : i64) -> Nil]
+  :requires [(valid db)]
+  :ensures [(valid result)]
+  :body
+    (do
+      (airl_sqlite_close db)
+      nil))

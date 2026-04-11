@@ -1,0 +1,23 @@
+;; EXPECT: "open OK create OK insert OK query OK close OK ALL PASSED"
+(do
+  (let (db-path : String (temp-file "airl-sqlite-test"))
+    (let (db : i64 (sqlite-open db-path))
+      (do
+        (sqlite-exec db "CREATE TABLE items (id INTEGER, name TEXT)")
+        (sqlite-exec db "INSERT INTO items VALUES (1, 'alpha')")
+        (sqlite-exec db "INSERT INTO items VALUES (2, 'beta')")
+        (let (rows : List (sqlite-query db "SELECT id, name FROM items ORDER BY id"))
+          (do
+            (let (ok-open : String "open OK ")
+              (let (ok-create : String "create OK ")
+                (let (ok-insert : String "insert OK ")
+                  (let (ok-query : String
+                         (if (= (length rows) 2)
+                           (if (= (at (at rows 0) 1) "alpha")
+                             "query OK "
+                             "query FAIL (wrong value) ")
+                           "query FAIL (wrong row count) "))
+                    (do
+                      (sqlite-close db)
+                      (let (ok-close : String "close OK ")
+                        (str ok-open ok-create ok-insert ok-query ok-close "ALL PASSED")))))))))))))

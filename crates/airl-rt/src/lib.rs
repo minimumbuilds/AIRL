@@ -222,3 +222,5 @@ pub mod aircon;
 pub mod thread;
 #[cfg(not(target_os = "airlos"))]
 pub mod terminal;
+#[cfg(not(target_os = "airlos"))]
+pub mod sqlite;

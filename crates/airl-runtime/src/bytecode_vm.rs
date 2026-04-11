@@ -842,6 +842,26 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "airl_aircon_status" => airl_rt::aircon::airl_aircon_status(a0!()),
         "airl_aircon_list"   => airl_rt::aircon::airl_aircon_list(),
 
+        // SQLite (extern-c aliases)
+        #[cfg(not(target_os = "airlos"))]
+        "airl_sqlite_open"         => airl_rt::sqlite::airl_sqlite_open(a0!()),
+        #[cfg(not(target_os = "airlos"))]
+        "airl_sqlite_prepare"      => airl_rt::sqlite::airl_sqlite_prepare(a0!(), a1!()),
+        #[cfg(not(target_os = "airlos"))]
+        "airl_sqlite_step"         => airl_rt::sqlite::airl_sqlite_step(a0!()),
+        #[cfg(not(target_os = "airlos"))]
+        "airl_sqlite_column_text"  => airl_rt::sqlite::airl_sqlite_column_text(a0!(), a1!()),
+        #[cfg(not(target_os = "airlos"))]
+        "airl_sqlite_column_int"   => airl_rt::sqlite::airl_sqlite_column_int(a0!(), a1!()),
+        #[cfg(not(target_os = "airlos"))]
+        "airl_sqlite_column_count" => airl_rt::sqlite::airl_sqlite_column_count(a0!()),
+        #[cfg(not(target_os = "airlos"))]
+        "airl_sqlite_finalize"     => airl_rt::sqlite::airl_sqlite_finalize(a0!()),
+        #[cfg(not(target_os = "airlos"))]
+        "airl_sqlite_close"        => airl_rt::sqlite::airl_sqlite_close(a0!()),
+        #[cfg(not(target_os = "airlos"))]
+        "airl_sqlite_errmsg"       => airl_rt::sqlite::airl_sqlite_errmsg(a0!()),
+
         // Not found
         _ => return None,
     };
@@ -931,6 +951,11 @@ fn builtin_arity(name: &str) -> Option<usize> {
         | "ash-install-sigint" | "ash-sigint-pending" | "canopy_raw_mode_enable"
         | "canopy_raw_mode_disable" | "canopy_stdin_read_byte" | "canopy_stdin_read_available"
         | "canopy_terminal_size" | "aircon_list" | "airl_aircon_list" => Some(0),
+        // SQLite — unary (1 arg: handle or path)
+        "airl_sqlite_open" | "airl_sqlite_step" | "airl_sqlite_column_count"
+        | "airl_sqlite_finalize" | "airl_sqlite_close" | "airl_sqlite_errmsg" => Some(1),
+        // SQLite — binary (2 args: handle + col/sql)
+        "airl_sqlite_prepare" | "airl_sqlite_column_text" | "airl_sqlite_column_int" => Some(2),
         // Variadic — cannot be partially applied
         "str" | "format" => None,
         // Everything else: unknown arity — don't partially apply

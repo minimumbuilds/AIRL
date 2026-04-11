@@ -442,9 +442,9 @@ pub fn compile_bytecode_to_executable_with_target(funcs: &[Value], output_path: 
     }
 
     #[cfg(target_os = "linux")]
-    { cmd.arg("-lm").arg("-lpthread").arg("-ldl"); }
+    { cmd.arg("-lm").arg("-lpthread").arg("-ldl").arg("-lsqlite3"); }
     #[cfg(target_os = "macos")]
-    { cmd.arg("-lSystem"); }
+    { cmd.arg("-lSystem").arg("-lsqlite3"); }
 
     let status = cmd
         .status()
