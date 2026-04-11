@@ -44,6 +44,7 @@ fn format_atom(atom: &Atom) -> String {
         AtomKind::Bool(false) => "false".to_string(),
         AtomKind::Nil => "nil".to_string(),
         AtomKind::Arrow => "->".to_string(),
+        AtomKind::Version(major, minor, patch) => format!("{}.{}.{}", major, minor, patch),
     }
 }
 

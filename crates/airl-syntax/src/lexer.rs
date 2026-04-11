@@ -227,20 +227,57 @@ impl<'src> Lexer<'src> {
             self.advance();
         }
 
-        let mut is_float = false;
-
+        // Check for version literal (N.N.N) — must come before float check.
         if self.pos < self.source.len() && self.source[self.pos] == b'.'
             && self.peek_at(1).map_or(false, |c| c.is_ascii_digit())
         {
-            is_float = true;
-            self.advance();
+            let after_int = self.pos;  // position of first '.'
+            self.advance();  // consume '.'
             while self.pos < self.source.len() && self.source[self.pos].is_ascii_digit() {
                 self.advance();
             }
+            let after_minor = self.pos;
+
+            if self.pos < self.source.len() && self.source[self.pos] == b'.'
+                && self.peek_at(1).map_or(false, |c| c.is_ascii_digit())
+            {
+                // Three-part version: N.N.N
+                self.advance();  // consume second '.'
+                let patch_start = self.pos;
+                while self.pos < self.source.len() && self.source[self.pos].is_ascii_digit() {
+                    self.advance();
+                }
+
+                if negative {
+                    return Err(Diagnostic::error(
+                        "version literals cannot be negative",
+                        Span::new(start, self.pos, start_line, start_col),
+                    ));
+                }
+
+                let major_str = std::str::from_utf8(&self.source[start..after_int]).unwrap_or("0");
+                let minor_str = std::str::from_utf8(&self.source[after_int+1..after_minor]).unwrap_or("0");
+                let patch_str = std::str::from_utf8(&self.source[patch_start..self.pos]).unwrap_or("0");
+
+                let major_val: u32 = major_str.parse().map_err(|_| {
+                    Diagnostic::error("invalid version major", Span::new(start, self.pos, start_line, start_col))
+                })?;
+                let minor_val: u32 = minor_str.parse().map_err(|_| {
+                    Diagnostic::error("invalid version minor", Span::new(start, self.pos, start_line, start_col))
+                })?;
+                let patch_val: u32 = patch_str.parse().map_err(|_| {
+                    Diagnostic::error("invalid version patch", Span::new(start, self.pos, start_line, start_col))
+                })?;
+
+                return Ok(TokenKind::Version(major_val, minor_val, patch_val));
+            }
+
+            // Only one dot — it's a float; fall through to exponent/suffix below.
+            // (self.pos is now after the minor digits)
         }
 
+        // Exponent
         if self.pos < self.source.len() && (self.source[self.pos] == b'e' || self.source[self.pos] == b'E') {
-            is_float = true;
             self.advance();
             if self.pos < self.source.len() && (self.source[self.pos] == b'+' || self.source[self.pos] == b'-') {
                 self.advance();
@@ -250,8 +287,8 @@ impl<'src> Lexer<'src> {
             }
         }
 
+        // 'f' suffix
         if self.pos < self.source.len() && self.source[self.pos] == b'f' {
-            is_float = true;
             self.advance();
             while self.pos < self.source.len() && self.source[self.pos].is_ascii_digit() {
                 self.advance();
@@ -260,12 +297,10 @@ impl<'src> Lexer<'src> {
 
         let text = std::str::from_utf8(&self.source[start..self.pos])
             .unwrap_or(""); // slice contains only ASCII digits/dots; UTF-8 always valid here
+        let is_float = text.contains('.') || text.contains('e') || text.contains('E');
+
         if is_float {
-            let parse_text = if let Some(idx) = text.find('f') {
-                &text[..idx]
-            } else {
-                text
-            };
+            let parse_text = if let Some(idx) = text.find('f') { &text[..idx] } else { text };
             let val: f64 = parse_text.parse().map_err(|_| {
                 Diagnostic::error("invalid float literal", Span::new(start, self.pos, start_line, start_col))
             })?;
@@ -577,5 +612,19 @@ mod tests {
         let s = unsafe { std::str::from_utf8_unchecked(&raw) };
         let mut lexer = Lexer::new(s);
         assert!(lexer.lex_all().is_err());
+    }
+
+    #[test]
+    fn lex_version_literal() {
+        assert_eq!(lex("0.10.0"), vec![TokenKind::Version(0, 10, 0)]);
+        assert_eq!(lex("1.2.3"), vec![TokenKind::Version(1, 2, 3)]);
+        assert_eq!(lex("0.1.0"), vec![TokenKind::Version(0, 1, 0)]);
+    }
+
+    #[test]
+    fn lex_version_distinguishable_from_float() {
+        // 0.10 (two-part) stays a Float; 0.10.0 (three-part) is Version
+        assert_eq!(lex("0.10"), vec![TokenKind::Float(0.10)]);
+        assert_eq!(lex("0.10.0"), vec![TokenKind::Version(0, 10, 0)]);
     }
 }

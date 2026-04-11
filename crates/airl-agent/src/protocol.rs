@@ -225,6 +225,7 @@ pub fn sexpr_to_value(sexpr: &SExpr) -> Result<Value, String> {
             }
             AtomKind::Keyword(k) => Ok(Value::Str(format!(":{}", k))),
             AtomKind::Arrow => Ok(Value::Str("->".into())),
+            AtomKind::Version(major, minor, patch) => Ok(Value::Str(format!("{}.{}.{}", major, minor, patch))),
         }
         SExpr::List(items, _) => {
             // Could be a variant: (Ok 42)

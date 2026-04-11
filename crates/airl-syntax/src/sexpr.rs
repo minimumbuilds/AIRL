@@ -26,6 +26,7 @@ pub enum AtomKind {
     Bool(bool),
     Nil,
     Arrow,  // -> preserved as atom for signature parsing
+    Version(u32, u32, u32),   // major.minor.patch — from VersionLit token
 }
 
 impl SExpr {
@@ -144,6 +145,7 @@ fn token_to_atom(token: &Token) -> Result<Atom, Diagnostic> {
         TokenKind::Bool(v) => AtomKind::Bool(*v),
         TokenKind::Nil => AtomKind::Nil,
         TokenKind::Arrow => AtomKind::Arrow,
+        TokenKind::Version(major, minor, patch) => AtomKind::Version(*major, *minor, *patch),
         TokenKind::Colon => AtomKind::Symbol(":".into()),
         other => {
             return Err(Diagnostic::error(

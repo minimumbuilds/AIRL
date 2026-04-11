@@ -102,6 +102,12 @@ fn parse_atom_expr(atom: &Atom) -> Result<Expr, Diagnostic> {
         AtomKind::Symbol(s) => ExprKind::SymbolRef(s.clone()),
         AtomKind::Keyword(s) => ExprKind::KeywordLit(s.clone()),
         AtomKind::Arrow => ExprKind::SymbolRef("->".to_string()),
+        AtomKind::Version(_, _, _) => {
+            return Err(Diagnostic::error(
+                "version literal is only valid in :version position",
+                span,
+            ));
+        }
     };
     Ok(Expr { kind, span })
 }
@@ -1233,24 +1239,22 @@ fn parse_module(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<
     })
 }
 
-/// Parse a version like `0.1.0` which the lexer produces as Float(0.1) Symbol(".0")
-/// or potentially as a symbol "0.1.0" depending on how the lexer handles it.
-// TODO: lex version strings as a dedicated VersionLit token kind to avoid
-// float formatting issues (e.g., 0.10 → "0.1" loses the minor component).
+/// Parse a version like `0.1.0`. The lexer now emits `VersionLit(major, minor, patch)`
+/// directly. Legacy fallbacks handle old float+symbol or symbol representations.
 fn parse_version(items: &[SExpr], i: &mut usize) -> Result<Version, Diagnostic> {
     let span = items[*i].span();
-
-    // The lexer produces 0.1.0 as Float(0.1) then Symbol(".0")
-    // Or it could be a single symbol if the lexer treats it differently
     match &items[*i] {
+        SExpr::Atom(Atom { kind: AtomKind::Version(major, minor, patch), .. }) => {
+            let v = Version { major: *major, minor: *minor, patch: *patch };
+            *i += 1;
+            Ok(v)
+        }
+        // Legacy fallback: Float(0.1) + Symbol(".0") from old lexer.
         SExpr::Atom(Atom { kind: AtomKind::Float(f), .. }) => {
-            // e.g., 0.1 — check if next item is like ".0"
             let major_minor = format!("{}", f);
             let parts: Vec<&str> = major_minor.split('.').collect();
             let major: u32 = parts[0].parse().unwrap_or(0);
             let minor: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-
-            // Check for .patch
             let mut patch = 0u32;
             if *i + 1 < items.len() {
                 if let SExpr::Atom(Atom { kind: AtomKind::Symbol(s), .. }) = &items[*i + 1] {
@@ -2391,5 +2395,21 @@ mod tests {
         let err = parse_top_err("(deftype Foo (& (x :)))");
         // Just verify it doesn't panic; an error is returned
         let _ = err;
+    }
+
+    #[test]
+    fn parse_module_version_minor_preserved() {
+        let tops = parse_top(r#"
+            (module mymod
+              :version 0.10.0
+              :provides [])
+        "#);
+        if let Some(TopLevel::Module(m)) = tops.first() {
+            assert_eq!(m.version.as_ref().map(|v| v.major), Some(0));
+            assert_eq!(m.version.as_ref().map(|v| v.minor), Some(10));  // must be 10, not 1
+            assert_eq!(m.version.as_ref().map(|v| v.patch), Some(0));
+        } else {
+            panic!("expected module");
+        }
     }
 }

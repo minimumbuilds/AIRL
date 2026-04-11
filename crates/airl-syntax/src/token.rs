@@ -11,6 +11,7 @@ pub enum TokenKind {
     // Literals
     Integer(i64),
     Float(f64),
+    Version(u32, u32, u32),  // major.minor.patch — e.g. 0.10.0
     Str(String),
     Bool(bool),
     Nil,

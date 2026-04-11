@@ -118,6 +118,7 @@ fn sexpr_to_value(sexpr: &airl_syntax::sexpr::SExpr) -> Result<Value, String> {
             AtomKind::Symbol(s) => Ok(Value::Str(s.clone())),
             AtomKind::Keyword(k) => Ok(Value::Str(format!(":{}", k))),
             AtomKind::Arrow => Ok(Value::Str("->".into())),
+            AtomKind::Version(major, minor, patch) => Ok(Value::Str(format!("{}.{}.{}", major, minor, patch))),
         }
         SExpr::List(items, _) => {
             // Check for variant: (Ok 42)
