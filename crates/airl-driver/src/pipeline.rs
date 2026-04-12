@@ -20,6 +20,7 @@ const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
 const SET_SOURCE: &str = include_str!("../../../stdlib/set.airl");
 const IO_SOURCE: &str = include_str!("../../../stdlib/io.airl");
 const PATH_SOURCE: &str = include_str!("../../../stdlib/path.airl");
+const RANDOM_SOURCE: &str = include_str!("../../../stdlib/random.airl");
 #[cfg(not(target_os = "airlos"))]
 const SQLITE_SOURCE: &str = include_str!("../../../stdlib/sqlite.airl");
 
@@ -708,6 +709,7 @@ const STDLIB_PATHS: &[&str] = &[
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/set.airl"),
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/io.airl"),
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/path.airl"),
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/random.airl"),
     #[cfg(not(target_os = "airlos"))]
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/sqlite.airl"),
 ];
@@ -725,6 +727,7 @@ fn stdlib_embed_hash() -> u64 {
     SET_SOURCE.hash(&mut hasher);
     IO_SOURCE.hash(&mut hasher);
     PATH_SOURCE.hash(&mut hasher);
+    RANDOM_SOURCE.hash(&mut hasher);
     #[cfg(not(target_os = "airlos"))]
     SQLITE_SOURCE.hash(&mut hasher);
     hasher.finish()
@@ -765,6 +768,7 @@ fn compile_stdlib_all() -> Result<Vec<(Vec<BytecodeFunc>, BytecodeFunc)>, Pipeli
         (SET_SOURCE, "set"),
         (IO_SOURCE, "io"),
         (PATH_SOURCE, "path"),
+        (RANDOM_SOURCE, "random"),
     ];
     #[cfg(not(target_os = "airlos"))]
     let stdlib_modules: &[(&str, &str)] = &[
@@ -776,6 +780,7 @@ fn compile_stdlib_all() -> Result<Vec<(Vec<BytecodeFunc>, BytecodeFunc)>, Pipeli
         (SET_SOURCE, "set"),
         (IO_SOURCE, "io"),
         (PATH_SOURCE, "path"),
+        (RANDOM_SOURCE, "random"),
         (SQLITE_SOURCE, "sqlite"),
     ];
     let mut result = Vec::new();
@@ -1417,6 +1422,7 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
         (MAP_SOURCE, "map"),
         (SET_SOURCE, "set"),
         (PATH_SOURCE, "path"),
+        (RANDOM_SOURCE, "random"),
     ] {
         let (funcs, _stdlib_main) = compile_source_to_bytecode(src, name)?;
         // Only take named functions, skip the __main__ (which just returns nil)

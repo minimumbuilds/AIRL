@@ -1,0 +1,94 @@
+;; ── Tests: random.airl stdlib ─────────────────────────────────────────
+
+;; ── random-hex ──────────────────────────────────────────────────────
+
+(let (h4 : String (random-hex 4))
+  (do
+    (assert-eq (length h4) 8 "random-hex 4 bytes length=8")
+    (print "PASS random-hex 4 bytes:" h4)))
+
+(let (h0 : String (random-hex 0))
+  (do
+    (assert-eq (length h0) 0 "random-hex 0 bytes length=0")
+    (print "PASS random-hex 0 bytes: empty")))
+
+(let (h16 : String (random-hex 16))
+  (do
+    (assert-eq (length h16) 32 "random-hex 16 bytes length=32")
+    (print "PASS random-hex 16 bytes:" h16)))
+
+;; ── random-url-token ────────────────────────────────────────────────
+
+(let (t3 : String (random-url-token 3))
+  (do
+    (assert-eq (length t3) 4 "random-url-token 3 bytes length=4")
+    (print "PASS random-url-token 3:" t3)))
+
+(let (t16 : String (random-url-token 16))
+  (do
+    (assert-eq (length t16) 22 "random-url-token 16 bytes length=22")
+    (print "PASS random-url-token 16:" t16)))
+
+(let (t32 : String (random-url-token 32))
+  (do
+    (assert-eq (length t32) 43 "random-url-token 32 bytes length=43")
+    (print "PASS random-url-token 32:" t32)))
+
+(let (tok : String (random-url-token 64))
+  (do
+    (assert-true (not (contains tok "+")) "random-url-token 64: no + char")
+    (assert-true (not (contains tok "/")) "random-url-token 64: no / char")
+    (assert-true (not (contains tok "=")) "random-url-token 64: no = char")
+    (print "PASS random-url-token 64 no +/=:" tok)))
+
+;; ── uuid-v4 ─────────────────────────────────────────────────────────
+
+(let (v4 : String (uuid-v4))
+  (do
+    (assert-eq (length v4) 36 "uuid-v4 length=36")
+    (assert-eq (char-at v4 8)  "-" "uuid-v4 dash at 8")
+    (assert-eq (char-at v4 13) "-" "uuid-v4 dash at 13")
+    (assert-eq (char-at v4 18) "-" "uuid-v4 dash at 18")
+    (assert-eq (char-at v4 23) "-" "uuid-v4 dash at 23")
+    (assert-eq (char-at v4 14) "4" "uuid-v4 version nibble=4")
+    (let (vn : String (char-at v4 19))
+      (assert-true
+        (if (= vn "8") (= vn "8")
+          (if (= vn "9") (= vn "9")
+            (if (= vn "a") (= vn "a")
+              (= vn "b"))))
+        "uuid-v4 variant nibble in {8,9,a,b}"))
+    (print "PASS uuid-v4:" v4)))
+
+(let (a : String (uuid-v4))
+     (b : String (uuid-v4))
+  (do
+    (assert-true (not (= a b)) "uuid-v4 two values differ")
+    (print "PASS uuid-v4 uniqueness")))
+
+;; ── uuid-v7 ─────────────────────────────────────────────────────────
+
+(let (v7 : String (uuid-v7))
+  (do
+    (assert-eq (length v7) 36 "uuid-v7 length=36")
+    (assert-eq (char-at v7 8)  "-" "uuid-v7 dash at 8")
+    (assert-eq (char-at v7 13) "-" "uuid-v7 dash at 13")
+    (assert-eq (char-at v7 18) "-" "uuid-v7 dash at 18")
+    (assert-eq (char-at v7 23) "-" "uuid-v7 dash at 23")
+    (assert-eq (char-at v7 14) "7" "uuid-v7 version nibble=7")
+    (let (vn : String (char-at v7 19))
+      (assert-true
+        (if (= vn "8") (= vn "8")
+          (if (= vn "9") (= vn "9")
+            (if (= vn "a") (= vn "a")
+              (= vn "b"))))
+        "uuid-v7 variant nibble in {8,9,a,b}"))
+    (print "PASS uuid-v7:" v7)))
+
+(let (a : String (uuid-v7))
+     (b : String (uuid-v7))
+  (do
+    (assert-true (not (= a b)) "uuid-v7 two values differ")
+    (print "PASS uuid-v7 uniqueness")))
+
+(println "All random/UUID tests PASSED")

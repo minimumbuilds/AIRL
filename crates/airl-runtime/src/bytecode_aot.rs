@@ -3299,6 +3299,7 @@ pub const MAP_SOURCE: &str = include_str!("../../../stdlib/map.airl");
 pub const SET_SOURCE: &str = include_str!("../../../stdlib/set.airl");
 pub const IO_SOURCE: &str = include_str!("../../../stdlib/io.airl");
 pub const PATH_SOURCE: &str = include_str!("../../../stdlib/path.airl");
+pub const RANDOM_SOURCE: &str = include_str!("../../../stdlib/random.airl");
 
 /// An extern-c declaration extracted from source: C symbol name + arity.
 #[derive(Debug, Clone)]
@@ -3376,6 +3377,7 @@ pub fn compile_to_executable_impl(
         (STRING_SOURCE, "string"),
         (MAP_SOURCE, "map"),
         (SET_SOURCE, "set"),
+        (RANDOM_SOURCE, "random"),
     ] {
         let (funcs, _stdlib_main) = compile_source_to_bytecode(src, name)?;
         all_funcs.extend(funcs);

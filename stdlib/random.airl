@@ -1,0 +1,208 @@
+;; ── AIRL Standard Library: Random / CSPRNG / UUID ──────────────────
+;; Cryptographically-secure random primitives and UUID generation.
+;; Requires: random-bytes (Rust builtin → hex string), bitwise-and/or/shr,
+;;           time-now, char-at, char-from-code, char-code, substring
+
+;; ── Internal helpers ─────────────────────────────────────────────────
+
+;; rnd-nibble-to-char: 0–15 → single lowercase hex char string
+(defn rnd-nibble-to-char
+  :sig [(n : i64) -> String]
+  :intent "Convert 0-15 to a single hex character string"
+  :requires [(>= n 0) (<= n 15)]
+  :ensures [(valid result)]
+  :body (if (< n 10)
+          (char-from-code (+ 48 n))
+          (char-from-code (+ 87 n))))
+
+;; rnd-hex-nibble-val: single hex char string → 0–15
+;; Accepts '0'-'9', 'a'-'f', 'A'-'F'
+(defn rnd-hex-nibble-val
+  :sig [(c : String) -> i64]
+  :intent "Parse a single hex character to its integer value 0-15"
+  :requires [(valid c)]
+  :ensures [(>= result 0) (<= result 15)]
+  :body
+    (let (b : i64 (char-code c))
+      (if (and (>= b 48) (<= b 57))
+        (- b 48)
+        (if (and (>= b 65) (<= b 70))
+          (- b 55)
+          (- b 87)))))
+
+;; rnd-hex-pair-to-byte: parse pair of hex chars at pair index i
+;; e.g. hex="a1b2", i=0 → 161, i=1 → 178
+;; NOTE: bindings are nested because hi/lo depend on ci.
+(defn rnd-hex-pair-to-byte
+  :sig [(hex : String) (i : i64) -> i64]
+  :intent "Decode one byte (two hex chars) from hex string at pair index i"
+  :requires [(>= i 0)]
+  :ensures [(>= result 0) (<= result 255)]
+  :body
+    (let (ci : i64 (* i 2))
+      (let (hi : i64 (rnd-hex-nibble-val (char-at hex ci)))
+           (lo : i64 (rnd-hex-nibble-val (char-at hex (+ ci 1))))
+        (+ (* hi 16) lo))))
+
+;; rnd-hex-to-bytes: decode hex string to IntList (list of 0-255 values)
+(defn rnd-hex-to-bytes
+  :sig [(hex : String) (i : i64) (n : i64) -> List]
+  :intent "Decode all n bytes from a 2n-char hex string into a List of ints"
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body
+    (if (= i n)
+      []
+      (cons (rnd-hex-pair-to-byte hex i) (rnd-hex-to-bytes hex (+ i 1) n))))
+
+;; rnd-ts-nibble: extract nibble k (0=MSN of 48-bit ts, 11=LSN) as hex char
+(defn rnd-ts-nibble
+  :sig [(ts : i64) (k : i64) -> String]
+  :intent "Extract the k-th nibble from the low 48 bits of ts as a hex char"
+  :requires [(>= k 0) (<= k 11)]
+  :ensures [(valid result)]
+  :body
+    (rnd-nibble-to-char (bitwise-and (bitwise-shr ts (* (- 11 k) 4)) 15)))
+
+;; rnd-int-to-hex-12: encode the low 48 bits of an i64 as 12 hex chars
+(defn rnd-int-to-hex-12
+  :sig [(ts : i64) -> String]
+  :intent "Format the low 48 bits of ts as a 12-character lowercase hex string"
+  :requires [(valid ts)]
+  :ensures [(valid result)]
+  :body
+    (str (str (str (str (rnd-ts-nibble ts 0) (rnd-ts-nibble ts 1))
+                   (str (rnd-ts-nibble ts 2) (rnd-ts-nibble ts 3)))
+              (str (str (rnd-ts-nibble ts 4) (rnd-ts-nibble ts 5))
+                   (str (rnd-ts-nibble ts 6) (rnd-ts-nibble ts 7))))
+         (str (str (rnd-ts-nibble ts 8) (rnd-ts-nibble ts 9))
+              (str (rnd-ts-nibble ts 10) (rnd-ts-nibble ts 11)))))
+
+;; ── Base64url encoding (RFC 4648 §5, no padding) ─────────────────────
+
+;; rnd-b64url-char: map 6-bit index to base64url character
+(defn rnd-b64url-char
+  :sig [(n : i64) -> String]
+  :intent "Map a 6-bit value (0-63) to its base64url character"
+  :requires [(>= n 0) (<= n 63)]
+  :ensures [(valid result)]
+  :body
+    (if (< n 26)
+      (char-from-code (+ n 65))
+      (if (< n 52)
+        (char-from-code (+ n 71))
+        (if (< n 62)
+          (char-from-code (- n 4))
+          (if (= n 62)
+            "-"
+            "_")))))
+
+;; rnd-b64url-triple: encode 3 bytes into 4 base64url characters
+(defn rnd-b64url-triple
+  :sig [(a : i64) (b : i64) (c : i64) -> String]
+  :intent "Encode 3 bytes into 4 base64url characters (no padding)"
+  :requires [(>= a 0) (>= b 0) (>= c 0)]
+  :ensures [(valid result)]
+  :body
+    (let (n : i64 (+ (* a 65536) (+ (* b 256) c)))
+      (str (str (rnd-b64url-char (/ n 262144))
+                (rnd-b64url-char (% (/ n 4096) 64)))
+           (str (rnd-b64url-char (% (/ n 64) 64))
+                (rnd-b64url-char (% n 64))))))
+
+;; rnd-b64url-loop: encode a byte list to base64url string, no padding
+(defn rnd-b64url-loop
+  :sig [(bytes : List) (i : i64) (len : i64) -> String]
+  :intent "Encode byte list to base64url string, no padding"
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body
+    (if (>= i len)
+      ""
+      (let (rem : i64 (- len i))
+        (if (>= rem 3)
+          (let (a : i64 (at bytes i))
+               (b : i64 (at bytes (+ i 1)))
+               (c : i64 (at bytes (+ i 2)))
+            (str (rnd-b64url-triple a b c)
+                 (rnd-b64url-loop bytes (+ i 3) len)))
+          (if (= rem 2)
+            (let (a : i64 (at bytes i))
+                 (b : i64 (at bytes (+ i 1)))
+              (let (n : i64 (+ (* a 65536) (* b 256)))
+                (str (rnd-b64url-char (/ n 262144))
+                     (str (rnd-b64url-char (% (/ n 4096) 64))
+                          (rnd-b64url-char (% (/ n 64) 64))))))
+            (let (a : i64 (at bytes i))
+              (let (n : i64 (* a 65536))
+                (str (rnd-b64url-char (/ n 262144))
+                     (rnd-b64url-char (% (/ n 4096) 64))))))))))
+
+;; ── Public API ────────────────────────────────────────────────────────
+
+;; random-hex: hex string of n cryptographically random bytes (alias for random-bytes)
+(defn random-hex
+  :sig [(n : i64) -> String]
+  :intent "Return a lowercase hex string of n cryptographically random bytes"
+  :requires [(>= n 0)]
+  :ensures [(valid result)]
+  :body (random-bytes n))
+
+;; random-url-token: base64url-encoded n random bytes, no padding
+;; NOTE: nested let because byte-list depends on hex.
+(defn random-url-token
+  :sig [(n : i64) -> String]
+  :intent "Return n cryptographically random bytes encoded as base64url (no padding)"
+  :requires [(>= n 0)]
+  :ensures [(valid result)]
+  :body
+    (let (hex : String (random-bytes n))
+      (let (byte-list : List (rnd-hex-to-bytes hex 0 n))
+        (rnd-b64url-loop byte-list 0 n))))
+
+;; uuid-v4: generate a random UUID v4 (RFC 4122)
+;; Sets version nibble (position 12) to '4' and variant nibble (position 16)
+;; to one of {'8','9','a','b'} (binary 10xx variant).
+;; NOTE: nested lets because var-nibble depends on raw, var-char depends on var-nibble.
+(defn uuid-v4
+  :sig [-> String]
+  :intent "Generate a random UUID v4 (RFC 4122) string"
+  :requires [(valid result)]
+  :ensures [(valid result)]
+  :body
+    (let (raw : String (random-bytes 16))
+      (let (var-nibble : i64 (rnd-hex-nibble-val (char-at raw 16)))
+        (let (var-char : String (rnd-nibble-to-char (+ (% var-nibble 4) 8)))
+          (str (str (substring raw 0 8) "-")
+               (str (str (substring raw 8 12) "-4")
+                    (str (str (substring raw 13 16) "-")
+                         (str var-char
+                              (str (substring raw 17 20)
+                                   (str "-" (substring raw 20 32)))))))))))
+
+;; uuid-v7: generate a time-ordered UUID v7 (RFC 9562)
+;; Layout (32 hex chars → 128 bits):
+;;   [0..12]  = 48-bit unix_ts_ms
+;;   [12]     = '7' (version)
+;;   [13..16] = 12 random bits
+;;   [16]     = variant nibble (10xx → '8','9','a','b')
+;;   [17..20] = 12 more random bits
+;;   [20..32] = 48 more random bits
+;; NOTE: uses nested lets throughout due to multi-bind dependency rule.
+(defn uuid-v7
+  :sig [-> String]
+  :intent "Generate a time-ordered UUID v7 (RFC 9562) string"
+  :requires [(valid result)]
+  :ensures [(valid result)]
+  :body
+    (let (ts : i64 (time-now))
+      (let (rand : String (random-bytes 10))
+        (let (ts-hex : String (rnd-int-to-hex-12 ts))
+          (let (var-nibble : i64 (rnd-hex-nibble-val (char-at rand 3)))
+            (let (var-char : String (rnd-nibble-to-char (+ (% var-nibble 4) 8)))
+              (str (str (substring ts-hex 0 8) "-")
+                   (str (str (substring ts-hex 8 12) "-7")
+                        (str (str (substring rand 0 3) "-")
+                             (str var-char
+                                  (str (substring rand 4 7)
+                                       (str "-" (substring rand 7 19)))))))))))))
