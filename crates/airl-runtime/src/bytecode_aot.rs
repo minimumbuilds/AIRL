@@ -210,6 +210,8 @@ pub struct RuntimeImports {
     pub sha512_bytes: FuncId,
     pub hmac_sha512_bytes: FuncId,
     pub pbkdf2_sha512: FuncId,
+    pub aes_256_gcm_encrypt: FuncId,
+    pub aes_256_gcm_decrypt: FuncId,
     pub bytes_xor: FuncId,
     pub bytes_xor_scalar: FuncId,
     pub bitwise_xor: FuncId,
@@ -750,6 +752,8 @@ impl BytecodeAot {
         let sha512_bytes = declare_import(m, "airl_sha512_bytes", s1.clone());
         let hmac_sha512_bytes = declare_import(m, "airl_hmac_sha512_bytes", s2.clone());
         let pbkdf2_sha512 = declare_import(m, "airl_pbkdf2_sha512", sig_4_ptr(m, ptr));
+        let aes_256_gcm_encrypt = declare_import(m, "airl_aes_256_gcm_encrypt", sig_3_ptr(m, ptr));
+        let aes_256_gcm_decrypt = declare_import(m, "airl_aes_256_gcm_decrypt", sig_3_ptr(m, ptr));
         let bytes_xor = declare_import(m, "airl_bytes_xor", s2.clone());
         let bytes_xor_scalar = declare_import(m, "airl_bytes_xor_scalar", s2.clone());
         let bitwise_xor = declare_import(m, "airl_bitwise_xor", s2.clone());
@@ -889,6 +893,8 @@ impl BytecodeAot {
             sha512, hmac_sha512, sha512_bytes,
             hmac_sha512_bytes,
             pbkdf2_sha512,
+            aes_256_gcm_encrypt,
+            aes_256_gcm_decrypt,
             bytes_xor,
             bytes_xor_scalar,
             bitwise_xor, bitwise_and, bitwise_or, bitwise_shr, bitwise_shl,
@@ -1071,6 +1077,8 @@ impl BytecodeAot {
         m.insert("sha512-bytes".into(),        rt.sha512_bytes);
         m.insert("hmac-sha512-bytes".into(),   rt.hmac_sha512_bytes);
         m.insert("pbkdf2-sha512".into(),       rt.pbkdf2_sha512);
+        m.insert("aes-256-gcm-encrypt".into(), rt.aes_256_gcm_encrypt);
+        m.insert("aes-256-gcm-decrypt".into(), rt.aes_256_gcm_decrypt);
         m.insert("bytes-xor".into(),           rt.bytes_xor);
         m.insert("bytes-xor-scalar".into(),    rt.bytes_xor_scalar);
         m.insert("bitwise-xor".into(),         rt.bitwise_xor);

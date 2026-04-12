@@ -891,6 +891,96 @@ pub extern "C" fn airl_pbkdf2_sha512(password: *mut RtValue, salt: *mut RtValue,
     rt_bytes(derived)
 }
 
+// ── AES-256-GCM ──────────────────────────────────────────────────────────────
+//
+// aes-256-gcm-encrypt key nonce plaintext → (Ok ciphertext-bytes) | (Err msg)
+// aes-256-gcm-decrypt key nonce ciphertext → (Ok plaintext-bytes) | (Err msg)
+//
+// key   : Bytes — must be exactly 32 bytes
+// nonce : Bytes — must be exactly 12 bytes (96-bit GCM standard)
+// The ciphertext returned by encrypt has the 16-byte authentication tag appended.
+// decrypt expects ciphertext produced by encrypt (tag-appended form).
+
+#[cfg(not(target_os = "airlos"))]
+#[no_mangle]
+pub extern "C" fn airl_aes_256_gcm_encrypt(
+    key: *mut RtValue,
+    nonce: *mut RtValue,
+    plaintext: *mut RtValue,
+) -> *mut RtValue {
+    use aes_gcm::{
+        aead::{Aead, KeyInit},
+        Aes256Gcm, Key, Nonce,
+    };
+    let key_bytes = unsafe { borrow_or_extract(key) };
+    let nonce_bytes = unsafe { borrow_or_extract(nonce) };
+    let pt_bytes = unsafe { borrow_or_extract(plaintext) };
+
+    if key_bytes.len() != 32 {
+        return err_variant(&format!("aes-256-gcm-encrypt: key must be 32 bytes, got {}", key_bytes.len()));
+    }
+    if nonce_bytes.len() != 12 {
+        return err_variant(&format!("aes-256-gcm-encrypt: nonce must be 12 bytes, got {}", nonce_bytes.len()));
+    }
+
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    match cipher.encrypt(nonce, pt_bytes.as_ref()) {
+        Ok(ct) => ok_variant(rt_bytes(ct)),
+        Err(e) => err_variant(&format!("aes-256-gcm-encrypt: {e}")),
+    }
+}
+
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_aes_256_gcm_encrypt(
+    _key: *mut RtValue,
+    _nonce: *mut RtValue,
+    _plaintext: *mut RtValue,
+) -> *mut RtValue {
+    err_variant("aes-256-gcm-encrypt: not available on AIRLOS")
+}
+
+#[cfg(not(target_os = "airlos"))]
+#[no_mangle]
+pub extern "C" fn airl_aes_256_gcm_decrypt(
+    key: *mut RtValue,
+    nonce: *mut RtValue,
+    ciphertext: *mut RtValue,
+) -> *mut RtValue {
+    use aes_gcm::{
+        aead::{Aead, KeyInit},
+        Aes256Gcm, Key, Nonce,
+    };
+    let key_bytes = unsafe { borrow_or_extract(key) };
+    let nonce_bytes = unsafe { borrow_or_extract(nonce) };
+    let ct_bytes = unsafe { borrow_or_extract(ciphertext) };
+
+    if key_bytes.len() != 32 {
+        return err_variant(&format!("aes-256-gcm-decrypt: key must be 32 bytes, got {}", key_bytes.len()));
+    }
+    if nonce_bytes.len() != 12 {
+        return err_variant(&format!("aes-256-gcm-decrypt: nonce must be 12 bytes, got {}", nonce_bytes.len()));
+    }
+
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    match cipher.decrypt(nonce, ct_bytes.as_ref()) {
+        Ok(pt) => ok_variant(rt_bytes(pt)),
+        Err(_) => err_variant("aes-256-gcm-decrypt: authentication failed (bad key, nonce, or corrupted ciphertext)"),
+    }
+}
+
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_aes_256_gcm_decrypt(
+    _key: *mut RtValue,
+    _nonce: *mut RtValue,
+    _ciphertext: *mut RtValue,
+) -> *mut RtValue {
+    err_variant("aes-256-gcm-decrypt: not available on AIRLOS")
+}
+
 #[cfg(not(target_os = "airlos"))]
 #[no_mangle]
 pub extern "C" fn airl_base64_decode_bytes(data: *mut RtValue) -> *mut RtValue {
@@ -2908,5 +2998,136 @@ mod tests {
         let e = rt_int(5);
         let result = airl_range(s, e);
         assert_eq!(range_len(result), 0, "non-Int start should return empty list");
+    }
+
+    // ── AES-256-GCM ──────────────────────────────────────────────────────────
+
+    fn make_bytes_val(data: &[u8]) -> *mut RtValue {
+        rt_bytes(data.to_vec())
+    }
+
+    fn extract_variant_tag(val: *mut RtValue) -> String {
+        match unsafe { &(*val).data } {
+            RtData::Variant { tag_name, .. } => tag_name.clone(),
+            _ => "not-a-variant".into(),
+        }
+    }
+
+    fn extract_variant_inner_bytes(val: *mut RtValue) -> Vec<u8> {
+        match unsafe { &(*val).data } {
+            RtData::Variant { inner, .. } => match unsafe { &(**inner).data } {
+                RtData::Bytes(b) => b.clone(),
+                _ => vec![],
+            },
+            _ => vec![],
+        }
+    }
+
+    fn extract_variant_inner_str(val: *mut RtValue) -> String {
+        match unsafe { &(*val).data } {
+            RtData::Variant { inner, .. } => match unsafe { &(**inner).data } {
+                RtData::Str(s) => s.clone(),
+                _ => String::new(),
+            },
+            _ => String::new(),
+        }
+    }
+
+    #[test]
+    fn test_aes_256_gcm_encrypt_decrypt_roundtrip() {
+        let key = make_bytes_val(&[0u8; 32]);
+        let nonce = make_bytes_val(&[0u8; 12]);
+        let plaintext = make_bytes_val(b"hello, world!");
+
+        let enc_result = airl_aes_256_gcm_encrypt(key, nonce, plaintext);
+        assert_eq!(extract_variant_tag(enc_result), "Ok", "encrypt should return Ok");
+        let ciphertext_bytes = extract_variant_inner_bytes(enc_result);
+        // Ciphertext = plaintext (13 bytes) + 16-byte GCM tag = 29 bytes
+        assert_eq!(ciphertext_bytes.len(), 13 + 16, "ciphertext should be plaintext len + 16 (tag)");
+
+        let ciphertext = make_bytes_val(&ciphertext_bytes);
+        let key2 = make_bytes_val(&[0u8; 32]);
+        let nonce2 = make_bytes_val(&[0u8; 12]);
+        let dec_result = airl_aes_256_gcm_decrypt(key2, nonce2, ciphertext);
+        assert_eq!(extract_variant_tag(dec_result), "Ok", "decrypt should return Ok");
+        let recovered = extract_variant_inner_bytes(dec_result);
+        assert_eq!(recovered, b"hello, world!", "decrypted plaintext must match original");
+    }
+
+    #[test]
+    fn test_aes_256_gcm_wrong_key_fails_auth() {
+        let key = make_bytes_val(&[0u8; 32]);
+        let nonce = make_bytes_val(&[0u8; 12]);
+        let plaintext = make_bytes_val(b"secret");
+
+        let enc_result = airl_aes_256_gcm_encrypt(key, nonce, plaintext);
+        let ciphertext_bytes = extract_variant_inner_bytes(enc_result);
+
+        let wrong_key = make_bytes_val(&[1u8; 32]);
+        let nonce2 = make_bytes_val(&[0u8; 12]);
+        let ciphertext = make_bytes_val(&ciphertext_bytes);
+        let dec_result = airl_aes_256_gcm_decrypt(wrong_key, nonce2, ciphertext);
+        assert_eq!(extract_variant_tag(dec_result), "Err", "decrypt with wrong key must return Err");
+        let msg = extract_variant_inner_str(dec_result);
+        assert!(msg.contains("authentication failed"), "error message should mention authentication failure");
+    }
+
+    #[test]
+    fn test_aes_256_gcm_bad_key_length() {
+        let short_key = make_bytes_val(&[0u8; 16]); // 16 bytes — wrong for AES-256
+        let nonce = make_bytes_val(&[0u8; 12]);
+        let plaintext = make_bytes_val(b"test");
+        let result = airl_aes_256_gcm_encrypt(short_key, nonce, plaintext);
+        assert_eq!(extract_variant_tag(result), "Err");
+        assert!(extract_variant_inner_str(result).contains("key must be 32 bytes"));
+    }
+
+    #[test]
+    fn test_aes_256_gcm_bad_nonce_length() {
+        let key = make_bytes_val(&[0u8; 32]);
+        let short_nonce = make_bytes_val(&[0u8; 8]); // 8 bytes — wrong
+        let plaintext = make_bytes_val(b"test");
+        let result = airl_aes_256_gcm_encrypt(key, short_nonce, plaintext);
+        assert_eq!(extract_variant_tag(result), "Err");
+        assert!(extract_variant_inner_str(result).contains("nonce must be 12 bytes"));
+    }
+
+    #[test]
+    fn test_aes_256_gcm_empty_plaintext() {
+        let key = make_bytes_val(&[0xABu8; 32]);
+        let nonce = make_bytes_val(&[0x01u8; 12]);
+        let plaintext = make_bytes_val(b"");
+
+        let enc_result = airl_aes_256_gcm_encrypt(key, nonce, plaintext);
+        assert_eq!(extract_variant_tag(enc_result), "Ok");
+        let ct = extract_variant_inner_bytes(enc_result);
+        // Empty plaintext → only 16-byte tag
+        assert_eq!(ct.len(), 16);
+
+        let key2 = make_bytes_val(&[0xABu8; 32]);
+        let nonce2 = make_bytes_val(&[0x01u8; 12]);
+        let ciphertext = make_bytes_val(&ct);
+        let dec_result = airl_aes_256_gcm_decrypt(key2, nonce2, ciphertext);
+        assert_eq!(extract_variant_tag(dec_result), "Ok");
+        let recovered = extract_variant_inner_bytes(dec_result);
+        assert_eq!(recovered, b"" as &[u8]);
+    }
+
+    #[test]
+    fn test_aes_256_gcm_tampered_ciphertext_fails() {
+        let key = make_bytes_val(&[0u8; 32]);
+        let nonce = make_bytes_val(&[0u8; 12]);
+        let plaintext = make_bytes_val(b"hello");
+
+        let enc_result = airl_aes_256_gcm_encrypt(key, nonce, plaintext);
+        let mut ct = extract_variant_inner_bytes(enc_result);
+        // Flip a bit in the ciphertext
+        ct[0] ^= 0xFF;
+
+        let key2 = make_bytes_val(&[0u8; 32]);
+        let nonce2 = make_bytes_val(&[0u8; 12]);
+        let tampered = make_bytes_val(&ct);
+        let dec_result = airl_aes_256_gcm_decrypt(key2, nonce2, tampered);
+        assert_eq!(extract_variant_tag(dec_result), "Err", "tampered ciphertext must fail authentication");
     }
 }

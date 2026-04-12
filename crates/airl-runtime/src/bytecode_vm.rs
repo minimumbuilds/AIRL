@@ -687,6 +687,8 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "sha512-bytes" => airl_rt::misc::airl_sha512_bytes(a0!()),
         "hmac-sha512-bytes" => airl_rt::misc::airl_hmac_sha512_bytes(a0!(), a1!()),
         "pbkdf2-sha512" => airl_rt::misc::airl_pbkdf2_sha512(a0!(), a1!(), a2!(), a3!()),
+        "aes-256-gcm-encrypt" => airl_rt::misc::airl_aes_256_gcm_encrypt(a0!(), a1!(), a2!()),
+        "aes-256-gcm-decrypt" => airl_rt::misc::airl_aes_256_gcm_decrypt(a0!(), a1!(), a2!()),
         "bytes-xor" => airl_rt::misc::airl_bytes_xor(a0!(), a1!()),
         "bytes-xor-scalar" => airl_rt::misc::airl_bytes_xor_scalar(a0!(), a1!()),
         // base64-decode-bytes, base64-encode-bytes removed above
@@ -942,6 +944,8 @@ fn builtin_arity(name: &str) -> Option<usize> {
                 _ => None,
             }
         }
+        // AES-256-GCM — ternary (key, nonce, data)
+        "aes-256-gcm-encrypt" | "aes-256-gcm-decrypt" => Some(3),
         // Bytes — ternary
         "bytes-set!" | "bytes-to-string" | "bytes-slice" | "regex-replace"
         | "shell-exec-with-stdin" => Some(3),
