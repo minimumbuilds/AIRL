@@ -2298,9 +2298,16 @@ impl BytecodeAot {
                 }
             }
         }
-        for r in func.arity as usize..reg_count {
-            let zero = builder.ins().iconst(self.ptr, 0);
-            builder.def_var(vars[r], zero);
+        // Initialize non-param registers to rt_nil() (immortal singleton, rc=u32::MAX).
+        // This makes Op::Move safe to unconditionally release the old dst value — releasing
+        // an immortal nil is a no-op, so fresh registers can always be overwritten safely.
+        {
+            let nil_ref = self.module.declare_func_in_func(self.rt.nil_ctor, builder.func);
+            let nil_call = builder.ins().call(nil_ref, &[]);
+            let nil_v = builder.inst_results(nil_call)[0];
+            for r in func.arity as usize..reg_count {
+                builder.def_var(vars[r], nil_v);
+            }
         }
         {
             let zero = builder.ins().iconst(types::I64, 0);
@@ -2422,8 +2429,15 @@ impl BytecodeAot {
                 Op::Move => {
                     let dst = instr.dst as usize;
                     let src = instr.a as usize;
-                    let v = builder.use_var(vars[src]);
-                    builder.def_var(vars[dst], v);
+                    let new_v = builder.use_var(vars[src]);
+                    let old_v = builder.use_var(vars[dst]);
+                    // Release old dst value (no-op if immortal nil — i.e., freshly allocated reg)
+                    let release_ref = self.module.declare_func_in_func(self.rt.value_release, builder.func);
+                    builder.ins().call(release_ref, &[old_v]);
+                    // Retain new src value (dst now holds a second reference)
+                    let retain_ref = self.module.declare_func_in_func(self.rt.value_retain, builder.func);
+                    builder.ins().call(retain_ref, &[new_v]);
+                    builder.def_var(vars[dst], new_v);
                     last_was_terminator = false;
                 }
 
@@ -2745,9 +2759,12 @@ impl BytecodeAot {
                 // Release is a no-op in the boxed AOT path. The AOT memory model
                 // uses move semantics (no retain-on-Move), so Release opcodes would
                 // cause double-frees. Heap memory is reclaimed at process exit.
-                // Full AOT reference-count support requires retain-on-Move and
-                // retain-on-Call, which is a future project.
+                // ── Memory management ─────────────────────────────────
                 Op::Release => {
+                    let reg = instr.a as usize;
+                    let v = builder.use_var(vars[reg]);
+                    let release_ref = self.module.declare_func_in_func(self.rt.value_release, builder.func);
+                    builder.ins().call(release_ref, &[v]);
                     last_was_terminator = false;
                 }
 
