@@ -450,13 +450,17 @@ pub struct BytecodeAot {
 }
 
 
-/// Remap user function names to avoid clashes with C symbols.
-/// In particular, user "main" → "__airl_user_main" so C entry point can be emitted.
+/// Remap user function names to avoid clashes with C stdlib symbols.
+/// - "main" / "__main__" → "__airl_user_main" so the C entry point can call it.
+/// - All other user functions get the "__airl_fn_" prefix; hyphens are replaced
+///   with underscores so the result is a valid C identifier.  This prevents
+///   AIRL functions named e.g. "getenv" from shadowing C stdlib symbols and
+///   causing crashes during C library initialisation (e.g. OpenSSL cpuid_setup).
 fn aot_symbol_name(name: &str) -> String {
-    if name == "main" {
+    if name == "main" || name == "__main__" {
         "__airl_user_main".to_string()
     } else {
-        name.to_string()
+        format!("__airl_fn_{}", name.replace('-', "_"))
     }
 }
 
@@ -2298,16 +2302,12 @@ impl BytecodeAot {
                 }
             }
         }
-        // Initialize non-param registers to rt_nil() (immortal singleton, rc=u32::MAX).
-        // This makes Op::Move safe to unconditionally release the old dst value — releasing
-        // an immortal nil is a no-op, so fresh registers can always be overwritten safely.
-        {
-            let nil_ref = self.module.declare_func_in_func(self.rt.nil_ctor, builder.func);
-            let nil_call = builder.ins().call(nil_ref, &[]);
-            let nil_v = builder.inst_results(nil_call)[0];
-            for r in func.arity as usize..reg_count {
-                builder.def_var(vars[r], nil_v);
-            }
+        // Non-param registers: initialize to zero (null pointer). Op::Move no longer releases
+        // old dst (matching VM semantics), so null-init is safe — the BC compiler ensures
+        // explicit Op::Release for all live values before registers are reused.
+        for r in func.arity as usize..reg_count {
+            let zero = builder.ins().iconst(self.ptr, 0);
+            builder.def_var(vars[r], zero);
         }
         {
             let zero = builder.ins().iconst(types::I64, 0);
@@ -2429,15 +2429,13 @@ impl BytecodeAot {
                 Op::Move => {
                     let dst = instr.dst as usize;
                     let src = instr.a as usize;
-                    let new_v = builder.use_var(vars[src]);
-                    let old_v = builder.use_var(vars[dst]);
-                    // Release old dst value (no-op if immortal nil — i.e., freshly allocated reg)
-                    let release_ref = self.module.declare_func_in_func(self.rt.value_release, builder.func);
-                    builder.ins().call(release_ref, &[old_v]);
-                    // Retain new src value (dst now holds a second reference)
+                    let v = builder.use_var(vars[src]);
+                    // Retain: dst now holds a second live reference to the same value.
+                    // Matches VM semantics (bytecode_vm.rs:1407). Without this, Move is
+                    // a raw pointer alias: when src is released, dst becomes dangling.
                     let retain_ref = self.module.declare_func_in_func(self.rt.value_retain, builder.func);
-                    builder.ins().call(retain_ref, &[new_v]);
-                    builder.def_var(vars[dst], new_v);
+                    builder.ins().call(retain_ref, &[v]);
+                    builder.def_var(vars[dst], v);
                     last_was_terminator = false;
                 }
 
@@ -2727,10 +2725,16 @@ impl BytecodeAot {
                             return Err(format!("call target '{}' not declared", callee_name));
                         };
                         let func_ref = self.module.declare_func_in_func(callee_func_id, builder.func);
+                        let retain_ref = self.module.declare_func_in_func(self.rt.value_retain, builder.func);
 
                         let mut call_args = Vec::new();
                         for j in 0..argc {
                             let arg = builder.use_var(vars[dst + 1 + j]);
+                            // Mirror VM push_frame_rt: retain each arg before the call.
+                            // The callee's bc-free-reg-to releases its params at exit;
+                            // the caller also releases call slots via Op::Release — we need
+                            // both references accounted for to avoid double-free.
+                            builder.ins().call(retain_ref, &[arg]);
                             call_args.push(arg);
                         }
                         let call = builder.ins().call(func_ref, &call_args);
@@ -2755,16 +2759,28 @@ impl BytecodeAot {
                     last_was_terminator = true;
                 }
 
-                // ── Memory management ─────────────────────────────────
-                // Release is a no-op in the boxed AOT path. The AOT memory model
-                // uses move semantics (no retain-on-Move), so Release opcodes would
-                // cause double-frees. Heap memory is reclaimed at process exit.
-                // ── Memory management ─────────────────────────────────
+                // ── Memory management — scope note + Op::Release ─────
+                // SCOPE NOTE: the RC protocol implemented here (retain-on-Move,
+                // release-on-Release) is correct only when the bytecode was compiled by
+                // bc_compiler.airl (the AIRL-written self-hosted compiler), which emits
+                // explicit Op::Release for every live value leaving scope.  The Rust
+                // BytecodeCompiler (crates/airl-runtime/src/bytecode_compiler.rs) does NOT
+                // emit Op::Release — but it is used only for interpreter/VM execution
+                // (bytecode_vm.rs handles its own RC protocol).  If the Rust compiler is
+                // ever extended to produce code for the AOT path, it must also be taught to
+                // emit Op::Release, or this handler must be guarded behind a flag.
                 Op::Release => {
+                    // Decrement refcount and null the variable — matches VM semantics
+                    // (bytecode_vm.rs:1965-1974). Nulling prevents use-after-free if the
+                    // same register slot is ever re-read after release.
+                    // Safe now that retain-on-Move keeps the RC balanced:
+                    // every Move that creates a second reference is paired with a Release.
                     let reg = instr.a as usize;
                     let v = builder.use_var(vars[reg]);
                     let release_ref = self.module.declare_func_in_func(self.rt.value_release, builder.func);
                     builder.ins().call(release_ref, &[v]);
+                    let null_val = builder.ins().iconst(types::I64, 0);
+                    builder.def_var(vars[reg], null_val);
                     last_was_terminator = false;
                 }
 

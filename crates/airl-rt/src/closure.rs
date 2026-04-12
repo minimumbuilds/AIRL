@@ -55,6 +55,14 @@ pub extern "C" fn airl_call_closure(
 
     assert!(total <= 8, "closure arity {} exceeds maximum supported arity of 8 — compiler bug", total);
 
+    // Retain each parameter before calling the AOT-compiled function.
+    // AOT functions release their params at exit (bc-free-reg-to); captures remain
+    // owned by the closure and explicit args remain owned by the call site — each
+    // needs its own reference that the callee can safely release.
+    for &p in &params {
+        airl_value_retain(p);
+    }
+
     // Dispatch by total arity using transmute to typed function pointers.
     //
     // SAFETY: `func_ptr` was produced by the AIRL AOT compiler (Cranelift) or
