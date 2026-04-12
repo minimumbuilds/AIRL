@@ -233,6 +233,62 @@ tmux-like terminal multiplexer for the AIRL ecosystem. Manages named sessions of
 
 ---
 
+### AirSeal -- JWT Library (scaffold)
+
+Pure-AIRL JWT signing/verification. HS256 in MVP. Depends on stdlib `sha256`, `hmac-sha256`, `base64`, `json`, and random/uuid builtins (G08).
+
+| | |
+|---|---|
+| **Location** | `../AirSeal` |
+| **Size** | 0 (scaffold — PLATY-GAP-G01) |
+| **Status** | Scaffolded; unimplemented. |
+
+### AirPost -- SMTP Client (scaffold)
+
+Pure-AIRL SMTP client. RFC 5321 + STARTTLS + AUTH PLAIN/LOGIN, MIME multipart.
+
+| | |
+|---|---|
+| **Location** | `../AirPost` |
+| **Size** | 0 (scaffold — PLATY-GAP-G06) |
+| **Status** | Scaffolded; unimplemented. |
+
+### AirHangar -- S3 Object Storage Client (scaffold)
+
+Pure-AIRL S3-compatible client built on AIReqL. SigV4 signer; supports MinIO and AWS S3. Presigned GET/PUT.
+
+| | |
+|---|---|
+| **Location** | `../AirHangar` |
+| **Size** | 0 (scaffold — PLATY-GAP-G03) |
+| **Status** | Scaffolded; unimplemented. Renamed from "AirVault" in the original spec to avoid collision with the existing AirVault memory-palace project. |
+
+### AirFlux -- Schema Migration Runner (scaffold)
+
+Flyway/golang-migrate-style forward-only migrations over Postgres. Depends on AirDB, CairLI, AirLog.
+
+| | |
+|---|---|
+| **Location** | `../AirFlux` |
+| **Size** | 0 (scaffold — PLATY-GAP-G09) |
+| **Status** | Scaffolded; unimplemented. |
+
+---
+
+## Applications
+
+### platy-airl -- HR/Compliance Platform (scaffold)
+
+Application built on the AIRL ecosystem. Consumes AirGate, AirDB, AirHangar, AirSeal, AirPost, AirFlux, AirLog. Scope includes PDF framework storage, RAG search over handbooks, acknowledgment tracking, background jobs, and JWT-authenticated web endpoints.
+
+| | |
+|---|---|
+| **Location** | `../platy-airl` |
+| **Size** | 0 (scaffold — PLATY-GAP-G05/G10 + consumer of G01-G12) |
+| **Status** | Scaffolded; unimplemented. |
+
+---
+
 ## Persistence
 
 ### AirWire -- Wire Protocol Primitives
