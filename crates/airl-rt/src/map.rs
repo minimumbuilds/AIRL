@@ -5,7 +5,6 @@ use crate::nostd_prelude::*;
 use std::collections::HashMap;
 #[cfg(target_os = "airlos")]
 use alloc::collections::BTreeMap as HashMap;
-use core::sync::atomic::Ordering;
 use crate::error::rt_error;
 use crate::memory::{airl_value_retain, airl_value_release};
 use crate::value::{rt_bool, rt_int, rt_list, rt_map, rt_nil, rt_str, RtData, RtValue};
@@ -96,9 +95,9 @@ pub extern "C" fn airl_map_get_or(
     }
 }
 
-/// Return a new map with key→val inserted.
-/// COW fast path: if rc==1 (sole owner), mutates in place and returns the same
-/// pointer (O(1)). Otherwise clones the entire map (O(N)).
+/// Return a new map with key→val inserted. The original map is always
+/// unchanged — always clones (functional semantics). All existing values are
+/// retained in the new map; val is retained.
 #[no_mangle]
 pub extern "C" fn airl_map_set(
     m: *mut RtValue,
@@ -107,28 +106,15 @@ pub extern "C" fn airl_map_set(
 ) -> *mut RtValue {
     let key_v = unsafe { &*key };
     let k_str = match &key_v.data {
-        RtData::Str(s) => s.clone(),
+        RtData::Str(s) => s.as_str(),
         _ => rt_error("airl_map_set: key must be a Str"),
     };
 
-    let v = unsafe { &mut *m };
-    if v.rc.load(Ordering::Relaxed) == 1 {
-        // COW: sole owner — mutate in place
-        match &mut v.data {
-            RtData::Map(map) => {
-                if let Some(&old_val) = map.get(k_str.as_str()) {
-                    airl_value_release(old_val);
-                }
-                airl_value_retain(val);
-                map.insert(k_str, val);
-                airl_value_retain(m); // caller expects a new reference
-                return m;
-            }
-            _ => rt_error("airl_map_set: first argument must be a Map"),
-        }
-    }
-
-    // rc > 1: clone
+    // Always clone — the AOT/JIT calling convention does not retain arguments
+    // before calling builtins, so rc==1 does not imply sole AIRL-level
+    // ownership (the caller's binding still lives). Mutating in place would
+    // violate functional semantics (the original binding would be altered).
+    let v = unsafe { &*m };
     match &v.data {
         RtData::Map(map) => {
             let mut new_map: HashMap<String, *mut RtValue> = HashMap::new();
@@ -136,11 +122,11 @@ pub extern "C" fn airl_map_set(
                 airl_value_retain(existing_val);
                 new_map.insert(existing_key.clone(), existing_val);
             }
-            if let Some(&old_val) = new_map.get(k_str.as_str()) {
+            if let Some(&old_val) = new_map.get(k_str) {
                 airl_value_release(old_val);
             }
             airl_value_retain(val);
-            new_map.insert(k_str, val);
+            new_map.insert(k_str.to_string(), val);
             rt_map(new_map)
         }
         _ => rt_error("airl_map_set: first argument must be a Map"),
@@ -162,39 +148,23 @@ pub extern "C" fn airl_map_has(m: *mut RtValue, key: *mut RtValue) -> *mut RtVal
     }
 }
 
-/// Remove a key from the map.
-/// COW fast path: if rc==1 (sole owner), removes in place (O(1)).
-/// Otherwise clones the map without the key (O(N)).
+/// Remove a key from the map. Always returns a new map without the key
+/// (functional semantics — the original map is never mutated).
 #[no_mangle]
 pub extern "C" fn airl_map_remove(m: *mut RtValue, key: *mut RtValue) -> *mut RtValue {
     let key_v = unsafe { &*key };
     let k = match &key_v.data {
-        RtData::Str(s) => s.clone(),
+        RtData::Str(s) => s.as_str(),
         _ => rt_error("airl_map_remove: key must be a Str"),
     };
 
-    let v = unsafe { &mut *m };
-    if v.rc.load(Ordering::Relaxed) == 1 {
-        // COW: sole owner — mutate in place
-        match &mut v.data {
-            RtData::Map(map) => {
-                if let Some(&old_val) = map.get(k.as_str()) {
-                    airl_value_release(old_val);
-                }
-                map.remove(k.as_str());
-                airl_value_retain(m); // caller expects a new reference
-                return m;
-            }
-            _ => rt_error("airl_map_remove: first argument must be a Map"),
-        }
-    }
-
-    // rc > 1: clone without the key
+    // Always clone — same reasoning as airl_map_set.
+    let v = unsafe { &*m };
     match &v.data {
         RtData::Map(map) => {
             let mut new_map: HashMap<String, *mut RtValue> = HashMap::new();
             for (existing_key, &existing_val) in map {
-                if existing_key.as_str() == k.as_str() {
+                if existing_key.as_str() == k {
                     continue;
                 }
                 airl_value_retain(existing_val);
@@ -558,48 +528,22 @@ mod tests {
     }
 
     #[test]
-    fn map_set_cow_rc1() {
-        // rc=1: map_set mutates in place and returns the same pointer
+    fn map_set_always_clones() {
         unsafe {
             let m = airl_map_new(); // rc=1
             let k = mk_key("a");
             let v = rt_int(10);
             let m2 = airl_map_set(m, k, v);
-            // COW: same pointer returned
-            assert_eq!(m2, m, "map_set with rc=1 must return the same pointer (COW)");
-            // The map now contains the new key
-            let k2 = mk_key("a");
-            let got = airl_map_get(m2, k2);
-            assert_eq!((*got).as_int(), 10, "COW map_set must insert the key");
-            airl_value_release(got);
-            airl_value_release(k2);
-            airl_value_release(v);
-            airl_value_release(k);
-            airl_value_release(m2); // release the retained ref from COW retain
-            airl_value_release(m);  // release the original ref
-        }
-    }
-
-    #[test]
-    fn map_set_clone_rc2() {
-        // rc>1: map_set clones and original is unchanged
-        unsafe {
-            let m = airl_map_new(); // rc=1
-            airl_value_retain(m);   // rc=2
-            let k = mk_key("a");
-            let v = rt_int(10);
-            let m2 = airl_map_set(m, k, v);
-            // rc>1: different pointer
-            assert_ne!(m2, m, "map_set with rc>1 must return a new map");
-            // Original is unchanged
+            // Always clones — original map is never mutated.
+            assert_ne!(m2, m, "map_set must always return a new map");
+            // m is still the original empty map (unmodified)
             let sz_orig = airl_map_size(m);
             assert_eq!((*sz_orig).as_int(), 0, "original map must be unchanged");
             airl_value_release(sz_orig);
             airl_value_release(v);
             airl_value_release(k);
             airl_value_release(m2);
-            airl_value_release(m); // release extra retain
-            airl_value_release(m); // release original
+            airl_value_release(m);
         }
     }
 

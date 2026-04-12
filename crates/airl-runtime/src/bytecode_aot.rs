@@ -2423,9 +2423,6 @@ impl BytecodeAot {
                     let dst = instr.dst as usize;
                     let src = instr.a as usize;
                     let v = builder.use_var(vars[src]);
-                    // Retain: dst now holds a second reference to the same value
-                    let retain_ref = self.module.declare_func_in_func(self.rt.value_retain, builder.func);
-                    builder.ins().call(retain_ref, &[v]);
                     builder.def_var(vars[dst], v);
                     last_was_terminator = false;
                 }
@@ -2745,11 +2742,12 @@ impl BytecodeAot {
                 }
 
                 // ── Memory management ─────────────────────────────────
+                // Release is a no-op in the boxed AOT path. The AOT memory model
+                // uses move semantics (no retain-on-Move), so Release opcodes would
+                // cause double-frees. Heap memory is reclaimed at process exit.
+                // Full AOT reference-count support requires retain-on-Move and
+                // retain-on-Call, which is a future project.
                 Op::Release => {
-                    let reg = instr.a as usize;
-                    let v = builder.use_var(vars[reg]);
-                    let release_ref = self.module.declare_func_in_func(self.rt.value_release, builder.func);
-                    builder.ins().call(release_ref, &[v]);
                     last_was_terminator = false;
                 }
 
