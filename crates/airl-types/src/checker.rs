@@ -140,6 +140,7 @@ impl TypeChecker {
             "read-file", "write-file", "file-exists?", "get-args",
             "append-file", "delete-file", "delete-dir", "rename-file",
             "read-dir", "create-dir", "file-size", "is-dir?",
+            "temp-file", "temp-dir", "file-mtime",
             "at-or", "set-at", "list-contains?",
             // System builtins — `str` has a typed signature above
             "int-to-string", "float-to-string", "string-to-int", "string-to-float",
