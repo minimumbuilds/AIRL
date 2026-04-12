@@ -1,9 +1,11 @@
 ;; ── AIRL Standard Library: I/O (extern-c wrappers) ──────────────
 ;;
 ;; These wrappers call C runtime functions via extern-c declarations.
-;; They add AIRL-level contracts (requires/ensures) around the raw C calls.
-;; Builtins deregistered from the AOT map and VM dispatch — these are
-;; now the canonical implementations.
+;; NOTE: most names below correspond to Rust builtins; the shadowing
+;; defn wrappers have been removed — the Rust builtin wins at name
+;; resolution and the AIRL defns were dead code.
+;; Retained defns: read-file, get-args, getenv, exit, walk-dir-acc, walk-dir
+;; (not present as Rust builtins).
 
 ;; ════════════════════════════════════════════════════════════════
 ;; File I/O (Batch 7a)
@@ -25,53 +27,8 @@
   :ensures [(valid result)]
   :body (airl_read_file path))
 
-(defn write-file
-  :sig [(path : String) (content : String) -> Bool]
-  :requires [(valid path) (valid content)]
-  :ensures [(valid result)]
-  :body (airl_write_file path content))
-
-(defn append-file
-  :sig [(path : String) (content : String) -> Bool]
-  :requires [(valid path) (valid content)]
-  :ensures [(valid result)]
-  :body (airl_append_file path content))
-
-(defn delete-file
-  :sig [(path : String) -> Bool]
-  :requires [(valid path)]
-  :ensures [(valid result)]
-  :body (airl_delete_file path))
-
-(defn file-exists?
-  :sig [(path : String) -> Bool]
-  :requires [(valid path)]
-  :ensures [(valid result)]
-  :body (airl_file_exists path))
-
-(defn file-size
-  :sig [(path : String) -> i64]
-  :requires [(valid path)]
-  :ensures [(valid result)]
-  :body (airl_file_size path))
-
-(defn file-mtime
-  :sig [(path : String) -> i64]
-  :requires [(valid path)]
-  :ensures [(valid result)]
-  :body (airl_file_mtime path))
-
-(defn rename-file
-  :sig [(old : String) (new : String) -> Bool]
-  :requires [(valid old) (valid new)]
-  :ensures [(valid result)]
-  :body (airl_rename_file old new))
-
-(defn temp-file
-  :sig [(prefix : String) -> String]
-  :requires [(valid prefix)]
-  :ensures [(valid result)]
-  :body (airl_temp_file prefix))
+;; write-file, append-file, delete-file, file-exists?, file-size,
+;; file-mtime, rename-file, temp-file are Rust builtins — defns removed.
 
 ;; ════════════════════════════════════════════════════════════════
 ;; Directory I/O (Batch 7b)
@@ -84,40 +41,8 @@
 (extern-c "airl_get_cwd"    [-> String])
 (extern-c "airl_temp_dir"   [(prefix : String) -> String])
 
-(defn read-dir
-  :sig [(path : String) -> List]
-  :requires [(valid path)]
-  :ensures [(valid result)]
-  :body (airl_read_dir path))
-
-(defn create-dir
-  :sig [(path : String) -> Bool]
-  :requires [(valid path)]
-  :ensures [(valid result)]
-  :body (airl_create_dir path))
-
-(defn delete-dir
-  :sig [(path : String) -> Bool]
-  :requires [(valid path)]
-  :ensures [(valid result)]
-  :body (airl_delete_dir path))
-
-(defn is-dir?
-  :sig [(path : String) -> Bool]
-  :requires [(valid path)]
-  :ensures [(valid result)]
-  :body (airl_is_dir path))
-
-(defn get-cwd
-  :sig [-> String]
-  :ensures [(valid result)]
-  :body (airl_get_cwd))
-
-(defn temp-dir
-  :sig [(prefix : String) -> String]
-  :requires [(valid prefix)]
-  :ensures [(valid result)]
-  :body (airl_temp_dir prefix))
+;; read-dir, create-dir, delete-dir, is-dir?, get-cwd, temp-dir
+;; are Rust builtins — defns removed.
 
 ;; ════════════════════════════════════════════════════════════════
 ;; Stream I/O (Batch 7c)
@@ -131,21 +56,7 @@
 (extern-c "airl_read_lines"  [(path : String) -> List])
 (extern-c "airl_read_stdin"  [-> String])
 
-(defn read-line
-  :sig [-> String]
-  :ensures [(valid result)]
-  :body (airl_read_line))
-
-(defn read-lines
-  :sig [(path : String) -> List]
-  :requires [(valid path)]
-  :ensures [(valid result)]
-  :body (airl_read_lines path))
-
-(defn read-stdin
-  :sig [-> String]
-  :ensures [(valid result)]
-  :body (airl_read_stdin))
+;; read-line, read-lines, read-stdin are Rust builtins — defns removed.
 
 ;; NOTE: print, println, eprint, eprintln are NOT deregistered.
 ;; print is variadic in the AOT compiler (special-cased in compile_func)
@@ -180,26 +91,7 @@
   :sig [(code : i64) -> Unit]
   :body (airl_exit code))
 
-(defn sleep
-  :sig [(ms : i64) -> Unit]
-  :requires [(>= ms 0)]
-  :body (airl_sleep ms))
-
-(defn time-now
-  :sig [-> i64]
-  :ensures [(valid result)]
-  :body (airl_time_now))
-
-(defn cpu-count
-  :sig [-> i64]
-  :ensures [(> result 0)]
-  :body (airl_cpu_count))
-
-(defn format-time
-  :sig [(ms : i64) (fmt : String) -> String]
-  :requires [(valid fmt)]
-  :ensures [(valid result)]
-  :body (airl_format_time ms fmt))
+;; sleep, time-now, cpu-count, format-time are Rust builtins — defns removed.
 
 ;; ════════════════════════════════════════════════════════════════
 ;; Directory Walking (issue-061)

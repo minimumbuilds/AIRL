@@ -1,7 +1,8 @@
 ;; ── AIRL Standard Library: HMAC-SHA-256 ──────────────────
 ;; RFC 2104 HMAC using SHA-256.
 ;; Depends on sha256.airl (sha256-bytes, bytes-to-hex-loop, make-zero-bytes).
-;; Rust builtins deregistered — these are the canonical implementations.
+;; NOTE: hmac-sha256 and hmac-sha256-bytes are Rust builtins — the defns have
+;; been removed. hmac-pad-key and hmac-xor-key are retained as helpers.
 
 ;; ── Key preparation ──
 
@@ -27,27 +28,4 @@
   :ensures [(= (length result) 64)]
   :body (bytes-xor-scalar key pad))
 
-;; ── HMAC-SHA-256 public API ──
-
-(defn hmac-sha256-bytes
-  :sig [(key : Bytes) (msg : Bytes) -> Bytes]
-  :intent "HMAC-SHA-256: returns 32-byte digest"
-  :requires [(valid key) (valid msg)]
-  :ensures [(valid result)]
-  :body (let (k : Bytes (hmac-pad-key key))
-             (i-key-pad : Bytes (hmac-xor-key k 54))
-             (o-key-pad : Bytes (hmac-xor-key k 92))
-             (inner-msg : Bytes (bytes-concat-all [i-key-pad msg]))
-             (inner-hash : Bytes (sha256-bytes inner-msg))
-             (outer-msg : Bytes (bytes-concat-all [o-key-pad inner-hash]))
-          (sha256-bytes outer-msg)))
-
-(defn hmac-sha256
-  :sig [(key : String) (msg : String) -> String]
-  :intent "HMAC-SHA-256 hex digest from String key and message"
-  :requires [(valid key) (valid msg)]
-  :ensures [(valid result)]
-  :body (let (digest : Bytes (hmac-sha256-bytes (bytes-from-string key) (bytes-from-string msg)))
-             (hex-parts : List (bytes-to-hex-loop digest 0 32))
-             (hex-buf : Bytes (bytes-concat-all hex-parts))
-          (bytes-to-string hex-buf 0 64)))
+;; hmac-sha256-bytes and hmac-sha256 are Rust builtins — defns removed (dead code).
