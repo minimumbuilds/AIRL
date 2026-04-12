@@ -1,12 +1,29 @@
 ;; ── AIRL Standard Library: String ──────────────────
 
 ;; ── words : split string by spaces ──
+;; Internal helper: accumulate non-empty tokens into result list.
+;; Uses explicit recursion instead of filter+lambda to work around AOT
+;; MakeClosure compilation bug with inline lambdas passed to map/filter.
+(defn words-collect-loop
+  :sig [(parts : List) (i : i64) (len : i64) (acc : List) -> List]
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body
+    (if (>= i len)
+      acc
+      (let (tok : String (at parts i))
+        (if (= tok "")
+          (words-collect-loop parts (+ i 1) len acc)
+          (words-collect-loop parts (+ i 1) len (concat acc [tok]))))))
+
 (defn words
   :sig [(s : String) -> List]
   :intent "Split a string into words by whitespace"
   :requires [(valid s)]
   :ensures [(valid result)]
-  :body (filter (fn [w] (not (= w ""))) (split (trim s) " ")))
+  :body
+    (let (parts : List (split (trim s) " "))
+      (words-collect-loop parts 0 (length parts) [])))
 
 ;; ── unwords : join strings with spaces ──
 (defn unwords

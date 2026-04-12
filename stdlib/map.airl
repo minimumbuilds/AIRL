@@ -6,12 +6,26 @@
 ;; ══════════════════════════════════════════════════════════════════
 
 ;; ── map-values : get all values in the map ──
+;; Internal helper: accumulate values indexed by key list.
+;; Uses explicit recursion instead of map+lambda to work around AOT
+;; MakeClosure compilation bug with inline lambdas passed to map.
+(defn map-values-loop
+  :sig [(m : _) (ks : List) (i : i64) (len : i64) (acc : List) -> List]
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body
+    (if (>= i len)
+      acc
+      (map-values-loop m ks (+ i 1) len (concat acc [(map-get m (at ks i))]))))
+
 (defn map-values
   :sig [(m : _) -> List]
   :intent "Get all values from a map as a list"
   :requires [(valid m)]
   :ensures [(= (length result) (length (map-keys m)))]
-  :body (map (fn [k] (map-get m k)) (map-keys m)))
+  :body
+    (let (ks : List (map-keys m))
+      (map-values-loop m ks 0 (length ks) [])))
 
 ;; ── map-size : number of entries in the map ──
 (defn map-size
@@ -48,21 +62,47 @@
   :body (map-from-pairs-loop lst 0 (length lst) (map-new)))
 
 ;; ── map-entries : get list of [key value] pairs ──
+;; Internal helper: accumulate [k v] pairs indexed by key list.
+;; Uses explicit recursion instead of map+lambda (same AOT workaround as map-values).
+(defn map-entries-loop
+  :sig [(m : _) (ks : List) (i : i64) (len : i64) (acc : List) -> List]
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body
+    (if (>= i len)
+      acc
+      (let (k : _ (at ks i))
+        (map-entries-loop m ks (+ i 1) len (concat acc [[k (map-get m k)]])))))
+
 (defn map-entries
   :sig [(m : _) -> List]
   :intent "Get all entries as a list of [key value] pairs"
   :requires [(valid m)]
   :ensures [(= (length result) (map-size m))]
-  :body (let (ks : List (map-keys m))
-          (map (fn [k] [k (map-get m k)]) ks)))
+  :body
+    (let (ks : List (map-keys m))
+      (map-entries-loop m ks 0 (length ks) [])))
 
 ;; ── map-from-entries : create map from list of [key value] pairs ──
+;; Internal helper: loop over entries list accumulating into a map.
+;; Avoids fold+lambda which triggers AOT MakeClosure compilation failure.
+(defn map-from-entries-loop
+  :sig [(entries : List) (i : i64) (len : i64) (acc : _) -> _]
+  :requires [(>= i 0)]
+  :ensures [(valid result)]
+  :body
+    (if (>= i len)
+      acc
+      (let (pair : List (at entries i))
+        (map-from-entries-loop entries (+ i 1) len
+          (map-set acc (head pair) (at pair 1))))))
+
 (defn map-from-entries
   :sig [(entries : List) -> _]
   :intent "Create a map from a list of [key value] pairs"
   :requires [(valid entries)]
   :ensures [(= (map-size result) (length entries))]
-  :body (fold (fn [acc pair] (map-set acc (head pair) (at pair 1))) (map-new) entries))
+  :body (map-from-entries-loop entries 0 (length entries) (map-new)))
 
 ;; ── map-merge : merge two maps (second wins on conflict) ──
 (defn map-merge
@@ -70,25 +110,53 @@
   :intent "Merge two maps, m2 values overwrite m1 on key conflict"
   :requires [(valid m1)]
   :ensures [(valid result)]
-  :body (fold (fn [acc pair] (map-set acc (head pair) (at pair 1))) m1 (map-entries m2)))
+  :body (map-from-entries-loop (map-entries m2) 0 (map-size m2) m1))
 
 ;; ── map-map-values : apply function to all values ──
-;; NOTE: parameter named `transform` to avoid collision with fold's `f` parameter
+;; Internal helper: loop over entries accumulating transformed values.
+(defn map-map-values-loop
+  :sig [(transform : fn) (entries : List) (i : i64) (len : i64) (acc : _) -> _]
+  :requires [(>= i 0) (valid transform)]
+  :ensures [(valid result)]
+  :body
+    (if (>= i len)
+      acc
+      (let (pair : List (at entries i))
+        (map-map-values-loop transform entries (+ i 1) len
+          (map-set acc (head pair) (transform (at pair 1)))))))
+
 (defn map-map-values
   :sig [(transform : fn) (m : _) -> _]
   :intent "Apply transform to every value in the map, keeping keys"
   :requires [(valid transform)]
   :ensures [(= (map-size result) (map-size m))]
-  :body (fold (fn [acc pair] (map-set acc (head pair) (transform (at pair 1)))) (map-new) (map-entries m)))
+  :body
+    (let (entries : List (map-entries m))
+      (map-map-values-loop transform entries 0 (length entries) (map-new))))
 
 ;; ── map-filter : keep entries where predicate is true ──
-;; NOTE: parameter named `pred-fn` to avoid collision with fold's `f` parameter
+;; Internal helper: loop over entries accumulating matching pairs.
+(defn map-filter-loop
+  :sig [(pred-fn : fn) (entries : List) (i : i64) (len : i64) (acc : _) -> _]
+  :requires [(>= i 0) (valid pred-fn)]
+  :ensures [(valid result)]
+  :body
+    (if (>= i len)
+      acc
+      (let (pair : List (at entries i))
+        (let (k : _ (head pair))
+          (let (v : _ (at pair 1))
+            (map-filter-loop pred-fn entries (+ i 1) len
+              (if (pred-fn k v) (map-set acc k v) acc)))))))
+
 (defn map-filter
   :sig [(pred-fn : fn) (m : _) -> _]
   :intent "Keep entries where pred-fn(key, value) returns true"
   :requires [(valid pred-fn)]
   :ensures [(<= (map-size result) (map-size m))]
-  :body (fold (fn [acc pair] (if (pred-fn (head pair) (at pair 1)) (map-set acc (head pair) (at pair 1)) acc)) (map-new) (map-entries m)))
+  :body
+    (let (entries : List (map-entries m))
+      (map-filter-loop pred-fn entries 0 (length entries) (map-new))))
 
 ;; ── map-update : update a single key with a function ──
 (defn map-update
@@ -109,9 +177,23 @@
   :body (map-set m key (updater (map-get-or m key default))))
 
 ;; ── map-count : count entries matching predicate ──
+;; Internal helper: loop over entries counting matches.
+(defn map-count-loop
+  :sig [(pred-fn : fn) (entries : List) (i : i64) (len : i64) (acc : i64) -> i64]
+  :requires [(>= i 0) (valid pred-fn)]
+  :ensures [(>= result 0)]
+  :body
+    (if (>= i len)
+      acc
+      (let (pair : List (at entries i))
+        (map-count-loop pred-fn entries (+ i 1) len
+          (if (pred-fn (head pair) (at pair 1)) (+ acc 1) acc)))))
+
 (defn map-count
   :sig [(pred-fn : fn) (m : _) -> i64]
   :intent "Count entries where pred-fn(key, value) returns true"
   :requires [(valid pred-fn)]
   :ensures [(>= result 0)]
-  :body (fold (fn [acc pair] (if (pred-fn (head pair) (at pair 1)) (+ acc 1) acc)) 0 (map-entries m)))
+  :body
+    (let (entries : List (map-entries m))
+      (map-count-loop pred-fn entries 0 (length entries) 0)))
