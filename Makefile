@@ -2,13 +2,15 @@
 #
 # Usage:
 #   make verify-api-manifest          # check api-manifest.json is up to date
+#   make lint-shadows                 # check stdlib has no defns shadowing Rust builtins
 #   AIRTOOLS=/path/to/airtools make verify-api-manifest
 
 AIRTOOLS ?= airtools
 STDLIB   ?= stdlib
 G3       ?= target-x86_64/release/airl-driver
 
-.PHONY: verify-api-manifest
+.PHONY: verify-api-manifest lint-shadows
+
 verify-api-manifest:
 	$(AIRTOOLS) doc-gen \
 	    --stdlib $(STDLIB) \
@@ -19,3 +21,6 @@ verify-api-manifest:
 	    (echo "ERROR: api-manifest.json is stale — regenerate with:" && \
 	     echo "  airtools doc-gen --stdlib stdlib --g3 $(G3) --manifest api-manifest.json" && \
 	     exit 1)
+
+lint-shadows:
+	python3 scripts/lint-shadows.py

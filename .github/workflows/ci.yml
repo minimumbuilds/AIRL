@@ -71,6 +71,13 @@ jobs:
           chmod +x servers/mynameisairl/mynameisairl
           echo "mynameisairl built successfully: $(du -sh servers/mynameisairl/mynameisairl)"
 
+  lint-shadows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check stdlib for defns shadowing Rust builtins
+        run: make lint-shadows
+
   tlc-model-check:
     runs-on: ubuntu-latest
     steps:
