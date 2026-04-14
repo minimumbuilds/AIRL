@@ -38,12 +38,18 @@ impl std::fmt::Display for TranslateError {
 }
 
 /// Which Z3 sort a variable has.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VarSort {
     Int,
     Bool,
     Real,
     Str,
+    /// Z3 Seq(Int) — used for AIRL lists in contracts.
+    /// AIRL lists are heterogeneous at runtime, but contracts that use `length`,
+    /// `list-contains?`, etc. on lists typically operate on homogeneous integer lists.
+    /// We model them as Seq(Int) for Z3 purposes; heterogeneous list contracts
+    /// return TranslationError.
+    Seq,
 }
 
 /// Translates AIRL expressions to Z3 AST nodes.
@@ -53,6 +59,9 @@ pub struct Translator<'ctx> {
     bool_vars: HashMap<String, ast::Bool<'ctx>>,
     real_vars: HashMap<String, ast::Real<'ctx>>,
     string_vars: HashMap<String, ast::String<'ctx>>,
+    /// Seq(Int) variables for AIRL list parameters in contracts.
+    /// Stored as Dynamic because the z3 crate has no typed Seq wrapper.
+    seq_vars: HashMap<String, ast::Dynamic<'ctx>>,
     /// Counter for generating unique quantifier-bound variable names when shadowing occurs.
     quant_counter: usize,
 }
@@ -65,6 +74,7 @@ impl<'ctx> Translator<'ctx> {
             bool_vars: HashMap::new(),
             real_vars: HashMap::new(),
             string_vars: HashMap::new(),
+            seq_vars: HashMap::new(),
             quant_counter: 0,
         }
     }
@@ -113,6 +123,27 @@ impl<'ctx> Translator<'ctx> {
         self.string_vars.get(name)
     }
 
+    /// Declare a Seq(Int) variable for an AIRL list parameter.
+    /// Z3 Seq sort is parameterized; we use Seq(Int) since most list contracts
+    /// deal with integer lists. Stored as Dynamic (no typed Seq in the z3 crate).
+    pub fn declare_seq(&mut self, name: &str) {
+        let z3_ctx = unsafe { raw_z3_ctx(self.ctx) };
+        let int_sort = unsafe { z3_sys::Z3_mk_int_sort(z3_ctx) };
+        let seq_sort = unsafe { z3_sys::Z3_mk_seq_sort(z3_ctx, int_sort) };
+        let c_name = std::ffi::CString::new(name).unwrap();
+        let name_sym = unsafe {
+            z3_sys::Z3_mk_string_symbol(z3_ctx, c_name.as_ptr())
+        };
+        let var_ast = unsafe { z3_sys::Z3_mk_const(z3_ctx, name_sym, seq_sort) };
+        let var = unsafe { ast::Dynamic::wrap(self.ctx, var_ast) };
+        self.seq_vars.insert(name.to_string(), var);
+    }
+
+    /// Get a reference to a seq variable (for counterexample extraction).
+    pub fn get_seq_var(&self, name: &str) -> Option<&ast::Dynamic<'ctx>> {
+        self.seq_vars.get(name)
+    }
+
     /// Push let bindings into the variable maps, saving prior state.
     /// Returns the saved state on success, or restores on error and returns Err.
     fn push_let_bindings(
@@ -123,11 +154,13 @@ impl<'ctx> Translator<'ctx> {
         Vec<(String, Option<ast::Bool<'ctx>>)>,
         Vec<(String, Option<ast::Real<'ctx>>)>,
         Vec<(String, Option<ast::String<'ctx>>)>,
+        Vec<(String, Option<ast::Dynamic<'ctx>>)>,
     ), TranslateError> {
         let mut saved_ints: Vec<(String, Option<ast::Int<'ctx>>)> = Vec::new();
         let mut saved_bools: Vec<(String, Option<ast::Bool<'ctx>>)> = Vec::new();
         let mut saved_reals: Vec<(String, Option<ast::Real<'ctx>>)> = Vec::new();
         let mut saved_strings: Vec<(String, Option<ast::String<'ctx>>)> = Vec::new();
+        let mut saved_seqs: Vec<(String, Option<ast::Dynamic<'ctx>>)> = Vec::new();
 
         for binding in bindings {
             let sort = if let AstTypeKind::Named(tn) = &binding.ty.kind {
@@ -143,7 +176,7 @@ impl<'ctx> Translator<'ctx> {
                         saved_ints.push((binding.name.clone(), prev));
                     }
                     Err(e) => {
-                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals, saved_strings);
+                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals, saved_strings, saved_seqs);
                         return Err(e);
                     }
                 },
@@ -153,7 +186,7 @@ impl<'ctx> Translator<'ctx> {
                         saved_bools.push((binding.name.clone(), prev));
                     }
                     Err(e) => {
-                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals, saved_strings);
+                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals, saved_strings, saved_seqs);
                         return Err(e);
                     }
                 },
@@ -163,7 +196,7 @@ impl<'ctx> Translator<'ctx> {
                         saved_reals.push((binding.name.clone(), prev));
                     }
                     Err(e) => {
-                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals, saved_strings);
+                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals, saved_strings, saved_seqs);
                         return Err(e);
                     }
                 },
@@ -173,12 +206,19 @@ impl<'ctx> Translator<'ctx> {
                         saved_strings.push((binding.name.clone(), prev));
                     }
                     Err(e) => {
-                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals, saved_strings);
+                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals, saved_strings, saved_seqs);
                         return Err(e);
                     }
                 },
+                Some(VarSort::Seq) => {
+                    // Seq let bindings are not translatable (no seq expression translation yet)
+                    self.pop_let_bindings(saved_ints, saved_bools, saved_reals, saved_strings, saved_seqs);
+                    return Err(TranslateError::UnsupportedExpression(
+                        format!("let binding '{}': Seq values cannot be constructed in contracts", binding.name)
+                    ));
+                },
                 None => {
-                    self.pop_let_bindings(saved_ints, saved_bools, saved_reals, saved_strings);
+                    self.pop_let_bindings(saved_ints, saved_bools, saved_reals, saved_strings, saved_seqs);
                     return Err(TranslateError::UnsupportedExpression(
                         format!("let binding '{}': unsupported type", binding.name)
                     ));
@@ -186,7 +226,7 @@ impl<'ctx> Translator<'ctx> {
             }
         }
 
-        Ok((saved_ints, saved_bools, saved_reals, saved_strings))
+        Ok((saved_ints, saved_bools, saved_reals, saved_strings, saved_seqs))
     }
 
     /// Restore variable maps from state saved by `push_let_bindings`.
@@ -196,6 +236,7 @@ impl<'ctx> Translator<'ctx> {
         saved_bools: Vec<(String, Option<ast::Bool<'ctx>>)>,
         saved_reals: Vec<(String, Option<ast::Real<'ctx>>)>,
         saved_strings: Vec<(String, Option<ast::String<'ctx>>)>,
+        saved_seqs: Vec<(String, Option<ast::Dynamic<'ctx>>)>,
     ) {
         for (name, prev) in saved_ints.into_iter().rev() {
             match prev {
@@ -219,6 +260,12 @@ impl<'ctx> Translator<'ctx> {
             match prev {
                 Some(v) => { self.string_vars.insert(name, v); }
                 None => { self.string_vars.remove(&name); }
+            }
+        }
+        for (name, prev) in saved_seqs.into_iter().rev() {
+            match prev {
+                Some(v) => { self.seq_vars.insert(name, v); }
+                None => { self.seq_vars.remove(&name); }
             }
         }
     }
@@ -278,6 +325,27 @@ impl<'ctx> Translator<'ctx> {
                             let s = self.translate_string(&args[1])?;
                             Ok(suffix.suffix(&s))
                         }
+                        "list-contains?" => {
+                            // (list-contains? xs x) — xs is Seq(Int), x is Int
+                            // Z3_mk_seq_contains expects both args to be sequences,
+                            // so we wrap the element as a unit sequence.
+                            if let ExprKind::SymbolRef(list_name) = &args[0].kind {
+                                if let Some(seq_var) = self.seq_vars.get(list_name).cloned() {
+                                    let elem = self.translate_int(&args[1])?;
+                                    let z3_ctx = unsafe { raw_z3_ctx(self.ctx) };
+                                    let unit_seq = unsafe {
+                                        z3_sys::Z3_mk_seq_unit(z3_ctx, elem.get_z3_ast())
+                                    };
+                                    let contains_ast = unsafe {
+                                        z3_sys::Z3_mk_seq_contains(z3_ctx, seq_var.get_z3_ast(), unit_seq)
+                                    };
+                                    return Ok(unsafe { ast::Bool::wrap(self.ctx, contains_ast) });
+                                }
+                            }
+                            Err(TranslateError::UnsupportedExpression(
+                                "list-contains? requires a declared list/seq variable".into()
+                            ))
+                        }
                         "valid" => {
                             // valid() cannot be encoded as a Z3 predicate — ownership
                             // semantics require a separate checker, not SMT encoding.
@@ -304,7 +372,7 @@ impl<'ctx> Translator<'ctx> {
             ExprKind::Let(bindings, body) => {
                 let saved = self.push_let_bindings(bindings)?;
                 let result = self.translate_bool(body);
-                self.pop_let_bindings(saved.0, saved.1, saved.2, saved.3);
+                self.pop_let_bindings(saved.0, saved.1, saved.2, saved.3, saved.4);
                 result
             }
 
@@ -399,6 +467,21 @@ impl<'ctx> Translator<'ctx> {
                             };
                             Ok(unsafe { ast::Int::wrap(self.ctx, len_ast) })
                         }
+                        "length" => {
+                            // (length xs) on a Seq(Int) variable → Z3_mk_seq_length
+                            if let ExprKind::SymbolRef(name) = &args[0].kind {
+                                if let Some(seq_var) = self.seq_vars.get(name) {
+                                    let z3_ctx = unsafe { raw_z3_ctx(self.ctx) };
+                                    let len_ast = unsafe {
+                                        z3_sys::Z3_mk_seq_length(z3_ctx, seq_var.get_z3_ast())
+                                    };
+                                    return Ok(unsafe { ast::Int::wrap(self.ctx, len_ast) });
+                                }
+                            }
+                            Err(TranslateError::UnsupportedExpression(
+                                "length requires a declared list/seq variable".into()
+                            ))
+                        }
                         _ => Err(TranslateError::UnsupportedExpression(
                             format!("int context: {}", op)
                         )),
@@ -418,7 +501,7 @@ impl<'ctx> Translator<'ctx> {
             ExprKind::Let(bindings, body) => {
                 let saved = self.push_let_bindings(bindings)?;
                 let result = self.translate_int(body);
-                self.pop_let_bindings(saved.0, saved.1, saved.2, saved.3);
+                self.pop_let_bindings(saved.0, saved.1, saved.2, saved.3, saved.4);
                 result
             }
 
@@ -548,7 +631,7 @@ impl<'ctx> Translator<'ctx> {
             ExprKind::Let(bindings, body) => {
                 let saved = self.push_let_bindings(bindings)?;
                 let result = self.translate_real(body);
-                self.pop_let_bindings(saved.0, saved.1, saved.2, saved.3);
+                self.pop_let_bindings(saved.0, saved.1, saved.2, saved.3, saved.4);
                 result
             }
 
@@ -619,7 +702,7 @@ impl<'ctx> Translator<'ctx> {
             ExprKind::Let(bindings, body) => {
                 let saved = self.push_let_bindings(bindings)?;
                 let result = self.translate_string(body);
-                self.pop_let_bindings(saved.0, saved.1, saved.2, saved.3);
+                self.pop_let_bindings(saved.0, saved.1, saved.2, saved.3, saved.4);
                 result
             }
 
@@ -920,6 +1003,11 @@ impl<'ctx> Translator<'ctx> {
                     ast::exists_const(self.ctx, &[&bound_var], &[], &formula)
                 })
             }
+            VarSort::Seq => {
+                Err(TranslateError::UnsupportedExpression(
+                    "quantifiers over List/Seq variables are not supported".into()
+                ))
+            }
         }
     }
 
@@ -1196,6 +1284,7 @@ impl<'ctx> Translator<'ctx> {
             "bool" => Some(VarSort::Bool),
             "f16" | "f32" | "f64" | "bf16" => Some(VarSort::Real),
             "String" | "str" => Some(VarSort::Str),
+            "List" => Some(VarSort::Seq),
             _ => None,
         }
     }
@@ -1466,5 +1555,56 @@ mod tests {
 
         // After the match, y should be restored to the original declared value
         assert!(t.get_int_var("y").is_some(), "outer y should still exist after match");
+    }
+
+    #[test]
+    fn sort_from_type_list() {
+        assert!(matches!(Translator::sort_from_type_name("List"), Some(VarSort::Seq)));
+    }
+
+    #[test]
+    fn declare_seq_variable() {
+        let ctx = make_ctx();
+        let mut t = Translator::new(&ctx);
+        t.declare_seq("xs");
+        assert!(t.get_seq_var("xs").is_some());
+    }
+
+    #[test]
+    fn translate_length_of_seq() {
+        let ctx = make_ctx();
+        let mut t = Translator::new(&ctx);
+        t.declare_seq("xs");
+        // (length xs)
+        let callee = Expr { kind: ExprKind::SymbolRef("length".into()), span: airl_syntax::Span::dummy() };
+        let xs = Expr { kind: ExprKind::SymbolRef("xs".into()), span: airl_syntax::Span::dummy() };
+        let expr = Expr { kind: ExprKind::FnCall(Box::new(callee), vec![xs]), span: airl_syntax::Span::dummy() };
+        assert!(t.translate_int(&expr).is_ok(), "length on seq variable should translate to Z3 Int");
+    }
+
+    #[test]
+    fn translate_length_of_non_seq_fails() {
+        let ctx = make_ctx();
+        let mut t = Translator::new(&ctx);
+        t.declare_int("n");
+        // (length n) — n is not a seq variable
+        let callee = Expr { kind: ExprKind::SymbolRef("length".into()), span: airl_syntax::Span::dummy() };
+        let n = Expr { kind: ExprKind::SymbolRef("n".into()), span: airl_syntax::Span::dummy() };
+        let expr = Expr { kind: ExprKind::FnCall(Box::new(callee), vec![n]), span: airl_syntax::Span::dummy() };
+        assert!(t.translate_int(&expr).is_err(), "length on non-seq should fail");
+    }
+
+    #[test]
+    fn translate_list_contains() {
+        let ctx = make_ctx();
+        let mut t = Translator::new(&ctx);
+        t.declare_seq("xs");
+        t.declare_int("x");
+        // (list-contains? xs x)
+        let callee = Expr { kind: ExprKind::SymbolRef("list-contains?".into()), span: airl_syntax::Span::dummy() };
+        let xs = Expr { kind: ExprKind::SymbolRef("xs".into()), span: airl_syntax::Span::dummy() };
+        let x = Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() };
+        let expr = Expr { kind: ExprKind::FnCall(Box::new(callee), vec![xs, x]), span: airl_syntax::Span::dummy() };
+        assert!(t.translate_bool(&expr).is_ok(), "list-contains? should translate to Z3 Bool");
     }
 }

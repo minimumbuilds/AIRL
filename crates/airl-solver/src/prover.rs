@@ -75,6 +75,7 @@ impl Z3Prover {
                     Some(VarSort::Bool) => translator.declare_bool(&param.name),
                     Some(VarSort::Real) => translator.declare_real(&param.name),
                     Some(VarSort::Str) => translator.declare_string(&param.name),
+                    Some(VarSort::Seq) => translator.declare_seq(&param.name),
                     None => { can_translate = false; break; }
                 }
             } else {
@@ -91,6 +92,7 @@ impl Z3Prover {
                     Some(VarSort::Bool) => translator.declare_bool("result"),
                     Some(VarSort::Real) => translator.declare_real("result"),
                     Some(VarSort::Str) => translator.declare_string("result"),
+                    Some(VarSort::Seq) => translator.declare_seq("result"),
                     None => can_translate = false,
                 }
             } else {
@@ -174,6 +176,10 @@ impl Z3Prover {
                     },
                     Err(_) => false,
                 },
+                // Seq(Int) return: body translation not yet supported — list-constructing
+                // expressions can't be translated to Z3. Contracts on list params (length,
+                // list-contains?) still work without body binding.
+                Some(VarSort::Seq) => false,
                 None => false,
             },
             _ => false,
@@ -234,6 +240,14 @@ impl Z3Prover {
                                             }
                                             Some(VarSort::Str) => {
                                                 if let Some(var) = translator.get_string_var(&param.name) {
+                                                    if let Some(val) = model.eval(var, true) {
+                                                        counterexample.push((param.name.clone(), val.to_string()));
+                                                    }
+                                                }
+                                            }
+                                            Some(VarSort::Seq) => {
+                                                // Seq counterexamples: use Dynamic eval + to_string
+                                                if let Some(var) = translator.get_seq_var(&param.name) {
                                                     if let Some(val) = model.eval(var, true) {
                                                         counterexample.push((param.name.clone(), val.to_string()));
                                                     }
@@ -316,6 +330,14 @@ impl Z3Prover {
                                             }
                                             Some(VarSort::Str) => {
                                                 if let Some(var) = translator.get_string_var(&param.name) {
+                                                    if let Some(val) = model.eval(var, true) {
+                                                        counterexample.push((param.name.clone(), val.to_string()));
+                                                    }
+                                                }
+                                            }
+                                            Some(VarSort::Seq) => {
+                                                // Seq counterexamples: use Dynamic eval + to_string
+                                                if let Some(var) = translator.get_seq_var(&param.name) {
                                                     if let Some(val) = model.eval(var, true) {
                                                         counterexample.push((param.name.clone(), val.to_string()));
                                                     }
@@ -806,6 +828,80 @@ mod tests {
         assert!(
             matches!(&v.ensures_results[0].1, VerifyResult::Disproven { counterexample } if !counterexample.is_empty()),
             "expected Disproven with Bool counterexample, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn prove_list_length_nonneg() {
+        // (defn list_len [(xs : List) -> i32]
+        //   :ensures [(>= result 0)]
+        //   :body (length xs))
+        // Seq length is always >= 0, so this should be Proven.
+        let def = make_fn("list_len",
+            vec![("xs", "List")], "i32",
+            vec![],
+            vec![call(">=", vec![sym("result"), int(0)])],
+            call("length", vec![sym("xs")]),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for list length >= 0, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn prove_list_length_sum() {
+        // (defn concat_len [(a : List) (b : List) -> i32]
+        //   :ensures [(= result (+ (length a) (length b)))]
+        //   :body (+ (length a) (length b)))
+        // Body is (+ (length a) (length b)), result == that sum. Should be Proven.
+        let body = call("+", vec![
+            call("length", vec![sym("a")]),
+            call("length", vec![sym("b")]),
+        ]);
+        let ensures = call("=", vec![
+            sym("result"),
+            call("+", vec![
+                call("length", vec![sym("a")]),
+                call("length", vec![sym("b")]),
+            ]),
+        ]);
+        let def = make_fn("concat_len",
+            vec![("a", "List"), ("b", "List")], "i32",
+            vec![],
+            vec![ensures],
+            body,
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for result == length(a) + length(b), got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn list_param_with_int_return() {
+        // (defn first_or_zero [(xs : List) -> i32]
+        //   :ensures [(>= (length xs) 0)]
+        //   :body 0)
+        // Ensures doesn't reference result, just checks length >= 0. Should be Proven.
+        let def = make_fn("first_or_zero",
+            vec![("xs", "List")], "i32",
+            vec![],
+            vec![call(">=", vec![call("length", vec![sym("xs")]), int(0)])],
+            int(0),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for length(xs) >= 0, got: {:?}", v,
         );
     }
 }
