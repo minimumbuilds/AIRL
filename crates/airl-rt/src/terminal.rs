@@ -2,6 +2,7 @@
 //!
 //! Seven extern "C" functions for raw terminal access:
 //! raw mode, stdin byte reads, stdout writes, terminal size, SIGWINCH.
+//! AOT linkage wrappers (`__airl_fn_canopy_*`) are appended at the bottom.
 
 #[cfg(not(target_os = "airlos"))]
 use crate::value::{rt_int, rt_list, RtValue};
@@ -180,4 +181,52 @@ extern "C" fn sigwinch_handler(_sig: libc::c_int) {
     // For Phase A, resize is detected by polling canopy_terminal_size()
     // in the coordinator loop rather than signal-based push.
     // This handler is a placeholder for Phase B.
+}
+
+// ── AOT linkage wrappers ──────────────────────────────────────────────
+//
+// The g3 AOT compiler emits calls to `__airl_fn_<name>` for unregistered
+// extern symbols.  These thin wrappers expose the mangled names so that
+// canopy AIRL sources link without `(extern-c ...)` declarations.
+
+#[cfg(not(target_os = "airlos"))]
+#[no_mangle]
+pub extern "C" fn __airl_fn_canopy_stdout_write(s: *mut RtValue) -> *mut RtValue {
+    canopy_stdout_write(s)
+}
+
+#[cfg(not(target_os = "airlos"))]
+#[no_mangle]
+pub extern "C" fn __airl_fn_canopy_stdin_read_byte() -> *mut RtValue {
+    canopy_stdin_read_byte()
+}
+
+#[cfg(not(target_os = "airlos"))]
+#[no_mangle]
+pub extern "C" fn __airl_fn_canopy_stdin_read_available() -> *mut RtValue {
+    canopy_stdin_read_available()
+}
+
+#[cfg(not(target_os = "airlos"))]
+#[no_mangle]
+pub extern "C" fn __airl_fn_canopy_terminal_size() -> *mut RtValue {
+    canopy_terminal_size()
+}
+
+#[cfg(not(target_os = "airlos"))]
+#[no_mangle]
+pub extern "C" fn __airl_fn_canopy_raw_mode_enable() -> *mut RtValue {
+    canopy_raw_mode_enable()
+}
+
+#[cfg(not(target_os = "airlos"))]
+#[no_mangle]
+pub extern "C" fn __airl_fn_canopy_raw_mode_disable() -> *mut RtValue {
+    canopy_raw_mode_disable()
+}
+
+#[cfg(not(target_os = "airlos"))]
+#[no_mangle]
+pub extern "C" fn __airl_fn_canopy_on_resize(tx: *mut RtValue) -> *mut RtValue {
+    canopy_on_resize(tx)
 }
