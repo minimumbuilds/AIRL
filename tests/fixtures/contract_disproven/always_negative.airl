@@ -1,0 +1,6 @@
+;; ERROR: Contract disproven
+(defn always-positive
+  :sig [(x : i32) -> i32]
+  :ensures [(> result 0)]
+  :body x)
+(always-positive 0)

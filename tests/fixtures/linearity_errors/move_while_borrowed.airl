@@ -3,7 +3,7 @@
 (defn both-ops
   :sig [(ref a : i32) (own b : i32) -> i32]
   :intent "test borrow and move"
-  :requires [(>= a 0)]
-  :ensures [(>= result 0)]
+  :requires [(valid a) (valid b)]
+  :ensures [(valid result)]
   :body (+ a b))
 (let (v : i32 42) (both-ops v v))

@@ -177,19 +177,11 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
                         }
                     }
                     airl_solver::VerifyResult::Disproven { counterexample } => {
-                        // Clauses referencing `result` are always false positives
-                        // because the solver does not constrain `result` to the
-                        // function body's return value.
-                        if clause.contains("result") {
-                            eprintln!("note: postcondition referencing 'result' in `{}` is checked at runtime only (static verification not yet supported)", f.name);
-                        } else {
-                            let msg = format!("contract disproven in `{}`: {} (counterexample: {:?})",
-                                f.name, clause, counterexample);
-                            match mode {
-                                PipelineMode::Check => eprintln!("error: {}", msg),
-                                _ => eprintln!("warning: {}", msg),
-                            }
-                        }
+                        return Err(PipelineError::ContractDisproven {
+                            fn_name: f.name.clone(),
+                            clause: clause.clone(),
+                            counterexample: counterexample.clone(),
+                        });
                     }
                     airl_solver::VerifyResult::Unknown(_) | airl_solver::VerifyResult::TranslationError(_) => {
                         if z3_warned_fns.insert(f.name.clone()) {
@@ -343,13 +335,11 @@ pub fn check_source(source: &str) -> Result<(), PipelineError> {
                         eprintln!("note: `{}` contract proven: {}", f.name, clause);
                     }
                     airl_solver::VerifyResult::Disproven { counterexample } => {
-                        // Clauses referencing `result` are always false positives
-                        // because the solver does not constrain `result` to the
-                        // function body's return value.
-                        if !clause.contains("result") {
-                            eprintln!("error: contract disproven in `{}`: {} (counterexample: {:?})",
-                                f.name, clause, counterexample);
-                        }
+                        return Err(PipelineError::ContractDisproven {
+                            fn_name: f.name.clone(),
+                            clause: clause.clone(),
+                            counterexample: counterexample.clone(),
+                        });
                     }
                     airl_solver::VerifyResult::Unknown(_) | airl_solver::VerifyResult::TranslationError(_) => {
                         if z3_warned_fns.insert(f.name.clone()) {
@@ -1073,6 +1063,11 @@ pub enum PipelineError {
     Parse(Diagnostics),
     TypeCheck(Diagnostics),
     Runtime(RuntimeError),
+    ContractDisproven {
+        fn_name: String,
+        clause: String,
+        counterexample: Vec<(String, String)>,
+    },
 }
 
 impl std::fmt::Display for PipelineError {
@@ -1093,6 +1088,9 @@ impl std::fmt::Display for PipelineError {
                 Ok(())
             }
             PipelineError::Runtime(e) => write!(f, "Runtime error: {}", e),
+            PipelineError::ContractDisproven { fn_name, clause, counterexample } => {
+                write!(f, "Contract disproven in `{}`: {} (counterexample: {:?})", fn_name, clause, counterexample)
+            }
         }
     }
 }

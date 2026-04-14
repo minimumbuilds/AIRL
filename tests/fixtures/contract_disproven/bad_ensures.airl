@@ -1,0 +1,6 @@
+;; ERROR: Contract disproven
+(defn bad-add
+  :sig [(a : i32) (b : i32) -> i32]
+  :ensures [(= result (* a b))]
+  :body (+ a b))
+(bad-add 1 2)

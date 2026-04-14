@@ -199,6 +199,20 @@ fn contract_error_fixtures_all_fail() {
 }
 
 #[test]
+fn contract_disproven_fixtures_all_fail() {
+    let (count, failures) = run_error_fixtures("contract_disproven");
+    assert!(count > 0, "No contract_disproven fixture files found");
+    if !failures.is_empty() {
+        panic!(
+            "\n{} contract_disproven fixture(s) failed:\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        );
+    }
+    eprintln!("  {} contract_disproven fixtures passed", count);
+}
+
+#[test]
 fn linearity_error_fixtures_all_fail() {
     let (count, failures) = run_error_fixtures("linearity_errors");
     assert!(count > 0, "No linearity_error fixture files found");
