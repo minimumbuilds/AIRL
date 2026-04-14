@@ -44,6 +44,8 @@ pub struct BytecodeCompiler {
     ownership_map: HashMap<String, Vec<bool>>,
     /// Set of (fn_name, clause_source) pairs proven by Z3 — skip opcode emission for these.
     proven_clauses: HashSet<(String, String)>,
+    /// Set of function names that are trusted — skip ALL contract opcode emission for these.
+    trusted_fns: HashSet<String>,
     /// Registers that have been marked as moved (need CheckNotMoved on subsequent loads).
     moved_regs: HashSet<u16>,
 }
@@ -62,6 +64,7 @@ impl BytecodeCompiler {
             compiled_lambdas: Vec::new(),
             ownership_map: HashMap::new(),
             proven_clauses: HashSet::new(),
+            trusted_fns: HashSet::new(),
             moved_regs: HashSet::new(),
         }
     }
@@ -80,6 +83,11 @@ impl BytecodeCompiler {
     /// Set proven clauses for opcode elision — proven contracts skip runtime assertion.
     pub fn set_proven_clauses(&mut self, proven: HashSet<(String, String)>) {
         self.proven_clauses = proven;
+    }
+
+    /// Set trusted functions — skip ALL contract opcode emission for these functions.
+    pub fn set_trusted_fns(&mut self, trusted: HashSet<String>) {
+        self.trusted_fns = trusted;
     }
 
     fn alloc_reg(&mut self) -> u16 {
@@ -924,6 +932,7 @@ impl BytecodeCompiler {
         compiler.lambda_prefix = self.lambda_prefix.clone();
         compiler.ownership_map = self.ownership_map.clone();
         compiler.proven_clauses = self.proven_clauses.clone();
+        compiler.trusted_fns = self.trusted_fns.clone();
 
         // Bind params to first N registers
         for (i, param) in params.iter().enumerate() {
@@ -935,53 +944,61 @@ impl BytecodeCompiler {
         // Store function name as a constant for error messages
         let fn_name_idx = compiler.add_constant(Value::Str(name.to_string()));
 
-        // Compile :requires — check preconditions before body
-        // (requires are never elided — they are caller-side contracts)
-        for (clause_ir, clause_source) in requires {
-            let clause_src_idx = compiler.add_constant(Value::Str(clause_source.clone()));
-            let bool_reg = compiler.alloc_reg();
-            compiler.compile_expr(clause_ir, bool_reg);
-            // Pack fn_name_idx into dst field for error reporting
-            compiler.emit(Op::AssertRequires, fn_name_idx, bool_reg, clause_src_idx);
-            compiler.free_reg_to(bool_reg);
-        }
-
-        // Compile body
-        let dst = compiler.alloc_reg();
-        compiler.compile_expr_tail(body, dst, name);
-
-        // Bind "result" for ensures/invariant clauses
-        compiler.locals.insert("result".to_string(), dst);
-
-        // Compile :invariant — check after body, before ensures
-        // Skip opcode emission for Z3-proven clauses
-        for (clause_ir, clause_source) in invariants {
-            if self.proven_clauses.contains(&(name.to_string(), clause_source.clone())) {
-                continue; // proven statically — no runtime check needed
+        // For trusted functions, skip ALL contract opcode emission
+        if self.trusted_fns.contains(name) {
+            // Compile body only, no contracts
+            let dst = compiler.alloc_reg();
+            compiler.compile_expr_tail(body, dst, name);
+            compiler.emit(Op::Return, 0, dst, 0);
+        } else {
+            // Compile :requires — check preconditions before body
+            // (requires are never elided — they are caller-side contracts)
+            for (clause_ir, clause_source) in requires {
+                let clause_src_idx = compiler.add_constant(Value::Str(clause_source.clone()));
+                let bool_reg = compiler.alloc_reg();
+                compiler.compile_expr(clause_ir, bool_reg);
+                // Pack fn_name_idx into dst field for error reporting
+                compiler.emit(Op::AssertRequires, fn_name_idx, bool_reg, clause_src_idx);
+                compiler.free_reg_to(bool_reg);
             }
-            let clause_src_idx = compiler.add_constant(Value::Str(clause_source.clone()));
-            let bool_reg = compiler.alloc_reg();
-            compiler.compile_expr(clause_ir, bool_reg);
-            compiler.emit(Op::AssertInvariant, fn_name_idx, bool_reg, clause_src_idx);
-            compiler.free_reg_to(bool_reg);
-        }
 
-        // Compile :ensures — check postconditions
-        // Skip opcode emission for Z3-proven clauses
-        for (clause_ir, clause_source) in ensures {
-            if self.proven_clauses.contains(&(name.to_string(), clause_source.clone())) {
-                continue; // proven statically — no runtime check needed
+            // Compile body
+            let dst = compiler.alloc_reg();
+            compiler.compile_expr_tail(body, dst, name);
+
+            // Bind "result" for ensures/invariant clauses
+            compiler.locals.insert("result".to_string(), dst);
+
+            // Compile :invariant — check after body, before ensures
+            // Skip opcode emission for Z3-proven clauses
+            for (clause_ir, clause_source) in invariants {
+                if self.proven_clauses.contains(&(name.to_string(), clause_source.clone())) {
+                    continue; // proven statically — no runtime check needed
+                }
+                let clause_src_idx = compiler.add_constant(Value::Str(clause_source.clone()));
+                let bool_reg = compiler.alloc_reg();
+                compiler.compile_expr(clause_ir, bool_reg);
+                compiler.emit(Op::AssertInvariant, fn_name_idx, bool_reg, clause_src_idx);
+                compiler.free_reg_to(bool_reg);
             }
-            let clause_src_idx = compiler.add_constant(Value::Str(clause_source.clone()));
-            let bool_reg = compiler.alloc_reg();
-            compiler.compile_expr(clause_ir, bool_reg);
-            compiler.emit(Op::AssertEnsures, fn_name_idx, bool_reg, clause_src_idx);
-            compiler.free_reg_to(bool_reg);
+
+            // Compile :ensures — check postconditions
+            // Skip opcode emission for Z3-proven clauses
+            for (clause_ir, clause_source) in ensures {
+                if self.proven_clauses.contains(&(name.to_string(), clause_source.clone())) {
+                    continue; // proven statically — no runtime check needed
+                }
+                let clause_src_idx = compiler.add_constant(Value::Str(clause_source.clone()));
+                let bool_reg = compiler.alloc_reg();
+                compiler.compile_expr(clause_ir, bool_reg);
+                compiler.emit(Op::AssertEnsures, fn_name_idx, bool_reg, clause_src_idx);
+                compiler.free_reg_to(bool_reg);
+            }
+
+            compiler.locals.remove("result");
+
+            compiler.emit(Op::Return, 0, dst, 0);
         }
-
-        compiler.locals.remove("result");
-
-        compiler.emit(Op::Return, 0, dst, 0);
 
         self.lambda_counter = compiler.lambda_counter;
         self.compiled_lambdas.extend(compiler.compiled_lambdas.drain(..));

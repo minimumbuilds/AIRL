@@ -96,6 +96,22 @@ fn parse_source_stdlib(source: &str, name: &str) -> Result<Vec<airl_syntax::ast:
     Ok(tops)
 }
 
+/// Look up the verify level for a function by finding its containing module.
+fn verify_level_for_fn(fn_name: &str, tops: &[airl_syntax::ast::TopLevel]) -> airl_syntax::ast::VerifyLevel {
+    for top in tops {
+        if let airl_syntax::ast::TopLevel::Module(m) = top {
+            for item in &m.body {
+                if let airl_syntax::ast::TopLevel::Defn(f) = item {
+                    if f.name == fn_name {
+                        return m.verify;
+                    }
+                }
+            }
+        }
+    }
+    airl_syntax::ast::VerifyLevel::Checked
+}
+
 pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, PipelineError> {
     let strict_mode = std::env::var("AIRL_STRICT").is_ok();
 
@@ -164,30 +180,70 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
     }
 
     // Z3 contract verification — build proof cache for opcode elision
+    // Respect VerifyLevel: Trusted → skip Z3 entirely; Proven → errors if unprovable; Checked → warn only
     let z3_prover = airl_solver::prover::Z3Prover::new();
     let mut z3_warned_fns: HashSet<String> = HashSet::new();
     let mut proof_cache = airl_solver::ProofCache::new();
+    let mut trusted_fns: HashSet<String> = HashSet::new();
     for top in &tops {
         if let airl_syntax::ast::TopLevel::Defn(f) = top {
-            let verification = z3_prover.verify_function(f);
-            for (clause, result) in verification.ensures_results.iter().chain(verification.invariants_results.iter()) {
-                proof_cache.insert(&f.name, clause, result.clone());
-                match result {
-                    airl_solver::VerifyResult::Proven => {
-                        if mode == PipelineMode::Check {
-                            eprintln!("note: `{}` contract proven: {}", f.name, clause);
+            let level = verify_level_for_fn(&f.name, &tops);
+            match level {
+                airl_syntax::ast::VerifyLevel::Trusted => {
+                    // Skip Z3 entirely — contracts are trusted, not checked
+                    trusted_fns.insert(f.name.clone());
+                }
+                airl_syntax::ast::VerifyLevel::Proven => {
+                    // Hard error if contracts can't be proven
+                    let verification = z3_prover.verify_function(f);
+                    for (clause, result) in verification.ensures_results.iter().chain(verification.invariants_results.iter()) {
+                        proof_cache.insert(&f.name, clause, result.clone());
+                        match result {
+                            airl_solver::VerifyResult::Proven => {
+                                if mode == PipelineMode::Check {
+                                    eprintln!("note: `{}` contract proven: {}", f.name, clause);
+                                }
+                            }
+                            airl_solver::VerifyResult::Disproven { counterexample } => {
+                                return Err(PipelineError::ContractDisproven {
+                                    fn_name: f.name.clone(),
+                                    clause: clause.clone(),
+                                    counterexample: counterexample.clone(),
+                                });
+                            }
+                            airl_solver::VerifyResult::Unknown(reason) | airl_solver::VerifyResult::TranslationError(reason) => {
+                                return Err(PipelineError::ContractUnprovable {
+                                    fn_name: f.name.clone(),
+                                    clause: clause.clone(),
+                                    reason: reason.clone(),
+                                });
+                            }
                         }
                     }
-                    airl_solver::VerifyResult::Disproven { counterexample } => {
-                        return Err(PipelineError::ContractDisproven {
-                            fn_name: f.name.clone(),
-                            clause: clause.clone(),
-                            counterexample: counterexample.clone(),
-                        });
-                    }
-                    airl_solver::VerifyResult::Unknown(_) | airl_solver::VerifyResult::TranslationError(_) => {
-                        if z3_warned_fns.insert(f.name.clone()) {
-                            eprintln!("warning: Z3 returned Unknown/TranslationError for `{}`, falling back to runtime checking", f.name);
+                }
+                airl_syntax::ast::VerifyLevel::Checked => {
+                    // Current behavior — warn on unprovable, don't error
+                    let verification = z3_prover.verify_function(f);
+                    for (clause, result) in verification.ensures_results.iter().chain(verification.invariants_results.iter()) {
+                        proof_cache.insert(&f.name, clause, result.clone());
+                        match result {
+                            airl_solver::VerifyResult::Proven => {
+                                if mode == PipelineMode::Check {
+                                    eprintln!("note: `{}` contract proven: {}", f.name, clause);
+                                }
+                            }
+                            airl_solver::VerifyResult::Disproven { counterexample } => {
+                                return Err(PipelineError::ContractDisproven {
+                                    fn_name: f.name.clone(),
+                                    clause: clause.clone(),
+                                    counterexample: counterexample.clone(),
+                                });
+                            }
+                            airl_solver::VerifyResult::Unknown(_) | airl_solver::VerifyResult::TranslationError(_) => {
+                                if z3_warned_fns.insert(f.name.clone()) {
+                                    eprintln!("warning: Z3 returned Unknown/TranslationError for `{}`, falling back to runtime checking", f.name);
+                                }
+                            }
                         }
                     }
                 }
@@ -203,6 +259,7 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
     let mut bc_compiler = BytecodeCompiler::with_prefix("user");
     bc_compiler.set_ownership_map(ownership_map);
     bc_compiler.set_proven_clauses(proof_cache.into_proven_set());
+    bc_compiler.set_trusted_fns(trusted_fns);
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
 
     // Create VM, load cached stdlib, execute
@@ -326,27 +383,61 @@ pub fn check_source(source: &str) -> Result<(), PipelineError> {
         )));
     }
 
-    // Z3 contract verification
+    // Z3 contract verification — respect VerifyLevel
     let z3_prover = airl_solver::prover::Z3Prover::new();
     let mut z3_warned_fns: HashSet<String> = HashSet::new();
     for top in &tops {
         if let airl_syntax::ast::TopLevel::Defn(f) = top {
-            let verification = z3_prover.verify_function(f);
-            for (clause, result) in verification.ensures_results.iter().chain(verification.invariants_results.iter()) {
-                match result {
-                    airl_solver::VerifyResult::Proven => {
-                        eprintln!("note: `{}` contract proven: {}", f.name, clause);
+            let level = verify_level_for_fn(&f.name, &tops);
+            match level {
+                airl_syntax::ast::VerifyLevel::Trusted => {
+                    // Skip Z3 entirely for trusted functions
+                }
+                airl_syntax::ast::VerifyLevel::Proven => {
+                    // Hard error if contracts can't be proven
+                    let verification = z3_prover.verify_function(f);
+                    for (clause, result) in verification.ensures_results.iter().chain(verification.invariants_results.iter()) {
+                        match result {
+                            airl_solver::VerifyResult::Proven => {
+                                eprintln!("note: `{}` contract proven: {}", f.name, clause);
+                            }
+                            airl_solver::VerifyResult::Disproven { counterexample } => {
+                                return Err(PipelineError::ContractDisproven {
+                                    fn_name: f.name.clone(),
+                                    clause: clause.clone(),
+                                    counterexample: counterexample.clone(),
+                                });
+                            }
+                            airl_solver::VerifyResult::Unknown(reason) | airl_solver::VerifyResult::TranslationError(reason) => {
+                                return Err(PipelineError::ContractUnprovable {
+                                    fn_name: f.name.clone(),
+                                    clause: clause.clone(),
+                                    reason: reason.clone(),
+                                });
+                            }
+                        }
                     }
-                    airl_solver::VerifyResult::Disproven { counterexample } => {
-                        return Err(PipelineError::ContractDisproven {
-                            fn_name: f.name.clone(),
-                            clause: clause.clone(),
-                            counterexample: counterexample.clone(),
-                        });
-                    }
-                    airl_solver::VerifyResult::Unknown(_) | airl_solver::VerifyResult::TranslationError(_) => {
-                        if z3_warned_fns.insert(f.name.clone()) {
-                            eprintln!("warning: Z3 returned Unknown/TranslationError for `{}`, falling back to runtime checking", f.name);
+                }
+                airl_syntax::ast::VerifyLevel::Checked => {
+                    // Current behavior — warn on unprovable, don't error
+                    let verification = z3_prover.verify_function(f);
+                    for (clause, result) in verification.ensures_results.iter().chain(verification.invariants_results.iter()) {
+                        match result {
+                            airl_solver::VerifyResult::Proven => {
+                                eprintln!("note: `{}` contract proven: {}", f.name, clause);
+                            }
+                            airl_solver::VerifyResult::Disproven { counterexample } => {
+                                return Err(PipelineError::ContractDisproven {
+                                    fn_name: f.name.clone(),
+                                    clause: clause.clone(),
+                                    counterexample: counterexample.clone(),
+                                });
+                            }
+                            airl_solver::VerifyResult::Unknown(_) | airl_solver::VerifyResult::TranslationError(_) => {
+                                if z3_warned_fns.insert(f.name.clone()) {
+                                    eprintln!("warning: Z3 returned Unknown/TranslationError for `{}`, falling back to runtime checking", f.name);
+                                }
+                            }
                         }
                     }
                 }
@@ -549,16 +640,17 @@ fn compile_top_level(top: &airl_syntax::ast::TopLevel) -> IRNode {
 // ── Shared: ownership map builder ──────────────────────────
 
 /// Build a map from function names to per-parameter ownership flags.
-/// Default (unannotated) ownership is treated as Own — all parameters are
-/// move-tracked by default. Users must annotate `Ref` or `Mut` explicitly.
+/// Only includes functions that have at least one explicitly `Own`-annotated parameter.
 fn build_ownership_map(tops: &[airl_syntax::ast::TopLevel]) -> HashMap<String, Vec<bool>> {
     let mut map = HashMap::new();
     for top in tops {
         if let airl_syntax::ast::TopLevel::Defn(f) = top {
             let own_flags: Vec<bool> = f.params.iter().map(|p| {
-                matches!(p.ownership, airl_syntax::ast::Ownership::Own | airl_syntax::ast::Ownership::Default)
+                matches!(p.ownership, airl_syntax::ast::Ownership::Own)
             }).collect();
-            map.insert(f.name.clone(), own_flags);
+            if own_flags.iter().any(|&o| o) {
+                map.insert(f.name.clone(), own_flags);
+            }
         }
     }
     map
@@ -1070,6 +1162,11 @@ pub enum PipelineError {
         clause: String,
         counterexample: Vec<(String, String)>,
     },
+    ContractUnprovable {
+        fn_name: String,
+        clause: String,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for PipelineError {
@@ -1092,6 +1189,9 @@ impl std::fmt::Display for PipelineError {
             PipelineError::Runtime(e) => write!(f, "Runtime error: {}", e),
             PipelineError::ContractDisproven { fn_name, clause, counterexample } => {
                 write!(f, "Contract disproven in `{}`: {} (counterexample: {:?})", fn_name, clause, counterexample)
+            }
+            PipelineError::ContractUnprovable { fn_name, clause, reason } => {
+                write!(f, "Contract unprovable in `{}`: {} (reason: {})", fn_name, clause, reason)
             }
         }
     }
