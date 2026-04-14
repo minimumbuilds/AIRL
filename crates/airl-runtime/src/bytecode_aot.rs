@@ -4,7 +4,7 @@
 //!
 //!   - String constants live in data sections.
 //!   - Closure function pointers use `func_addr`.
-//!   - Emits a C `main()` entry point that calls `__main__()`.
+//!   - Emits a C `main()` entry point that calls `__airl_main_entry__()`.
 //!   - `finish()` returns the object file bytes.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -453,14 +453,20 @@ pub struct BytecodeAot {
 
 
 /// Remap user function names to avoid clashes with C stdlib symbols.
-/// - "main" / "__main__" → "__airl_user_main" so the C entry point can call it.
+/// - "main" (user-defined) → "__airl_user_main" to avoid clashing with C's main().
+/// - "__main__" (compiler-generated entry point) → "__airl_main_entry__" so it
+///   gets a distinct symbol from the user's "main" function.  Previously both
+///   mapped to "__airl_user_main", causing a duplicate-definition error when a
+///   file contained `(defn main ...)`.
 /// - All other user functions get the "__airl_fn_" prefix; hyphens are replaced
 ///   with underscores so the result is a valid C identifier.  This prevents
 ///   AIRL functions named e.g. "getenv" from shadowing C stdlib symbols and
 ///   causing crashes during C library initialisation (e.g. OpenSSL cpuid_setup).
 fn aot_symbol_name(name: &str) -> String {
-    if name == "main" || name == "__main__" {
+    if name == "main" {
         "__airl_user_main".to_string()
+    } else if name == "__main__" {
+        "__airl_main_entry__".to_string()
     } else {
         format!("__airl_fn_{}", name.replace('-', "_"))
     }
