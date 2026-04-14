@@ -98,9 +98,8 @@ impl TypeChecker {
         // `polymorphic_builtin_min_arity`.
         //
         // INVARIANT: Any builtin that has a fully typed signature in
-        // `register_typed_builtins` above (e.g., map, filter, fold, head, tail, cons,
-        // empty?, str) must NOT appear in this list — its entry here would shadow the
-        // typed signature. This invariant is verified by the test
+        // `register_typed_builtins` above must NOT appear in this list — its entry here
+        // would shadow the typed signature. This invariant is verified by the test
         // `typed_builtins_not_in_wildcard_list`.
         for name in &[
             "length", "at", "append",
@@ -110,13 +109,8 @@ impl TypeChecker {
             "tensor.transpose", "tensor.softmax", "tensor.sum", "tensor.max",
             "tensor.slice",
             "spawn-agent", "send",
-            "char-at", "substring", "split", "join",
-            "replace", "chars",
             // contains, starts-with, ends-with, trim, to-upper, to-lower,
             // index-of, char-alpha?, char-digit?, char-whitespace? — now in stdlib string.airl
-            "map-new", "map-get", "map-set",
-            "map-has", "map-remove", "map-keys",
-            // map-from, map-get-or, map-values, map-size — now in stdlib map.airl
             // Agent builtins
             "await", "parallel", "broadcast", "retry", "escalate", "any-agent",
             "send-async",
@@ -129,13 +123,6 @@ impl TypeChecker {
             // Stdlib: result (result.airl)
             "is-ok?", "is-err?", "unwrap-or", "map-ok", "map-err",
             "and-then", "or-else", "ok-or",
-            // Stdlib: string (string.airl)
-            "words", "unwords", "lines", "unlines", "repeat-str",
-            "pad-left", "pad-right", "is-empty-str", "reverse-str",
-            "count-occurrences",
-            // Stdlib: map (map.airl)
-            "map-entries", "map-from-entries", "map-merge", "map-map-values",
-            "map-filter", "map-update", "map-update-or", "map-count",
             // File I/O
             "read-file", "write-file", "file-exists?", "get-args",
             "append-file", "delete-file", "delete-dir", "rename-file",
@@ -166,10 +153,20 @@ impl TypeChecker {
             "channel-new", "channel-send", "channel-recv", "channel-recv-timeout", "channel-drain", "channel-close",
             // Container runtime (aircon) — AIRLOS-only IPC stubs
             "aircon_create", "aircon_start", "aircon_stop", "aircon_status", "aircon_list",
+            // Map stdlib helpers not in typed registry
+            "map-map-values", "map-filter", "map-update", "map-update-or",
         ] {
             let builtin_sym = self.sym_builtin;
             self.env.bind_str(name, Ty::TypeVar(builtin_sym));
         }
+    }
+
+    /// Helper to bind a function signature directly.
+    fn bind_typed(&mut self, name: &str, params: &[Ty], ret: Ty) {
+        self.env.bind_str(name, Ty::Func {
+            params: params.to_vec(),
+            ret: Box::new(ret),
+        });
     }
 
     /// Register properly-typed signatures for the most-used builtins.
@@ -252,6 +249,96 @@ impl TypeChecker {
             params: vec![t.clone()],
             ret: Box::new(Ty::Prim(PrimTy::Str)),
         });
+
+        // ── String builtins (Tier 1) ──
+        let string_t = Ty::Prim(PrimTy::Str);
+        let int_t = Ty::Prim(PrimTy::I64);
+        let bool_t = Ty::Prim(PrimTy::Bool);
+
+        // char-at : String -> Int -> String
+        self.bind_typed("char-at", &[string_t.clone(), int_t.clone()], string_t.clone());
+
+        // substring : String -> Int -> Int -> String
+        self.bind_typed("substring", &[string_t.clone(), int_t.clone(), int_t.clone()], string_t.clone());
+
+        // split : String -> String -> List
+        self.bind_typed("split", &[string_t.clone(), string_t.clone()], list_t.clone());
+
+        // join : List -> String -> String
+        self.bind_typed("join", &[list_t.clone(), string_t.clone()], string_t.clone());
+
+        // replace : String -> String -> String -> String
+        self.bind_typed("replace", &[string_t.clone(), string_t.clone(), string_t.clone()], string_t.clone());
+
+        // chars : String -> List
+        self.bind_typed("chars", &[string_t.clone()], list_t.clone());
+
+        // words : String -> List
+        self.bind_typed("words", &[string_t.clone()], list_t.clone());
+
+        // unwords : List -> String
+        self.bind_typed("unwords", &[list_t.clone()], string_t.clone());
+
+        // lines : String -> List
+        self.bind_typed("lines", &[string_t.clone()], list_t.clone());
+
+        // unlines : List -> String
+        self.bind_typed("unlines", &[list_t.clone()], string_t.clone());
+
+        // repeat-str : String -> Int -> String
+        self.bind_typed("repeat-str", &[string_t.clone(), int_t.clone()], string_t.clone());
+
+        // pad-left : String -> Int -> String -> String
+        self.bind_typed("pad-left", &[string_t.clone(), int_t.clone(), string_t.clone()], string_t.clone());
+
+        // pad-right : String -> Int -> String -> String
+        self.bind_typed("pad-right", &[string_t.clone(), int_t.clone(), string_t.clone()], string_t.clone());
+
+        // is-empty-str : String -> Bool
+        self.bind_typed("is-empty-str", &[string_t.clone()], bool_t.clone());
+
+        // reverse-str : String -> String
+        self.bind_typed("reverse-str", &[string_t.clone()], string_t.clone());
+
+        // count-occurrences : String -> String -> Int
+        self.bind_typed("count-occurrences", &[string_t.clone(), string_t.clone()], int_t.clone());
+
+        // ── Map builtins (Tier 2) ──
+        let map_name = self.intern("Map");
+        let map_t = Ty::Named {
+            name: map_name,
+            args: vec![TyArg::Type(t.clone())],
+        };
+
+        // map-new : () -> Map
+        self.bind_typed("map-new", &[], map_t.clone());
+
+        // map-get : Map -> T -> T
+        self.bind_typed("map-get", &[map_t.clone(), t.clone()], t.clone());
+
+        // map-set : Map -> T -> T -> Map
+        self.bind_typed("map-set", &[map_t.clone(), t.clone(), t.clone()], map_t.clone());
+
+        // map-has : Map -> T -> Bool
+        self.bind_typed("map-has", &[map_t.clone(), t.clone()], bool_t.clone());
+
+        // map-remove : Map -> T -> Map
+        self.bind_typed("map-remove", &[map_t.clone(), t.clone()], map_t.clone());
+
+        // map-keys : Map -> List
+        self.bind_typed("map-keys", &[map_t.clone()], list_t.clone());
+
+        // map-entries : Map -> List
+        self.bind_typed("map-entries", &[map_t.clone()], list_t.clone());
+
+        // map-from-entries : List -> Map
+        self.bind_typed("map-from-entries", &[list_t.clone()], map_t.clone());
+
+        // map-merge : Map -> Map -> Map
+        self.bind_typed("map-merge", &[map_t.clone(), map_t.clone()], map_t.clone());
+
+        // map-count : Map -> Int
+        self.bind_typed("map-count", &[map_t.clone()], int_t.clone());
     }
 
     // ── Type resolution ──────────────────────────────────
