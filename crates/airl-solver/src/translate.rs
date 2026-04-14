@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use z3::ast::{self, Ast};
 use z3::Context;
-use airl_syntax::ast::{Expr, ExprKind, LetBinding, AstTypeKind};
+use airl_syntax::ast::{Expr, ExprKind, LetBinding, AstTypeKind, MatchArm, Pattern, PatternKind, LitPattern};
 
 /// Error during AIRL → Z3 translation.
 #[derive(Debug, Clone)]
@@ -256,12 +256,12 @@ impl<'ctx> Translator<'ctx> {
             }
 
             ExprKind::Lambda(_, _) => Err(TranslateError::UnsupportedExpression(
-                "lambda expressions cannot appear in Z3 contracts".into()
+                "lambda expressions cannot appear in Z3 contracts (must be immediately applied)".into()
             )),
 
-            ExprKind::Match(_, _) => Err(TranslateError::UnsupportedExpression(
-                "match expressions in contracts require explicit encoding — use if/cond instead".into()
-            )),
+            ExprKind::Match(scrutinee, arms) => {
+                self.translate_match_bool(scrutinee, arms)
+            }
 
             _ => Err(TranslateError::UnsupportedExpression(
                 format!("{:?}", expr.kind)
@@ -352,12 +352,12 @@ impl<'ctx> Translator<'ctx> {
                 .and_then(|e| self.translate_int(e)),
 
             ExprKind::Lambda(_, _) => Err(TranslateError::UnsupportedExpression(
-                "lambda expressions cannot appear in Z3 contracts".into()
+                "lambda expressions cannot appear in Z3 contracts (must be immediately applied)".into()
             )),
 
-            ExprKind::Match(_, _) => Err(TranslateError::UnsupportedExpression(
-                "match expressions in contracts require explicit encoding — use if/cond instead".into()
-            )),
+            ExprKind::Match(scrutinee, arms) => {
+                self.translate_match_int(scrutinee, arms)
+            }
 
             _ => Err(TranslateError::UnsupportedExpression(
                 format!("int context: {:?}", expr.kind)
@@ -482,12 +482,12 @@ impl<'ctx> Translator<'ctx> {
                 .and_then(|e| self.translate_real(e)),
 
             ExprKind::Lambda(_, _) => Err(TranslateError::UnsupportedExpression(
-                "lambda expressions cannot appear in Z3 contracts".into()
+                "lambda expressions cannot appear in Z3 contracts (must be immediately applied)".into()
             )),
 
-            ExprKind::Match(_, _) => Err(TranslateError::UnsupportedExpression(
-                "match expressions in contracts require explicit encoding — use if/cond instead".into()
-            )),
+            ExprKind::Match(scrutinee, arms) => {
+                self.translate_match_real(scrutinee, arms)
+            }
 
             _ => Err(TranslateError::UnsupportedExpression(
                 format!("real context: {:?}", expr.kind)
@@ -743,6 +743,161 @@ impl<'ctx> Translator<'ctx> {
         }
     }
 
+    /// Translate a match expression to a Z3 Bool via ITE chain.
+    /// Each arm is checked in order; the pattern condition determines whether the arm fires.
+    /// The last arm's condition (if wildcard) becomes the final else branch.
+    fn translate_match_bool(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+    ) -> Result<ast::Bool<'ctx>, TranslateError> {
+        if arms.is_empty() {
+            return Err(TranslateError::UnsupportedExpression(
+                "match with no arms".into()
+            ));
+        }
+
+        // Build ITE chain from right to left: innermost (last arm) first.
+        // Start with the last arm as the base case.
+        let last_arm = &arms[arms.len() - 1];
+        let mut result = self.translate_bool(&last_arm.body)?;
+
+        // For each preceding arm (in reverse order), build an ITE around the result.
+        for arm in arms[0..arms.len() - 1].iter().rev() {
+            let condition = self.translate_pattern_condition(scrutinee, &arm.pattern)?;
+            let body = self.translate_bool(&arm.body)?;
+            result = condition.ite(&body, &result);
+        }
+
+        Ok(result)
+    }
+
+    /// Translate a match expression to a Z3 Int via ITE chain.
+    fn translate_match_int(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+    ) -> Result<ast::Int<'ctx>, TranslateError> {
+        if arms.is_empty() {
+            return Err(TranslateError::UnsupportedExpression(
+                "match with no arms".into()
+            ));
+        }
+
+        // Build ITE chain from right to left.
+        let last_arm = &arms[arms.len() - 1];
+        let mut result = self.translate_int(&last_arm.body)?;
+
+        for arm in arms[0..arms.len() - 1].iter().rev() {
+            let condition = self.translate_pattern_condition(scrutinee, &arm.pattern)?;
+            let body = self.translate_int(&arm.body)?;
+            result = condition.ite(&body, &result);
+        }
+
+        Ok(result)
+    }
+
+    /// Translate a match expression to a Z3 Real via ITE chain.
+    fn translate_match_real(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+    ) -> Result<ast::Real<'ctx>, TranslateError> {
+        if arms.is_empty() {
+            return Err(TranslateError::UnsupportedExpression(
+                "match with no arms".into()
+            ));
+        }
+
+        // Build ITE chain from right to left.
+        let last_arm = &arms[arms.len() - 1];
+        let mut result = self.translate_real(&last_arm.body)?;
+
+        for arm in arms[0..arms.len() - 1].iter().rev() {
+            let condition = self.translate_pattern_condition(scrutinee, &arm.pattern)?;
+            let body = self.translate_real(&arm.body)?;
+            result = condition.ite(&body, &result);
+        }
+
+        Ok(result)
+    }
+
+    /// Generate a Bool condition for a pattern match against a scrutinee.
+    /// - Wildcard (_) → always true
+    /// - Binding (x) → always true (we bind x = scrutinee in a context where needed)
+    /// - Literal (42, true, "x", nil) → (= scrutinee literal)
+    /// - Variant (Ok x) → more complex; for now, raise error (no variant decomposition info)
+    fn translate_pattern_condition(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) -> Result<ast::Bool<'ctx>, TranslateError> {
+        match &pattern.kind {
+            PatternKind::Wildcard => {
+                // Wildcard always matches
+                Ok(ast::Bool::from_bool(self.ctx, true))
+            }
+            PatternKind::Binding(_) => {
+                // Bare binding always matches (and we'd bind the name in the body context)
+                Ok(ast::Bool::from_bool(self.ctx, true))
+            }
+            PatternKind::Literal(lit) => {
+                match lit {
+                    LitPattern::Int(n) => {
+                        let scrutinee_int = self.translate_int(scrutinee)?;
+                        let lit_val = ast::Int::from_i64(self.ctx, *n);
+                        Ok(scrutinee_int._eq(&lit_val))
+                    }
+                    LitPattern::Bool(b) => {
+                        let scrutinee_bool = self.translate_bool(scrutinee)?;
+                        let lit_val = ast::Bool::from_bool(self.ctx, *b);
+                        Ok(scrutinee_bool._eq(&lit_val))
+                    }
+                    LitPattern::Float(f) => {
+                        let scrutinee_real = self.translate_real(scrutinee)?;
+                        // Translate float literal to Z3 Real.
+                        let v = *f;
+                        if v.is_nan() || v.is_infinite() {
+                            return Err(TranslateError::UnsupportedExpression(
+                                format!("float literal {} in pattern is NaN or Infinity", f)
+                            ));
+                        }
+                        const SCALE: i64 = 1_000_000;
+                        let scaled = (v * SCALE as f64).round() as i64;
+                        let lit_val = if scaled >= i32::MIN as i64 && scaled <= i32::MAX as i64 {
+                            ast::Real::from_real(self.ctx, scaled as i32, SCALE as i32)
+                        } else {
+                            let approx = v.round() as i64;
+                            if approx >= i32::MIN as i64 && approx <= i32::MAX as i64 {
+                                ast::Real::from_real(self.ctx, approx as i32, 1)
+                            } else {
+                                return Err(TranslateError::UnsupportedExpression(
+                                    format!("float literal {} is too large for Z3 Real", f)
+                                ));
+                            }
+                        };
+                        Ok(scrutinee_real._eq(&lit_val))
+                    }
+                    LitPattern::Str(_) => {
+                        Err(TranslateError::UnsupportedExpression(
+                            "string literals in match patterns are not yet supported".into()
+                        ))
+                    }
+                    LitPattern::Nil => {
+                        Err(TranslateError::UnsupportedExpression(
+                            "nil pattern matching is not yet supported".into()
+                        ))
+                    }
+                }
+            }
+            PatternKind::Variant(_, _) => {
+                Err(TranslateError::UnsupportedExpression(
+                    "variant pattern matching requires type information and constructor awareness not yet integrated".into()
+                ))
+            }
+        }
+    }
+
     /// Determine variable sort from an AIRL type name.
     pub fn sort_from_type_name(name: &str) -> Option<VarSort> {
         match name {
@@ -885,5 +1040,89 @@ mod tests {
         let x = Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() };
         let expr = Expr { kind: ExprKind::FnCall(Box::new(callee), vec![n, x]), span: airl_syntax::Span::dummy() };
         assert!(t.translate_bool(&expr).is_ok(), "mixed Int/Real comparison should succeed via coercion");
+    }
+
+    #[test]
+    fn translate_match_int_literal() {
+        let ctx = make_ctx();
+        let mut t = Translator::new(&ctx);
+        t.declare_int("x");
+
+        // (match x
+        //   ((42) (1))
+        //   ((0) (2)))
+        let scrutinee = Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() };
+        let arm1 = MatchArm {
+            pattern: Pattern { kind: PatternKind::Literal(LitPattern::Int(42)), span: airl_syntax::Span::dummy() },
+            body: Expr { kind: ExprKind::IntLit(1), span: airl_syntax::Span::dummy() },
+            span: airl_syntax::Span::dummy(),
+        };
+        let arm2 = MatchArm {
+            pattern: Pattern { kind: PatternKind::Literal(LitPattern::Int(0)), span: airl_syntax::Span::dummy() },
+            body: Expr { kind: ExprKind::IntLit(2), span: airl_syntax::Span::dummy() },
+            span: airl_syntax::Span::dummy(),
+        };
+        let expr = Expr { kind: ExprKind::Match(Box::new(scrutinee), vec![arm1, arm2]), span: airl_syntax::Span::dummy() };
+        assert!(t.translate_int(&expr).is_ok(), "match on int literals should succeed");
+    }
+
+    #[test]
+    fn translate_match_bool_literal() {
+        let ctx = make_ctx();
+        let mut t = Translator::new(&ctx);
+        t.declare_bool("b");
+
+        // (match b
+        //   ((true) (1))
+        //   ((false) (0)))
+        let scrutinee = Expr { kind: ExprKind::SymbolRef("b".into()), span: airl_syntax::Span::dummy() };
+        let arm1 = MatchArm {
+            pattern: Pattern { kind: PatternKind::Literal(LitPattern::Bool(true)), span: airl_syntax::Span::dummy() },
+            body: Expr { kind: ExprKind::IntLit(1), span: airl_syntax::Span::dummy() },
+            span: airl_syntax::Span::dummy(),
+        };
+        let arm2 = MatchArm {
+            pattern: Pattern { kind: PatternKind::Literal(LitPattern::Bool(false)), span: airl_syntax::Span::dummy() },
+            body: Expr { kind: ExprKind::IntLit(0), span: airl_syntax::Span::dummy() },
+            span: airl_syntax::Span::dummy(),
+        };
+        let expr = Expr { kind: ExprKind::Match(Box::new(scrutinee), vec![arm1, arm2]), span: airl_syntax::Span::dummy() };
+        assert!(t.translate_int(&expr).is_ok(), "match on bool literals should succeed");
+    }
+
+    #[test]
+    fn translate_match_with_wildcard() {
+        let ctx = make_ctx();
+        let mut t = Translator::new(&ctx);
+        t.declare_int("x");
+
+        // (match x
+        //   ((42) (1))
+        //   ((_ ) (99)))
+        let scrutinee = Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() };
+        let arm1 = MatchArm {
+            pattern: Pattern { kind: PatternKind::Literal(LitPattern::Int(42)), span: airl_syntax::Span::dummy() },
+            body: Expr { kind: ExprKind::IntLit(1), span: airl_syntax::Span::dummy() },
+            span: airl_syntax::Span::dummy(),
+        };
+        let arm2 = MatchArm {
+            pattern: Pattern { kind: PatternKind::Wildcard, span: airl_syntax::Span::dummy() },
+            body: Expr { kind: ExprKind::IntLit(99), span: airl_syntax::Span::dummy() },
+            span: airl_syntax::Span::dummy(),
+        };
+        let expr = Expr { kind: ExprKind::Match(Box::new(scrutinee), vec![arm1, arm2]), span: airl_syntax::Span::dummy() };
+        assert!(t.translate_int(&expr).is_ok(), "match with wildcard should succeed");
+    }
+
+    #[test]
+    fn translate_match_empty_error() {
+        let ctx = make_ctx();
+        let mut t = Translator::new(&ctx);
+        t.declare_int("x");
+
+        // (match x) — no arms
+        let scrutinee = Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() };
+        let expr = Expr { kind: ExprKind::Match(Box::new(scrutinee), vec![]), span: airl_syntax::Span::dummy() };
+        assert!(t.translate_int(&expr).is_err(), "match with no arms should error");
     }
 }
