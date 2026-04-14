@@ -102,7 +102,6 @@ impl TypeChecker {
         // would shadow the typed signature. This invariant is verified by the test
         // `typed_builtins_not_in_wildcard_list`.
         for name in &[
-            "length", "at", "append",
             "print", "type-of", "shape", "valid",
             "tensor.zeros", "tensor.ones", "tensor.rand", "tensor.identity",
             "tensor.add", "tensor.mul", "tensor.matmul", "tensor.reshape",
@@ -115,10 +114,13 @@ impl TypeChecker {
             "await", "parallel", "broadcast", "retry", "escalate", "any-agent",
             "send-async",
             // Stdlib: collections (prelude.airl) — map, filter, fold have typed signatures above
-            "reverse", "concat", "zip", "flatten",
-            "range", "take", "drop", "any", "all", "find", "sort", "merge",
+            // length, at, at-or, set-at, list-contains?, append, reverse, concat, zip, flatten,
+            // range, take, drop, find, sort — now in typed registry (Tier 3)
+            "any", "all", "merge",
             // Stdlib: math (math.airl)
-            "abs", "min", "max", "clamp", "sign", "even?", "odd?",
+            // abs, min, max, clamp, sqrt, sin, cos, tan, log, exp, floor, ceil, round,
+            // int-to-float, float-to-int — now in typed registry (Tier 4)
+            "sign", "even?", "odd?",
             "pow", "gcd", "lcm", "sum-list", "product-list",
             // Stdlib: result (result.airl)
             "is-ok?", "is-err?", "unwrap-or", "map-ok", "map-err",
@@ -128,13 +130,10 @@ impl TypeChecker {
             "append-file", "delete-file", "delete-dir", "rename-file",
             "read-dir", "create-dir", "file-size", "is-dir?",
             "temp-file", "temp-dir", "file-mtime",
-            "at-or", "set-at", "list-contains?",
             // System builtins — `str` has a typed signature above
             "int-to-string", "float-to-string", "string-to-int", "string-to-float",
             "char-code", "char-from-code",
-            // Float math
-            "sqrt", "sin", "cos", "tan", "log", "exp",
-            "floor", "ceil", "round", "float-to-int", "int-to-float",
+            // Float special values
             "infinity", "nan", "is-nan?", "is-infinite?",
             "panic", "assert",
             // json-parse, json-stringify — now in stdlib json.airl
@@ -339,6 +338,100 @@ impl TypeChecker {
 
         // map-count : Map -> Int
         self.bind_typed("map-count", &[map_t.clone()], int_t.clone());
+
+        // ── List builtins (Tier 3) ──
+        // length : T -> Int (works on List, String, Map — use TypeVar("_"))
+        self.bind_typed("length", &[t.clone()], int_t.clone());
+
+        // at : List -> Int -> T
+        self.bind_typed("at", &[list_t.clone(), int_t.clone()], t.clone());
+
+        // at-or : List -> Int -> T -> T
+        self.bind_typed("at-or", &[list_t.clone(), int_t.clone(), t.clone()], t.clone());
+
+        // set-at : List -> Int -> T -> List
+        self.bind_typed("set-at", &[list_t.clone(), int_t.clone(), t.clone()], list_t.clone());
+
+        // list-contains? : List -> T -> Bool
+        self.bind_typed("list-contains?", &[list_t.clone(), t.clone()], bool_t.clone());
+
+        // append : List -> T -> List
+        self.bind_typed("append", &[list_t.clone(), t.clone()], list_t.clone());
+
+        // reverse : List -> List
+        self.bind_typed("reverse", &[list_t.clone()], list_t.clone());
+
+        // concat : List -> List -> List
+        self.bind_typed("concat", &[list_t.clone(), list_t.clone()], list_t.clone());
+
+        // zip : List -> List -> List
+        self.bind_typed("zip", &[list_t.clone(), list_t.clone()], list_t.clone());
+
+        // flatten : List -> List
+        self.bind_typed("flatten", &[list_t.clone()], list_t.clone());
+
+        // range : Int -> Int -> List
+        self.bind_typed("range", &[int_t.clone(), int_t.clone()], list_t.clone());
+
+        // take : List -> Int -> List
+        self.bind_typed("take", &[list_t.clone(), int_t.clone()], list_t.clone());
+
+        // drop : List -> Int -> List
+        self.bind_typed("drop", &[list_t.clone(), int_t.clone()], list_t.clone());
+
+        // sort : List -> List
+        self.bind_typed("sort", &[list_t.clone()], list_t.clone());
+
+        // find : T -> List -> T (first arg is predicate fn, use TypeVar("_"))
+        self.bind_typed("find", &[t.clone(), list_t.clone()], t.clone());
+
+        // ── Math builtins (Tier 4) ──
+        let float_t = Ty::Prim(PrimTy::F64);
+
+        // abs : Int -> Int
+        self.bind_typed("abs", &[int_t.clone()], int_t.clone());
+
+        // min : Int -> Int -> Int
+        self.bind_typed("min", &[int_t.clone(), int_t.clone()], int_t.clone());
+
+        // max : Int -> Int -> Int
+        self.bind_typed("max", &[int_t.clone(), int_t.clone()], int_t.clone());
+
+        // clamp : Int -> Int -> Int -> Int
+        self.bind_typed("clamp", &[int_t.clone(), int_t.clone(), int_t.clone()], int_t.clone());
+
+        // sqrt : Float -> Float
+        self.bind_typed("sqrt", &[float_t.clone()], float_t.clone());
+
+        // sin : Float -> Float
+        self.bind_typed("sin", &[float_t.clone()], float_t.clone());
+
+        // cos : Float -> Float
+        self.bind_typed("cos", &[float_t.clone()], float_t.clone());
+
+        // tan : Float -> Float
+        self.bind_typed("tan", &[float_t.clone()], float_t.clone());
+
+        // log : Float -> Float
+        self.bind_typed("log", &[float_t.clone()], float_t.clone());
+
+        // exp : Float -> Float
+        self.bind_typed("exp", &[float_t.clone()], float_t.clone());
+
+        // floor : Float -> Int
+        self.bind_typed("floor", &[float_t.clone()], int_t.clone());
+
+        // ceil : Float -> Int
+        self.bind_typed("ceil", &[float_t.clone()], int_t.clone());
+
+        // round : Float -> Int
+        self.bind_typed("round", &[float_t.clone()], int_t.clone());
+
+        // int-to-float : Int -> Float
+        self.bind_typed("int-to-float", &[int_t.clone()], float_t.clone());
+
+        // float-to-int : Float -> Int
+        self.bind_typed("float-to-int", &[float_t.clone()], int_t.clone());
     }
 
     // ── Type resolution ──────────────────────────────────
@@ -1116,20 +1209,12 @@ impl TypeChecker {
     /// from the `Ty::Func` branch and must NOT be listed here.
     fn polymorphic_builtin_min_arity(name: &str) -> Option<usize> {
         match name {
-            // Collection builtins
-            "reverse"    => Some(1),
-            "concat"     => Some(2),
-            "zip"        => Some(2),
-            "flatten"    => Some(1),
-            "range"      => Some(2),
-            "take"       => Some(2),
-            "drop"       => Some(2),
+            // Collection builtins (now in typed registry)
+            // reverse, concat, zip, flatten, range, take, drop, find, sort removed
             "any"        => Some(2),
             "all"        => Some(2),
-            "find"       => Some(2),
-            "sort"       => Some(1),
             "merge"      => Some(2),
-            // Map builtins
+            // Map builtins (already in typed registry)
             "map-get"    => Some(2),
             "map-set"    => Some(3),
             "map-has"    => Some(2),
@@ -1144,9 +1229,6 @@ impl TypeChecker {
             "and-then"   => Some(2),
             "or-else"    => Some(2),
             "ok-or"      => Some(2),
-            // List accessors
-            "at-or"      => Some(3),
-            "set-at"     => Some(3),
             _ => None,
         }
     }
