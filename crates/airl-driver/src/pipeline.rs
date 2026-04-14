@@ -546,17 +546,16 @@ fn compile_top_level(top: &airl_syntax::ast::TopLevel) -> IRNode {
 // ── Shared: ownership map builder ──────────────────────────
 
 /// Build a map from function names to per-parameter ownership flags.
-/// Only includes functions that have at least one explicitly `Own`-annotated parameter.
+/// Default (unannotated) ownership is treated as Own — all parameters are
+/// move-tracked by default. Users must annotate `Ref` or `Mut` explicitly.
 fn build_ownership_map(tops: &[airl_syntax::ast::TopLevel]) -> HashMap<String, Vec<bool>> {
     let mut map = HashMap::new();
     for top in tops {
         if let airl_syntax::ast::TopLevel::Defn(f) = top {
             let own_flags: Vec<bool> = f.params.iter().map(|p| {
-                matches!(p.ownership, airl_syntax::ast::Ownership::Own)
+                matches!(p.ownership, airl_syntax::ast::Ownership::Own | airl_syntax::ast::Ownership::Default)
             }).collect();
-            if own_flags.iter().any(|&o| o) {
-                map.insert(f.name.clone(), own_flags);
-            }
+            map.insert(f.name.clone(), own_flags);
         }
     }
     map

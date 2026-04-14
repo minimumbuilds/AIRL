@@ -184,9 +184,14 @@ impl LinearityChecker {
     // ── Static analysis: AST walking ─────────────────────
 
     /// Register a function's parameter ownership annotations.
+    /// Default (unannotated) ownership is treated as Own for linearity enforcement.
     pub fn register_fn(&mut self, def: &FnDef) {
         let ownerships: Vec<Ownership> = def.params.iter()
-            .map(|p| p.ownership)
+            .map(|p| if p.ownership == Ownership::Default {
+                Ownership::Own
+            } else {
+                p.ownership
+            })
             .collect();
         let id = self.interner.intern(&def.name);
         self.fn_ownerships.insert(id, ownerships);
@@ -359,7 +364,7 @@ impl LinearityChecker {
                 let _ = self.track_copy(name, &Ty::Prim(PrimTy::I64), arg.span);
             }
             _ => {
-                // Default ownership or complex expression — recurse
+                // Default ownership (builtins/unknown) or complex expression — recurse
                 self.check_expr(arg);
             }
         }
