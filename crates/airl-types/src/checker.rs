@@ -1018,6 +1018,21 @@ impl TypeChecker {
         }
         let declared_ret = self.resolve_type(&f.return_type)?;
 
+        // Type-check :requires clauses (must be Bool)
+        for req in &f.requires {
+            match self.check_expr(req) {
+                Ok(req_ty) => {
+                    if !matches!(req_ty, Ty::Prim(PrimTy::Bool)) {
+                        self.diags.add(Diagnostic::error(
+                            format!(":requires clause must be Bool, got {:?}", req_ty),
+                            req.span,
+                        ));
+                    }
+                }
+                Err(()) => {} // error already recorded
+            }
+        }
+
         // Pre-bind the function name so recursive calls can resolve.
         // Use the declared return type if available, otherwise a fresh type variable.
         let wc = self.sym_wildcard;
@@ -1037,6 +1052,41 @@ impl TypeChecker {
         let body_ty = self.check_expr(&f.body)?;
         // Check body_ty is assignable to declared_ret
         self.check_assignable(&body_ty, &declared_ret, f.body.span)?;
+
+        // Bind `result` for ensures/invariants clauses
+        let result_id = self.intern("result");
+        self.env.bind(result_id, declared_ret.clone());
+
+        // Type-check :ensures clauses (must be Bool)
+        for ens in &f.ensures {
+            match self.check_expr(ens) {
+                Ok(ens_ty) => {
+                    if !matches!(ens_ty, Ty::Prim(PrimTy::Bool)) {
+                        self.diags.add(Diagnostic::error(
+                            format!(":ensures clause must be Bool, got {:?}", ens_ty),
+                            ens.span,
+                        ));
+                    }
+                }
+                Err(()) => {} // error already recorded
+            }
+        }
+
+        // Type-check :invariants clauses (must be Bool)
+        for inv in &f.invariants {
+            match self.check_expr(inv) {
+                Ok(inv_ty) => {
+                    if !matches!(inv_ty, Ty::Prim(PrimTy::Bool)) {
+                        self.diags.add(Diagnostic::error(
+                            format!(":invariants clause must be Bool, got {:?}", inv_ty),
+                            inv.span,
+                        ));
+                    }
+                }
+                Err(()) => {} // error already recorded
+            }
+        }
+
         self.env.pop_scope();
         let fn_ty = Ty::Func {
             params: param_tys,
@@ -1658,5 +1708,97 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn contract_requires_must_be_bool() {
+        // A :requires clause with non-Bool type should produce a diagnostic error
+        let mut checker = TypeChecker::new();
+        let input = r#"(defn bad-contract :sig [(x : i32) -> i32] :requires [(+ x 1)] :body x)"#;
+        let mut lexer = airl_syntax::Lexer::new(input);
+        let tokens = lexer.lex_all().unwrap();
+        let sexprs = airl_syntax::parse_sexpr_all(tokens).unwrap();
+        let mut diags = Diagnostics::new();
+        let top = airl_syntax::parse_top_level(&sexprs[0], &mut diags).unwrap();
+        let _ = checker.check_top_level(&top);
+
+        // Should have a diagnostic error because (+ x 1) returns i64, not Bool
+        let err_msgs: Vec<String> = checker.diags.errors()
+            .map(|d| format!("{:?}", d))
+            .collect();
+        assert!(!err_msgs.is_empty(), "Expected error for non-Bool :requires clause");
+        assert!(err_msgs.iter().any(|e| e.contains("must be Bool")), "Error message should mention Bool requirement: {:?}", err_msgs);
+    }
+
+    #[test]
+    fn contract_ensures_must_be_bool() {
+        // A :ensures clause with non-Bool type should produce a diagnostic error
+        let mut checker = TypeChecker::new();
+        let input = r#"(defn bad-contract :sig [(x : i32) -> i32] :ensures [(+ x 1)] :body x)"#;
+        let mut lexer = airl_syntax::Lexer::new(input);
+        let tokens = lexer.lex_all().unwrap();
+        let sexprs = airl_syntax::parse_sexpr_all(tokens).unwrap();
+        let mut diags = Diagnostics::new();
+        let top = airl_syntax::parse_top_level(&sexprs[0], &mut diags).unwrap();
+        let _ = checker.check_top_level(&top);
+
+        // Should have a diagnostic error because (+ x 1) returns i64, not Bool
+        let err_msgs: Vec<String> = checker.diags.errors()
+            .map(|d| format!("{:?}", d))
+            .collect();
+        assert!(!err_msgs.is_empty(), "Expected error for non-Bool :ensures clause");
+        assert!(err_msgs.iter().any(|e| e.contains("must be Bool")), "Error message should mention Bool requirement: {:?}", err_msgs);
+    }
+
+    #[test]
+    fn contract_valid_requires_bool() {
+        // A :requires clause with Bool type should type-check successfully
+        let mut checker = TypeChecker::new();
+        let input = r#"(defn good-contract :sig [(x : i32) -> i32] :requires [(valid x)] :body x)"#;
+        let mut lexer = airl_syntax::Lexer::new(input);
+        let tokens = lexer.lex_all().unwrap();
+        let sexprs = airl_syntax::parse_sexpr_all(tokens).unwrap();
+        let mut diags = Diagnostics::new();
+        let top = airl_syntax::parse_top_level(&sexprs[0], &mut diags).unwrap();
+        let result = checker.check_top_level(&top);
+
+        // Should succeed because (valid x) returns Bool
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn contract_result_binding_in_ensures() {
+        // The 'result' variable should be bound in :ensures clauses
+        let mut checker = TypeChecker::new();
+        let input = r#"(defn good-contract :sig [(x : i32) -> i32] :ensures [(> result 0)] :body x)"#;
+        let mut lexer = airl_syntax::Lexer::new(input);
+        let tokens = lexer.lex_all().unwrap();
+        let sexprs = airl_syntax::parse_sexpr_all(tokens).unwrap();
+        let mut diags = Diagnostics::new();
+        let top = airl_syntax::parse_top_level(&sexprs[0], &mut diags).unwrap();
+        let result = checker.check_top_level(&top);
+
+        // Should succeed because 'result' is bound and (> result 0) returns Bool
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn contract_undeclared_var_in_ensures() {
+        // An undeclared variable in :ensures should produce an undefined symbol error
+        let mut checker = TypeChecker::new();
+        let input = r#"(defn bad-contract :sig [(x : i32) -> i32] :ensures [(> result unknown_var)] :body x)"#;
+        let mut lexer = airl_syntax::Lexer::new(input);
+        let tokens = lexer.lex_all().unwrap();
+        let sexprs = airl_syntax::parse_sexpr_all(tokens).unwrap();
+        let mut diags = Diagnostics::new();
+        let top = airl_syntax::parse_top_level(&sexprs[0], &mut diags).unwrap();
+        let _ = checker.check_top_level(&top);
+
+        // Should have a diagnostic error because unknown_var is undefined
+        let err_msgs: Vec<String> = checker.diags.errors()
+            .map(|d| format!("{:?}", d))
+            .collect();
+        assert!(!err_msgs.is_empty(), "Expected error for undefined variable in :ensures clause");
+        assert!(err_msgs.iter().any(|e| e.contains("undefined")), "Error message should mention undefined symbol: {:?}", err_msgs);
     }
 }

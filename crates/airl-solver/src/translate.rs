@@ -760,12 +760,49 @@ impl<'ctx> Translator<'ctx> {
         // Build ITE chain from right to left: innermost (last arm) first.
         // Start with the last arm as the base case.
         let last_arm = &arms[arms.len() - 1];
+
+        // Handle binding pattern in last arm: bind the variable before translating body
+        let saved_last = if let PatternKind::Binding(name) = &last_arm.pattern.kind {
+            let scrutinee_val = self.translate_bool(scrutinee)?;
+            let prev = self.bool_vars.insert(name.clone(), scrutinee_val);
+            Some((name.clone(), prev))
+        } else {
+            None
+        };
+
         let mut result = self.translate_bool(&last_arm.body)?;
+
+        // Restore the previous binding after translating last arm
+        if let Some((name, prev)) = saved_last {
+            match prev {
+                Some(v) => { self.bool_vars.insert(name, v); }
+                None => { self.bool_vars.remove(&name); }
+            }
+        }
 
         // For each preceding arm (in reverse order), build an ITE around the result.
         for arm in arms[0..arms.len() - 1].iter().rev() {
             let condition = self.translate_pattern_condition(scrutinee, &arm.pattern)?;
+
+            // Handle binding pattern: bind the variable before translating body
+            let saved = if let PatternKind::Binding(name) = &arm.pattern.kind {
+                let scrutinee_val = self.translate_bool(scrutinee)?;
+                let prev = self.bool_vars.insert(name.clone(), scrutinee_val);
+                Some((name.clone(), prev))
+            } else {
+                None
+            };
+
             let body = self.translate_bool(&arm.body)?;
+
+            // Restore the previous binding after translating body
+            if let Some((name, prev)) = saved {
+                match prev {
+                    Some(v) => { self.bool_vars.insert(name, v); }
+                    None => { self.bool_vars.remove(&name); }
+                }
+            }
+
             result = condition.ite(&body, &result);
         }
 
@@ -786,11 +823,48 @@ impl<'ctx> Translator<'ctx> {
 
         // Build ITE chain from right to left.
         let last_arm = &arms[arms.len() - 1];
+
+        // Handle binding pattern in last arm: bind the variable before translating body
+        let saved_last = if let PatternKind::Binding(name) = &last_arm.pattern.kind {
+            let scrutinee_val = self.translate_int(scrutinee)?;
+            let prev = self.int_vars.insert(name.clone(), scrutinee_val);
+            Some((name.clone(), prev))
+        } else {
+            None
+        };
+
         let mut result = self.translate_int(&last_arm.body)?;
+
+        // Restore the previous binding after translating last arm
+        if let Some((name, prev)) = saved_last {
+            match prev {
+                Some(v) => { self.int_vars.insert(name, v); }
+                None => { self.int_vars.remove(&name); }
+            }
+        }
 
         for arm in arms[0..arms.len() - 1].iter().rev() {
             let condition = self.translate_pattern_condition(scrutinee, &arm.pattern)?;
+
+            // Handle binding pattern: bind the variable before translating body
+            let saved = if let PatternKind::Binding(name) = &arm.pattern.kind {
+                let scrutinee_val = self.translate_int(scrutinee)?;
+                let prev = self.int_vars.insert(name.clone(), scrutinee_val);
+                Some((name.clone(), prev))
+            } else {
+                None
+            };
+
             let body = self.translate_int(&arm.body)?;
+
+            // Restore the previous binding after translating body
+            if let Some((name, prev)) = saved {
+                match prev {
+                    Some(v) => { self.int_vars.insert(name, v); }
+                    None => { self.int_vars.remove(&name); }
+                }
+            }
+
             result = condition.ite(&body, &result);
         }
 
@@ -811,11 +885,48 @@ impl<'ctx> Translator<'ctx> {
 
         // Build ITE chain from right to left.
         let last_arm = &arms[arms.len() - 1];
+
+        // Handle binding pattern in last arm: bind the variable before translating body
+        let saved_last = if let PatternKind::Binding(name) = &last_arm.pattern.kind {
+            let scrutinee_val = self.translate_real(scrutinee)?;
+            let prev = self.real_vars.insert(name.clone(), scrutinee_val);
+            Some((name.clone(), prev))
+        } else {
+            None
+        };
+
         let mut result = self.translate_real(&last_arm.body)?;
+
+        // Restore the previous binding after translating last arm
+        if let Some((name, prev)) = saved_last {
+            match prev {
+                Some(v) => { self.real_vars.insert(name, v); }
+                None => { self.real_vars.remove(&name); }
+            }
+        }
 
         for arm in arms[0..arms.len() - 1].iter().rev() {
             let condition = self.translate_pattern_condition(scrutinee, &arm.pattern)?;
+
+            // Handle binding pattern: bind the variable before translating body
+            let saved = if let PatternKind::Binding(name) = &arm.pattern.kind {
+                let scrutinee_val = self.translate_real(scrutinee)?;
+                let prev = self.real_vars.insert(name.clone(), scrutinee_val);
+                Some((name.clone(), prev))
+            } else {
+                None
+            };
+
             let body = self.translate_real(&arm.body)?;
+
+            // Restore the previous binding after translating body
+            if let Some((name, prev)) = saved {
+                match prev {
+                    Some(v) => { self.real_vars.insert(name, v); }
+                    None => { self.real_vars.remove(&name); }
+                }
+            }
+
             result = condition.ite(&body, &result);
         }
 
@@ -1124,5 +1235,54 @@ mod tests {
         let scrutinee = Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() };
         let expr = Expr { kind: ExprKind::Match(Box::new(scrutinee), vec![]), span: airl_syntax::Span::dummy() };
         assert!(t.translate_int(&expr).is_err(), "match with no arms should error");
+    }
+
+    #[test]
+    fn translate_match_binding_uses_scrutinee() {
+        let ctx = make_ctx();
+        let mut t = Translator::new(&ctx);
+        t.declare_int("x");
+
+        // (match x (y (+ y 1)))
+        let scrutinee = Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() };
+        let arm = MatchArm {
+            pattern: Pattern { kind: PatternKind::Binding("y".into()), span: airl_syntax::Span::dummy() },
+            body: Expr {
+                kind: ExprKind::FnCall(
+                    Box::new(Expr { kind: ExprKind::SymbolRef("+".into()), span: airl_syntax::Span::dummy() }),
+                    vec![
+                        Expr { kind: ExprKind::SymbolRef("y".into()), span: airl_syntax::Span::dummy() },
+                        Expr { kind: ExprKind::IntLit(1), span: airl_syntax::Span::dummy() },
+                    ],
+                ),
+                span: airl_syntax::Span::dummy(),
+            },
+            span: airl_syntax::Span::dummy(),
+        };
+        let expr = Expr { kind: ExprKind::Match(Box::new(scrutinee), vec![arm]), span: airl_syntax::Span::dummy() };
+        let result = t.translate_int(&expr);
+        assert!(result.is_ok(), "match with binding pattern should succeed: {:?}", result.err());
+    }
+
+    #[test]
+    fn translate_match_binding_shadow_restores() {
+        let ctx = make_ctx();
+        let mut t = Translator::new(&ctx);
+        t.declare_int("x");
+        t.declare_int("y"); // outer y
+
+        // (match x (y y))
+        let scrutinee = Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() };
+        let arm = MatchArm {
+            pattern: Pattern { kind: PatternKind::Binding("y".into()), span: airl_syntax::Span::dummy() },
+            body: Expr { kind: ExprKind::SymbolRef("y".into()), span: airl_syntax::Span::dummy() },
+            span: airl_syntax::Span::dummy(),
+        };
+        let expr = Expr { kind: ExprKind::Match(Box::new(scrutinee), vec![arm]), span: airl_syntax::Span::dummy() };
+        let result = t.translate_int(&expr);
+        assert!(result.is_ok(), "match binding shadow should work");
+
+        // After the match, y should be restored to the original declared value
+        assert!(t.get_int_var("y").is_some(), "outer y should still exist after match");
     }
 }

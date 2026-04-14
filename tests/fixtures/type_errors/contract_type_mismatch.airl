@@ -1,0 +1,5 @@
+;; ERROR: must be Bool
+(defn bad-contract
+  :sig [(x : i32) -> i32]
+  :requires [(+ x 1)]
+  :body x)

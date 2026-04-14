@@ -1,0 +1,5 @@
+;; ERROR: undefined
+(defn bad-ref
+  :sig [(x : i32) -> i32]
+  :ensures [(> result y)]
+  :body x)

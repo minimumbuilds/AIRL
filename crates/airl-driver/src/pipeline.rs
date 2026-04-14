@@ -96,91 +96,53 @@ fn parse_source_stdlib(source: &str, name: &str) -> Result<Vec<airl_syntax::ast:
     Ok(tops)
 }
 
-/// Look up the verify level for a function by finding its containing module.
-fn verify_level_for_fn(fn_name: &str, tops: &[airl_syntax::ast::TopLevel]) -> airl_syntax::ast::VerifyLevel {
-    for top in tops {
-        if let airl_syntax::ast::TopLevel::Module(m) = top {
-            for item in &m.body {
-                if let airl_syntax::ast::TopLevel::Defn(f) = item {
-                    if f.name == fn_name {
-                        return m.verify;
-                    }
+/// Parse source and extract extern-c declarations alongside the top-level forms.
+/// Used by compile_to_object to get both AST and extern info in a single pass.
+#[cfg(feature = "aot")]
+fn parse_source_with_externs(source: &str) -> Result<(Vec<airl_syntax::ast::TopLevel>, Vec<airl_runtime::bytecode_aot::ExternCInfo>), PipelineError> {
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.lex_all().map_err(PipelineError::Syntax)?;
+    let sexprs = parse_sexpr_all(tokens).map_err(PipelineError::Syntax)?;
+    let mut diags = Diagnostics::new();
+
+    let mut tops = Vec::new();
+    let mut extern_c_decls = Vec::new();
+    for sexpr in &sexprs {
+        match parser::parse_top_level(sexpr, &mut diags) {
+            Ok(top) => {
+                if let airl_syntax::ast::TopLevel::ExternC(ref decl) = top {
+                    extern_c_decls.push(airl_runtime::bytecode_aot::ExternCInfo {
+                        c_name: decl.c_name.clone(),
+                        arity: decl.params.len(),
+                    });
+                }
+                tops.push(top);
+            }
+            Err(d) => {
+                let mut diags2 = Diagnostics::new();
+                match parser::parse_expr(sexpr, &mut diags2) {
+                    Ok(expr) => tops.push(airl_syntax::ast::TopLevel::Expr(expr)),
+                    Err(_) => return Err(PipelineError::Syntax(d)),
                 }
             }
         }
     }
-    airl_syntax::ast::VerifyLevel::Checked
+    Ok((tops, extern_c_decls))
 }
 
-pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, PipelineError> {
-    let strict_mode = std::env::var("AIRL_STRICT").is_ok();
-
-    let (tops, diags) = parse_source(source)?;
-    if diags.has_errors() {
-        return Err(PipelineError::Parse(diags));
-    }
-
-    // Type check
-    let mut checker = TypeChecker::new();
-    for top in &tops {
-        let _ = checker.check_top_level(top);
-    }
-    if checker.has_errors() {
-        let type_diags = checker.into_diagnostics();
-        match mode {
-            PipelineMode::Check => return Err(PipelineError::TypeCheck(type_diags)),
-            PipelineMode::Run | PipelineMode::Repl => {
-                if strict_mode {
-                    return Err(PipelineError::TypeCheck(type_diags));
-                }
-                // Print as warnings to stderr, don't block
-                for d in type_diags.errors() {
-                    eprintln!("warning: {}", d.message);
-                }
-            }
-        }
-    }
-
-    // Linearity check
-    let mut lin_checker = LinearityChecker::new();
-    for top in &tops {
-        if let airl_syntax::ast::TopLevel::Defn(f) = top {
-            lin_checker.check_fn(f);
-        }
-    }
-    if lin_checker.has_errors() {
-        let lin_diags = lin_checker.drain_diagnostics();
-        match mode {
-            PipelineMode::Check => {
-                // Linearity errors are fatal in Check mode
-                let mut msgs = Vec::new();
-                for d in lin_diags.errors() {
-                    msgs.push(d.message.clone());
-                }
-                return Err(PipelineError::Runtime(RuntimeError::Custom(
-                    msgs.join("; ")
-                )));
-            }
-            PipelineMode::Run | PipelineMode::Repl => {
-                if strict_mode {
-                    let mut msgs = Vec::new();
-                    for d in lin_diags.errors() {
-                        msgs.push(d.message.clone());
-                    }
-                    return Err(PipelineError::Runtime(RuntimeError::Custom(
-                        msgs.join("; ")
-                    )));
-                }
-                // Warn only — runtime ownership tracking enforces moves via MarkMoved/CheckNotMoved
-                for d in lin_diags.errors() {
-                    eprintln!("warning (linearity): {}", d.message);
-                }
-            }
-        }
-    }
-
-    // Z3 contract verification — build proof cache for opcode elision
-    // Respect VerifyLevel: Trusted → skip Z3 entirely; Proven → errors if unprovable; Checked → warn only
+/// Shared Z3 verification helper. Runs Z3 verification on all function definitions
+/// in `tops`, respecting VerifyLevel per-module. Returns a ProofCache (for opcode
+/// elision in bytecode compilation) and a set of trusted function names.
+///
+/// `mode` controls error reporting:
+/// - `Check` mode: prints "note:" for proven contracts, hard-errors on Proven-level failures
+/// - `Run`/`Repl` mode: same hard errors for Proven, warns on Checked-level Unknown
+///
+/// DiskCache is loaded/saved automatically (unless AIRL_NO_Z3_CACHE is set).
+fn z3_verify_tops(
+    tops: &[airl_syntax::ast::TopLevel],
+    mode: PipelineMode,
+) -> Result<(airl_solver::ProofCache, HashSet<String>), PipelineError> {
     let z3_prover = airl_solver::prover::Z3Prover::new();
     let mut z3_warned_fns: HashSet<String> = HashSet::new();
     let mut proof_cache = airl_solver::ProofCache::new();
@@ -196,9 +158,9 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
     };
     let mut cache_keys = Vec::new();
 
-    for top in &tops {
+    for top in tops {
         if let airl_syntax::ast::TopLevel::Defn(f) = top {
-            let level = verify_level_for_fn(&f.name, &tops);
+            let level = verify_level_for_fn(&f.name, tops);
             match level {
                 airl_syntax::ast::VerifyLevel::Trusted => {
                     // Skip Z3 entirely — contracts are trusted, not checked
@@ -284,6 +246,95 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
         let _ = disk_cache.write(&cache_path);
     }
 
+    Ok((proof_cache, trusted_fns))
+}
+
+/// Look up the verify level for a function by finding its containing module.
+fn verify_level_for_fn(fn_name: &str, tops: &[airl_syntax::ast::TopLevel]) -> airl_syntax::ast::VerifyLevel {
+    for top in tops {
+        if let airl_syntax::ast::TopLevel::Module(m) = top {
+            for item in &m.body {
+                if let airl_syntax::ast::TopLevel::Defn(f) = item {
+                    if f.name == fn_name {
+                        return m.verify;
+                    }
+                }
+            }
+        }
+    }
+    airl_syntax::ast::VerifyLevel::Checked
+}
+
+pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, PipelineError> {
+    let strict_mode = std::env::var("AIRL_STRICT").is_ok();
+
+    let (tops, diags) = parse_source(source)?;
+    if diags.has_errors() {
+        return Err(PipelineError::Parse(diags));
+    }
+
+    // Type check
+    let mut checker = TypeChecker::new();
+    for top in &tops {
+        let _ = checker.check_top_level(top);
+    }
+    if checker.has_errors() {
+        let type_diags = checker.into_diagnostics();
+        match mode {
+            PipelineMode::Check => return Err(PipelineError::TypeCheck(type_diags)),
+            PipelineMode::Run | PipelineMode::Repl => {
+                if strict_mode {
+                    return Err(PipelineError::TypeCheck(type_diags));
+                }
+                // Print as warnings to stderr, don't block
+                for d in type_diags.errors() {
+                    eprintln!("warning: {}", d.message);
+                }
+            }
+        }
+    }
+
+    // Linearity check
+    let mut lin_checker = LinearityChecker::new();
+    for top in &tops {
+        if let airl_syntax::ast::TopLevel::Defn(f) = top {
+            lin_checker.check_fn(f);
+        }
+    }
+    if lin_checker.has_errors() {
+        let lin_diags = lin_checker.drain_diagnostics();
+        match mode {
+            PipelineMode::Check => {
+                // Linearity errors are fatal in Check mode
+                let mut msgs = Vec::new();
+                for d in lin_diags.errors() {
+                    msgs.push(d.message.clone());
+                }
+                return Err(PipelineError::Runtime(RuntimeError::Custom(
+                    msgs.join("; ")
+                )));
+            }
+            PipelineMode::Run | PipelineMode::Repl => {
+                if strict_mode {
+                    let mut msgs = Vec::new();
+                    for d in lin_diags.errors() {
+                        msgs.push(d.message.clone());
+                    }
+                    return Err(PipelineError::Runtime(RuntimeError::Custom(
+                        msgs.join("; ")
+                    )));
+                }
+                // Warn only — runtime ownership tracking enforces moves via MarkMoved/CheckNotMoved
+                for d in lin_diags.errors() {
+                    eprintln!("warning (linearity): {}", d.message);
+                }
+            }
+        }
+    }
+
+    // Z3 contract verification — build proof cache for opcode elision
+    let (proof_cache, trusted_fns) = z3_verify_tops(&tops, mode)?;
+
     // Build ownership map: function name → per-param "is Own" flags
     let ownership_map = build_ownership_map(&tops);
 
@@ -345,10 +396,15 @@ pub fn run_file_with_preloads(path: &str, preloads: &[String]) -> Result<Value, 
 
     let (tops, _diags) = parse_source(&source)?;
 
+    // Z3 contract verification
+    let (proof_cache, trusted_fns) = z3_verify_tops(&tops, PipelineMode::Run)?;
+
     let ownership_map = build_ownership_map(&tops);
     let (ir_nodes, contracts, fn_meta) = compile_tops_with_contracts(&tops);
     let mut bc_compiler = BytecodeCompiler::with_prefix("user");
     bc_compiler.set_ownership_map(ownership_map);
+    bc_compiler.set_proven_clauses(proof_cache.into_proven_set());
+    bc_compiler.set_trusted_fns(trusted_fns);
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
 
     let mut vm = BytecodeVm::new();
@@ -416,67 +472,8 @@ pub fn check_source(source: &str) -> Result<(), PipelineError> {
         )));
     }
 
-    // Z3 contract verification — respect VerifyLevel
-    let z3_prover = airl_solver::prover::Z3Prover::new();
-    let mut z3_warned_fns: HashSet<String> = HashSet::new();
-    for top in &tops {
-        if let airl_syntax::ast::TopLevel::Defn(f) = top {
-            let level = verify_level_for_fn(&f.name, &tops);
-            match level {
-                airl_syntax::ast::VerifyLevel::Trusted => {
-                    // Skip Z3 entirely for trusted functions
-                }
-                airl_syntax::ast::VerifyLevel::Proven => {
-                    // Hard error if contracts can't be proven
-                    let verification = z3_prover.verify_function(f);
-                    for (clause, result) in verification.ensures_results.iter().chain(verification.invariants_results.iter()) {
-                        match result {
-                            airl_solver::VerifyResult::Proven => {
-                                eprintln!("note: `{}` contract proven: {}", f.name, clause);
-                            }
-                            airl_solver::VerifyResult::Disproven { counterexample } => {
-                                return Err(PipelineError::ContractDisproven {
-                                    fn_name: f.name.clone(),
-                                    clause: clause.clone(),
-                                    counterexample: counterexample.clone(),
-                                });
-                            }
-                            airl_solver::VerifyResult::Unknown(reason) | airl_solver::VerifyResult::TranslationError(reason) => {
-                                return Err(PipelineError::ContractUnprovable {
-                                    fn_name: f.name.clone(),
-                                    clause: clause.clone(),
-                                    reason: reason.clone(),
-                                });
-                            }
-                        }
-                    }
-                }
-                airl_syntax::ast::VerifyLevel::Checked => {
-                    // Current behavior — warn on unprovable, don't error
-                    let verification = z3_prover.verify_function(f);
-                    for (clause, result) in verification.ensures_results.iter().chain(verification.invariants_results.iter()) {
-                        match result {
-                            airl_solver::VerifyResult::Proven => {
-                                eprintln!("note: `{}` contract proven: {}", f.name, clause);
-                            }
-                            airl_solver::VerifyResult::Disproven { counterexample } => {
-                                return Err(PipelineError::ContractDisproven {
-                                    fn_name: f.name.clone(),
-                                    clause: clause.clone(),
-                                    counterexample: counterexample.clone(),
-                                });
-                            }
-                            airl_solver::VerifyResult::Unknown(_) | airl_solver::VerifyResult::TranslationError(_) => {
-                                if z3_warned_fns.insert(f.name.clone()) {
-                                    eprintln!("warning: Z3 returned Unknown/TranslationError for `{}`, falling back to runtime checking", f.name);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // Z3 contract verification — respect VerifyLevel (with DiskCache)
+    let _z3_results = z3_verify_tops(&tops, PipelineMode::Check)?;
 
     Ok(())
 }
@@ -1573,7 +1570,7 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
         stdlib_extern_c_decls.extend(externs);
     }
 
-    // 2. Compile user source files to bytecode
+    // 2. Parse and compile user source files with Z3 verification
     let mut all_source = String::new();
     for path in paths {
         let source = std::fs::read_to_string(path)
@@ -1582,8 +1579,21 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
         all_source.push('\n');
     }
 
-    let (funcs, main_func, extern_c_decls) =
-        compile_source_to_bytecode_with_externs(&all_source, "user")?;
+    // Parse user source and extract extern-c declarations
+    let (user_tops, user_extern_c_decls) = parse_source_with_externs(&all_source)?;
+
+    // Z3 contract verification on user code
+    let (proof_cache, trusted_fns) = z3_verify_tops(&user_tops, PipelineMode::Run)?;
+
+    // Compile user source with contracts and Z3 proof results
+    let ownership_map = build_ownership_map(&user_tops);
+    let (ir_nodes, contracts, _fn_meta) = compile_tops_with_contracts(&user_tops);
+    let mut bc_compiler = BytecodeCompiler::with_prefix("user");
+    bc_compiler.set_ownership_map(ownership_map);
+    bc_compiler.set_proven_clauses(proof_cache.into_proven_set());
+    bc_compiler.set_trusted_fns(trusted_fns);
+    let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
+    let extern_c_decls = user_extern_c_decls;
     all_funcs.extend(funcs);
     all_funcs.push(main_func); // Only the user's __main__
 
@@ -1684,6 +1694,10 @@ pub fn compile_to_object_with_imports(entry_path: &str, target: Option<&str>) ->
             .cloned()
             .collect();
 
+        // Z3 contract verification for this module
+        let (proof_cache, trusted_fns) = z3_verify_tops(&filtered_tops, PipelineMode::Run)?;
+        let proven_set = proof_cache.into_proven_set();
+
         let (ir_nodes, contracts, _fn_meta) = compile_tops_with_contracts(&filtered_tops);
 
         // Rewrite qualified names for the entry module (with visibility checks)
@@ -1697,6 +1711,8 @@ pub fn compile_to_object_with_imports(entry_path: &str, target: Option<&str>) ->
             let ownership_map = build_ownership_map(&filtered_tops);
             let mut bc_compiler = BytecodeCompiler::with_prefix("user");
             bc_compiler.set_ownership_map(ownership_map);
+            bc_compiler.set_proven_clauses(proven_set);
+            bc_compiler.set_trusted_fns(trusted_fns);
             let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&final_ir, &contracts);
             all_funcs.extend(funcs);
             all_funcs.push(main_func); // Only entry module's __main__
@@ -1705,6 +1721,8 @@ pub fn compile_to_object_with_imports(entry_path: &str, target: Option<&str>) ->
             let ownership_map = build_ownership_map(&filtered_tops);
             let mut bc_compiler = BytecodeCompiler::with_prefix(&module.name);
             bc_compiler.set_ownership_map(ownership_map);
+            bc_compiler.set_proven_clauses(proven_set);
+            bc_compiler.set_trusted_fns(trusted_fns);
             let (funcs, _main) = bc_compiler.compile_program_with_contracts(&final_ir, &contracts);
             for mut func in funcs {
                 if func.name != "__main__" {
