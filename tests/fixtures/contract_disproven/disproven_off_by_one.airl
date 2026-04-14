@@ -1,0 +1,8 @@
+;; ERROR: Contract disproven
+;; The ensures clause requires result >= 1, but (+ x 0) can return 0 when x = 0.
+(defn at-least-one
+  :sig [(x : i32) -> i32]
+  :intent "should return at least 1"
+  :ensures [(>= result 1)]
+  :body (+ x 0))
+(at-least-one 0)

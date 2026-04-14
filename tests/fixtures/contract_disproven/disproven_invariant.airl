@@ -1,0 +1,9 @@
+;; ERROR: Contract disproven
+;; The invariant (> result 0) is disproven when x = 0 since body returns x directly.
+(defn stay-positive
+  :sig [(x : i32) -> i32]
+  :intent "identity that claims positivity"
+  :ensures [(= result x)]
+  :invariant [(> result 0)]
+  :body x)
+(stay-positive 1)

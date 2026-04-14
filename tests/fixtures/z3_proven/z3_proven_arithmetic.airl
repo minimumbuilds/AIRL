@@ -1,0 +1,23 @@
+;; EXPECT: 7
+;; Test Z3 verification of multiplication, division, and modulo contracts.
+;;Z3-PROVEN: double
+;;Z3-PROVEN: integer-div
+;;Z3-PROVEN: remainder
+(defn double
+  :sig [(x : i32) -> i32]
+  :intent "multiply x by 2"
+  :ensures [(= result (* x 2))]
+  :body (* x 2))
+(defn integer-div
+  :sig [(a : i32) (b : i32) -> i32]
+  :intent "integer division"
+  :requires [(!= b 0)]
+  :ensures [(= result (/ a b))]
+  :body (/ a b))
+(defn remainder
+  :sig [(a : i32) (b : i32) -> i32]
+  :intent "modulo operation"
+  :requires [(!= b 0)]
+  :ensures [(= result (% a b))]
+  :body (% a b))
+(+ (double 3) (remainder 10 3))

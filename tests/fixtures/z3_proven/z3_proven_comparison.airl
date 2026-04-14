@@ -1,0 +1,21 @@
+;; EXPECT: 5
+;; Test Z3 verification of min/max/clamp via if-expressions (ite).
+;;Z3-PROVEN: my-min
+;;Z3-PROVEN: my-max
+;;Z3-PROVEN: my-abs
+(defn my-min
+  :sig [(a : i32) (b : i32) -> i32]
+  :intent "return the smaller of a and b"
+  :ensures [(<= result a) (<= result b)]
+  :body (if (< a b) a b))
+(defn my-max
+  :sig [(a : i32) (b : i32) -> i32]
+  :intent "return the larger of a and b"
+  :ensures [(>= result a) (>= result b)]
+  :body (if (> a b) a b))
+(defn my-abs
+  :sig [(x : i32) -> i32]
+  :intent "absolute value"
+  :ensures [(>= result 0)]
+  :body (if (>= x 0) x (- 0 x)))
+(my-min (my-max 3 5) (my-abs -7))

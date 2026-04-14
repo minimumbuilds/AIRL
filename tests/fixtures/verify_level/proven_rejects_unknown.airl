@@ -1,0 +1,15 @@
+;; ERROR: unprovable
+;; VERIFY-LEVEL: proven
+;; The body uses a typed lambda invocation which Z3 cannot translate
+;; (non-symbol callee). Since ensures references result and body
+;; translation fails, Z3 returns Unknown. Proven mode errors.
+(module proven-test
+  :version 0.1.0
+  :provides [must-prove]
+  :verify proven
+  (defn must-prove
+    :sig [(x : i32) -> i32]
+    :intent "identity via lambda"
+    :ensures [(= result x)]
+    :body ((fn [(y : i32)] y) x)))
+(must-prove 1)

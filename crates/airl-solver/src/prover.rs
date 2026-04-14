@@ -74,6 +74,7 @@ impl Z3Prover {
                     Some(VarSort::Int) => translator.declare_int(&param.name),
                     Some(VarSort::Bool) => translator.declare_bool(&param.name),
                     Some(VarSort::Real) => translator.declare_real(&param.name),
+                    Some(VarSort::Str) => translator.declare_string(&param.name),
                     None => { can_translate = false; break; }
                 }
             } else {
@@ -89,6 +90,7 @@ impl Z3Prover {
                     Some(VarSort::Int) => translator.declare_int("result"),
                     Some(VarSort::Bool) => translator.declare_bool("result"),
                     Some(VarSort::Real) => translator.declare_real("result"),
+                    Some(VarSort::Str) => translator.declare_string("result"),
                     None => can_translate = false,
                 }
             } else {
@@ -162,6 +164,16 @@ impl Z3Prover {
                     },
                     Err(_) => false,
                 },
+                Some(VarSort::Str) => match translator.translate_string(&def.body) {
+                    Ok(body_z3) => match translator.get_string_var("result") {
+                        Some(result_var) => {
+                            solver.assert(&result_var.clone()._eq(&body_z3));
+                            true
+                        }
+                        None => false,
+                    },
+                    Err(_) => false,
+                },
                 None => false,
             },
             _ => false,
@@ -217,6 +229,13 @@ impl Z3Prover {
                                                         if let Some(b) = val.as_bool() {
                                                             counterexample.push((param.name.clone(), b.to_string()));
                                                         }
+                                                    }
+                                                }
+                                            }
+                                            Some(VarSort::Str) => {
+                                                if let Some(var) = translator.get_string_var(&param.name) {
+                                                    if let Some(val) = model.eval(var, true) {
+                                                        counterexample.push((param.name.clone(), val.to_string()));
                                                     }
                                                 }
                                             }
@@ -292,6 +311,13 @@ impl Z3Prover {
                                                         if let Some(b) = val.as_bool() {
                                                             counterexample.push((param.name.clone(), b.to_string()));
                                                         }
+                                                    }
+                                                }
+                                            }
+                                            Some(VarSort::Str) => {
+                                                if let Some(var) = translator.get_string_var(&param.name) {
+                                                    if let Some(val) = model.eval(var, true) {
+                                                        counterexample.push((param.name.clone(), val.to_string()));
                                                     }
                                                 }
                                             }
@@ -522,7 +548,9 @@ mod tests {
     }
 
     #[test]
-    fn unknown_for_string_params() {
+    fn string_params_now_supported() {
+        // String params are now translatable — body (name) is bound to result,
+        // and the function has no ensures, so the result is trivially OK.
         let def = make_fn("greet",
             vec![("name", "String")], "String",
             vec![], vec![],
@@ -530,8 +558,71 @@ mod tests {
         );
         let prover = Z3Prover::new();
         let result = prover.verify_function(&def);
-        // Should return Unknown for all clauses (no clauses = trivially OK)
-        assert!(result.ensures_results.is_empty() || !result.has_disproven());
+        assert!(result.ensures_results.is_empty());
+    }
+
+    #[test]
+    fn prove_string_length_nonneg() {
+        // (defn slen [(s : String) -> i32]
+        //   :ensures [(>= result 0)]
+        //   :body (string-length s))
+        // string-length always returns >= 0.
+        let def = make_fn("slen",
+            vec![("s", "String")], "i32",
+            vec![],
+            vec![call(">=", vec![sym("result"), int(0)])],
+            call("string-length", vec![sym("s")]),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for string-length >= 0, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn prove_string_contains_self() {
+        // (defn self_contains [(s : String) -> bool]
+        //   :ensures [(= result true)]
+        //   :body (string-contains? s s))
+        // A string always contains itself.
+        let def = make_fn("self_contains",
+            vec![("s", "String")], "bool",
+            vec![],
+            vec![call("=", vec![sym("result"), Expr { kind: ExprKind::BoolLit(true), span: Span::dummy() }])],
+            call("string-contains?", vec![sym("s"), sym("s")]),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for string-contains? self, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn prove_string_concat_result() {
+        // (defn greet [(name : String) -> String]
+        //   :ensures [(= result (string-concat "hello " name))]
+        //   :body (string-concat "hello " name))
+        let hello = Expr { kind: ExprKind::StrLit("hello ".into()), span: Span::dummy() };
+        let hello2 = Expr { kind: ExprKind::StrLit("hello ".into()), span: Span::dummy() };
+        let def = make_fn("greet",
+            vec![("name", "String")], "String",
+            vec![],
+            vec![call("=", vec![sym("result"), call("string-concat", vec![hello.clone(), sym("name")])])],
+            call("string-concat", vec![hello2, sym("name")]),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for string-concat result, got: {:?}", v,
+        );
     }
 
     // ── New tests for body translation feature ──────────────────────────────

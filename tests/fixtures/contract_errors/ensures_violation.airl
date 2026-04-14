@@ -1,0 +1,11 @@
+;; ERROR: contract violated
+;; The requires clause uses (valid x) which Z3 cannot translate, so all
+;; contract clauses fall back to runtime checking. At runtime, x = 0
+;; makes (> result 0) false, triggering an ensures violation.
+(defn positive-result
+  :sig [(x : i32) -> i32]
+  :intent "return a positive value"
+  :requires [(valid x)]
+  :ensures [(> result 0)]
+  :body x)
+(positive-result 0)

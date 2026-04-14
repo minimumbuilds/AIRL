@@ -46,6 +46,18 @@ impl ProofCache {
             .map_or(false, |r| matches!(r, VerifyResult::Proven))
     }
 
+    /// Return names of functions where every clause (ensures + invariants) is Proven
+    /// and at least one clause exists. Used by `run_source_with_z3_info` for fixture checks.
+    pub fn fully_verified_functions(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for (fn_name, clauses) in &self.results {
+            if !clauses.is_empty() && clauses.values().all(|r| matches!(r, VerifyResult::Proven)) {
+                names.push(fn_name.clone());
+            }
+        }
+        names
+    }
+
     /// Extract the set of (fn_name, clause) pairs that were proven.
     /// Used to pass to the bytecode compiler for opcode elision.
     pub fn into_proven_set(self) -> std::collections::HashSet<(String, String)> {

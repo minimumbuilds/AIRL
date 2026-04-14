@@ -1,0 +1,14 @@
+;; EXPECT: 42
+;; VERIFY-LEVEL: trusted
+;; A function inside a (module :verify trusted) with a provably wrong ensures.
+;; In Trusted mode, Z3 is skipped entirely, so the bad contract is ignored.
+(module trust-test
+  :version 0.1.0
+  :provides [wrong-but-trusted]
+  :verify trusted
+  (defn wrong-but-trusted
+    :sig [(x : i32) -> i32]
+    :intent "identity that claims result is always 99"
+    :ensures [(= result 99)]
+    :body x))
+(wrong-but-trusted 42)

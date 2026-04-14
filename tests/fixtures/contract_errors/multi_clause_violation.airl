@@ -1,0 +1,11 @@
+;; ERROR: contract violated
+;; Multiple ensures clauses with untranslatable requires so Z3 falls back
+;; to runtime. The first ensures (> result 0) passes for x = 5, but the
+;; second ensures (< result 3) fails because result = 5.
+(defn bounded
+  :sig [(x : i32) -> i32]
+  :intent "return x within bounds"
+  :requires [(valid x)]
+  :ensures [(> result 0) (< result 3)]
+  :body x)
+(bounded 5)

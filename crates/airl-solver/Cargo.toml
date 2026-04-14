@@ -8,6 +8,8 @@ airl-syntax = { path = "../airl-syntax" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 z3 = { version = "0.12", features = ["static-link-z3"] }
+z3-sys = "0.8"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 z3 = { version = "0.12" }
+z3-sys = "0.8"

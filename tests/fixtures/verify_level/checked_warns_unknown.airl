@@ -1,0 +1,14 @@
+;; EXPECT: 1
+;; VERIFY-LEVEL: checked
+;; Same untranslatable body in a (module :verify checked) context.
+;; Z3 returns Unknown but Checked mode only warns — check_source succeeds.
+(module checked-test
+  :version 0.1.0
+  :provides [soft-check]
+  :verify checked
+  (defn soft-check
+    :sig [(x : i32) -> i32]
+    :intent "identity via lambda"
+    :ensures [(= result x)]
+    :body ((fn [(y : i32)] y) x)))
+(soft-check 1)

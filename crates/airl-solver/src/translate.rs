@@ -1,7 +1,23 @@
 use std::collections::HashMap;
 use z3::ast::{self, Ast};
 use z3::Context;
+use z3_sys::{self, Z3_context};
 use airl_syntax::ast::{Expr, ExprKind, LetBinding, AstTypeKind, MatchArm, Pattern, PatternKind, LitPattern};
+
+/// Extract the raw Z3_context pointer from a z3::Context.
+///
+/// The z3 crate 0.12 does not expose a public accessor for the underlying
+/// Z3_context, but the struct has a single field (`z3_ctx: Z3_context`).
+/// We read it via pointer cast — this is sound because:
+///   1. Context is a non-repr(C) single-field struct (guaranteed same layout).
+///   2. Z3_context is a pointer type (no padding/alignment issues).
+///   3. We only read; we never modify or take ownership.
+///
+/// SAFETY: Only valid for z3 crate version 0.12.x where Context = { z3_ctx: Z3_context }.
+/// If the crate is upgraded, this must be re-verified.
+unsafe fn raw_z3_ctx(ctx: &Context) -> Z3_context {
+    *(ctx as *const Context as *const Z3_context)
+}
 
 /// Error during AIRL → Z3 translation.
 #[derive(Debug, Clone)]
@@ -27,6 +43,7 @@ pub enum VarSort {
     Int,
     Bool,
     Real,
+    Str,
 }
 
 /// Translates AIRL expressions to Z3 AST nodes.
@@ -35,6 +52,7 @@ pub struct Translator<'ctx> {
     int_vars: HashMap<String, ast::Int<'ctx>>,
     bool_vars: HashMap<String, ast::Bool<'ctx>>,
     real_vars: HashMap<String, ast::Real<'ctx>>,
+    string_vars: HashMap<String, ast::String<'ctx>>,
     /// Counter for generating unique quantifier-bound variable names when shadowing occurs.
     quant_counter: usize,
 }
@@ -46,6 +64,7 @@ impl<'ctx> Translator<'ctx> {
             int_vars: HashMap::new(),
             bool_vars: HashMap::new(),
             real_vars: HashMap::new(),
+            string_vars: HashMap::new(),
             quant_counter: 0,
         }
     }
@@ -83,6 +102,17 @@ impl<'ctx> Translator<'ctx> {
         self.bool_vars.get(name)
     }
 
+    /// Declare a string variable.
+    pub fn declare_string(&mut self, name: &str) {
+        let var = ast::String::new_const(self.ctx, name);
+        self.string_vars.insert(name.to_string(), var);
+    }
+
+    /// Get a reference to a string variable (for counterexample extraction).
+    pub fn get_string_var(&self, name: &str) -> Option<&ast::String<'ctx>> {
+        self.string_vars.get(name)
+    }
+
     /// Push let bindings into the variable maps, saving prior state.
     /// Returns the saved state on success, or restores on error and returns Err.
     fn push_let_bindings(
@@ -92,10 +122,12 @@ impl<'ctx> Translator<'ctx> {
         Vec<(String, Option<ast::Int<'ctx>>)>,
         Vec<(String, Option<ast::Bool<'ctx>>)>,
         Vec<(String, Option<ast::Real<'ctx>>)>,
+        Vec<(String, Option<ast::String<'ctx>>)>,
     ), TranslateError> {
         let mut saved_ints: Vec<(String, Option<ast::Int<'ctx>>)> = Vec::new();
         let mut saved_bools: Vec<(String, Option<ast::Bool<'ctx>>)> = Vec::new();
         let mut saved_reals: Vec<(String, Option<ast::Real<'ctx>>)> = Vec::new();
+        let mut saved_strings: Vec<(String, Option<ast::String<'ctx>>)> = Vec::new();
 
         for binding in bindings {
             let sort = if let AstTypeKind::Named(tn) = &binding.ty.kind {
@@ -111,7 +143,7 @@ impl<'ctx> Translator<'ctx> {
                         saved_ints.push((binding.name.clone(), prev));
                     }
                     Err(e) => {
-                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals);
+                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals, saved_strings);
                         return Err(e);
                     }
                 },
@@ -121,7 +153,7 @@ impl<'ctx> Translator<'ctx> {
                         saved_bools.push((binding.name.clone(), prev));
                     }
                     Err(e) => {
-                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals);
+                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals, saved_strings);
                         return Err(e);
                     }
                 },
@@ -131,12 +163,22 @@ impl<'ctx> Translator<'ctx> {
                         saved_reals.push((binding.name.clone(), prev));
                     }
                     Err(e) => {
-                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals);
+                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals, saved_strings);
+                        return Err(e);
+                    }
+                },
+                Some(VarSort::Str) => match self.translate_string(&binding.value) {
+                    Ok(v) => {
+                        let prev = self.string_vars.insert(binding.name.clone(), v);
+                        saved_strings.push((binding.name.clone(), prev));
+                    }
+                    Err(e) => {
+                        self.pop_let_bindings(saved_ints, saved_bools, saved_reals, saved_strings);
                         return Err(e);
                     }
                 },
                 None => {
-                    self.pop_let_bindings(saved_ints, saved_bools, saved_reals);
+                    self.pop_let_bindings(saved_ints, saved_bools, saved_reals, saved_strings);
                     return Err(TranslateError::UnsupportedExpression(
                         format!("let binding '{}': unsupported type", binding.name)
                     ));
@@ -144,7 +186,7 @@ impl<'ctx> Translator<'ctx> {
             }
         }
 
-        Ok((saved_ints, saved_bools, saved_reals))
+        Ok((saved_ints, saved_bools, saved_reals, saved_strings))
     }
 
     /// Restore variable maps from state saved by `push_let_bindings`.
@@ -153,6 +195,7 @@ impl<'ctx> Translator<'ctx> {
         saved_ints: Vec<(String, Option<ast::Int<'ctx>>)>,
         saved_bools: Vec<(String, Option<ast::Bool<'ctx>>)>,
         saved_reals: Vec<(String, Option<ast::Real<'ctx>>)>,
+        saved_strings: Vec<(String, Option<ast::String<'ctx>>)>,
     ) {
         for (name, prev) in saved_ints.into_iter().rev() {
             match prev {
@@ -170,6 +213,12 @@ impl<'ctx> Translator<'ctx> {
             match prev {
                 Some(v) => { self.real_vars.insert(name, v); }
                 None => { self.real_vars.remove(&name); }
+            }
+        }
+        for (name, prev) in saved_strings.into_iter().rev() {
+            match prev {
+                Some(v) => { self.string_vars.insert(name, v); }
+                None => { self.string_vars.remove(&name); }
             }
         }
     }
@@ -213,6 +262,22 @@ impl<'ctx> Translator<'ctx> {
                             let inner = self.translate_bool(&args[0])?;
                             Ok(inner.not())
                         }
+                        // String predicates
+                        "string-contains?" => {
+                            let s = self.translate_string(&args[0])?;
+                            let sub = self.translate_string(&args[1])?;
+                            Ok(s.contains(&sub))
+                        }
+                        "string-prefix?" => {
+                            let prefix = self.translate_string(&args[0])?;
+                            let s = self.translate_string(&args[1])?;
+                            Ok(prefix.prefix(&s))
+                        }
+                        "string-suffix?" => {
+                            let suffix = self.translate_string(&args[0])?;
+                            let s = self.translate_string(&args[1])?;
+                            Ok(suffix.suffix(&s))
+                        }
                         "valid" => {
                             // valid() cannot be encoded as a Z3 predicate — ownership
                             // semantics require a separate checker, not SMT encoding.
@@ -239,7 +304,7 @@ impl<'ctx> Translator<'ctx> {
             ExprKind::Let(bindings, body) => {
                 let saved = self.push_let_bindings(bindings)?;
                 let result = self.translate_bool(body);
-                self.pop_let_bindings(saved.0, saved.1, saved.2);
+                self.pop_let_bindings(saved.0, saved.1, saved.2, saved.3);
                 result
             }
 
@@ -324,6 +389,16 @@ impl<'ctx> Translator<'ctx> {
                             let rhs = self.translate_int(&args[1])?;
                             Ok(lhs.modulo(&rhs))
                         }
+                        "string-length" => {
+                            let s = self.translate_string(&args[0])?;
+                            // z3 crate 0.12 does not expose a len() method on ast::String,
+                            // so we call Z3_mk_seq_length via z3-sys directly.
+                            let z3_ctx = unsafe { raw_z3_ctx(self.ctx) };
+                            let len_ast = unsafe {
+                                z3_sys::Z3_mk_seq_length(z3_ctx, s.get_z3_ast())
+                            };
+                            Ok(unsafe { ast::Int::wrap(self.ctx, len_ast) })
+                        }
                         _ => Err(TranslateError::UnsupportedExpression(
                             format!("int context: {}", op)
                         )),
@@ -343,7 +418,7 @@ impl<'ctx> Translator<'ctx> {
             ExprKind::Let(bindings, body) => {
                 let saved = self.push_let_bindings(bindings)?;
                 let result = self.translate_int(body);
-                self.pop_let_bindings(saved.0, saved.1, saved.2);
+                self.pop_let_bindings(saved.0, saved.1, saved.2, saved.3);
                 result
             }
 
@@ -473,7 +548,7 @@ impl<'ctx> Translator<'ctx> {
             ExprKind::Let(bindings, body) => {
                 let saved = self.push_let_bindings(bindings)?;
                 let result = self.translate_real(body);
-                self.pop_let_bindings(saved.0, saved.1, saved.2);
+                self.pop_let_bindings(saved.0, saved.1, saved.2, saved.3);
                 result
             }
 
@@ -491,6 +566,69 @@ impl<'ctx> Translator<'ctx> {
 
             _ => Err(TranslateError::UnsupportedExpression(
                 format!("real context: {:?}", expr.kind)
+            )),
+        }
+    }
+
+    /// Translate an AIRL expression to a Z3 String.
+    pub fn translate_string(&mut self, expr: &Expr) -> Result<ast::String<'ctx>, TranslateError> {
+        match &expr.kind {
+            ExprKind::StrLit(s) => {
+                ast::String::from_str(self.ctx, s).map_err(|e| {
+                    TranslateError::UnsupportedExpression(
+                        format!("string literal contains null byte: {}", e)
+                    )
+                })
+            }
+
+            ExprKind::SymbolRef(name) => {
+                if let Some(var) = self.string_vars.get(name) {
+                    Ok(var.clone())
+                } else {
+                    Err(TranslateError::UndefinedVariable(name.clone()))
+                }
+            }
+
+            ExprKind::FnCall(callee, args) => {
+                if let ExprKind::SymbolRef(op) = &callee.kind {
+                    match op.as_str() {
+                        "string-concat" | "str-concat" => {
+                            let operands: Result<Vec<_>, _> = args.iter()
+                                .map(|a| self.translate_string(a))
+                                .collect();
+                            let operands = operands?;
+                            let refs: Vec<&ast::String> = operands.iter().collect();
+                            Ok(ast::String::concat(self.ctx, &refs))
+                        }
+                        _ => Err(TranslateError::UnsupportedExpression(
+                            format!("string context: {}", op)
+                        )),
+                    }
+                } else {
+                    Err(TranslateError::UnsupportedExpression("non-symbol callee".into()))
+                }
+            }
+
+            ExprKind::If(cond, then_e, else_e) => {
+                let c = self.translate_bool(cond)?;
+                let t = self.translate_string(then_e)?;
+                let e = self.translate_string(else_e)?;
+                Ok(c.ite(&t, &e))
+            }
+
+            ExprKind::Let(bindings, body) => {
+                let saved = self.push_let_bindings(bindings)?;
+                let result = self.translate_string(body);
+                self.pop_let_bindings(saved.0, saved.1, saved.2, saved.3);
+                result
+            }
+
+            ExprKind::Do(exprs) => exprs.last()
+                .ok_or_else(|| TranslateError::UnsupportedExpression("empty do block".into()))
+                .and_then(|e| self.translate_string(e)),
+
+            _ => Err(TranslateError::UnsupportedExpression(
+                format!("string context: {:?}", expr.kind)
             )),
         }
     }
@@ -538,6 +676,11 @@ impl<'ctx> Translator<'ctx> {
         if let (Ok(l_real), Ok(r_int)) = (self.translate_real(lhs), self.translate_int(rhs)) {
             let r_real = r_int.to_real();
             let eq = l_real._eq(&r_real);
+            return Ok(if negate { eq.not() } else { eq });
+        }
+        // Both String
+        if let (Ok(l), Ok(r)) = (self.translate_string(lhs), self.translate_string(rhs)) {
+            let eq = l._eq(&r);
             return Ok(if negate { eq.not() } else { eq });
         }
         Err(TranslateError::UnsupportedExpression("cannot translate comparison operands".into()))
@@ -731,6 +874,43 @@ impl<'ctx> Translator<'ctx> {
                 match saved_prev {
                     Some(v) => { self.real_vars.insert(var_name.clone(), v); }
                     None => { self.real_vars.remove(var_name); }
+                }
+
+                let formula = formula_result?;
+                Ok(if is_forall {
+                    ast::forall_const(self.ctx, &[&bound_var], &[], &formula)
+                } else {
+                    ast::exists_const(self.ctx, &[&bound_var], &[], &formula)
+                })
+            }
+            VarSort::Str => {
+                let z3_name = if self.string_vars.contains_key(var_name) {
+                    let n = self.quant_counter;
+                    self.quant_counter += 1;
+                    format!("{}_q{}", var_name, n)
+                } else {
+                    var_name.clone()
+                };
+                let bound_var = ast::String::new_const(self.ctx, z3_name.as_str());
+                let saved_prev = self.string_vars.insert(var_name.clone(), bound_var.clone());
+
+                let formula_result = (|| -> Result<ast::Bool<'ctx>, TranslateError> {
+                    let body_bool = self.translate_bool(body)?;
+                    if let Some(guard) = where_clause {
+                        let guard_bool = self.translate_bool(guard)?;
+                        if is_forall {
+                            Ok(guard_bool.implies(&body_bool))
+                        } else {
+                            Ok(ast::Bool::and(self.ctx, &[&guard_bool, &body_bool]))
+                        }
+                    } else {
+                        Ok(body_bool)
+                    }
+                })();
+
+                match saved_prev {
+                    Some(v) => { self.string_vars.insert(var_name.clone(), v); }
+                    None => { self.string_vars.remove(var_name); }
                 }
 
                 let formula = formula_result?;
@@ -1015,6 +1195,7 @@ impl<'ctx> Translator<'ctx> {
             "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "Nat" => Some(VarSort::Int),
             "bool" => Some(VarSort::Bool),
             "f16" | "f32" | "f64" | "bf16" => Some(VarSort::Real),
+            "String" | "str" => Some(VarSort::Str),
             _ => None,
         }
     }
@@ -1117,7 +1298,8 @@ mod tests {
         assert!(matches!(Translator::sort_from_type_name("bool"), Some(VarSort::Bool)));
         assert!(matches!(Translator::sort_from_type_name("f32"), Some(VarSort::Real)));
         assert!(matches!(Translator::sort_from_type_name("f64"), Some(VarSort::Real)));
-        assert!(Translator::sort_from_type_name("String").is_none());
+        assert!(matches!(Translator::sort_from_type_name("String"), Some(VarSort::Str)));
+        assert!(matches!(Translator::sort_from_type_name("str"), Some(VarSort::Str)));
     }
 
     #[test]

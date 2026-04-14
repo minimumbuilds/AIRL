@@ -366,3 +366,91 @@ fn z3_proven_fixtures_all_pass() {
 
     eprintln!("  {} z3_proven fixtures passed", files.len());
 }
+
+// ── Verify-level fixture tests ──────────────────────────
+
+/// Extract the ;;VERIFY-LEVEL: annotation from a fixture source file.
+fn extract_verify_level(source: &str) -> Option<String> {
+    source
+        .lines()
+        .find(|l| l.contains(";; VERIFY-LEVEL:"))
+        .map(|l| l.split(";; VERIFY-LEVEL:").nth(1).unwrap().trim().to_string())
+}
+
+#[test]
+fn verify_level_fixtures() {
+    let vl_dir = fixtures_root().join("verify_level");
+    let files = collect_airl_files(&vl_dir);
+
+    if files.is_empty() {
+        eprintln!("  no verify_level fixture files found — skipping");
+        return;
+    }
+
+    let mut failures = Vec::new();
+
+    for file in &files {
+        let source = fs::read_to_string(file).unwrap();
+        let level = extract_verify_level(&source);
+        let expected = extract_expect(&source);
+        let expected_error = extract_error(&source);
+
+        match level.as_deref() {
+            Some("trusted") => {
+                // Trusted: check_source should pass even with bad contracts
+                if let Err(e) = airl_driver::pipeline::check_source(&source) {
+                    failures.push(format!(
+                        "{}: trusted module should not error, but got: {}",
+                        file.display(), e
+                    ));
+                }
+            }
+            Some("proven") => {
+                // Proven: check_source should error on untranslatable contracts
+                let fragment = expected_error.unwrap_or_default();
+                match airl_driver::pipeline::check_source(&source) {
+                    Ok(()) => {
+                        failures.push(format!(
+                            "{}: proven module should error, but check_source passed",
+                            file.display()
+                        ));
+                    }
+                    Err(e) => {
+                        let err_str = format!("{}", e);
+                        if !fragment.is_empty() && !err_str.contains(&fragment) {
+                            failures.push(format!(
+                                "{}: error '{}' does not contain '{}'",
+                                file.display(), err_str, fragment
+                            ));
+                        }
+                    }
+                }
+            }
+            Some("checked") => {
+                // Checked: check_source should pass (warns but does not error)
+                if let Err(e) = airl_driver::pipeline::check_source(&source) {
+                    failures.push(format!(
+                        "{}: checked module should not error, but got: {}",
+                        file.display(), e
+                    ));
+                }
+            }
+            _ => {
+                failures.push(format!(
+                    "{}: missing or unknown ;; VERIFY-LEVEL: annotation",
+                    file.display()
+                ));
+            }
+        }
+    }
+
+    if !failures.is_empty() {
+        panic!(
+            "\n{} verify_level fixture(s) failed:\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        );
+    }
+
+    eprintln!("  {} verify_level fixtures passed", files.len());
+}
