@@ -1,7 +1,26 @@
 pub mod translate;
 pub mod prover;
+pub mod cache;
 
 use std::collections::HashMap;
+
+/// Content-addressed cache key for a function's verification-relevant content.
+pub fn cache_key(def: &airl_syntax::ast::FnDef) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    def.name.hash(&mut h);
+    for p in &def.params {
+        p.name.hash(&mut h);
+        format!("{:?}", p.ty.kind).hash(&mut h);
+    }
+    format!("{:?}", def.return_type.kind).hash(&mut h);
+    for r in &def.requires { format!("{:?}", r).hash(&mut h); }
+    for e in &def.ensures { format!("{:?}", e).hash(&mut h); }
+    for i in &def.invariants { format!("{:?}", i).hash(&mut h); }
+    format!("{:?}", def.body).hash(&mut h);
+    h.finish()
+}
 
 /// Cache of Z3 verification results, keyed by function name then clause source text.
 /// Passed to the bytecode compiler so proven contracts skip opcode emission.

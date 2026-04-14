@@ -21,6 +21,7 @@ aot_fib
 g3.working
 g3v0.8.0
 .z3-trace
+.airl-z3-cache
 commands/*/build/
 servers/*/build/
 servers/*/mynameisairl

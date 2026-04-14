@@ -43,11 +43,11 @@ fn cmd_run(args: &[String]) {
     #[cfg(feature = "aot")]
     {
         if args.is_empty() {
-            eprintln!("Usage: airl run [--load module.airl ...] <file.airl> [-- args...]");
+            eprintln!("Usage: airl run [--load module.airl ...] [--no-z3-cache] <file.airl> [-- args...]");
             std::process::exit(1);
         }
 
-        // Parse flags: --load, --jit-full (ignored), main file, -- user args
+        // Parse flags: --load, --jit-full (ignored), --no-z3-cache, main file, -- user args
         let mut preloads: Vec<String> = Vec::new();
         let mut main_file: Option<String> = None;
         let mut user_args: Vec<String> = Vec::new();
@@ -67,6 +67,10 @@ fn cmd_run(args: &[String]) {
                 }
                 "--bytecode" => {
                     eprintln!("warning: --bytecode is deprecated and has no effect; airl run is AOT-only");
+                    i += 1;
+                }
+                "--no-z3-cache" => {
+                    std::env::set_var("AIRL_NO_Z3_CACHE", "1");
                     i += 1;
                 }
                 "--" => { past_separator = true; user_args.push("--".to_string()); i += 1; }
@@ -197,11 +201,11 @@ fn cmd_compile(args: &[String]) {
         use airl_driver::pipeline::compile_to_object;
 
         if args.is_empty() {
-            eprintln!("Usage: airl compile <file.airl ...> [-o output]");
+            eprintln!("Usage: airl compile [--no-z3-cache] <file.airl ...> [-o output] [--target target]");
             std::process::exit(1);
         }
 
-        // Parse args: files, -o flag, --target flag
+        // Parse args: files, -o flag, --target flag, --no-z3-cache flag
         let mut files: Vec<String> = Vec::new();
         let mut output = String::from("a.out");
         let mut target: Option<String> = None;
@@ -223,6 +227,9 @@ fn cmd_compile(args: &[String]) {
                     eprintln!("--target requires an argument (x86-64, i686, i686-airlos, x86_64-airlos, aarch64)");
                     std::process::exit(1);
                 }
+            } else if args[i] == "--no-z3-cache" {
+                std::env::set_var("AIRL_NO_Z3_CACHE", "1");
+                i += 1;
             } else {
                 files.push(args[i].clone());
                 i += 1;
@@ -407,10 +414,21 @@ fn find_airl_libs() -> (String, String) {
 
 fn cmd_check(args: &[String]) {
     if args.is_empty() {
-        eprintln!("Usage: airl check <file.airl>");
+        eprintln!("Usage: airl check [--no-z3-cache] <file.airl>");
         std::process::exit(1);
     }
-    let path = &args[0];
+
+    // Parse --no-z3-cache flag
+    let mut path_idx = 0;
+    for (i, arg) in args.iter().enumerate() {
+        if arg == "--no-z3-cache" {
+            std::env::set_var("AIRL_NO_Z3_CACHE", "1");
+        } else {
+            path_idx = i;
+            break;
+        }
+    }
+    let path = &args[path_idx];
     match check_file(path) {
         Ok(()) => println!("OK: {}", path),
         Err(e) => {

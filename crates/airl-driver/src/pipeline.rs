@@ -185,6 +185,17 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
     let mut z3_warned_fns: HashSet<String> = HashSet::new();
     let mut proof_cache = airl_solver::ProofCache::new();
     let mut trusted_fns: HashSet<String> = HashSet::new();
+
+    // Load Z3 disk cache
+    let cache_path = std::path::PathBuf::from(".airl-z3-cache");
+    let use_cache = std::env::var("AIRL_NO_Z3_CACHE").is_err();
+    let mut disk_cache = if use_cache {
+        airl_solver::cache::DiskCache::load(&cache_path)
+    } else {
+        airl_solver::cache::DiskCache::new()
+    };
+    let mut cache_keys = Vec::new();
+
     for top in &tops {
         if let airl_syntax::ast::TopLevel::Defn(f) = top {
             let level = verify_level_for_fn(&f.name, &tops);
@@ -195,7 +206,15 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
                 }
                 airl_syntax::ast::VerifyLevel::Proven => {
                     // Hard error if contracts can't be proven
-                    let verification = z3_prover.verify_function(f);
+                    let key = airl_solver::cache_key(f);
+                    cache_keys.push(key);
+                    let verification = if let Some(cached) = disk_cache.get(key) {
+                        cached
+                    } else {
+                        let v = z3_prover.verify_function(f);
+                        disk_cache.insert(key, &v);
+                        v
+                    };
                     for (clause, result) in verification.ensures_results.iter().chain(verification.invariants_results.iter()) {
                         proof_cache.insert(&f.name, clause, result.clone());
                         match result {
@@ -223,7 +242,15 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
                 }
                 airl_syntax::ast::VerifyLevel::Checked => {
                     // Current behavior — warn on unprovable, don't error
-                    let verification = z3_prover.verify_function(f);
+                    let key = airl_solver::cache_key(f);
+                    cache_keys.push(key);
+                    let verification = if let Some(cached) = disk_cache.get(key) {
+                        cached
+                    } else {
+                        let v = z3_prover.verify_function(f);
+                        disk_cache.insert(key, &v);
+                        v
+                    };
                     for (clause, result) in verification.ensures_results.iter().chain(verification.invariants_results.iter()) {
                         proof_cache.insert(&f.name, clause, result.clone());
                         match result {
@@ -249,6 +276,12 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
                 }
             }
         }
+    }
+
+    // Clean up stale cache entries and write to disk
+    if use_cache {
+        disk_cache.evict_stale(&cache_keys);
+        let _ = disk_cache.write(&cache_path);
     }
 
     // Build ownership map: function name → per-param "is Own" flags
