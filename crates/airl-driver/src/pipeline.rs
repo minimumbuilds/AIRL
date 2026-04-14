@@ -169,7 +169,7 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
     for top in &tops {
         if let airl_syntax::ast::TopLevel::Defn(f) = top {
             let verification = z3_prover.verify_function(f);
-            for (clause, result) in &verification.ensures_results {
+            for (clause, result) in verification.ensures_results.iter().chain(verification.invariants_results.iter()) {
                 match result {
                     airl_solver::VerifyResult::Proven => {
                         if mode == PipelineMode::Check {
@@ -242,7 +242,7 @@ pub fn run_source_with_z3_info(source: &str) -> Result<(Value, Vec<String>), Pip
     for top in &tops {
         if let airl_syntax::ast::TopLevel::Defn(f) = top {
             let verification = z3_prover.verify_function(f);
-            if !verification.ensures_results.is_empty() && verification.all_proven() {
+            if (!verification.ensures_results.is_empty() || !verification.invariants_results.is_empty()) && verification.all_proven() {
                 z3_verified.push(f.name.clone());
             }
         }
@@ -337,7 +337,7 @@ pub fn check_source(source: &str) -> Result<(), PipelineError> {
     for top in &tops {
         if let airl_syntax::ast::TopLevel::Defn(f) = top {
             let verification = z3_prover.verify_function(f);
-            for (clause, result) in &verification.ensures_results {
+            for (clause, result) in verification.ensures_results.iter().chain(verification.invariants_results.iter()) {
                 match result {
                     airl_solver::VerifyResult::Proven => {
                         eprintln!("note: `{}` contract proven: {}", f.name, clause);

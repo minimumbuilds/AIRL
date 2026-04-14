@@ -19,15 +19,18 @@ pub enum VerifyResult {
 pub struct FunctionVerification {
     pub function_name: String,
     pub ensures_results: Vec<(String, VerifyResult)>,
+    pub invariants_results: Vec<(String, VerifyResult)>,
 }
 
 impl FunctionVerification {
     pub fn all_proven(&self) -> bool {
         self.ensures_results.iter().all(|(_, r)| matches!(r, VerifyResult::Proven))
+            && self.invariants_results.iter().all(|(_, r)| matches!(r, VerifyResult::Proven))
     }
 
     pub fn has_disproven(&self) -> bool {
         self.ensures_results.iter().any(|(_, r)| matches!(r, VerifyResult::Disproven { .. }))
+            || self.invariants_results.iter().any(|(_, r)| matches!(r, VerifyResult::Disproven { .. }))
     }
 }
 

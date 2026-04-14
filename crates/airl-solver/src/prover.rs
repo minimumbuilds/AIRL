@@ -102,6 +102,9 @@ impl Z3Prover {
                 ensures_results: def.ensures.iter().map(|e| {
                     (e.to_airl(), VerifyResult::Unknown("unsupported parameter types".into()))
                 }).collect(),
+                invariants_results: def.invariants.iter().map(|e| {
+                    (e.to_airl(), VerifyResult::Unknown("unsupported parameter types".into()))
+                }).collect(),
             };
         }
 
@@ -114,6 +117,9 @@ impl Z3Prover {
                     return FunctionVerification {
                         function_name: def.name.clone(),
                         ensures_results: def.ensures.iter().map(|e| {
+                            (e.to_airl(), VerifyResult::Unknown("cannot translate requires".into()))
+                        }).collect(),
+                        invariants_results: def.invariants.iter().map(|e| {
                             (e.to_airl(), VerifyResult::Unknown("cannot translate requires".into()))
                         }).collect(),
                     };
@@ -237,9 +243,85 @@ impl Z3Prover {
             ensures_results.push((clause_source, result));
         }
 
+        // Prove each :invariant clause (same strategy as :ensures —
+        // invariants must hold given :requires and body binding)
+        let mut invariants_results = Vec::new();
+        for inv_expr in &def.invariants {
+            let clause_source = inv_expr.to_airl();
+
+            if clause_references_result(inv_expr) && !body_translated {
+                invariants_results.push((
+                    clause_source,
+                    VerifyResult::Unknown(
+                        "invariant references result but body translation failed".into(),
+                    ),
+                ));
+                continue;
+            }
+
+            let result = match translator.translate_bool(inv_expr) {
+                Ok(z3_bool) => {
+                    solver.push();
+                    solver.assert(&z3_bool.not());
+
+                    let result = match solver.check() {
+                        SatResult::Unsat => VerifyResult::Proven,
+                        SatResult::Sat => {
+                            let mut counterexample = Vec::new();
+                            if let Some(model) = solver.get_model() {
+                                for param in &def.params {
+                                    if let AstTypeKind::Named(type_name) = &param.ty.kind {
+                                        match Translator::sort_from_type_name(type_name) {
+                                            Some(VarSort::Int) => {
+                                                if let Some(var) = translator.get_int_var(&param.name) {
+                                                    if let Some(val) = model.eval(var, true) {
+                                                        counterexample.push((param.name.clone(), val.to_string()));
+                                                    }
+                                                }
+                                            }
+                                            Some(VarSort::Real) => {
+                                                if let Some(var) = translator.get_real_var(&param.name) {
+                                                    if let Some(val) = model.eval(var, true) {
+                                                        counterexample.push((param.name.clone(), val.to_string()));
+                                                    }
+                                                }
+                                            }
+                                            Some(VarSort::Bool) => {
+                                                if let Some(var) = translator.get_bool_var(&param.name) {
+                                                    if let Some(val) = model.eval(var, true) {
+                                                        if let Some(b) = val.as_bool() {
+                                                            counterexample.push((param.name.clone(), b.to_string()));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            None => {}
+                                        }
+                                    }
+                                }
+                            }
+                            VerifyResult::Disproven { counterexample }
+                        }
+                        SatResult::Unknown => {
+                            VerifyResult::Unknown(
+                                solver.get_reason_unknown().unwrap_or_else(|| "unknown".into())
+                            )
+                        }
+                    };
+
+                    solver.pop(1);
+                    result
+                }
+                Err(e) => VerifyResult::TranslationError(e.to_string()),
+            };
+
+            invariants_results.push((clause_source, result));
+        }
+
         FunctionVerification {
             function_name: def.name.clone(),
             ensures_results,
+            invariants_results,
         }
     }
 }
@@ -566,6 +648,54 @@ mod tests {
         assert!(
             matches!(&v.ensures_results[0].1, VerifyResult::Unknown(_)),
             "expected Unknown fallback for untranslatable body, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn prove_invariant_clause() {
+        // (defn add_pos [(a : i32) (b : i32) -> i32]
+        //   :requires [(>= a 0) (>= b 0)]
+        //   :invariant [(>= result 0)]
+        //   :body (+ a b))
+        // Z3 proves the invariant: result == a+b >= 0 given a>=0, b>=0.
+        let mut def = make_fn("add_pos",
+            vec![("a", "i32"), ("b", "i32")], "i32",
+            vec![
+                call(">=", vec![sym("a"), int(0)]),
+                call(">=", vec![sym("b"), int(0)]),
+            ],
+            vec![], // no ensures
+            call("+", vec![sym("a"), sym("b")]),
+        );
+        def.invariants = vec![call(">=", vec![sym("result"), int(0)])];
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert!(v.ensures_results.is_empty());
+        assert_eq!(v.invariants_results.len(), 1);
+        assert!(
+            matches!(&v.invariants_results[0].1, VerifyResult::Proven),
+            "expected invariant Proven, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn disprove_invariant_clause() {
+        // (defn sub [(a : i32) (b : i32) -> i32]
+        //   :invariant [(>= result 0)]
+        //   :body (- a b))
+        // No requires — a=0, b=1 gives result=-1, violating the invariant.
+        let mut def = make_fn("sub",
+            vec![("a", "i32"), ("b", "i32")], "i32",
+            vec![], vec![],
+            call("-", vec![sym("a"), sym("b")]),
+        );
+        def.invariants = vec![call(">=", vec![sym("result"), int(0)])];
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.invariants_results.len(), 1);
+        assert!(
+            matches!(&v.invariants_results[0].1, VerifyResult::Disproven { .. }),
+            "expected invariant Disproven, got: {:?}", v,
         );
     }
 
