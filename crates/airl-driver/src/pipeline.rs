@@ -163,13 +163,15 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
         }
     }
 
-    // Z3 contract verification
+    // Z3 contract verification — build proof cache for opcode elision
     let z3_prover = airl_solver::prover::Z3Prover::new();
     let mut z3_warned_fns: HashSet<String> = HashSet::new();
+    let mut proof_cache = airl_solver::ProofCache::new();
     for top in &tops {
         if let airl_syntax::ast::TopLevel::Defn(f) = top {
             let verification = z3_prover.verify_function(f);
             for (clause, result) in verification.ensures_results.iter().chain(verification.invariants_results.iter()) {
+                proof_cache.insert(&f.name, clause, result.clone());
                 match result {
                     airl_solver::VerifyResult::Proven => {
                         if mode == PipelineMode::Check {
@@ -196,10 +198,11 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
     // Build ownership map: function name → per-param "is Own" flags
     let ownership_map = build_ownership_map(&tops);
 
-    // Compile AST → IR → Bytecode with contracts
+    // Compile AST → IR → Bytecode with contracts (proof cache elides proven opcodes)
     let (ir_nodes, contracts, fn_meta) = compile_tops_with_contracts(&tops);
     let mut bc_compiler = BytecodeCompiler::with_prefix("user");
     bc_compiler.set_ownership_map(ownership_map);
+    bc_compiler.set_proven_clauses(proof_cache.into_proven_set());
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
 
     // Create VM, load cached stdlib, execute

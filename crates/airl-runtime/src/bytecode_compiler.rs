@@ -42,6 +42,8 @@ pub struct BytecodeCompiler {
     compiled_lambdas: Vec<BytecodeFunc>, // lambdas compiled during expression compilation
     /// Maps function names to per-parameter ownership flags (true = Own, needs move tracking).
     ownership_map: HashMap<String, Vec<bool>>,
+    /// Set of (fn_name, clause_source) pairs proven by Z3 — skip opcode emission for these.
+    proven_clauses: HashSet<(String, String)>,
     /// Registers that have been marked as moved (need CheckNotMoved on subsequent loads).
     moved_regs: HashSet<u16>,
 }
@@ -59,6 +61,7 @@ impl BytecodeCompiler {
             lambda_prefix: String::new(),
             compiled_lambdas: Vec::new(),
             ownership_map: HashMap::new(),
+            proven_clauses: HashSet::new(),
             moved_regs: HashSet::new(),
         }
     }
@@ -72,6 +75,11 @@ impl BytecodeCompiler {
     /// Set the ownership map for move tracking during call compilation.
     pub fn set_ownership_map(&mut self, map: HashMap<String, Vec<bool>>) {
         self.ownership_map = map;
+    }
+
+    /// Set proven clauses for opcode elision — proven contracts skip runtime assertion.
+    pub fn set_proven_clauses(&mut self, proven: HashSet<(String, String)>) {
+        self.proven_clauses = proven;
     }
 
     fn alloc_reg(&mut self) -> u16 {
@@ -843,6 +851,7 @@ impl BytecodeCompiler {
         compiler.lambda_counter = self.lambda_counter;
         compiler.lambda_prefix = self.lambda_prefix.clone();
         compiler.ownership_map = self.ownership_map.clone();
+        compiler.proven_clauses = self.proven_clauses.clone();
         // Bind params to first N registers
         for (i, param) in params.iter().enumerate() {
             compiler.locals.insert(param.clone(), i as u16);
@@ -914,6 +923,7 @@ impl BytecodeCompiler {
         compiler.lambda_counter = self.lambda_counter;
         compiler.lambda_prefix = self.lambda_prefix.clone();
         compiler.ownership_map = self.ownership_map.clone();
+        compiler.proven_clauses = self.proven_clauses.clone();
 
         // Bind params to first N registers
         for (i, param) in params.iter().enumerate() {
@@ -926,6 +936,7 @@ impl BytecodeCompiler {
         let fn_name_idx = compiler.add_constant(Value::Str(name.to_string()));
 
         // Compile :requires — check preconditions before body
+        // (requires are never elided — they are caller-side contracts)
         for (clause_ir, clause_source) in requires {
             let clause_src_idx = compiler.add_constant(Value::Str(clause_source.clone()));
             let bool_reg = compiler.alloc_reg();
@@ -943,7 +954,11 @@ impl BytecodeCompiler {
         compiler.locals.insert("result".to_string(), dst);
 
         // Compile :invariant — check after body, before ensures
+        // Skip opcode emission for Z3-proven clauses
         for (clause_ir, clause_source) in invariants {
+            if self.proven_clauses.contains(&(name.to_string(), clause_source.clone())) {
+                continue; // proven statically — no runtime check needed
+            }
             let clause_src_idx = compiler.add_constant(Value::Str(clause_source.clone()));
             let bool_reg = compiler.alloc_reg();
             compiler.compile_expr(clause_ir, bool_reg);
@@ -952,7 +967,11 @@ impl BytecodeCompiler {
         }
 
         // Compile :ensures — check postconditions
+        // Skip opcode emission for Z3-proven clauses
         for (clause_ir, clause_source) in ensures {
+            if self.proven_clauses.contains(&(name.to_string(), clause_source.clone())) {
+                continue; // proven statically — no runtime check needed
+            }
             let clause_src_idx = compiler.add_constant(Value::Str(clause_source.clone()));
             let bool_reg = compiler.alloc_reg();
             compiler.compile_expr(clause_ir, bool_reg);
