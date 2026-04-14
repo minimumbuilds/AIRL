@@ -122,22 +122,17 @@ impl TypeChecker {
             // int-to-float, float-to-int — now in typed registry (Tier 4)
             "sign", "even?", "odd?",
             "pow", "gcd", "lcm", "sum-list", "product-list",
-            // Stdlib: result (result.airl)
-            "is-ok?", "is-err?", "unwrap-or", "map-ok", "map-err",
-            "and-then", "or-else", "ok-or",
-            // File I/O
-            "read-file", "write-file", "file-exists?", "get-args",
-            "append-file", "delete-file", "delete-dir", "rename-file",
-            "read-dir", "create-dir", "file-size", "is-dir?",
-            "temp-file", "temp-dir", "file-mtime",
-            // System builtins — `str` has a typed signature above
-            "int-to-string", "float-to-string", "string-to-int", "string-to-float",
-            "char-code", "char-from-code",
-            // Float special values
-            "infinity", "nan", "is-nan?", "is-infinite?",
-            "panic", "assert",
+                // Stdlib: result (result.airl) — moved to typed registry (Tier 6)
+            // is-ok?, is-err?, unwrap-or, map-ok, map-err, and-then, or-else, ok-or
+            // File I/O — moved to typed registry (Tier 5)
+            // read-file, write-file, file-exists?, get-args, append-file, delete-file,
+            // delete-dir, rename-file, read-dir, create-dir, file-size, is-dir?,
+            // temp-file, temp-dir, file-mtime
+            // System builtins — moved to typed registry (Tier 5)
+            // int-to-string, float-to-string, string-to-int, string-to-float, char-code,
+            // char-from-code, infinity, nan, is-nan?, is-infinite?, panic, assert,
+            // shell-exec, cpu-count, time-now, sleep, format-time, getenv
             // json-parse, json-stringify — now in stdlib json.airl
-            "shell-exec", "cpu-count", "time-now", "sleep", "format-time", "getenv",
             "run-bytecode", "compile-to-executable", "compile-bytecode-to-executable",
             "compile-bytecode-to-executable-with-target",
             // Byte encoding
@@ -432,6 +427,60 @@ impl TypeChecker {
 
         // float-to-int : Float -> Int
         self.bind_typed("float-to-int", &[float_t.clone()], int_t.clone());
+
+        // ── I/O, System, Conversion (Tier 5) ──
+        // File I/O
+        self.bind_typed("read-file", &[string_t.clone()], string_t.clone());
+        self.bind_typed("write-file", &[string_t.clone(), string_t.clone()], bool_t.clone());
+        self.bind_typed("file-exists?", &[string_t.clone()], bool_t.clone());
+        self.bind_typed("append-file", &[string_t.clone(), string_t.clone()], bool_t.clone());
+        self.bind_typed("delete-file", &[string_t.clone()], bool_t.clone());
+        self.bind_typed("delete-dir", &[string_t.clone()], bool_t.clone());
+        self.bind_typed("rename-file", &[string_t.clone(), string_t.clone()], bool_t.clone());
+        self.bind_typed("read-dir", &[string_t.clone()], list_t.clone());
+        self.bind_typed("create-dir", &[string_t.clone()], bool_t.clone());
+        self.bind_typed("file-size", &[string_t.clone()], int_t.clone());
+        self.bind_typed("is-dir?", &[string_t.clone()], bool_t.clone());
+        self.bind_typed("temp-file", &[], string_t.clone());
+        self.bind_typed("temp-dir", &[], string_t.clone());
+        self.bind_typed("file-mtime", &[string_t.clone()], int_t.clone());
+
+        // System
+        self.bind_typed("shell-exec", &[string_t.clone(), list_t.clone()], t.clone()); // returns Result
+        self.bind_typed("time-now", &[], int_t.clone());
+        self.bind_typed("sleep", &[int_t.clone()], t.clone()); // returns Nil
+        self.bind_typed("getenv", &[string_t.clone()], t.clone()); // returns Result
+        self.bind_typed("get-args", &[], list_t.clone());
+        self.bind_typed("cpu-count", &[], int_t.clone());
+        self.bind_typed("format-time", &[int_t.clone(), string_t.clone()], string_t.clone());
+
+        // Conversion
+        self.bind_typed("int-to-string", &[int_t.clone()], string_t.clone());
+        self.bind_typed("float-to-string", &[float_t.clone()], string_t.clone());
+        self.bind_typed("string-to-int", &[string_t.clone()], int_t.clone());
+        self.bind_typed("string-to-float", &[string_t.clone()], float_t.clone());
+        self.bind_typed("char-code", &[string_t.clone()], int_t.clone());
+        self.bind_typed("char-from-code", &[int_t.clone()], string_t.clone());
+
+        // Float special values and checks
+        self.bind_typed("infinity", &[], float_t.clone());
+        self.bind_typed("nan", &[], float_t.clone());
+        self.bind_typed("is-nan?", &[float_t.clone()], bool_t.clone());
+        self.bind_typed("is-infinite?", &[float_t.clone()], bool_t.clone());
+
+        // Assertions
+        self.bind_typed("panic", &[string_t.clone()], t.clone());
+        self.bind_typed("assert", &[bool_t.clone(), string_t.clone()], t.clone());
+
+        // ── Result operations (Tier 6) ──
+        self.bind_typed("is-ok?", &[t.clone()], bool_t.clone());
+        self.bind_typed("is-err?", &[t.clone()], bool_t.clone());
+        self.bind_typed("unwrap-or", &[t.clone(), t.clone()], t.clone());
+        self.bind_typed("map-ok", &[t.clone(), t.clone()], t.clone());
+        self.bind_typed("map-err", &[t.clone(), t.clone()], t.clone());
+        self.bind_typed("and-then", &[t.clone(), t.clone()], t.clone());
+        self.bind_typed("or-else", &[t.clone(), t.clone()], t.clone());
+        self.bind_typed("ok-or", &[t.clone(), t.clone()], t.clone());
     }
 
     // ── Type resolution ──────────────────────────────────
