@@ -101,3 +101,21 @@ jobs:
             -deadlock \
             tla/airl_channels.tla
         timeout-minutes: 5
+
+      - name: TLC model check — memory retain/release/immortal invariants
+        run: |
+          java -jar tla/tla2tools.jar \
+            -config tla/MC_memory.cfg \
+            -workers auto \
+            -deadlock \
+            tla/airl_memory.tla
+        timeout-minutes: 5
+
+      - name: TLC model check — COW fast-path invariants
+        run: |
+          java -jar tla/tla2tools.jar \
+            -config tla/MC_cow.cfg \
+            -workers auto \
+            -deadlock \
+            tla/airl_cow.tla
+        timeout-minutes: 5
