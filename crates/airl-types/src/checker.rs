@@ -101,54 +101,24 @@ impl TypeChecker {
         // `register_typed_builtins` above must NOT appear in this list — its entry here
         // would shadow the typed signature. This invariant is verified by the test
         // `typed_builtins_not_in_wildcard_list`.
+        // Remaining builtins that cannot have fixed-arity Ty::Func signatures
+        // (variadic, tensor-typed, agent protocol, compiler internals, AIRLOS-only).
         for name in &[
-            "print", "type-of", "shape", "valid",
+            // Variadic stdio (print accepts 1+ args, concatenated at runtime)
+            "print", "println", "eprint", "eprintln", "format",
+            // Tensor operations (would need Tensor type in the type system)
             "tensor.zeros", "tensor.ones", "tensor.rand", "tensor.identity",
             "tensor.add", "tensor.mul", "tensor.matmul", "tensor.reshape",
             "tensor.transpose", "tensor.softmax", "tensor.sum", "tensor.max",
             "tensor.slice",
-            "spawn-agent", "send",
-            // contains, starts-with, ends-with, trim, to-upper, to-lower,
-            // index-of, char-alpha?, char-digit?, char-whitespace? — now in stdlib string.airl
-            // Agent builtins
+            // Agent builtins (variadic send protocol)
+            "spawn-agent", "send", "send-async",
             "await", "parallel", "broadcast", "retry", "escalate", "any-agent",
-            "send-async",
-            // Stdlib: collections (prelude.airl) — map, filter, fold have typed signatures above
-            // length, at, at-or, set-at, list-contains?, append, reverse, concat, zip, flatten,
-            // range, take, drop, find, sort — now in typed registry (Tier 3)
-            "any", "all", "merge",
-            // Stdlib: math (math.airl)
-            // abs, min, max, clamp, sqrt, sin, cos, tan, log, exp, floor, ceil, round,
-            // int-to-float, float-to-int — now in typed registry (Tier 4)
-            "sign", "even?", "odd?",
-            "pow", "gcd", "lcm", "sum-list", "product-list",
-                // Stdlib: result (result.airl) — moved to typed registry (Tier 6)
-            // is-ok?, is-err?, unwrap-or, map-ok, map-err, and-then, or-else, ok-or
-            // File I/O — moved to typed registry (Tier 5)
-            // read-file, write-file, file-exists?, get-args, append-file, delete-file,
-            // delete-dir, rename-file, read-dir, create-dir, file-size, is-dir?,
-            // temp-file, temp-dir, file-mtime
-            // System builtins — moved to typed registry (Tier 5)
-            // int-to-string, float-to-string, string-to-int, string-to-float, char-code,
-            // char-from-code, infinity, nan, is-nan?, is-infinite?, panic, assert,
-            // shell-exec, cpu-count, time-now, sleep, format-time, getenv
-            // json-parse, json-stringify — now in stdlib json.airl
+            // Compiler internals (rarely called, internal dispatch)
             "run-bytecode", "compile-to-executable", "compile-bytecode-to-executable",
             "compile-bytecode-to-executable-with-target",
-            // Byte encoding
-            "bytes-new", "bytes-from-int8", "bytes-from-int16", "bytes-from-int32", "bytes-from-int64",
-            "bytes-to-int16", "bytes-to-int32", "bytes-to-int64",
-            "bytes-from-string", "bytes-to-string", "bytes-concat", "bytes-concat-all", "bytes-slice", "crc32c",
-            // TCP sockets
-            "tcp-connect", "tcp-close", "tcp-send", "tcp-recv", "tcp-recv-exact", "tcp-set-timeout",
-            "tcp-listen", "tcp-accept", "tcp-accept-tls",
-            // Threading and channels
-            "thread-spawn", "thread-join", "thread-set-affinity",
-            "channel-new", "channel-send", "channel-recv", "channel-recv-timeout", "channel-drain", "channel-close",
             // Container runtime (aircon) — AIRLOS-only IPC stubs
             "aircon_create", "aircon_start", "aircon_stop", "aircon_status", "aircon_list",
-            // Map stdlib helpers not in typed registry
-            "map-map-values", "map-filter", "map-update", "map-update-or",
         ] {
             let builtin_sym = self.sym_builtin;
             self.env.bind_str(name, Ty::TypeVar(builtin_sym));
@@ -481,6 +451,162 @@ impl TypeChecker {
         self.bind_typed("and-then", &[t.clone(), t.clone()], t.clone());
         self.bind_typed("or-else", &[t.clone(), t.clone()], t.clone());
         self.bind_typed("ok-or", &[t.clone(), t.clone()], t.clone());
+
+        // ── Introspection & Guards (Tier 7) ──
+        self.bind_typed("type-of", &[t.clone()], string_t.clone());
+        self.bind_typed("valid", &[t.clone()], bool_t.clone());
+        self.bind_typed("shape", &[t.clone()], list_t.clone());
+
+        // ── Stdio (Tier 7) ──
+        self.bind_typed("read-line", &[], string_t.clone());
+        self.bind_typed("read-stdin", &[], string_t.clone());
+
+        // ── Math remaining (Tier 8) ──
+        self.bind_typed("sign", &[int_t.clone()], int_t.clone());
+        self.bind_typed("even?", &[int_t.clone()], bool_t.clone());
+        self.bind_typed("odd?", &[int_t.clone()], bool_t.clone());
+        self.bind_typed("pow", &[int_t.clone(), int_t.clone()], int_t.clone());
+        self.bind_typed("gcd", &[int_t.clone(), int_t.clone()], int_t.clone());
+        self.bind_typed("lcm", &[int_t.clone(), int_t.clone()], int_t.clone());
+        self.bind_typed("sum-list", &[list_t.clone()], int_t.clone());
+        self.bind_typed("product-list", &[list_t.clone()], int_t.clone());
+
+        // ── Bitwise (Tier 8) ──
+        self.bind_typed("bitwise-and", &[int_t.clone(), int_t.clone()], int_t.clone());
+        self.bind_typed("bitwise-or", &[int_t.clone(), int_t.clone()], int_t.clone());
+        self.bind_typed("bitwise-xor", &[int_t.clone(), int_t.clone()], int_t.clone());
+        self.bind_typed("bitwise-shl", &[int_t.clone(), int_t.clone()], int_t.clone());
+        self.bind_typed("bitwise-shr", &[int_t.clone(), int_t.clone()], int_t.clone());
+
+        // ── Collections remaining (Tier 9) ──
+        let fn_t_bool2 = Ty::Func {
+            params: vec![t.clone()],
+            ret: Box::new(bool_t.clone()),
+        };
+        // any : (T -> Bool) -> List[T] -> Bool
+        self.bind_typed("any", &[fn_t_bool2.clone(), list_t.clone()], bool_t.clone());
+        // all : (T -> Bool) -> List[T] -> Bool
+        self.bind_typed("all", &[fn_t_bool2, list_t.clone()], bool_t.clone());
+        // merge : (T -> T -> Bool) -> List[T] -> List[T] -> List[T]
+        let fn_cmp = Ty::Func {
+            params: vec![t.clone(), t.clone()],
+            ret: Box::new(bool_t.clone()),
+        };
+        self.bind_typed("merge", &[fn_cmp, list_t.clone(), list_t.clone()], list_t.clone());
+
+        // ── Map helpers (Tier 10) ──
+        self.bind_typed("map-get-or", &[map_t.clone(), t.clone(), t.clone()], t.clone());
+        self.bind_typed("map-values", &[map_t.clone()], list_t.clone());
+        self.bind_typed("map-from", &[list_t.clone()], map_t.clone());
+        // map-map-values : (T -> T) -> Map -> Map
+        let fn_t_t = Ty::Func {
+            params: vec![t.clone()],
+            ret: Box::new(t.clone()),
+        };
+        self.bind_typed("map-map-values", &[fn_t_t, map_t.clone()], map_t.clone());
+        // map-filter : (T -> T -> Bool) -> Map -> Map
+        let fn_kv_bool = Ty::Func {
+            params: vec![t.clone(), t.clone()],
+            ret: Box::new(bool_t.clone()),
+        };
+        self.bind_typed("map-filter", &[fn_kv_bool, map_t.clone()], map_t.clone());
+        // map-update : Map -> T -> (T -> T) -> Map
+        self.bind_typed("map-update", &[map_t.clone(), t.clone(), t.clone()], map_t.clone());
+        // map-update-or : Map -> T -> T -> (T -> T) -> Map
+        self.bind_typed("map-update-or", &[map_t.clone(), t.clone(), t.clone(), t.clone()], map_t.clone());
+
+        // ── Bytes (Tier 11) ──
+        self.bind_typed("bytes-new", &[], list_t.clone());
+        self.bind_typed("bytes-from-int8", &[int_t.clone()], list_t.clone());
+        self.bind_typed("bytes-from-int16", &[int_t.clone()], list_t.clone());
+        self.bind_typed("bytes-from-int32", &[int_t.clone()], list_t.clone());
+        self.bind_typed("bytes-from-int64", &[int_t.clone()], list_t.clone());
+        self.bind_typed("bytes-to-int16", &[list_t.clone(), int_t.clone()], int_t.clone());
+        self.bind_typed("bytes-to-int32", &[list_t.clone(), int_t.clone()], int_t.clone());
+        self.bind_typed("bytes-to-int64", &[list_t.clone(), int_t.clone()], int_t.clone());
+        self.bind_typed("bytes-from-string", &[string_t.clone()], list_t.clone());
+        self.bind_typed("bytes-to-string", &[list_t.clone(), int_t.clone(), int_t.clone()], string_t.clone());
+        self.bind_typed("bytes-concat", &[list_t.clone(), list_t.clone()], list_t.clone());
+        self.bind_typed("bytes-concat-all", &[list_t.clone()], list_t.clone());
+        self.bind_typed("bytes-slice", &[list_t.clone(), int_t.clone(), int_t.clone()], list_t.clone());
+        self.bind_typed("crc32c", &[list_t.clone()], int_t.clone());
+
+        // ── TCP (Tier 12) — all return Result (typed as T/wildcard) ──
+        self.bind_typed("tcp-listen", &[int_t.clone(), int_t.clone()], t.clone());
+        self.bind_typed("tcp-accept", &[int_t.clone()], t.clone());
+        self.bind_typed("tcp-accept-tls", &[int_t.clone(), string_t.clone(), string_t.clone(), string_t.clone()], t.clone());
+        self.bind_typed("tcp-connect", &[string_t.clone(), int_t.clone()], t.clone());
+        self.bind_typed("tcp-connect-tls", &[string_t.clone(), int_t.clone(), string_t.clone(), string_t.clone(), string_t.clone()], t.clone());
+        self.bind_typed("tcp-close", &[int_t.clone()], t.clone());
+        self.bind_typed("tcp-send", &[int_t.clone(), list_t.clone()], t.clone());
+        self.bind_typed("tcp-recv", &[int_t.clone(), int_t.clone()], t.clone());
+        self.bind_typed("tcp-recv-exact", &[int_t.clone(), int_t.clone()], t.clone());
+        self.bind_typed("tcp-set-timeout", &[int_t.clone(), int_t.clone()], t.clone());
+
+        // ── Threading and Channels (Tier 13) ──
+        self.bind_typed("thread-spawn", &[t.clone()], int_t.clone());
+        self.bind_typed("thread-join", &[int_t.clone()], t.clone());
+        self.bind_typed("thread-set-affinity", &[int_t.clone()], t.clone());
+        self.bind_typed("channel-new", &[], list_t.clone());
+        self.bind_typed("channel-send", &[int_t.clone(), t.clone()], t.clone());
+        self.bind_typed("channel-recv", &[int_t.clone()], t.clone());
+        self.bind_typed("channel-recv-timeout", &[int_t.clone(), int_t.clone()], t.clone());
+        self.bind_typed("channel-drain", &[int_t.clone()], list_t.clone());
+        self.bind_typed("channel-close", &[int_t.clone()], bool_t.clone());
+
+        // ── Crypto (Tier 14) ──
+        // String hashing
+        self.bind_typed("sha256", &[string_t.clone()], string_t.clone());
+        self.bind_typed("sha512", &[string_t.clone()], string_t.clone());
+        self.bind_typed("hmac-sha256", &[string_t.clone(), string_t.clone()], string_t.clone());
+        self.bind_typed("hmac-sha512", &[string_t.clone(), string_t.clone()], string_t.clone());
+        // Bytes hashing
+        self.bind_typed("sha256-bytes", &[list_t.clone()], list_t.clone());
+        self.bind_typed("sha512-bytes", &[list_t.clone()], list_t.clone());
+        self.bind_typed("hmac-sha256-bytes", &[list_t.clone(), list_t.clone()], list_t.clone());
+        self.bind_typed("hmac-sha512-bytes", &[list_t.clone(), list_t.clone()], list_t.clone());
+        // Key derivation
+        self.bind_typed("pbkdf2-sha256", &[string_t.clone(), string_t.clone(), int_t.clone(), int_t.clone()], list_t.clone());
+        self.bind_typed("pbkdf2-sha512", &[string_t.clone(), string_t.clone(), int_t.clone(), int_t.clone()], list_t.clone());
+        // Base64
+        self.bind_typed("base64-encode", &[string_t.clone()], string_t.clone());
+        self.bind_typed("base64-decode", &[string_t.clone()], string_t.clone());
+        self.bind_typed("base64-encode-bytes", &[list_t.clone()], string_t.clone());
+        self.bind_typed("base64-decode-bytes", &[string_t.clone()], list_t.clone());
+        // Random
+        self.bind_typed("random-bytes", &[int_t.clone()], list_t.clone());
+
+        // ── Compression (Tier 15) — all IntList -> IntList ──
+        for name in &[
+            "gzip-compress", "gzip-decompress",
+            "snappy-compress", "snappy-decompress",
+            "lz4-compress", "lz4-decompress",
+            "zstd-compress", "zstd-decompress",
+        ] {
+            self.bind_typed(name, &[list_t.clone()], list_t.clone());
+        }
+
+        // ── Additional System/Conversion (Tier 16) ──
+        self.bind_typed("get-cwd", &[], string_t.clone());
+        self.bind_typed("shell-exec-with-stdin", &[string_t.clone(), list_t.clone(), string_t.clone()], t.clone());
+        self.bind_typed("parse-int-radix", &[string_t.clone(), int_t.clone()], t.clone());
+        self.bind_typed("int-to-string-radix", &[int_t.clone(), int_t.clone()], string_t.clone());
+        self.bind_typed("json-parse", &[string_t.clone()], t.clone());
+        self.bind_typed("json-stringify", &[t.clone()], string_t.clone());
+        self.bind_typed("read-lines", &[string_t.clone()], list_t.clone());
+        self.bind_typed("exec-file", &[string_t.clone()], t.clone());
+        self.bind_typed("whoami", &[], string_t.clone());
+
+        // Path operations
+        self.bind_typed("path-parent", &[string_t.clone()], string_t.clone());
+        self.bind_typed("path-filename", &[string_t.clone()], string_t.clone());
+        self.bind_typed("path-extension", &[string_t.clone()], string_t.clone());
+        self.bind_typed("is-absolute?", &[string_t.clone()], bool_t.clone());
+
+        // Regex
+        self.bind_typed("regex-find-all", &[string_t.clone(), string_t.clone()], list_t.clone());
+        self.bind_typed("regex-match", &[string_t.clone(), string_t.clone()], bool_t.clone());
+        self.bind_typed("regex-split", &[string_t.clone(), string_t.clone()], list_t.clone());
     }
 
     // ── Type resolution ──────────────────────────────────
@@ -1307,27 +1433,26 @@ impl TypeChecker {
     /// Builtins with explicit `Ty::Func` signatures already get arity checking
     /// from the `Ty::Func` branch and must NOT be listed here.
     fn polymorphic_builtin_min_arity(name: &str) -> Option<usize> {
+        // Only builtins still registered as TypeVar("builtin") need min-arity here.
+        // Builtins with Ty::Func signatures get arity checking automatically.
         match name {
-            // Collection builtins (now in typed registry)
-            // reverse, concat, zip, flatten, range, take, drop, find, sort removed
-            "any"        => Some(2),
-            "all"        => Some(2),
-            "merge"      => Some(2),
-            // Map builtins (already in typed registry)
-            "map-get"    => Some(2),
-            "map-set"    => Some(3),
-            "map-has"    => Some(2),
-            "map-remove" => Some(2),
-            "map-keys"   => Some(1),
-            // Result stdlib
-            "is-ok?"     => Some(1),
-            "is-err?"    => Some(1),
-            "unwrap-or"  => Some(2),
-            "map-ok"     => Some(2),
-            "map-err"    => Some(2),
-            "and-then"   => Some(2),
-            "or-else"    => Some(2),
-            "ok-or"      => Some(2),
+            // Variadic stdio
+            "print" | "println" | "eprint" | "eprintln" => Some(1),
+            "format" => Some(1),
+            // Agent protocol
+            "spawn-agent" => Some(1),
+            "send" | "send-async" => Some(2),
+            "await" => Some(1),
+            // Tensor ops
+            "tensor.zeros" | "tensor.ones" => Some(1),
+            "tensor.rand" => Some(2),
+            "tensor.identity" => Some(1),
+            "tensor.add" | "tensor.mul" | "tensor.matmul" => Some(2),
+            "tensor.reshape" => Some(2),
+            "tensor.transpose" | "tensor.softmax" | "tensor.sum" | "tensor.max" => Some(1),
+            "tensor.slice" => Some(3),
+            // Compiler internals
+            "run-bytecode" | "compile-to-executable" => Some(1),
             _ => None,
         }
     }
@@ -1678,16 +1803,78 @@ mod tests {
     /// would silently regress to the permissive TypeVar path.
     #[test]
     fn typed_builtins_not_in_wildcard_list() {
-        // These are the builtins with explicit Ty::Func signatures.
+        // All builtins with explicit Ty::Func signatures.  After TypeChecker::new()
+        // every name here must resolve to Ty::Func, not Ty::TypeVar("builtin").
         let typed_builtins = [
+            // Tier 0: core operators
+            "+", "-", "*", "/", "%", "<", ">", "<=", ">=", "=", "!=",
+            "and", "or", "not",
+            // Tier 1-2: original typed builtins
             "head", "tail", "cons", "empty?",
-            "map", "filter", "fold",
-            "str",
+            "map", "filter", "fold", "str",
+            "char-at", "substring", "split", "join", "replace", "chars", "words",
+            "unwords", "lines", "unlines", "repeat-str", "pad-left", "pad-right",
+            "is-empty-str", "reverse-str", "count-occurrences",
+            "map-new", "map-get", "map-set", "map-has", "map-remove", "map-keys",
+            "map-entries", "map-from-entries", "map-merge", "map-count",
+            // Tier 3: list
+            "length", "at", "at-or", "set-at", "list-contains?", "append",
+            "reverse", "concat", "zip", "flatten", "range", "take", "drop",
+            "sort", "find",
+            // Tier 4: math
+            "abs", "min", "max", "clamp", "sqrt", "sin", "cos", "tan", "log",
+            "exp", "floor", "ceil", "round", "int-to-float", "float-to-int",
+            // Tier 5: I/O + system + conversion
+            "read-file", "write-file", "file-exists?", "append-file", "delete-file",
+            "delete-dir", "rename-file", "read-dir", "create-dir", "file-size",
+            "is-dir?", "temp-file", "temp-dir", "file-mtime",
+            "shell-exec", "time-now", "sleep", "getenv", "get-args", "cpu-count",
+            "format-time", "int-to-string", "float-to-string", "string-to-int",
+            "string-to-float", "char-code", "char-from-code",
+            "infinity", "nan", "is-nan?", "is-infinite?", "panic", "assert",
+            // Tier 6: result
+            "is-ok?", "is-err?", "unwrap-or", "map-ok", "map-err",
+            "and-then", "or-else", "ok-or",
+            // Tier 7: introspection + stdio
+            "type-of", "valid", "shape", "read-line", "read-stdin",
+            // Tier 8: math remaining + bitwise
+            "sign", "even?", "odd?", "pow", "gcd", "lcm",
+            "sum-list", "product-list",
+            "bitwise-and", "bitwise-or", "bitwise-xor", "bitwise-shl", "bitwise-shr",
+            // Tier 9: collections remaining
+            "any", "all", "merge",
+            // Tier 10: map helpers
+            "map-get-or", "map-values", "map-from",
+            "map-map-values", "map-filter", "map-update", "map-update-or",
+            // Tier 11: bytes
+            "bytes-new", "bytes-from-int8", "bytes-from-int16", "bytes-from-int32",
+            "bytes-from-int64", "bytes-to-int16", "bytes-to-int32", "bytes-to-int64",
+            "bytes-from-string", "bytes-to-string", "bytes-concat", "bytes-concat-all",
+            "bytes-slice", "crc32c",
+            // Tier 12: TCP
+            "tcp-listen", "tcp-accept", "tcp-accept-tls", "tcp-connect",
+            "tcp-connect-tls", "tcp-close", "tcp-send", "tcp-recv",
+            "tcp-recv-exact", "tcp-set-timeout",
+            // Tier 13: threading + channels
+            "thread-spawn", "thread-join", "thread-set-affinity",
+            "channel-new", "channel-send", "channel-recv", "channel-recv-timeout",
+            "channel-drain", "channel-close",
+            // Tier 14: crypto
+            "sha256", "sha512", "hmac-sha256", "hmac-sha512",
+            "sha256-bytes", "sha512-bytes", "hmac-sha256-bytes", "hmac-sha512-bytes",
+            "pbkdf2-sha256", "pbkdf2-sha512",
+            "base64-encode", "base64-decode", "base64-encode-bytes", "base64-decode-bytes",
+            "random-bytes",
+            // Tier 15: compression
+            "gzip-compress", "gzip-decompress", "snappy-compress", "snappy-decompress",
+            "lz4-compress", "lz4-decompress", "zstd-compress", "zstd-decompress",
+            // Tier 16: system/conversion/path/regex
+            "get-cwd", "shell-exec-with-stdin", "parse-int-radix", "int-to-string-radix",
+            "json-parse", "json-stringify", "read-lines", "exec-file", "whoami",
+            "path-parent", "path-filename", "path-extension", "is-absolute?",
+            "regex-find-all", "regex-match", "regex-split",
         ];
 
-        // The wildcard list is embedded in register_builtins(). We verify indirectly:
-        // after TypeChecker::new(), the type of each typed builtin must be Ty::Func,
-        // not Ty::TypeVar("builtin").
         let checker = TypeChecker::new();
         let builtin_sym = checker.sym_builtin;
         for name in &typed_builtins {

@@ -1,0 +1,3 @@
+;; ERROR: type mismatch
+;; gcd expects (Int, Int) not (String, Int)
+(gcd "abc" 10)

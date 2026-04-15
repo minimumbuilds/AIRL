@@ -1,0 +1,3 @@
+;; ERROR: type mismatch
+;; bitwise-and expects (Int, Int) not (String, Int)
+(bitwise-and "abc" 0xFF)

@@ -1,0 +1,3 @@
+;; ERROR: expects 3 arguments, got 1
+;; bytes-to-string requires (List, Int, Int) but only given 1 arg
+(bytes-to-string "hello")

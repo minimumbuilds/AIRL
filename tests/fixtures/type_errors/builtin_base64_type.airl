@@ -1,0 +1,3 @@
+;; ERROR: type mismatch
+;; base64-encode expects String, not Int
+(base64-encode 42)

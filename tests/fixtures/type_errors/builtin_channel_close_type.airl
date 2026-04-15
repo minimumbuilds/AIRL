@@ -1,0 +1,3 @@
+;; ERROR: type mismatch
+;; channel-close expects Int handle, not String
+(channel-close "not-a-handle")

@@ -1,0 +1,3 @@
+;; ERROR: type mismatch
+;; even? expects Int, not Bool
+(even? true)

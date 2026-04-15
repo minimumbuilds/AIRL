@@ -1,0 +1,3 @@
+;; ERROR: expects 2 arguments, got 1
+;; tcp-connect requires (String, Int)
+(tcp-connect "localhost")

@@ -1,0 +1,3 @@
+;; ERROR: type mismatch
+;; sha256 expects String, not Int
+(sha256 42)
