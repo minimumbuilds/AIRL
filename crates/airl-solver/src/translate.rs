@@ -136,7 +136,8 @@ impl<'ctx> Translator<'ctx> {
         let z3_ctx = unsafe { raw_z3_ctx(self.ctx) };
         let int_sort = unsafe { z3_sys::Z3_mk_int_sort(z3_ctx) };
         let seq_sort = unsafe { z3_sys::Z3_mk_seq_sort(z3_ctx, int_sort) };
-        let c_name = std::ffi::CString::new(name).unwrap();
+        let c_name = std::ffi::CString::new(name)
+            .expect("AIRL identifiers cannot contain null bytes");
         let name_sym = unsafe {
             z3_sys::Z3_mk_string_symbol(z3_ctx, c_name.as_ptr())
         };
@@ -1328,7 +1329,8 @@ impl<'ctx> Translator<'ctx> {
                 }
             };
 
-            let c_name = std::ffi::CString::new(name).unwrap();
+            let c_name = std::ffi::CString::new(name)
+                .expect("AIRL identifiers cannot contain null bytes");
             let sym = unsafe { z3_sys::Z3_mk_string_symbol(z3_ctx, c_name.as_ptr()) };
             let decl = unsafe {
                 z3_sys::Z3_mk_func_decl(
