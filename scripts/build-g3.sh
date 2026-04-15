@@ -114,12 +114,14 @@ $AIRL_BIN run \
   --load bootstrap/bc_compiler.airl \
   --load bootstrap/z3_bridge_g3.airl \
   --load bootstrap/z3_cache.airl \
+  --load bootstrap/linearity.airl \
   bootstrap/g3_compiler.airl -- \
   bootstrap/lexer.airl \
   bootstrap/parser.airl \
   bootstrap/bc_compiler.airl \
   bootstrap/z3_bridge_g3.airl \
   bootstrap/z3_cache.airl \
+  bootstrap/linearity.airl \
   bootstrap/g3_compiler.airl \
   -o "$BUILD_PATH"
 

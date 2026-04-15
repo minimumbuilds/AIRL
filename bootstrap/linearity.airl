@@ -1,0 +1,559 @@
+;; bootstrap/linearity.airl — Static linearity/ownership checker for g3
+;;
+;; Walks parsed AST nodes and tracks ownership state per binding using a
+;; simple state machine: "owned" → "moved" (terminal), with "copy" for
+;; copy-type bindings (Int, I64, F64, Bool, Nat, Float).
+;;
+;; Mirrors the Rust implementation in crates/airl-types/src/linearity.rs.
+;; Simplified for g3 v1: no borrow tracking, no capture analysis.
+;;
+;; Binding map: list of [name state] pairs (cons-list, first match wins).
+;; Snapshot: save the list reference (immutable — O(1)).
+;; Merge: compare two maps against base for branch disagreement.
+
+;; ── Copy-type detection ─────────────────────────────────
+
+(defn is-copy-type
+  :sig [(type-name : String) -> Bool]
+  :intent "Returns true if the type is Copy (never consumed by move)"
+  :requires [(valid type-name)]
+  :ensures [(valid result)]
+  :body
+    (if (= type-name "Int") true
+    (if (= type-name "I64") true
+    (if (= type-name "i64") true
+    (if (= type-name "F64") true
+    (if (= type-name "Float") true
+    (if (= type-name "Bool") true
+    (if (= type-name "Nat") true
+    (if (= type-name "Unit") true
+    (if (= type-name "Nil") true
+    (if (= type-name "_") true
+      false)))))))))))
+
+;; ── Binding map operations ──────────────────────────────
+;; A binding map is a list of [name state] pairs.
+;; Lookup walks from head (most recently added) — shadowing is natural.
+
+(defn binding-lookup
+  :sig [(bindings : List) (name : String) -> _]
+  :intent "Look up a binding's state by name. Returns (Ok state) or (Err \"not-found\")"
+  :requires [(valid bindings)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? bindings)
+      (Err "not-found")
+      (let (entry : List (head bindings))
+        (if (= (at entry 0) name)
+          (Ok (at entry 1))
+          (binding-lookup (tail bindings) name)))))
+
+(defn binding-update
+  :sig [(bindings : List) (name : String) (new-state : String) -> List]
+  :intent "Update the first binding matching name to new-state. Returns updated map."
+  :requires [(valid bindings)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? bindings)
+      []
+      (let (entry : List (head bindings))
+        (let (rest : List (tail bindings))
+          (if (= (at entry 0) name)
+            (cons [name new-state] rest)
+            (cons entry (binding-update rest name new-state)))))))
+
+(defn binding-add
+  :sig [(bindings : List) (name : String) (state : String) -> List]
+  :intent "Add a new binding to the front of the map"
+  :requires [(valid bindings)]
+  :ensures [(valid result)]
+  :body (cons [name state] bindings))
+
+(defn binding-remove
+  :sig [(bindings : List) (name : String) -> List]
+  :intent "Remove the first binding matching name"
+  :requires [(valid bindings)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? bindings)
+      []
+      (let (entry : List (head bindings))
+        (let (rest : List (tail bindings))
+          (if (= (at entry 0) name)
+            rest
+            (cons entry (binding-remove rest name)))))))
+
+;; ── Track move ──────────────────────────────────────────
+
+(defn track-move
+  :sig [(bindings : List) (name : String) -> List]
+  :intent "Transition binding to moved. Returns [updated-bindings diagnostics]"
+  :requires [(valid bindings)]
+  :ensures [(valid result)]
+  :body
+    (match (binding-lookup bindings name)
+      (Ok state)
+        (if (= state "copy")
+          ;; Copy types are never consumed
+          [bindings []]
+          (if (= state "moved")
+            ;; Already moved — error
+            [bindings [(str "use of moved value '" name "'")]]
+            (if (= state "owned")
+              ;; Move it
+              [(binding-update bindings name "moved") []]
+              ;; Unknown state — treat as ok
+              [bindings []])))
+      (Err _)
+        ;; Not found — might be a global/builtin, skip
+        [bindings []]))
+
+;; ── Branch merge ────────────────────────────────────────
+
+(defn merge-branch-states-walk
+  :sig [(base : List) (map-a : List) (map-b : List) (merged : List) (diags : List) -> List]
+  :intent "Walk base bindings, compare states in map-a and map-b, build merged map and diagnostics"
+  :requires [(valid base)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? base)
+      [merged diags]
+      (let (entry : List (head base))
+        (let (name : String (at entry 0))
+          (let (rest-base : List (tail base))
+            (let (state-a-r : _ (binding-lookup map-a name))
+              (let (state-b-r : _ (binding-lookup map-b name))
+                (let (state-a : String (match state-a-r (Ok s) s _ "owned"))
+                  (let (state-b : String (match state-b-r (Ok s) s _ "owned"))
+                    (let (a-moved : Bool (= state-a "moved"))
+                      (let (b-moved : Bool (= state-b "moved"))
+                        (if (= a-moved b-moved)
+                          ;; Agree — use the agreed state
+                          (let (agreed : String (if a-moved "moved" state-a))
+                            (merge-branch-states-walk rest-base map-a map-b
+                              (append merged [name agreed]) diags))
+                          ;; Disagree — emit diagnostic, use "moved" (conservative)
+                          (merge-branch-states-walk rest-base map-a map-b
+                            (append merged [name "moved"])
+                            (append diags (str "branches disagree on ownership of '" name "': moved in one branch but not the other")))))))))))))))
+
+(defn merge-branch-states
+  :sig [(map-a : List) (map-b : List) (base : List) -> List]
+  :intent "Merge two branch binding maps against base. Returns [merged-map diagnostics]"
+  :requires [(valid map-a)]
+  :ensures [(valid result)]
+  :body (merge-branch-states-walk base map-a map-b [] []))
+
+;; ── Merge N arm states ──────────────────────────────────
+
+(defn merge-n-arm-states
+  :sig [(arm-states : List) (base : List) -> List]
+  :intent "Merge N arm states pairwise. Returns [merged-map diagnostics]"
+  :requires [(valid arm-states)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? arm-states)
+      [base []]
+      (if (= (length arm-states) 1)
+        [(head arm-states) []]
+        ;; Fold: merge each arm against the first
+        (let (first-arm : List (head arm-states))
+          (fold (fn [acc arm-state]
+                  (let (current-merged : List (at acc 0))
+                    (let (current-diags : List (at acc 1))
+                      (let (merge-result : List (merge-branch-states current-merged arm-state base))
+                        (let (new-merged : List (at merge-result 0))
+                          (let (new-diags : List (at merge-result 1))
+                            [new-merged (concat current-diags new-diags)]))))))
+            [first-arm []]
+            (tail arm-states))))))
+
+;; ── Initial state for a param ───────────────────────────
+
+(defn param-initial-state
+  :sig [(param : _) -> String]
+  :intent "Determine initial ownership state for a function parameter"
+  :requires [(valid param)]
+  :ensures [(valid result)]
+  :body
+    (match param
+      (ASTParam name type-name)
+        (if (is-copy-type type-name) "copy" "owned")
+      _ "owned"))
+
+(defn param-name
+  :sig [(param : _) -> String]
+  :intent "Extract name from an ASTParam"
+  :requires [(valid param)]
+  :ensures [(valid result)]
+  :body
+    (match param
+      (ASTParam name _) name
+      _ ""))
+
+;; ── Expression checker ──────────────────────────────────
+;; Returns [updated-bindings diagnostics-list]
+
+(defn linearity-check-expr
+  :sig [(expr : _) (bindings : List) -> List]
+  :intent "Walk an expression, tracking ownership. Returns [updated-bindings diagnostics]"
+  :requires [(valid expr)]
+  :ensures [(valid result)]
+  :body
+    (match expr
+      ;; Literals — no ownership effects
+      (ASTInt _ _ _)     [bindings []]
+      (ASTFloat _ _ _)   [bindings []]
+      (ASTStr _ _ _)     [bindings []]
+      (ASTBool _ _ _)    [bindings []]
+      (ASTNil _ _)       [bindings []]
+      (ASTKeyword _ _ _) [bindings []]
+
+      ;; Symbol reference — just a read, not a move by itself
+      ;; Moves happen at call sites (track-move in call handler)
+      (ASTSymbol name _ _)
+        (match (binding-lookup bindings name)
+          (Ok state)
+            (if (= state "moved")
+              [bindings [(str "use of moved value '" name "'")]]
+              [bindings []])
+          (Err _)
+            ;; Not in scope — global/builtin, skip
+            [bindings []])
+
+      ;; Let binding
+      (ASTLet let-bindings body _ _)
+        (linearity-check-let let-bindings body bindings)
+
+      ;; Do block — sequential
+      (ASTDo exprs _ _)
+        (linearity-check-seq exprs bindings)
+
+      ;; If/else — branch check
+      (ASTIf cond-expr then-expr else-expr _ _)
+        (linearity-check-if cond-expr then-expr else-expr bindings)
+
+      ;; Match — N-way branch check
+      (ASTMatch scrutinee arms _ _)
+        (linearity-check-match scrutinee arms bindings)
+
+      ;; Function call — move tracking for arguments
+      (ASTCall callee args _ _)
+        (linearity-check-call callee args bindings)
+
+      ;; Lambda — push scope, check body, pop
+      (ASTLambda params body _ _)
+        (linearity-check-lambda params body bindings)
+
+      ;; List literal — check each element
+      (ASTList elems _ _)
+        (linearity-check-seq elems bindings)
+
+      ;; Variant constructor — check each argument
+      (ASTVariant _ args _ _)
+        (linearity-check-seq args bindings)
+
+      ;; Try — check inner
+      (ASTTry inner _ _)
+        (linearity-check-expr inner bindings)
+
+      ;; Defn at expression level (shouldn't happen but be safe)
+      (ASTDefn _ _ _ _ _ _ _ _ _)
+        [bindings []]
+
+      ;; Anything else — skip
+      _ [bindings []]))
+
+;; ── Let binding checker ─────────────────────────────────
+
+(defn linearity-check-let
+  :sig [(let-bindings : List) (body : _) (bindings : List) -> List]
+  :intent "Check let bindings, introduce them, check body, clean up"
+  :requires [(valid let-bindings)]
+  :ensures [(valid result)]
+  :body
+    ;; First check all init expressions and collect names
+    (let (init-result : List (linearity-check-let-inits let-bindings bindings []))
+      (let (bindings-after-inits : List (at init-result 0))
+        (let (init-diags : List (at init-result 1))
+          (let (bound-names : List (at init-result 2))
+            ;; Check body with all bindings in scope
+            (let (body-result : List (linearity-check-expr body bindings-after-inits))
+              (let (bindings-after-body : List (at body-result 0))
+                (let (body-diags : List (at body-result 1))
+                  ;; Remove introduced bindings from scope
+                  (let (cleaned : List (linearity-remove-names bindings-after-body bound-names))
+                    [cleaned (concat init-diags body-diags)])))))))))
+
+(defn linearity-check-let-inits
+  :sig [(let-bindings : List) (bindings : List) (names-acc : List) -> List]
+  :intent "Check let init expressions and add bindings. Returns [updated-bindings diags names-list]"
+  :requires [(valid let-bindings)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? let-bindings)
+      [bindings [] names-acc]
+      (let (binding : _ (head let-bindings))
+        (let (rest : List (tail let-bindings))
+          (match binding
+            (ASTBinding name type-name val-expr)
+              ;; Check the init expression
+              (let (val-result : List (linearity-check-expr val-expr bindings))
+                (let (bindings-after : List (at val-result 0))
+                  (let (val-diags : List (at val-result 1))
+                    ;; Add the new binding
+                    (let (state : String (if (is-copy-type type-name) "copy" "owned"))
+                      (let (bindings-with-new : List (binding-add bindings-after name state))
+                        (let (rest-result : List (linearity-check-let-inits rest bindings-with-new (append names-acc name)))
+                          (let (final-bindings : List (at rest-result 0))
+                            (let (rest-diags : List (at rest-result 1))
+                              (let (final-names : List (at rest-result 2))
+                                [final-bindings (concat val-diags rest-diags) final-names])))))))))
+            ;; Not a binding node — skip
+            _ (linearity-check-let-inits rest bindings names-acc))))))
+
+(defn linearity-remove-names
+  :sig [(bindings : List) (names : List) -> List]
+  :intent "Remove a list of names from the binding map"
+  :requires [(valid bindings)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? names)
+      bindings
+      (linearity-remove-names (binding-remove bindings (head names)) (tail names))))
+
+;; ── Sequential expression checker ───────────────────────
+
+(defn linearity-check-seq
+  :sig [(exprs : List) (bindings : List) -> List]
+  :intent "Check expressions sequentially, threading bindings. Returns [updated-bindings diags]"
+  :requires [(valid exprs)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? exprs)
+      [bindings []]
+      (let (result : List (linearity-check-expr (head exprs) bindings))
+        (let (new-bindings : List (at result 0))
+          (let (diags : List (at result 1))
+            (let (rest-result : List (linearity-check-seq (tail exprs) new-bindings))
+              (let (final-bindings : List (at rest-result 0))
+                (let (rest-diags : List (at rest-result 1))
+                  [final-bindings (concat diags rest-diags)]))))))))
+
+;; ── If/else checker ─────────────────────────────────────
+
+(defn linearity-check-if
+  :sig [(cond-expr : _) (then-expr : _) (else-expr : _) (bindings : List) -> List]
+  :intent "Check if/else with branch snapshot/merge"
+  :requires [(valid cond-expr)]
+  :ensures [(valid result)]
+  :body
+    ;; Check condition
+    (let (cond-result : List (linearity-check-expr cond-expr bindings))
+      (let (bindings-after-cond : List (at cond-result 0))
+        (let (cond-diags : List (at cond-result 1))
+          ;; Snapshot after cond
+          (let (snapshot : List bindings-after-cond)
+            ;; Check then branch
+            (let (then-result : List (linearity-check-expr then-expr snapshot))
+              (let (then-bindings : List (at then-result 0))
+                (let (then-diags : List (at then-result 1))
+                  ;; Check else branch from snapshot
+                  (let (else-result : List (linearity-check-expr else-expr snapshot))
+                    (let (else-bindings : List (at else-result 0))
+                      (let (else-diags : List (at else-result 1))
+                        ;; Merge branch states
+                        (let (merge-result : List (merge-branch-states then-bindings else-bindings snapshot))
+                          (let (merged : List (at merge-result 0))
+                            (let (merge-diags : List (at merge-result 1))
+                              [merged (concat cond-diags (concat then-diags (concat else-diags merge-diags)))]))))))))))))))
+
+;; ── Match checker ───────────────────────────────────────
+
+(defn linearity-check-match
+  :sig [(scrutinee : _) (arms : List) (bindings : List) -> List]
+  :intent "Check match with N-way branch merge"
+  :requires [(valid scrutinee)]
+  :ensures [(valid result)]
+  :body
+    ;; Check scrutinee
+    (let (scrut-result : List (linearity-check-expr scrutinee bindings))
+      (let (bindings-after-scrut : List (at scrut-result 0))
+        (let (scrut-diags : List (at scrut-result 1))
+          ;; Snapshot after scrutinee
+          (let (snapshot : List bindings-after-scrut)
+            ;; Check each arm from snapshot
+            (let (arms-result : List (linearity-check-match-arms arms snapshot))
+              (let (arm-states : List (at arms-result 0))
+                (let (arm-diags : List (at arms-result 1))
+                  ;; Merge all arm states
+                  (let (merge-result : List (merge-n-arm-states arm-states snapshot))
+                    (let (merged : List (at merge-result 0))
+                      (let (merge-diags : List (at merge-result 1))
+                        [merged (concat scrut-diags (concat arm-diags merge-diags))])))))))))))
+
+(defn linearity-check-match-arms
+  :sig [(arms : List) (snapshot : List) -> List]
+  :intent "Check each match arm from snapshot. Returns [list-of-arm-states all-diags]"
+  :requires [(valid arms)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? arms)
+      [[] []]
+      (let (arm : _ (head arms))
+        (let (rest : List (tail arms))
+          (match arm
+            (ASTArm pattern body)
+              ;; Introduce pattern bindings into snapshot
+              (let (arm-bindings : List (introduce-pattern-bindings pattern snapshot))
+                ;; Check arm body
+                (let (body-result : List (linearity-check-expr body arm-bindings))
+                  (let (arm-state : List (at body-result 0))
+                    (let (arm-diags : List (at body-result 1))
+                      ;; Remove pattern bindings from result
+                      (let (pat-names : List (collect-pattern-names pattern))
+                        (let (cleaned-state : List (linearity-remove-names arm-state pat-names))
+                          ;; Check rest of arms
+                          (let (rest-result : List (linearity-check-match-arms rest snapshot))
+                            (let (rest-states : List (at rest-result 0))
+                              (let (rest-diags : List (at rest-result 1))
+                                [(cons cleaned-state rest-states) (concat arm-diags rest-diags)])))))))))
+            ;; Not an ASTArm — skip
+            _ (linearity-check-match-arms rest snapshot))))))
+
+(defn introduce-pattern-bindings
+  :sig [(pattern : _) (bindings : List) -> List]
+  :intent "Add bindings for pattern variables (all owned)"
+  :requires [(valid pattern)]
+  :ensures [(valid result)]
+  :body
+    (match pattern
+      (PatBind name _ _)
+        (binding-add bindings name "owned")
+      (PatVariant _ sub-pats _ _)
+        (fold (fn [acc pat] (introduce-pattern-bindings pat acc))
+          bindings
+          sub-pats)
+      ;; Wildcard, literal — no bindings
+      _ bindings))
+
+(defn collect-pattern-names
+  :sig [(pattern : _) -> List]
+  :intent "Collect all binding names from a pattern"
+  :requires [(valid pattern)]
+  :ensures [(valid result)]
+  :body
+    (match pattern
+      (PatBind name _ _) [name]
+      (PatVariant _ sub-pats _ _)
+        (fold (fn [acc pat] (concat acc (collect-pattern-names pat)))
+          []
+          sub-pats)
+      _ []))
+
+;; ── Call checker ────────────────────────────────────────
+
+(defn linearity-check-call
+  :sig [(callee : _) (args : List) (bindings : List) -> List]
+  :intent "Check function call — move each symbol argument (default Own ownership)"
+  :requires [(valid callee)]
+  :ensures [(valid result)]
+  :body
+    ;; Check callee expression first
+    (let (callee-result : List (linearity-check-expr callee bindings))
+      (let (bindings-after-callee : List (at callee-result 0))
+        (let (callee-diags : List (at callee-result 1))
+          ;; Check each argument — symbol args are moved, complex args are recursed
+          (let (args-result : List (linearity-check-call-args args bindings-after-callee))
+            (let (final-bindings : List (at args-result 0))
+              (let (args-diags : List (at args-result 1))
+                [final-bindings (concat callee-diags args-diags)])))))))
+
+(defn linearity-check-call-args
+  :sig [(args : List) (bindings : List) -> List]
+  :intent "Check call arguments sequentially, moving symbol args"
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? args)
+      [bindings []]
+      (let (arg : _ (head args))
+        (let (rest : List (tail args))
+          (let (arg-result : List
+            (match arg
+              ;; Symbol argument — track move (default Own ownership)
+              (ASTSymbol name _ _)
+                (track-move bindings name)
+              ;; Complex expression — recurse
+              _ (linearity-check-expr arg bindings)))
+            (let (new-bindings : List (at arg-result 0))
+              (let (arg-diags : List (at arg-result 1))
+                (let (rest-result : List (linearity-check-call-args rest new-bindings))
+                  (let (final-bindings : List (at rest-result 0))
+                    (let (rest-diags : List (at rest-result 1))
+                      [final-bindings (concat arg-diags rest-diags)]))))))))))
+
+;; ── Lambda checker ──────────────────────────────────────
+
+(defn linearity-check-lambda
+  :sig [(params : List) (body : _) (bindings : List) -> List]
+  :intent "Check lambda body with params in scope. No capture analysis in v1."
+  :requires [(valid params)]
+  :ensures [(valid result)]
+  :body
+    ;; Add params as owned bindings
+    (let (lambda-bindings : List (fold (fn [acc p] (binding-add acc p "owned"))
+                                   bindings params))
+      ;; Check body
+      (let (body-result : List (linearity-check-expr body lambda-bindings))
+        (let (body-diags : List (at body-result 1))
+          ;; Remove lambda params from result, keep outer bindings unchanged
+          (let (cleaned : List (linearity-remove-names (at body-result 0) params))
+            [cleaned body-diags])))))
+
+;; ── Function definition checker ─────────────────────────
+
+(defn linearity-check-fn
+  :sig [(defn-ast : _) (mode : String) -> List]
+  :intent "Check one function definition for linearity violations"
+  :requires [(valid defn-ast)]
+  :ensures [(valid result)]
+  :body
+    (match defn-ast
+      (ASTDefn name sig _ _ _ body _ _ _)
+        (if (= body nil)
+          ;; No body — nothing to check
+          []
+          ;; Build initial binding map from signature params
+          (let (params : List (match sig
+                                (ASTSig param-list _) param-list
+                                _ []))
+            (let (initial-bindings : List
+              (fold (fn [acc p]
+                      (let (pname : String (param-name p))
+                        (let (pstate : String (param-initial-state p))
+                          (binding-add acc pname pstate))))
+                []
+                params))
+              ;; Check the body
+              (let (result : List (linearity-check-expr body initial-bindings))
+                (let (diags : List (at result 1))
+                  ;; Prefix diagnostics with function name
+                  (map (fn [d] (str "in " name ": " d)) diags))))))
+      _ []))
+
+;; ── Module checker (entry point) ────────────────────────
+
+(defn linearity-check-module
+  :sig [(tops : List) (mode : String) -> List]
+  :intent "Check all defns in a module for linearity violations. Returns list of diagnostic strings."
+  :requires [(valid tops)]
+  :ensures [(valid result)]
+  :body
+    (fold (fn [acc node]
+            (match node
+              (ASTDefn _ _ _ _ _ _ _ _ _)
+                (concat acc (linearity-check-fn node mode))
+              _ acc))
+      []
+      tops))

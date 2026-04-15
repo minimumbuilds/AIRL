@@ -81,11 +81,44 @@
                                 ;; Compile with proof results for opcode elision
                                 (bc-compile-program-with-prefix-and-proofs ast-nodes mod-prefix proof-map))))))))))))
 
+;; ── Linearity check integration (issue-141) ─────────────
+
+(defn g3-linearity-mode
+  :sig [(strict : Bool) -> String]
+  :intent "Determine linearity mode: check when strict or AIRL_LINEARITY=check, else warn"
+  :requires [(valid strict)]
+  :ensures [(valid result)]
+  :body
+    (if strict
+      "check"
+      (match (getenv "AIRL_LINEARITY")
+        (Ok mode) mode
+        _ "warn")))
+
+(defn g3-run-linearity
+  :sig [(ast-nodes : List) (label : String) (lin-mode : String) -> _]
+  :intent "Run linearity checker on AST nodes. Returns (Ok ast-nodes) or (Err msg) in check mode."
+  :requires [(valid ast-nodes)]
+  :ensures [(valid result)]
+  :body
+    (if (= lin-mode "off")
+      (Ok ast-nodes)
+      (let (diags : List (linearity-check-module ast-nodes lin-mode))
+        (if (empty? diags)
+          (Ok ast-nodes)
+          (if (= lin-mode "check")
+            ;; Fatal — print errors and return Err
+            (do (fold (fn [_ d] (print "[linearity] " label ": error: " d "\n")) nil diags)
+                (Err (str label ": linearity check failed (" (length diags) " errors)")))
+            ;; Warn mode — print warnings, continue
+            (do (fold (fn [_ d] (print "[linearity] " label ": warning: " d "\n")) nil diags)
+                (Ok ast-nodes)))))))
+
 ;; ── Z3-verified compilation with strict mode (issue-136) ─
 
 (defn g3-compile-source-with-z3-strict
   :sig [(source : String) (label : String) (mod-prefix : String) (strict : Bool) -> _]
-  :intent "Compile with Z3 verification; when strict=true, override all verify-levels to proven"
+  :intent "Compile with Z3 verification + linearity check; when strict=true, override all verify-levels to proven"
   :requires [(valid source)]
   :ensures [(valid result)]
   :body
@@ -98,19 +131,24 @@
             (match (parse-program sexprs)
               (Err e) (Err (g3-format-error label e))
               (Ok ast-nodes)
-                (let (cache : _ (z3c-load ".g3-z3-cache"))
-                  (let (cv-result : _ (z3c-verify-ast-cached ast-nodes cache))
-                    (let (proof-map : _ (at cv-result 0))
-                      (let (updated-cache : _ (at cv-result 1))
-                        (let (cache-hits : _ (at cv-result 2))
-                          (let (cache-misses : _ (at cv-result 3))
-                            (do (z3c-save ".g3-z3-cache" updated-cache)
-                                (print "[z3-cache] " label ": "
-                                       cache-hits " hits, "
-                                       cache-misses " misses\n")
-                                (if strict
-                                  (bc-compile-program-with-prefix-proofs-strict ast-nodes mod-prefix proof-map)
-                                  (bc-compile-program-with-prefix-and-proofs ast-nodes mod-prefix proof-map)))))))))))))
+                ;; Linearity check — after parse, before Z3 (issue-141)
+                (let (lin-mode : String (g3-linearity-mode strict))
+                  (match (g3-run-linearity ast-nodes label lin-mode)
+                    (Err e) (Err e)
+                    (Ok checked-nodes)
+                      (let (cache : _ (z3c-load ".g3-z3-cache"))
+                        (let (cv-result : _ (z3c-verify-ast-cached checked-nodes cache))
+                          (let (proof-map : _ (at cv-result 0))
+                            (let (updated-cache : _ (at cv-result 1))
+                              (let (cache-hits : _ (at cv-result 2))
+                                (let (cache-misses : _ (at cv-result 3))
+                                  (do (z3c-save ".g3-z3-cache" updated-cache)
+                                      (print "[z3-cache] " label ": "
+                                             cache-hits " hits, "
+                                             cache-misses " misses\n")
+                                      (if strict
+                                        (bc-compile-program-with-prefix-proofs-strict checked-nodes mod-prefix proof-map)
+                                        (bc-compile-program-with-prefix-and-proofs checked-nodes mod-prefix proof-map)))))))))))))))
 
 ;; ── Locate stdlib directory ──────────────────────────────
 
