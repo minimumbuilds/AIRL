@@ -1553,6 +1553,11 @@
             (bc-split-loop (tail nodes) defns exprs)
           (ASTDefType _ _ _ _ _)
             (bc-split-loop (tail nodes) defns exprs)
+          (ASTModule _ _ mod-body _ _)
+            (let (split : List (bc-split-loop mod-body [] []))
+              (bc-split-loop (tail nodes)
+                (concat defns (at split 0))
+                (concat exprs (at split 1))))
           _ (bc-split-loop (tail nodes) defns (append exprs node))))))
 
 (defn bc-compile-defns

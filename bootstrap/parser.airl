@@ -970,6 +970,65 @@
                 (Err (ParseError "import path must be a string" line col))))
         _ (Err (ParseError "import path must be a string" line col)))))
 
+;; ── Module form ──────────────────────────────────
+
+(defn walk-module-clauses
+  :sig [(items : List) (pos : i64) (verify : String) (body : List) -> List]
+  :intent "Walk keyword clauses in module form, collect verify level and body items"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (>= pos (length items))
+      (Ok [verify body])
+      (match (at items pos)
+        (SAtom tok)
+          (match tok
+            (Token kind value _ _)
+              (if (= kind "keyword")
+                (if (= value "verify")
+                  (if (>= (+ pos 1) (length items))
+                    (Err (ParseError "missing value for :verify" 0 0))
+                    (match (at items (+ pos 1))
+                      (SAtom vtok)
+                        (match vtok
+                          (Token vk vv _ _)
+                            (if (= vk "symbol")
+                              (walk-module-clauses items (+ pos 2) vv body)
+                              (Err (ParseError "verify level must be a symbol" 0 0))))
+                      _ (Err (ParseError "verify level must be a symbol" 0 0))))
+                  ;; Other keywords (version, requires, provides) — skip key+value
+                  (if (>= (+ pos 1) (length items))
+                    (Err (ParseError (+ "missing value for :" value) 0 0))
+                    (walk-module-clauses items (+ pos 2) verify body)))
+                ;; Non-keyword atom — this is a body item, parse as top-level
+                (match (parse-top-level (at items pos))
+                  (Ok node) (walk-module-clauses items (+ pos 1) verify (append body node))
+                  (Err e) (Err e))))
+          ;; S-expression — body item, parse as top-level
+        _ (match (parse-top-level (at items pos))
+            (Ok node) (walk-module-clauses items (+ pos 1) verify (append body node))
+            (Err e) (Err e)))))
+
+(defn parse-module
+  :sig [(items : List) (line : i64) (col : i64) -> List]
+  :intent "Parse (module name :verify level body...) form"
+  :requires [(valid items)]
+  :ensures [(valid result)]
+  :body
+    (if (< (length items) 2)
+      (Err (ParseError "module requires a name" line col))
+      (match (at items 1)
+        (SAtom tok)
+          (match tok
+            (Token kind name _ _)
+              (if (= kind "symbol")
+                (match (walk-module-clauses items 2 "checked" [])
+                  (Ok clause-vals)
+                    (Ok (ASTModule name (at clause-vals 0) (at clause-vals 1) line col))
+                  (Err e) (Err e))
+                (Err (ParseError "module name must be a symbol" line col))))
+        _ (Err (ParseError "module name must be a symbol" line col)))))
+
 ;; ── Top-level and entry point ─────────────────────
 
 (defn parse-top-level
@@ -993,7 +1052,9 @@
                         (parse-defn items line col)
                         (if (= value "deftype")
                           (parse-deftype (tail items) line col)
-                          (parse-expr sexpr))))
+                          (if (= value "module")
+                            (parse-module items line col)
+                            (parse-expr sexpr)))))
                     (parse-expr sexpr)))
             _ (parse-expr sexpr)))
       _ (parse-expr sexpr)))
