@@ -7,6 +7,9 @@
 ;; Retained defns: read-file, get-args, getenv, exit, walk-dir-acc, walk-dir
 ;; (not present as Rust builtins).
 
+(module io
+  :verify trusted
+
 ;; ════════════════════════════════════════════════════════════════
 ;; File I/O (Batch 7a)
 ;; ════════════════════════════════════════════════════════════════
@@ -127,3 +130,5 @@
     (if (not (is-dir? root-path))
       []
       (walk-dir-acc root-path skip-patterns (read-dir root-path) [])))
+
+) ;; end module io

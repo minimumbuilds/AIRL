@@ -3,6 +3,9 @@
 ;; Wrappers around aircon_* builtins for container lifecycle management.
 ;; On Linux these return (Err "not available on Linux").
 
+(module aircon
+  :verify trusted
+
 ;; ── aircon-create : create a new container ──
 (defn aircon-create
   :sig [(image : String) (mem-kb : i64) (cpu-ms : i64) -> _]
@@ -42,3 +45,5 @@
   :requires []
   :ensures [(valid result)]
   :body (aircon_list))
+
+) ;; end module aircon

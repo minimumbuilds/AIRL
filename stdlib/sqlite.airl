@@ -4,6 +4,9 @@
 ;; Handles are opaque i64 values (raw pointer casts on 64-bit platforms).
 ;; All functions are non-AIRLOS only (SQLite not available on AIRLOS).
 
+(module sqlite
+  :verify trusted
+
 (extern-c "airl_sqlite_open"         [(path : String) -> i64])
 (extern-c "airl_sqlite_prepare"      [(db : i64) (sql : String) -> i64])
 (extern-c "airl_sqlite_step"         [(stmt : i64) -> i64])
@@ -70,3 +73,5 @@
     (do
       (airl_sqlite_close db)
       nil))
+
+) ;; end module sqlite

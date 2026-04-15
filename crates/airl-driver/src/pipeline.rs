@@ -127,6 +127,19 @@ fn parse_source_with_externs(source: &str) -> Result<(Vec<airl_syntax::ast::TopL
             }
         }
     }
+    // Also extract extern-c declarations from inside module bodies
+    for top in &tops {
+        if let airl_syntax::ast::TopLevel::Module(m) = top {
+            for inner in &m.body {
+                if let airl_syntax::ast::TopLevel::ExternC(ref decl) = inner {
+                    extern_c_decls.push(airl_runtime::bytecode_aot::ExternCInfo {
+                        c_name: decl.c_name.clone(),
+                        arity: decl.params.len(),
+                    });
+                }
+            }
+        }
+    }
     Ok((tops, extern_c_decls))
 }
 
@@ -1835,6 +1848,17 @@ pub fn compile_to_object_with_imports(entry_path: &str, target: Option<&str>) ->
                     arity: decl.params.len(),
                 });
             }
+            // Also extract extern-c from inside module bodies
+            if let airl_syntax::ast::TopLevel::Module(m) = top {
+                for inner in &m.body {
+                    if let airl_syntax::ast::TopLevel::ExternC(decl) = inner {
+                        extern_c_decls.push(airl_runtime::bytecode_aot::ExternCInfo {
+                            c_name: decl.c_name.clone(),
+                            arity: decl.params.len(),
+                        });
+                    }
+                }
+            }
         }
 
         // Filter tops: remove Import nodes, skip Expr for non-entry modules
@@ -1947,6 +1971,19 @@ fn compile_source_to_bytecode_with_externs(
                 match parser::parse_expr(sexpr, &mut diags2) {
                     Ok(expr) => tops.push(airl_syntax::ast::TopLevel::Expr(expr)),
                     Err(_) => return Err(PipelineError::Syntax(d)),
+                }
+            }
+        }
+    }
+    // Also extract extern-c declarations from inside module bodies
+    for top in &tops {
+        if let airl_syntax::ast::TopLevel::Module(m) = top {
+            for inner in &m.body {
+                if let airl_syntax::ast::TopLevel::ExternC(ref decl) = inner {
+                    extern_c_decls.push(airl_runtime::bytecode_aot::ExternCInfo {
+                        c_name: decl.c_name.clone(),
+                        arity: decl.params.len(),
+                    });
                 }
             }
         }

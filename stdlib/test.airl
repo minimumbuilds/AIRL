@@ -1,5 +1,8 @@
 ;; ── AIRL Standard Library: Test ──────────────────
 
+(module test
+  :verify trusted
+
 ;; ── assert-eq : equality assertion ──
 (defn assert-eq
   :sig [(a : Any) (b : Any) (msg : String) -> Unit]
@@ -71,3 +74,5 @@
           (do
             (println (str "{\"test\": \"" msg "\", \"status\": \"fail\", \"expected\": \"true\", \"actual\": \"false\"}"))
             (exit 1))))
+
+) ;; end module test

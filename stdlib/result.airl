@@ -1,5 +1,8 @@
 ;; ── AIRL Standard Library: Result Combinators ──────────────────
 
+(module result
+  :verify trusted
+
 ;; ── is-ok? : check if Result is Ok ──
 (defn is-ok?
   :sig [(r : _) -> bool]
@@ -77,3 +80,5 @@
   :requires [(valid err)]
   :ensures [(valid result)]
   :body (if (= val nil) (Err err) (Ok val)))
+
+) ;; end module result
