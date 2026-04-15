@@ -8,7 +8,7 @@ The compiler is self-hosted: the G3 binary is written in AIRL and compiles itsel
 
 ## Core
 
-### AIRL (v1.1.1)
+### AIRL (v0.16.0)
 
 The compiler and runtime. 10-crate Rust workspace + self-hosted bootstrap compiler.
 
@@ -27,13 +27,13 @@ The compiler and runtime. 10-crate Rust workspace + self-hosted bootstrap compil
 
 **Bootstrap:** 30 AIRL files (~27K lines) implementing lexer, parser, bytecode compiler, and G3 driver.
 
-**Stdlib:** 14 modules -- collections, math, result, string, map, set, json, base64, sha256, hmac, pbkdf2, io, path, aircon. 73 functions migrated from Rust builtins to pure AIRL in v0.11.0. ELF rebuild in v1.1.1.
+**Stdlib:** 14 modules -- collections, math, result, string, map, set, json, base64, sha256, hmac, pbkdf2, io, path, aircon. 73 functions migrated from Rust builtins to pure AIRL in v0.11.0.
 
 **New runtime builtins:** `dns-resolve`, `icmp-ping` (networking), 8 identity IPC stubs (`whoami`, `id`, `authenticate`, `su`, `sudo`, `useradd`, `userdel`, `usermod`), 7 Canopy terminal extern-c functions, 5 AirCon container IPC stubs (`aircon-create`, `aircon-start`, `aircon-stop`, `aircon-status`, `aircon-list`), `ash-install-sigint`/`ash-sigint-pending` for REPL signal handling (all in `airl-rt`).
 
 **Recent fixes:** AOT arity bug -- use callee's declared arity, not caller's argc.
 
-**Stats:** 36K Rust LOC, 40K AIRL LOC, 592 commits, 703 unit tests, 74 AOT tests.
+**Stats:** ~43K Rust LOC (crates/), ~35K AIRL LOC (bootstrap/ + stdlib/), 843 commits, 74 AOT tests. (Counted with `wc -l`.)
 
 **Execution modes:**
 - `airl run` -- AOT compile to temp binary, execute, clean up
@@ -231,61 +231,64 @@ tmux-like terminal multiplexer for the AIRL ecosystem. Manages named sessions of
 | **Status** | PoC complete. 64 tests passing. Binary builds on Linux. |
 | **Depends on** | Canopy (TUI framework), AIRL stdlib (map, string, json), libutil (openpty) |
 
----
+### AirSeal -- JWT Library
 
-### AirSeal -- JWT Library (scaffold)
-
-Pure-AIRL JWT signing/verification. HS256 in MVP. Depends on stdlib `sha256`, `hmac-sha256`, `base64`, `json`, and random/uuid builtins (G08).
+Pure-AIRL JWT signing/verification. HS256 implementation with base64url encoding. Depends on stdlib `sha256`, `hmac-sha256`, `base64`, `json`.
 
 | | |
 |---|---|
 | **Location** | `../AirSeal` |
-| **Size** | 0 (scaffold — PLATY-GAP-G01) |
-| **Status** | Scaffolded; unimplemented. |
+| **Size** | 678 LOC (2 modules), 308 LOC tests |
+| **Commits** | 3 |
+| **Status** | Functional. JWT sign/verify with HS256. |
 
-### AirPost -- SMTP Client (scaffold)
+### AirPost -- SMTP Client
 
-Pure-AIRL SMTP client. RFC 5321 + STARTTLS + AUTH PLAIN/LOGIN, MIME multipart.
+Pure-AIRL SMTP client. RFC 5321 + STARTTLS + AUTH PLAIN/LOGIN, MIME multipart message construction.
 
 | | |
 |---|---|
 | **Location** | `../AirPost` |
-| **Size** | 0 (scaffold — PLATY-GAP-G06) |
-| **Status** | Scaffolded; unimplemented. |
+| **Size** | 1,172 LOC (3 modules), 247 LOC tests |
+| **Commits** | 3 |
+| **Status** | Functional. SMTP protocol, MIME multipart, and auth complete. |
 
-### AirHangar -- S3 Object Storage Client (scaffold)
+### AirHangar -- S3 Object Storage Client
 
 Pure-AIRL S3-compatible client built on AIReqL. SigV4 signer; supports MinIO and AWS S3. Presigned GET/PUT.
 
 | | |
 |---|---|
 | **Location** | `../AirHangar` |
-| **Size** | 0 (scaffold — PLATY-GAP-G03) |
-| **Status** | Scaffolded; unimplemented. Renamed from "AirVault" in the original spec to avoid collision with the existing AirVault memory-palace project. |
+| **Size** | 1,210 LOC (2 modules), 414 LOC tests |
+| **Commits** | 3 |
+| **Status** | Functional. SigV4 signing and S3 operations complete. |
 
-### AirFlux -- Schema Migration Runner (scaffold)
+### AirFlux -- Schema Migration Runner
 
 Flyway/golang-migrate-style forward-only migrations over Postgres. Depends on AirDB, CairLI, AirLog.
 
 | | |
 |---|---|
 | **Location** | `../AirFlux` |
-| **Size** | 0 (scaffold — PLATY-GAP-G09) |
-| **Status** | Scaffolded; unimplemented. |
+| **Size** | 546 LOC (1 module), 215 LOC tests |
+| **Commits** | 3 |
+| **Status** | Functional. Forward-only migration execution. |
 
 ---
 
 ## Applications
 
-### platy-airl -- HR/Compliance Platform (scaffold)
+### platy-airl -- HR/Compliance Platform
 
-Application built on the AIRL ecosystem. Consumes AirGate, AirDB, AirHangar, AirSeal, AirPost, AirFlux, AirLog. Scope includes PDF framework storage, RAG search over handbooks, acknowledgment tracking, background jobs, and JWT-authenticated web endpoints.
+Application built on the AIRL ecosystem. Consumes AirGate, AirDB, AirHangar, AirSeal, AirPost, AirFlux, AirLog. PDF framework storage, RAG search over handbooks, acknowledgment tracking, background jobs, and JWT-authenticated web endpoints.
 
 | | |
 |---|---|
 | **Location** | `../platy-airl` |
-| **Size** | 0 (scaffold — PLATY-GAP-G05/G10 + consumer of G01-G12) |
-| **Status** | Scaffolded; unimplemented. |
+| **Size** | 4,004 LOC (16 modules), 1,849 LOC tests |
+| **Commits** | 48 |
+| **Status** | Functional. Full HR platform with auth, search, ingestion, job queue, and dashboard. |
 
 ---
 
@@ -356,7 +359,7 @@ Measures how well language models generate AIRL code. 100 tasks across 4 difficu
 | **Location** | `../AIRL_bench` |
 | **Size** | 847 LOC harness, 100 task specifications |
 | **Commits** | 27 |
-| **Key results** | qwen3-coder: 100/100 (100%). AIRL is 2.7x more token-efficient than Python. |
+| **Key results** | qwen3-coder: 100/100 (100%). AIRL uses 0.43× the completion tokens of Python. |
 
 **Progression:** 44% (no guide) -> 68% (+ guide) -> 80% (+ few-shot) -> 100% (v0.6.0+ stdlib improvements).
 
@@ -440,7 +443,7 @@ SSH client for AIRLOS. Implements the SSH-2 protocol from scratch: key exchange 
 
 | Project | Language | LOC | Commits | Status |
 |---------|----------|-----|---------|--------|
-| AIRL | Rust + AIRL | 76,307 | 595 | v0.11.2, self-hosted |
+| AIRL | Rust + AIRL | ~78,000 | 843 | v0.16.0, self-hosted |
 | AIRLOS | C + asm | 36,100 | 190 | v0.2.6, Prototype |
 | AIRL_castle | AIRL | 8,811 | 78 | Functional |
 | airtools | AIRL | 6,065 | 8 | Functional |
@@ -466,7 +469,12 @@ SSH client for AIRLOS. Implements the SSH-2 protocol from scratch: key exchange 
 | AirDB | AIRL | 1,000 | 3 | v0.2.0 |
 | AirMux | AIRL + C | 1,100 | 2 | v0.1.0 PoC |
 | AirNexus | AIRL | 1,630 | 7 | v0.1.0 Functional |
-| **Total** | | **~168,359** | **1,061** | |
+| AirSeal | AIRL | 678 | 3 | Functional |
+| AirPost | AIRL | 1,172 | 3 | Functional |
+| AirHangar | AIRL | 1,210 | 3 | Functional |
+| AirFlux | AIRL | 546 | 3 | Functional |
+| platy-airl | AIRL | 4,004 | 48 | Functional |
+| **Total** | | **~176,000** | **~1,121** | |
 
 ## Building
 
@@ -477,7 +485,7 @@ All AIRL ecosystem projects require the g3 compiler and `libairl_rt.a` from the 
 cd AIRL
 cargo build --release --features aot
 
-# Build g3 self-hosted compiler (one-time, ~23 min)
+# Build g3 self-hosted compiler (one-time, ~1 min)
 bash scripts/build-g3.sh
 
 # Compile any AIRL project
