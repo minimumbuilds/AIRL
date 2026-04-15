@@ -1842,6 +1842,24 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
         aot.register_extern_c("airl_z3_mk_ite", 4);
         aot.register_extern_c("airl_z3_solver_assert", 3);
         aot.register_extern_c("airl_z3_solver_check", 2);
+        // Real sort (issue-133)
+        aot.register_extern_c("airl_z3_mk_real_sort", 1);
+        aot.register_extern_c("airl_z3_mk_real", 3);
+        aot.register_extern_c("airl_z3_mk_int2real", 2);
+        // String sort (issue-133)
+        aot.register_extern_c("airl_z3_mk_string_sort", 1);
+        aot.register_extern_c("airl_z3_mk_string_val", 2);
+        aot.register_extern_c("airl_z3_mk_seq_length", 2);
+        aot.register_extern_c("airl_z3_mk_seq_contains", 3);
+        aot.register_extern_c("airl_z3_mk_seq_concat2", 3);
+        // Quantifiers (issue-134)
+        aot.register_extern_c("airl_z3_mk_forall_const1", 3);
+        aot.register_extern_c("airl_z3_mk_exists_const1", 3);
+        aot.register_extern_c("airl_z3_mk_forall_const2", 4);
+        aot.register_extern_c("airl_z3_mk_exists_const2", 4);
+        // Model / counterexample (issue-136)
+        aot.register_extern_c("airl_z3_solver_get_model", 2);
+        aot.register_extern_c("airl_z3_model_to_string", 2);
     }
 
     for func in &all_funcs {

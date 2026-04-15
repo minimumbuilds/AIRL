@@ -81,6 +81,37 @@
                                 ;; Compile with proof results for opcode elision
                                 (bc-compile-program-with-prefix-and-proofs ast-nodes mod-prefix proof-map))))))))))))
 
+;; ── Z3-verified compilation with strict mode (issue-136) ─
+
+(defn g3-compile-source-with-z3-strict
+  :sig [(source : String) (label : String) (mod-prefix : String) (strict : Bool) -> _]
+  :intent "Compile with Z3 verification; when strict=true, override all verify-levels to proven"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (lex source)
+      (Err e) (Err (g3-format-error label e))
+      (Ok tokens)
+        (match (parse-sexpr-all tokens)
+          (Err e) (Err (g3-format-error label e))
+          (Ok sexprs)
+            (match (parse-program sexprs)
+              (Err e) (Err (g3-format-error label e))
+              (Ok ast-nodes)
+                (let (cache : _ (z3c-load ".g3-z3-cache"))
+                  (let (cv-result : _ (z3c-verify-ast-cached ast-nodes cache))
+                    (let (proof-map : _ (at cv-result 0))
+                      (let (updated-cache : _ (at cv-result 1))
+                        (let (cache-hits : _ (at cv-result 2))
+                          (let (cache-misses : _ (at cv-result 3))
+                            (do (z3c-save ".g3-z3-cache" updated-cache)
+                                (print "[z3-cache] " label ": "
+                                       cache-hits " hits, "
+                                       cache-misses " misses\n")
+                                (if strict
+                                  (bc-compile-program-with-prefix-proofs-strict ast-nodes mod-prefix proof-map)
+                                  (bc-compile-program-with-prefix-and-proofs ast-nodes mod-prefix proof-map)))))))))))))
+
 ;; ── Locate stdlib directory ──────────────────────────────
 
 (defn g3-find-stdlib-dir
@@ -223,13 +254,16 @@
                 (Ok stdlib-funcs)
                   (do
                     (print "[g3] " (length stdlib-funcs) " stdlib functions\n")
+                    ;; Check AIRL_STRICT_VERIFY for strict mode (issue-136)
+                    (let (strict-env : _ (getenv "AIRL_STRICT_VERIFY"))
+                      (let (strict : Bool (match strict-env (Ok v) (= v "1") _ false))
                     ;; Step 2: Compile user source files with Z3 verification
                     (match (fold (fn [acc path]
                               (match acc
                                 (Err e) (Err e)
                                 (Ok funcs-so-far)
                                   (let (source : String (read-file path))
-                                    (match (g3-compile-source-with-z3 source path "user")
+                                    (match (g3-compile-source-with-z3-strict source path "user" strict)
                                       (Err e) (Err e)
                                       (Ok new-funcs)
                                         (Ok (concat funcs-so-far
@@ -244,7 +278,7 @@
                       (Ok user-funcs-no-main)
                         ;; Compile last file again to get its __main__
                         (let (last-source : String (read-file (at input-files (- (length input-files) 1))))
-                          (match (g3-compile-source-with-z3 last-source "main" "user")
+                          (match (g3-compile-source-with-z3-strict last-source "main" "user" strict)
                             (Err e) (do (print "Compile error: " e "\n") (exit 1))
                             (Ok last-funcs)
                               (let (user-funcs : List (concat user-funcs-no-main
@@ -262,4 +296,4 @@
                                   (compile-bytecode-to-executable-with-target all-funcs output-path target-str)))
                                 (match compile-result
                                   (Err e) (do (print "[g3] COMPILE ERROR: " e "\n") (exit 1))
-                                  _ (print "[g3] done\n")))))))))))))))))))))
+                                  _ (print "[g3] done\n")))))))))))))))))))))))

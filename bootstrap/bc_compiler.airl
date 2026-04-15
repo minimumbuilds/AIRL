@@ -1562,6 +1562,45 @@
                         (let (main-lambdas : List (at result-triple 1))
                           (Ok (concat func-list (concat main-lambdas [main-func])))))))))))))
 
+(defn bc-compile-program-with-prefix-proofs-strict
+  :sig [(ast-nodes : List) (mod-prefix : String) (proof-map : _) -> _]
+  :intent "Compile with strict mode: all verify-levels overridden to proven (issue-136)"
+  :requires [(valid ast-nodes)]
+  :ensures [(valid result)]
+  :body
+    (let (split : List (bc-split-top-levels ast-nodes))
+      (let (defns : List (at split 0))
+        (let (exprs : List (at split 1))
+          (let (base-vm : _ (at split 2))
+            ;; Override every verify-level to "proven"
+            (let (verify-map : _ (bc-override-all-proven base-vm defns))
+              (match (bc-compile-defns-prefixed-with-proofs defns mod-prefix verify-map proof-map)
+                (Err e) (Err e)
+                (Ok func-list)
+                  (let (main-body : _ (if (empty? exprs)
+                                        (ASTNil 0 0)
+                                        (if (= (length exprs) 1)
+                                          (head exprs)
+                                          (ASTDo exprs 0 0))))
+                    (match (bc-compile-function-ext "__main__" [] main-body 0 [] [] mod-prefix 0 "checked")
+                      (Err e) (Err e)
+                      (Ok result-triple)
+                        (let (main-func : _ (at result-triple 0))
+                          (let (main-lambdas : List (at result-triple 1))
+                            (Ok (concat func-list (concat main-lambdas [main-func]))))))))))))))
+
+(defn bc-override-all-proven
+  :sig [(vm : _) (defns : List) -> _]
+  :intent "Set verify-level to proven for every defn in the list"
+  :requires [(valid vm)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? defns) vm
+      (match (head defns)
+        (ASTDefn name _ _ _ _ _ _ _ _)
+          (bc-override-all-proven (map-set vm name "proven") (tail defns))
+        _ (bc-override-all-proven vm (tail defns)))))
+
 (defn bc-split-top-levels
   :sig [(nodes : List) -> List]
   :intent "Split AST nodes into [defns exprs verify-map]"
@@ -1633,9 +1672,12 @@
               (let (param-names : List (map (fn [p] (match p (ASTParam n _) n _ "?")) params))
                 (let (verify-level : String (map-get-or verify-map name "checked"))
                   (let (proof-result : String (map-get-or proof-map name "none"))
-                    ;; Z3-driven compile error: disproven contracts
+                    ;; Z3-driven compile error: disproven contracts (with optional counterexample)
                     (if (= proof-result "disproven")
                       (Err (str "Z3 contract violation: function '" name "' has a disproven contract"))
+                    (if (if (>= (length proof-result) 10) (= (substring proof-result 0 10) "disproven:") false)
+                      (let (model-str : String (substring proof-result 10 (length proof-result)))
+                        (Err (str "Z3 contract violation: function '" name "' has a disproven contract\n  counterexample: " model-str)))
                       ;; Z3-driven compile error: "proven" level but Z3 returned unknown
                       (if (= verify-level "proven")
                         (if (= proof-result "unknown")
@@ -1670,7 +1712,7 @@
                                 (let (sub-lambdas : List (at result-triple 1))
                                   (match (bc-compile-defns-prefixed-with-proofs (tail defns) mod-prefix verify-map proof-map)
                                     (Err e) (Err e)
-                                    (Ok rest) (Ok (concat (cons func sub-lambdas) rest))))))))))))
+                                    (Ok rest) (Ok (concat (cons func sub-lambdas) rest)))))))))))))
             _ (Err "bc-compile-defns: defn requires sig"))
         _ (Err "bc-compile-defns: expected defn"))))
 
