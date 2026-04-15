@@ -454,3 +454,64 @@ fn verify_level_fixtures() {
 
     eprintln!("  {} verify_level fixtures passed", files.len());
 }
+
+/// Verify that module-wrapped functions actually compile and execute correctly.
+/// This is separate from verify_level_fixtures which only tests check_source.
+/// Only fixtures with ;;RUN-MODULE annotation are tested for execution — older
+/// verify_level fixtures were designed for check_source only.
+#[test]
+fn module_compilation_fixtures() {
+    let vl_dir = fixtures_root().join("verify_level");
+    let files = collect_airl_files(&vl_dir);
+
+    if files.is_empty() {
+        eprintln!("  no verify_level fixture files found — skipping");
+        return;
+    }
+
+    let mut failures = Vec::new();
+    let mut run_count = 0;
+
+    for file in &files {
+        let source = fs::read_to_string(file).unwrap();
+
+        // Only run fixtures explicitly marked for module execution testing
+        if !source.contains(";;RUN-MODULE") {
+            continue;
+        }
+
+        let expected = match extract_expect(&source) {
+            Some(e) => e,
+            None => {
+                failures.push(format!("{}: has ;;RUN-MODULE but no ;; EXPECT:", file.display()));
+                continue;
+            }
+        };
+
+        run_count += 1;
+        match run_fixture(&source) {
+            Ok(output) => {
+                if output != expected {
+                    failures.push(format!(
+                        "{}: expected '{}', got '{}'",
+                        file.display(), expected, output
+                    ));
+                }
+            }
+            Err(err) => {
+                failures.push(format!("{}: unexpected error: {}", file.display(), err));
+            }
+        }
+    }
+
+    if !failures.is_empty() {
+        panic!(
+            "\n{} module compilation fixture(s) failed:\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        );
+    }
+
+    assert!(run_count > 0, "No ;;RUN-MODULE fixtures found in verify_level/");
+    eprintln!("  {} module compilation fixtures passed", run_count);
+}

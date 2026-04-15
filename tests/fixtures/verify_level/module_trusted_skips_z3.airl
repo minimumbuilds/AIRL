@@ -1,0 +1,16 @@
+;; EXPECT: 42
+;; VERIFY-LEVEL: trusted
+;;RUN-MODULE
+;; A Trusted module with a wrong ensures clause. Z3 is skipped entirely,
+;; so the bad contract is ignored and the function executes normally.
+;; This also verifies that module-wrapped defns compile (issue-124).
+(module trust-exec-test
+  :version 0.1.0
+  :provides [identity-wrong-contract]
+  :verify trusted
+  (defn identity-wrong-contract
+    :sig [(x : i32) -> i32]
+    :intent "identity that falsely claims result is always 0"
+    :ensures [(= result 0)]
+    :body x))
+(identity-wrong-contract 42)

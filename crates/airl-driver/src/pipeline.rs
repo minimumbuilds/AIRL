@@ -139,6 +139,25 @@ fn parse_source_with_externs(source: &str) -> Result<(Vec<airl_syntax::ast::TopL
 /// - `Run`/`Repl` mode: same hard errors for Proven, warns on Checked-level Unknown
 ///
 /// DiskCache is loaded/saved automatically (unless AIRL_NO_Z3_CACHE is set).
+
+/// Flatten modules: expand `TopLevel::Module` bodies into their contained top-level items.
+/// Non-module items are passed through unchanged. This ensures pipeline functions that
+/// iterate over tops don't silently skip module-wrapped definitions.
+fn flatten_module_tops(tops: &[airl_syntax::ast::TopLevel]) -> Vec<&airl_syntax::ast::TopLevel> {
+    let mut result = Vec::new();
+    for top in tops {
+        match top {
+            airl_syntax::ast::TopLevel::Module(m) => {
+                for inner in &m.body {
+                    result.push(inner);
+                }
+            }
+            other => result.push(other),
+        }
+    }
+    result
+}
+
 fn z3_verify_tops(
     tops: &[airl_syntax::ast::TopLevel],
     mode: PipelineMode,
@@ -310,9 +329,10 @@ pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, P
         }
     }
 
-    // Linearity check
+    // Linearity check (flatten modules so wrapped defns are checked)
+    let flat_tops = flatten_module_tops(&tops);
     let mut lin_checker = LinearityChecker::new();
-    for top in &tops {
+    for top in &flat_tops {
         if let airl_syntax::ast::TopLevel::Defn(f) = top {
             lin_checker.check_fn(f);
         }
@@ -409,9 +429,10 @@ pub fn run_source_with_z3_info(source: &str) -> Result<(Value, Vec<String>), Pip
         }
     }
 
-    // Linearity check
+    // Linearity check (flatten modules so wrapped defns are checked)
+    let flat_tops = flatten_module_tops(&tops);
     let mut lin_checker = LinearityChecker::new();
-    for top in &tops {
+    for top in &flat_tops {
         if let airl_syntax::ast::TopLevel::Defn(f) = top {
             lin_checker.check_fn(f);
         }
@@ -524,9 +545,10 @@ pub fn check_source(source: &str) -> Result<(), PipelineError> {
         return Err(PipelineError::TypeCheck(checker.into_diagnostics()));
     }
 
-    // Linearity check (strict mode)
+    // Linearity check (strict mode, flatten modules so wrapped defns are checked)
+    let flat_tops = flatten_module_tops(&tops);
     let mut lin_checker = LinearityChecker::new();
-    for top in &tops {
+    for top in &flat_tops {
         if let airl_syntax::ast::TopLevel::Defn(f) = top {
             lin_checker.check_fn(f);
         }
@@ -724,17 +746,20 @@ fn extract_upper_bound(where_expr: &Expr, var_name: &str) -> Option<IRNode> {
     None
 }
 
-fn compile_top_level(top: &airl_syntax::ast::TopLevel) -> IRNode {
+fn compile_top_level(top: &airl_syntax::ast::TopLevel) -> Vec<IRNode> {
     match top {
         airl_syntax::ast::TopLevel::Defn(f) => {
             let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
-            IRNode::Func(f.name.clone(), param_names, Box::new(compile_expr(&f.body)))
+            vec![IRNode::Func(f.name.clone(), param_names, Box::new(compile_expr(&f.body)))]
         }
         airl_syntax::ast::TopLevel::Define(d) => {
-            IRNode::Func(d.name.clone(), d.params.clone(), Box::new(compile_expr(&d.body)))
+            vec![IRNode::Func(d.name.clone(), d.params.clone(), Box::new(compile_expr(&d.body)))]
         }
-        airl_syntax::ast::TopLevel::Expr(e) => compile_expr(e),
-        _ => IRNode::Nil, // Module, DefType, Task, UseDecl — no runtime effect in compiled mode
+        airl_syntax::ast::TopLevel::Expr(e) => vec![compile_expr(e)],
+        airl_syntax::ast::TopLevel::Module(m) => {
+            m.body.iter().flat_map(compile_top_level).collect()
+        }
+        _ => vec![IRNode::Nil], // DefType, Task, UseDecl — no runtime effect in compiled mode
     }
 }
 
@@ -744,14 +769,25 @@ fn compile_top_level(top: &airl_syntax::ast::TopLevel) -> IRNode {
 /// Only includes functions that have at least one explicitly `Own`-annotated parameter.
 fn build_ownership_map(tops: &[airl_syntax::ast::TopLevel]) -> HashMap<String, Vec<bool>> {
     let mut map = HashMap::new();
+    let mut insert_fn = |f: &airl_syntax::ast::FnDef| {
+        let own_flags: Vec<bool> = f.params.iter().map(|p| {
+            matches!(p.ownership, airl_syntax::ast::Ownership::Own)
+        }).collect();
+        if own_flags.iter().any(|&o| o) {
+            map.insert(f.name.clone(), own_flags);
+        }
+    };
     for top in tops {
-        if let airl_syntax::ast::TopLevel::Defn(f) = top {
-            let own_flags: Vec<bool> = f.params.iter().map(|p| {
-                matches!(p.ownership, airl_syntax::ast::Ownership::Own)
-            }).collect();
-            if own_flags.iter().any(|&o| o) {
-                map.insert(f.name.clone(), own_flags);
+        match top {
+            airl_syntax::ast::TopLevel::Defn(f) => insert_fn(f),
+            airl_syntax::ast::TopLevel::Module(m) => {
+                for inner in &m.body {
+                    if let airl_syntax::ast::TopLevel::Defn(f) = inner {
+                        insert_fn(f);
+                    }
+                }
             }
+            _ => {}
         }
     }
     map
@@ -772,45 +808,66 @@ fn compile_tops_with_contracts(
     let mut contracts = HashMap::new();
     let mut metadata = Vec::new();
 
+    // Helper: compile a single defn and record its contracts/metadata
+    let mut compile_defn = |f: &airl_syntax::ast::FnDef,
+                            ir_nodes: &mut Vec<IRNode>,
+                            contracts: &mut HashMap<String, (Vec<(IRNode, String)>, Vec<(IRNode, String)>, Vec<(IRNode, String)>)>,
+                            metadata: &mut Vec<airl_runtime::bytecode::FnDefMetadata>| {
+        let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
+        ir_nodes.push(IRNode::Func(f.name.clone(), param_names.clone(), Box::new(compile_expr(&f.body))));
+
+        let mut req_strings = Vec::with_capacity(f.requires.len());
+        let req: Vec<(IRNode, String)> = f.requires.iter()
+            .map(|e| { let s = e.to_airl(); req_strings.push(s.clone()); (compile_expr(e), s) })
+            .collect();
+        let mut ens_strings = Vec::with_capacity(f.ensures.len());
+        let ens: Vec<(IRNode, String)> = f.ensures.iter()
+            .map(|e| { let s = e.to_airl(); ens_strings.push(s.clone()); (compile_expr(e), s) })
+            .collect();
+        let mut inv_strings = Vec::with_capacity(f.invariants.len());
+        let inv: Vec<(IRNode, String)> = f.invariants.iter()
+            .map(|e| { let s = e.to_airl(); inv_strings.push(s.clone()); (compile_expr(e), s) })
+            .collect();
+
+        if !req.is_empty() || !ens.is_empty() || !inv.is_empty() {
+            contracts.insert(f.name.clone(), (req, ens, inv));
+        }
+
+        metadata.push(airl_runtime::bytecode::FnDefMetadata {
+            name: f.name.clone(),
+            param_names,
+            param_types: f.params.iter().map(|p| p.ty.to_airl()).collect(),
+            return_type: f.return_type.to_airl(),
+            intent: f.intent.clone(),
+            requires: req_strings,
+            ensures: ens_strings,
+            invariants: inv_strings,
+        });
+    };
+
     for top in tops {
         match top {
             airl_syntax::ast::TopLevel::Defn(f) => {
-                let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
-                ir_nodes.push(IRNode::Func(f.name.clone(), param_names.clone(), Box::new(compile_expr(&f.body))));
-
-                // Collect contract IR+source pairs, extracting source strings
-                // in the same pass to avoid a second iteration.
-                let mut req_strings = Vec::with_capacity(f.requires.len());
-                let req: Vec<(IRNode, String)> = f.requires.iter()
-                    .map(|e| { let s = e.to_airl(); req_strings.push(s.clone()); (compile_expr(e), s) })
-                    .collect();
-                let mut ens_strings = Vec::with_capacity(f.ensures.len());
-                let ens: Vec<(IRNode, String)> = f.ensures.iter()
-                    .map(|e| { let s = e.to_airl(); ens_strings.push(s.clone()); (compile_expr(e), s) })
-                    .collect();
-                let mut inv_strings = Vec::with_capacity(f.invariants.len());
-                let inv: Vec<(IRNode, String)> = f.invariants.iter()
-                    .map(|e| { let s = e.to_airl(); inv_strings.push(s.clone()); (compile_expr(e), s) })
-                    .collect();
-
-                if !req.is_empty() || !ens.is_empty() || !inv.is_empty() {
-                    contracts.insert(f.name.clone(), (req, ens, inv));
+                compile_defn(f, &mut ir_nodes, &mut contracts, &mut metadata);
+            }
+            airl_syntax::ast::TopLevel::Module(m) => {
+                for inner in &m.body {
+                    match inner {
+                        airl_syntax::ast::TopLevel::Defn(f) => {
+                            compile_defn(f, &mut ir_nodes, &mut contracts, &mut metadata);
+                        }
+                        airl_syntax::ast::TopLevel::Define(d) => {
+                            ir_nodes.push(IRNode::Func(d.name.clone(), d.params.clone(), Box::new(compile_expr(&d.body))));
+                        }
+                        airl_syntax::ast::TopLevel::Expr(e) => {
+                            ir_nodes.push(compile_expr(e));
+                        }
+                        _ => {}
+                    }
                 }
-
-                metadata.push(airl_runtime::bytecode::FnDefMetadata {
-                    name: f.name.clone(),
-                    param_names,
-                    param_types: f.params.iter().map(|p| p.ty.to_airl()).collect(),
-                    return_type: f.return_type.to_airl(),
-                    intent: f.intent.clone(),
-                    requires: req_strings,
-                    ensures: ens_strings,
-                    invariants: inv_strings,
-                });
             }
             airl_syntax::ast::TopLevel::Define(d) => {
                 ir_nodes.push(IRNode::Func(d.name.clone(), d.params.clone(), Box::new(compile_expr(&d.body))));
-                // No contracts or metadata for define — it's intentionally simple
             }
             airl_syntax::ast::TopLevel::Expr(e) => {
                 ir_nodes.push(compile_expr(e));
@@ -838,39 +895,61 @@ fn compile_tops_without_exprs(
     let mut contracts = HashMap::new();
     let mut metadata = Vec::new();
 
+    // Helper: compile a defn for library use (no-expr mode)
+    let mut compile_defn = |f: &airl_syntax::ast::FnDef,
+                            ir_nodes: &mut Vec<IRNode>,
+                            contracts: &mut HashMap<String, (Vec<(IRNode, String)>, Vec<(IRNode, String)>, Vec<(IRNode, String)>)>,
+                            metadata: &mut Vec<airl_runtime::bytecode::FnDefMetadata>| {
+        let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
+        ir_nodes.push(IRNode::Func(f.name.clone(), param_names.clone(), Box::new(compile_expr(&f.body))));
+
+        let mut req_strings = Vec::with_capacity(f.requires.len());
+        let req: Vec<(IRNode, String)> = f.requires.iter()
+            .map(|e| { let s = e.to_airl(); req_strings.push(s.clone()); (compile_expr(e), s) })
+            .collect();
+        let mut ens_strings = Vec::with_capacity(f.ensures.len());
+        let ens: Vec<(IRNode, String)> = f.ensures.iter()
+            .map(|e| { let s = e.to_airl(); ens_strings.push(s.clone()); (compile_expr(e), s) })
+            .collect();
+        let mut inv_strings = Vec::with_capacity(f.invariants.len());
+        let inv: Vec<(IRNode, String)> = f.invariants.iter()
+            .map(|e| { let s = e.to_airl(); inv_strings.push(s.clone()); (compile_expr(e), s) })
+            .collect();
+
+        if !req.is_empty() || !ens.is_empty() || !inv.is_empty() {
+            contracts.insert(f.name.clone(), (req, ens, inv));
+        }
+
+        metadata.push(airl_runtime::bytecode::FnDefMetadata {
+            name: f.name.clone(),
+            param_names,
+            param_types: f.params.iter().map(|p| p.ty.to_airl()).collect(),
+            return_type: f.return_type.to_airl(),
+            intent: f.intent.clone(),
+            requires: req_strings,
+            ensures: ens_strings,
+            invariants: inv_strings,
+        });
+    };
+
     for top in tops {
         match top {
             airl_syntax::ast::TopLevel::Defn(f) => {
-                let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
-                ir_nodes.push(IRNode::Func(f.name.clone(), param_names.clone(), Box::new(compile_expr(&f.body))));
-
-                let mut req_strings = Vec::with_capacity(f.requires.len());
-                let req: Vec<(IRNode, String)> = f.requires.iter()
-                    .map(|e| { let s = e.to_airl(); req_strings.push(s.clone()); (compile_expr(e), s) })
-                    .collect();
-                let mut ens_strings = Vec::with_capacity(f.ensures.len());
-                let ens: Vec<(IRNode, String)> = f.ensures.iter()
-                    .map(|e| { let s = e.to_airl(); ens_strings.push(s.clone()); (compile_expr(e), s) })
-                    .collect();
-                let mut inv_strings = Vec::with_capacity(f.invariants.len());
-                let inv: Vec<(IRNode, String)> = f.invariants.iter()
-                    .map(|e| { let s = e.to_airl(); inv_strings.push(s.clone()); (compile_expr(e), s) })
-                    .collect();
-
-                if !req.is_empty() || !ens.is_empty() || !inv.is_empty() {
-                    contracts.insert(f.name.clone(), (req, ens, inv));
+                compile_defn(f, &mut ir_nodes, &mut contracts, &mut metadata);
+            }
+            airl_syntax::ast::TopLevel::Module(m) => {
+                for inner in &m.body {
+                    match inner {
+                        airl_syntax::ast::TopLevel::Defn(f) => {
+                            compile_defn(f, &mut ir_nodes, &mut contracts, &mut metadata);
+                        }
+                        airl_syntax::ast::TopLevel::Define(d) => {
+                            ir_nodes.push(IRNode::Func(d.name.clone(), d.params.clone(), Box::new(compile_expr(&d.body))));
+                        }
+                        // Skip Expr inside modules for library imports
+                        _ => {}
+                    }
                 }
-
-                metadata.push(airl_runtime::bytecode::FnDefMetadata {
-                    name: f.name.clone(),
-                    param_names,
-                    param_types: f.params.iter().map(|p| p.ty.to_airl()).collect(),
-                    return_type: f.return_type.to_airl(),
-                    intent: f.intent.clone(),
-                    requires: req_strings,
-                    ensures: ens_strings,
-                    invariants: inv_strings,
-                });
             }
             airl_syntax::ast::TopLevel::Define(d) => {
                 ir_nodes.push(IRNode::Func(d.name.clone(), d.params.clone(), Box::new(compile_expr(&d.body))));
@@ -971,7 +1050,7 @@ fn compile_stdlib_all() -> Result<Vec<(Vec<BytecodeFunc>, BytecodeFunc)>, Pipeli
     let mut result = Vec::new();
     for (src, name) in stdlib_modules {
         let tops = parse_source_stdlib(src, name)?;
-        let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
+        let ir_nodes: Vec<IRNode> = tops.iter().flat_map(compile_top_level).collect();
         let mut bc_compiler = BytecodeCompiler::with_prefix(name);
         let (funcs, main_func) = bc_compiler.compile_program(&ir_nodes);
         result.push((funcs, main_func));
@@ -1007,7 +1086,7 @@ fn load_cached_stdlib(vm: &mut BytecodeVm) -> Result<(), PipelineError> {
 fn compile_and_load_stdlib_bytecode(vm: &mut BytecodeVm, source: &str, name: &str) -> Result<(), PipelineError> {
     let tops = parse_source_stdlib(source, name)?;
 
-    let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
+    let ir_nodes: Vec<IRNode> = tops.iter().flat_map(compile_top_level).collect();
     let mut bc_compiler = BytecodeCompiler::with_prefix(name);
     let (funcs, main_func) = bc_compiler.compile_program(&ir_nodes);
 
@@ -1873,7 +1952,7 @@ fn compile_source_to_bytecode_with_externs(
         }
     }
 
-    let ir_nodes: Vec<IRNode> = tops.iter().map(compile_top_level).collect();
+    let ir_nodes: Vec<IRNode> = tops.iter().flat_map(compile_top_level).collect();
     let mut bc_compiler = BytecodeCompiler::with_prefix(prefix);
     let (funcs, main) = bc_compiler.compile_program(&ir_nodes);
     Ok((funcs, main, extern_c_decls))

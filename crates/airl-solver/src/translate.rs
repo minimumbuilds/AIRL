@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use z3::ast::{self, Ast};
 use z3::Context;
-use z3_sys::{self, Z3_context};
+use z3_sys::{self, Z3_context, Z3_func_decl};
 use airl_syntax::ast::{Expr, ExprKind, LetBinding, AstTypeKind, MatchArm, Pattern, PatternKind, LitPattern};
 
 /// Extract the raw Z3_context pointer from a z3::Context.
@@ -64,6 +64,11 @@ pub struct Translator<'ctx> {
     seq_vars: HashMap<String, ast::Dynamic<'ctx>>,
     /// Counter for generating unique quantifier-bound variable names when shadowing occurs.
     quant_counter: usize,
+    /// Cache of uninterpreted function declarations (name -> Z3_func_decl).
+    /// When a contract references a user-defined function that cannot be inlined,
+    /// we declare it as an uninterpreted function so Z3 can reason about call
+    /// relationships (e.g., f(x) = f(x) is provable by function congruence).
+    func_decls: HashMap<String, Z3_func_decl>,
 }
 
 impl<'ctx> Translator<'ctx> {
@@ -76,6 +81,7 @@ impl<'ctx> Translator<'ctx> {
             string_vars: HashMap::new(),
             seq_vars: HashMap::new(),
             quant_counter: 0,
+            func_decls: HashMap::new(),
         }
     }
 
@@ -353,9 +359,11 @@ impl<'ctx> Translator<'ctx> {
                                 "valid() predicate is not yet encoded — contracts using valid() are unverified".into()
                             ));
                         }
-                        _ => Err(TranslateError::UnsupportedExpression(
-                            format!("boolean context: {}", op)
-                        )),
+                        _ => {
+                            // Unknown function — declare as uninterpreted with Bool return
+                            let app_ast = self.apply_uninterpreted_fn(op, args, VarSort::Bool)?;
+                            Ok(unsafe { ast::Bool::wrap(self.ctx, app_ast) })
+                        }
                     }
                 } else {
                     Err(TranslateError::UnsupportedExpression("non-symbol callee".into()))
@@ -482,9 +490,11 @@ impl<'ctx> Translator<'ctx> {
                                 "length requires a declared list/seq variable".into()
                             ))
                         }
-                        _ => Err(TranslateError::UnsupportedExpression(
-                            format!("int context: {}", op)
-                        )),
+                        _ => {
+                            // Unknown function — declare as uninterpreted with Int return
+                            let app_ast = self.apply_uninterpreted_fn(op, args, VarSort::Int)?;
+                            Ok(unsafe { ast::Int::wrap(self.ctx, app_ast) })
+                        }
                     }
                 } else {
                     Err(TranslateError::UnsupportedExpression("non-symbol callee".into()))
@@ -1277,6 +1287,81 @@ impl<'ctx> Translator<'ctx> {
         }
     }
 
+    /// Declare (or retrieve from cache) an uninterpreted function and apply it to arguments.
+    ///
+    /// Uninterpreted functions let Z3 reason about function call relationships without
+    /// knowing the implementation. Key property: Z3 knows uninterpreted functions are
+    /// deterministic, so `f(x) = f(x)` is provable, while `f(x) = f(y)` requires x = y.
+    ///
+    /// All parameters default to Int sort and the return sort is specified by the caller.
+    /// The function declaration is cached so repeated calls to the same function reuse
+    /// the same Z3 FuncDecl.
+    fn apply_uninterpreted_fn(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        return_sort_kind: VarSort,
+    ) -> Result<z3_sys::Z3_ast, TranslateError> {
+        let z3_ctx = unsafe { raw_z3_ctx(self.ctx) };
+        let arity = args.len();
+
+        // Build a cache key that includes name + arity + return sort to avoid
+        // collisions between overloads (same name, different arity/return).
+        let cache_key = format!("{}/${}/{:?}", name, arity, return_sort_kind);
+
+        let func_decl = if let Some(&cached) = self.func_decls.get(&cache_key) {
+            cached
+        } else {
+            // Build domain sorts — default all params to Int
+            let int_sort = unsafe { z3_sys::Z3_mk_int_sort(z3_ctx) };
+            let domain: Vec<z3_sys::Z3_sort> = (0..arity).map(|_| int_sort).collect();
+
+            let range = match return_sort_kind {
+                VarSort::Int => unsafe { z3_sys::Z3_mk_int_sort(z3_ctx) },
+                VarSort::Bool => unsafe { z3_sys::Z3_mk_bool_sort(z3_ctx) },
+                VarSort::Real => unsafe { z3_sys::Z3_mk_real_sort(z3_ctx) },
+                VarSort::Str => unsafe { z3_sys::Z3_mk_string_sort(z3_ctx) },
+                VarSort::Seq => {
+                    return Err(TranslateError::UnsupportedExpression(
+                        format!("uninterpreted function '{}': Seq return sort not supported", name),
+                    ));
+                }
+            };
+
+            let c_name = std::ffi::CString::new(name).unwrap();
+            let sym = unsafe { z3_sys::Z3_mk_string_symbol(z3_ctx, c_name.as_ptr()) };
+            let decl = unsafe {
+                z3_sys::Z3_mk_func_decl(
+                    z3_ctx,
+                    sym,
+                    arity as u32,
+                    if domain.is_empty() { std::ptr::null() } else { domain.as_ptr() },
+                    range,
+                )
+            };
+            self.func_decls.insert(cache_key, decl);
+            decl
+        };
+
+        // Translate arguments — all assumed to be Int
+        let mut z3_args: Vec<z3_sys::Z3_ast> = Vec::with_capacity(arity);
+        for arg in args {
+            let z3_int = self.translate_int(arg)?;
+            z3_args.push(z3_int.get_z3_ast());
+        }
+
+        let app_ast = unsafe {
+            z3_sys::Z3_mk_app(
+                z3_ctx,
+                func_decl,
+                arity as u32,
+                if z3_args.is_empty() { std::ptr::null() } else { z3_args.as_ptr() },
+            )
+        };
+
+        Ok(app_ast)
+    }
+
     /// Determine variable sort from an AIRL type name.
     pub fn sort_from_type_name(name: &str) -> Option<VarSort> {
         match name {
@@ -1606,5 +1691,108 @@ mod tests {
         let x = Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() };
         let expr = Expr { kind: ExprKind::FnCall(Box::new(callee), vec![xs, x]), span: airl_syntax::Span::dummy() };
         assert!(t.translate_bool(&expr).is_ok(), "list-contains? should translate to Z3 Bool");
+    }
+
+    // --- Uninterpreted function tests ---
+
+    #[test]
+    fn uninterpreted_fn_call_translates_in_int_context() {
+        // (f x) where f is unknown — should succeed as uninterpreted function
+        let ctx = make_ctx();
+        let mut t = Translator::new(&ctx);
+        t.declare_int("x");
+        let callee = Expr { kind: ExprKind::SymbolRef("f".into()), span: airl_syntax::Span::dummy() };
+        let x = Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() };
+        let expr = Expr { kind: ExprKind::FnCall(Box::new(callee), vec![x]), span: airl_syntax::Span::dummy() };
+        assert!(t.translate_int(&expr).is_ok(), "uninterpreted fn call should translate in int context");
+    }
+
+    #[test]
+    fn uninterpreted_fn_call_translates_in_bool_context() {
+        // (p x) where p is unknown — should succeed as uninterpreted predicate
+        let ctx = make_ctx();
+        let mut t = Translator::new(&ctx);
+        t.declare_int("x");
+        let callee = Expr { kind: ExprKind::SymbolRef("p".into()), span: airl_syntax::Span::dummy() };
+        let x = Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() };
+        let expr = Expr { kind: ExprKind::FnCall(Box::new(callee), vec![x]), span: airl_syntax::Span::dummy() };
+        assert!(t.translate_bool(&expr).is_ok(), "uninterpreted fn call should translate in bool context");
+    }
+
+    #[test]
+    fn uninterpreted_fn_determinism_provable() {
+        // (= (f x) (f x)) should be provable — uninterpreted functions are deterministic
+        use z3::{Solver, SatResult};
+        let ctx = make_ctx();
+        let solver = Solver::new(&ctx);
+        let mut t = Translator::new(&ctx);
+        t.declare_int("x");
+
+        // Build (= (f x) (f x))
+        let fx1 = Expr {
+            kind: ExprKind::FnCall(
+                Box::new(Expr { kind: ExprKind::SymbolRef("f".into()), span: airl_syntax::Span::dummy() }),
+                vec![Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() }],
+            ),
+            span: airl_syntax::Span::dummy(),
+        };
+        let fx2 = Expr {
+            kind: ExprKind::FnCall(
+                Box::new(Expr { kind: ExprKind::SymbolRef("f".into()), span: airl_syntax::Span::dummy() }),
+                vec![Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() }],
+            ),
+            span: airl_syntax::Span::dummy(),
+        };
+        let eq_expr = Expr {
+            kind: ExprKind::FnCall(
+                Box::new(Expr { kind: ExprKind::SymbolRef("=".into()), span: airl_syntax::Span::dummy() }),
+                vec![fx1, fx2],
+            ),
+            span: airl_syntax::Span::dummy(),
+        };
+
+        let z3_bool = t.translate_bool(&eq_expr).expect("should translate");
+        // Negate and check: if UNSAT, the original is proven
+        solver.assert(&z3_bool.not());
+        assert_eq!(solver.check(), SatResult::Unsat, "(= (f x) (f x)) should be provable");
+    }
+
+    #[test]
+    fn uninterpreted_fn_different_args_not_provable() {
+        // (= (f x) (f y)) should NOT be provable — different args may yield different results
+        use z3::{Solver, SatResult};
+        let ctx = make_ctx();
+        let solver = Solver::new(&ctx);
+        let mut t = Translator::new(&ctx);
+        t.declare_int("x");
+        t.declare_int("y");
+
+        // Build (= (f x) (f y))
+        let fx = Expr {
+            kind: ExprKind::FnCall(
+                Box::new(Expr { kind: ExprKind::SymbolRef("f".into()), span: airl_syntax::Span::dummy() }),
+                vec![Expr { kind: ExprKind::SymbolRef("x".into()), span: airl_syntax::Span::dummy() }],
+            ),
+            span: airl_syntax::Span::dummy(),
+        };
+        let fy = Expr {
+            kind: ExprKind::FnCall(
+                Box::new(Expr { kind: ExprKind::SymbolRef("f".into()), span: airl_syntax::Span::dummy() }),
+                vec![Expr { kind: ExprKind::SymbolRef("y".into()), span: airl_syntax::Span::dummy() }],
+            ),
+            span: airl_syntax::Span::dummy(),
+        };
+        let eq_expr = Expr {
+            kind: ExprKind::FnCall(
+                Box::new(Expr { kind: ExprKind::SymbolRef("=".into()), span: airl_syntax::Span::dummy() }),
+                vec![fx, fy],
+            ),
+            span: airl_syntax::Span::dummy(),
+        };
+
+        let z3_bool = t.translate_bool(&eq_expr).expect("should translate");
+        // Negate and check: if SAT, the original is NOT provable (counterexample exists)
+        solver.assert(&z3_bool.not());
+        assert_eq!(solver.check(), SatResult::Sat, "(= (f x) (f y)) should NOT be provable");
     }
 }

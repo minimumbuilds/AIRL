@@ -1,0 +1,19 @@
+;; EXPECT: 5
+;; VERIFY-LEVEL: checked
+;;RUN-MODULE
+;; Functions inside a (module :verify checked ...) must compile and execute.
+;; This is a regression test: module-wrapped defns were silently dropped
+;; by compile_tops_with_contracts (issue-124).
+(module compile-test
+  :version 0.1.0
+  :provides [add1 double]
+  :verify checked
+  (defn add1
+    :sig [(x : i32) -> i32]
+    :ensures [(= result (+ x 1))]
+    :body (+ x 1))
+  (defn double
+    :sig [(x : i32) -> i32]
+    :ensures [(= result (+ x x))]
+    :body (+ x x)))
+(add1 (double 2))
