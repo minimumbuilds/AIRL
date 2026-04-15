@@ -54,7 +54,11 @@
               (airl_z3_mk_real_sort ctx)
               (if (= type-name "String")
                 (airl_z3_mk_string_sort ctx)
-                (airl_z3_mk_int_sort ctx))))))))
+                (if (= type-name "List")
+                  (airl_z3_mk_seq_sort ctx (airl_z3_mk_int_sort ctx))
+                  (if (= type-name "ListInt")
+                    (airl_z3_mk_seq_sort ctx (airl_z3_mk_int_sort ctx))
+                    (airl_z3_mk_int_sort ctx))))))))))
 
 ;; ── Named constant constructor ──────────────────────────────────────
 
@@ -207,8 +211,8 @@
 
 (defn z3-pow10
   :sig [(n : Int) -> Int]
-  :requires [(>= n 0)]
-  :ensures [(> result 0)]
+  :requires [(valid n)]
+  :ensures [(valid result)]
   :body
     (if (= n 0) 1
       (* 10 (z3-pow10 (- n 1)))))
@@ -354,8 +358,17 @@
     (let (a : _ (z3-translate-expr ctx (at args 0) param-map int-sort))
       (let (b : _ (z3-translate-expr ctx (at args 1) param-map int-sort))
         (if (= a 0) 0 (if (= b 0) 0 (airl_z3_mk_seq_concat2 ctx a b)))))
+  ;; List operations (issue-137)
+  (if (= op "length")
+    (let (a : _ (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (if (= a 0) 0 (airl_z3_mk_seq_length ctx a)))
+  (if (= op "list-contains?")
+    (let (a : _ (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (let (b : _ (z3-translate-expr ctx (at args 1) param-map int-sort))
+        (if (= a 0) 0 (if (= b 0) 0
+          (airl_z3_mk_seq_contains ctx a (airl_z3_mk_seq_unit ctx b))))))
     ;; Unsupported operator
-    0))))))))))))))))))))
+    0))))))))))))))))))))))
 
 ;; ── AST expression translator ───────────────────────────────────────
 ;; Translates parsed AST nodes (ASTCall, ASTSymbol, ASTInt, etc.) to Z3 ASTs.
@@ -395,17 +408,19 @@
               (airl_z3_mk_true ctx)
               (airl_z3_mk_false ctx))
           ;; Function call — covers operators like (> x 0), (valid x), (+ a b)
+          ;; callee may be a string (old format) or ASTSymbol (parsed AST) — extract name
           (ASTCall callee args _ _)
-            (if (= callee "valid")
-              ;; (valid x) is always true — trivial guard
-              (airl_z3_mk_true ctx)
-              (if (= callee "forall")
-                ;; Quantifier: (forall [x : Type] (where guard)? body) (issue-134)
-                (z3-translate-quantifier ctx args param-map int-sort true)
-                (if (= callee "exists")
-                  ;; Quantifier: (exists [x : Type] (where guard)? body) (issue-134)
-                  (z3-translate-quantifier ctx args param-map int-sort false)
-                  (z3-translate-ast-op ctx callee args param-map int-sort))))
+            (let (op-name : String (match callee (ASTSymbol n _ _) n _ callee))
+              (if (= op-name "valid")
+                ;; (valid x) is always true — trivial guard
+                (airl_z3_mk_true ctx)
+                (if (= op-name "forall")
+                  ;; Quantifier: (forall [x : Type] (where guard)? body) (issue-134)
+                  (z3-translate-quantifier ctx args param-map int-sort true)
+                  (if (= op-name "exists")
+                    ;; Quantifier: (exists [x : Type] (where guard)? body) (issue-134)
+                    (z3-translate-quantifier ctx args param-map int-sort false)
+                    (z3-translate-ast-op ctx op-name args param-map int-sort)))))
           ;; Match expression (issue-135)
           (ASTMatch scrutinee arms _ _)
             (let (scrut-z3 : _ (z3-translate-ast-expr ctx scrutinee param-map int-sort))
@@ -421,8 +436,95 @@
                     (if (= t 0) 0
                       (if (= e 0) 0
                         (airl_z3_mk_ite ctx c t e)))))))
+          ;; Let binding (issue-138) — translate init, bind in param-map, translate body
+          (ASTLet bindings body _ _)
+            (z3-translate-ast-let ctx bindings body param-map int-sort)
+          ;; Do block (issue-139) — translate only the last expression
+          (ASTDo exprs _ _)
+            (if (empty? exprs)
+              0
+              (z3-translate-ast-expr ctx (at exprs (- (length exprs) 1)) param-map int-sort))
           ;; Anything else — unsupported
           _ 0))))
+
+;; ── Uninterpreted function helpers (issue-140) ──────────────────────
+;; Must be defined before z3-translate-ast-op (forward references cause
+;; arity mismatch in the AOT compiler).
+
+(defn z3-is-user-function
+  :sig [(op : String) -> Bool]
+  :requires [(valid op)]
+  :ensures [(valid result)]
+  :body
+    (if (= op "int-to-float") false
+    (if (= op "float-to-int") false
+    (if (= op "int-to-string") false
+    (if (= op "string-to-int") false
+    (if (= op "parse-int") false
+    (if (= op "parse-int-radix") false
+    (if (= op "type-of") false
+    (if (= op "str") false
+    (if (= op "print") false
+    (if (= op "println") false
+    (if (= op "eprintln") false
+    (if (= op "eprint") false
+    (if (= op "head") false
+    (if (= op "tail") false
+    (if (= op "cons") false
+    (if (= op "empty?") false
+    (if (= op "at") false
+    (if (= op "at-or") false
+    (if (= op "set-at") false
+    (if (= op "map-new") false
+    (if (= op "map-get") false
+    (if (= op "map-set") false
+    (if (= op "map-has") false
+    (if (= op "map-get-or") false
+    (if (= op "map-keys") false
+    (if (= op "map-values") false
+    (if (= op "map-from") false
+    (if (= op "char-at") false
+    (if (= op "char-code") false
+    (if (= op "substring") false
+    (if (= op "split") false
+    (if (= op "join") false
+    (if (= op "trim") false
+    (if (= op "contains") false
+    (if (= op "replace") false
+    (if (= op "read-file") false
+    (if (= op "write-file") false
+    (if (= op "abs") false
+    (if (= op "min") false
+    (if (= op "max") false
+    (if (= op "sort") false
+    (if (= op "reverse") false
+    (if (= op "append") false
+    (if (= op "assert") false
+    (if (= op "error") false
+    (if (= op "getenv") false
+    (if (= op "exit") false
+      true))))))))))))))))))))))))))))))))))))))))))))))))
+
+(defn z3-apply-uninterpreted
+  :sig [(ctx : _) (op : String) (args : List) (param-map : List) (int-sort : _) -> _]
+  :intent "Apply unknown operator as Z3 uninterpreted function"
+  :requires [(valid ctx)]
+  :ensures [(valid result)]
+  :body
+    (if (z3-is-user-function op)
+      (if (= (length args) 1)
+        (let (a : _ (z3-translate-ast-expr ctx (at args 0) param-map int-sort))
+          (if (= a 0) 0
+            (let (fd : _ (airl_z3_mk_func_decl1 ctx op int-sort int-sort))
+              (airl_z3_mk_app1 ctx fd a))))
+        (if (= (length args) 2)
+          (let (a : _ (z3-translate-ast-expr ctx (at args 0) param-map int-sort))
+            (let (b : _ (z3-translate-ast-expr ctx (at args 1) param-map int-sort))
+              (if (= a 0) 0 (if (= b 0) 0
+                (let (fd : _ (airl_z3_mk_func_decl2 ctx op int-sort int-sort int-sort))
+                  (airl_z3_mk_app2 ctx fd a b))))))
+          0))
+      0))
 
 (defn z3-translate-ast-op
   :sig [(ctx : _) (op : String) (args : List) (param-map : List) (int-sort : _) -> _]
@@ -496,8 +598,52 @@
       (let (a : _ (z3-translate-ast-expr ctx (at args 0) param-map int-sort))
         (let (b : _ (z3-translate-ast-expr ctx (at args 1) param-map int-sort))
           (if (= a 0) 0 (if (= b 0) 0 (airl_z3_mk_seq_concat2 ctx a b)))))
-    ;; Unsupported operator — return 0
-    0))))))))))))))))))
+    ;; List operations (issue-137) — length works on any Seq sort
+    (if (= op "length")
+      (let (a : _ (z3-translate-ast-expr ctx (at args 0) param-map int-sort))
+        (if (= a 0) 0 (airl_z3_mk_seq_length ctx a)))
+    (if (= op "list-contains?")
+      (let (a : _ (z3-translate-ast-expr ctx (at args 0) param-map int-sort))
+        (let (b : _ (z3-translate-ast-expr ctx (at args 1) param-map int-sort))
+          (if (= a 0) 0 (if (= b 0) 0
+            (airl_z3_mk_seq_contains ctx a (airl_z3_mk_seq_unit ctx b))))))
+    ;; Uninterpreted function fallback (issue-140)
+    (if (z3-is-user-function op)
+      (if (= (length args) 1)
+        (let (a : _ (z3-translate-ast-expr ctx (at args 0) param-map int-sort))
+          (if (= a 0) 0
+            (let (fd : _ (airl_z3_mk_func_decl1 ctx op int-sort int-sort))
+              (airl_z3_mk_app1 ctx fd a))))
+        (if (= (length args) 2)
+          (let (a : _ (z3-translate-ast-expr ctx (at args 0) param-map int-sort))
+            (let (b : _ (z3-translate-ast-expr ctx (at args 1) param-map int-sort))
+              (if (= a 0) 0 (if (= b 0) 0
+                (let (fd : _ (airl_z3_mk_func_decl2 ctx op int-sort int-sort int-sort))
+                  (airl_z3_mk_app2 ctx fd a b))))))
+          0))
+      0)))))))))))))))))))))
+
+;; ── Let binding translation (issue-138) ─────────────────────────────
+;; Processes bindings sequentially: translate each init with current param-map,
+;; add binding, then translate body. g3 nests single-binding lets, so this
+;; handles each ASTLet with its list of ASTBinding nodes.
+
+(defn z3-translate-ast-let
+  :sig [(ctx : _) (bindings : List) (body : _) (param-map : List) (int-sort : _) -> _]
+  :intent "Translate let bindings for Z3 — bind each init, then translate body"
+  :requires [(valid ctx)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? bindings)
+      (z3-translate-ast-expr ctx body param-map int-sort)
+      (match (head bindings)
+        (ASTBinding name _ val-expr)
+          (let (init-z3 : _ (z3-translate-ast-expr ctx val-expr param-map int-sort))
+            (if (= init-z3 0)
+              0
+              (let (new-map : List (cons (cons name (cons init-z3 [])) param-map))
+                (z3-translate-ast-let ctx (tail bindings) body new-map int-sort))))
+        _ (z3-translate-ast-expr ctx body param-map int-sort))))
 
 ;; ── Quantifier translation (issue-134) ──────────────────────────────
 ;; Handles (forall [x : Type] (where guard)? body) and exists variant.

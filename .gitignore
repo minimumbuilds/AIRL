@@ -69,3 +69,5 @@ cat.airl
 airl_gen/
 findings/
 results/
+target-x86_64/
+g3-x86_64

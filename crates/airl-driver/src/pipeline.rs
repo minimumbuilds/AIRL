@@ -1849,6 +1849,8 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
         // String sort (issue-133)
         aot.register_extern_c("airl_z3_mk_string_sort", 1);
         aot.register_extern_c("airl_z3_mk_string_val", 2);
+        aot.register_extern_c("airl_z3_mk_seq_sort", 2);
+        aot.register_extern_c("airl_z3_mk_seq_unit", 2);
         aot.register_extern_c("airl_z3_mk_seq_length", 2);
         aot.register_extern_c("airl_z3_mk_seq_contains", 3);
         aot.register_extern_c("airl_z3_mk_seq_concat2", 3);
@@ -1860,6 +1862,11 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
         // Model / counterexample (issue-136)
         aot.register_extern_c("airl_z3_solver_get_model", 2);
         aot.register_extern_c("airl_z3_model_to_string", 2);
+        // Uninterpreted functions (issue-140)
+        aot.register_extern_c("airl_z3_mk_func_decl1", 4);
+        aot.register_extern_c("airl_z3_mk_func_decl2", 5);
+        aot.register_extern_c("airl_z3_mk_app1", 3);
+        aot.register_extern_c("airl_z3_mk_app2", 4);
     }
 
     for func in &all_funcs {

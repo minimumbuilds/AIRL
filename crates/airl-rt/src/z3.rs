@@ -40,6 +40,8 @@ extern "C" {
     fn Z3_mk_real(c: *mut c_void, num: c_int, den: c_int) -> *mut c_void;
     fn Z3_mk_int2real(c: *mut c_void, a: *mut c_void) -> *mut c_void;
     fn Z3_mk_string(c: *mut c_void, s: *const i8) -> *mut c_void;
+    fn Z3_mk_seq_sort(c: *mut c_void, elem_sort: *mut c_void) -> *mut c_void;
+    fn Z3_mk_seq_unit(c: *mut c_void, elem: *mut c_void) -> *mut c_void;
     fn Z3_mk_seq_length(c: *mut c_void, s: *mut c_void) -> *mut c_void;
     fn Z3_mk_seq_contains(c: *mut c_void, a: *mut c_void, b: *mut c_void) -> *mut c_void;
     fn Z3_mk_seq_concat(c: *mut c_void, num: c_uint, args: *const *mut c_void) -> *mut c_void;
@@ -62,6 +64,8 @@ extern "C" {
     fn Z3_mk_ge(c: *mut c_void, t1: *mut c_void, t2: *mut c_void) -> *mut c_void;
     fn Z3_mk_forall_const(c: *mut c_void, weight: c_uint, num_bound: c_uint, bound: *const *mut c_void, num_patterns: c_uint, patterns: *const *mut c_void, body: *mut c_void) -> *mut c_void;
     fn Z3_mk_exists_const(c: *mut c_void, weight: c_uint, num_bound: c_uint, bound: *const *mut c_void, num_patterns: c_uint, patterns: *const *mut c_void, body: *mut c_void) -> *mut c_void;
+    fn Z3_mk_func_decl(c: *mut c_void, s: *mut c_void, domain_size: c_uint, domain: *const *mut c_void, range: *mut c_void) -> *mut c_void;
+    fn Z3_mk_app(c: *mut c_void, d: *mut c_void, num_args: c_uint, args: *const *mut c_void) -> *mut c_void;
     fn Z3_solver_assert(c: *mut c_void, s: *mut c_void, a: *mut c_void);
     fn Z3_solver_check(c: *mut c_void, s: *mut c_void) -> c_int;
     fn Z3_solver_get_model(c: *mut c_void, s: *mut c_void) -> *mut c_void;
@@ -439,6 +443,66 @@ pub extern "C" fn airl_z3_mk_exists_const2(ctx: *mut RtValue, b1: *mut RtValue, 
     handle_to_rt(unsafe {
         Z3_mk_exists_const(c, 0, 2, bound_arr.as_ptr(), 0, empty_patterns.as_ptr(), extract_handle(body))
     })
+}
+
+// ── Seq sort / unit (issue-137) ───────────────────────────────────
+
+#[no_mangle]
+#[cfg(not(target_os = "airlos"))]
+pub extern "C" fn airl_z3_mk_seq_sort(ctx: *mut RtValue, elem_sort: *mut RtValue) -> *mut RtValue {
+    handle_to_rt(unsafe { Z3_mk_seq_sort(extract_handle(ctx), extract_handle(elem_sort)) })
+}
+
+#[no_mangle]
+#[cfg(not(target_os = "airlos"))]
+pub extern "C" fn airl_z3_mk_seq_unit(ctx: *mut RtValue, elem: *mut RtValue) -> *mut RtValue {
+    handle_to_rt(unsafe { Z3_mk_seq_unit(extract_handle(ctx), extract_handle(elem)) })
+}
+
+// ── Uninterpreted functions (issue-140) ───────────────────────────
+
+#[no_mangle]
+#[cfg(not(target_os = "airlos"))]
+pub extern "C" fn airl_z3_mk_func_decl1(ctx: *mut RtValue, name: *mut RtValue, domain: *mut RtValue, range: *mut RtValue) -> *mut RtValue {
+    let c = extract_handle(ctx);
+    let s = extract_str(name);
+    let cs = match CString::new(s) {
+        Ok(v) => v,
+        Err(_) => return rt_int(0),
+    };
+    let sym = unsafe { Z3_mk_string_symbol(c, cs.as_ptr()) };
+    let domain_arr = [extract_handle(domain)];
+    handle_to_rt(unsafe { Z3_mk_func_decl(c, sym, 1, domain_arr.as_ptr(), extract_handle(range)) })
+}
+
+#[no_mangle]
+#[cfg(not(target_os = "airlos"))]
+pub extern "C" fn airl_z3_mk_func_decl2(ctx: *mut RtValue, name: *mut RtValue, d1: *mut RtValue, d2: *mut RtValue, range: *mut RtValue) -> *mut RtValue {
+    let c = extract_handle(ctx);
+    let s = extract_str(name);
+    let cs = match CString::new(s) {
+        Ok(v) => v,
+        Err(_) => return rt_int(0),
+    };
+    let sym = unsafe { Z3_mk_string_symbol(c, cs.as_ptr()) };
+    let domain_arr = [extract_handle(d1), extract_handle(d2)];
+    handle_to_rt(unsafe { Z3_mk_func_decl(c, sym, 2, domain_arr.as_ptr(), extract_handle(range)) })
+}
+
+#[no_mangle]
+#[cfg(not(target_os = "airlos"))]
+pub extern "C" fn airl_z3_mk_app1(ctx: *mut RtValue, decl: *mut RtValue, arg: *mut RtValue) -> *mut RtValue {
+    let c = extract_handle(ctx);
+    let args = [extract_handle(arg)];
+    handle_to_rt(unsafe { Z3_mk_app(c, extract_handle(decl), 1, args.as_ptr()) })
+}
+
+#[no_mangle]
+#[cfg(not(target_os = "airlos"))]
+pub extern "C" fn airl_z3_mk_app2(ctx: *mut RtValue, decl: *mut RtValue, a1: *mut RtValue, a2: *mut RtValue) -> *mut RtValue {
+    let c = extract_handle(ctx);
+    let args = [extract_handle(a1), extract_handle(a2)];
+    handle_to_rt(unsafe { Z3_mk_app(c, extract_handle(decl), 2, args.as_ptr()) })
 }
 
 // ── Model / counterexample (issue-136) ────────────────────────────
