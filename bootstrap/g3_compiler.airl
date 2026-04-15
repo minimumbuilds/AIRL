@@ -199,7 +199,7 @@
   :sig [-> Nil]
   :requires [(valid 1)]
   :ensures [(valid result)]
-  :body (print "g3 0.20.3\n"))
+  :body (print "g3 0.20.4\n"))
 
 (defn g3-print-help
   :sig [-> Nil]
