@@ -224,3 +224,5 @@ pub mod thread;
 pub mod terminal;
 #[cfg(not(target_os = "airlos"))]
 pub mod sqlite;
+#[cfg(not(target_os = "airlos"))]
+pub mod z3;

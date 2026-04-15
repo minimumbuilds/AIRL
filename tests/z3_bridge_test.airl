@@ -1,0 +1,59 @@
+;; ── Z3 Bridge Tests ──────────────────────────────────────────────────
+;; Tests z3-verify-function with simple contracts.
+;; Clause format: nested lists of strings built via cons (no string list literals).
+
+;; Helper: build a 2-element list from two values
+(define pair (a b)
+  (cons a (cons b [])))
+
+;; Helper: build a 3-element list
+(define triple (a b c)
+  (cons a (cons b (cons c []))))
+
+;; Assert helper: panic if condition is false
+(define check (label expected actual)
+  (if (= expected actual)
+    (println (str label ": PASS (" actual ")"))
+    (panic (str label ": FAIL — expected " expected " got " actual))))
+
+;; ── Test 1: Provable contract ───────────────────────────────────────
+;; requires (> x 0) ensures (> x 0) — trivially true
+(let (params : _ (cons (pair "x" "Int") []))
+  (let (reqs : _ (cons (triple ">" "x" "0") []))
+    (let (enss : _ (cons (triple ">" "x" "0") []))
+      (check "Test 1 (trivial proven)" "proven"
+        (z3-verify-function "pos" params reqs enss)))))
+
+;; ── Test 2: Disprovable contract ────────────────────────────────────
+;; requires (> x 0) ensures (< x 0) — counterexample exists
+(let (params : _ (cons (pair "x" "Int") []))
+  (let (reqs : _ (cons (triple ">" "x" "0") []))
+    (let (enss : _ (cons (triple "<" "x" "0") []))
+      (check "Test 2 (disproven)" "disproven"
+        (z3-verify-function "bad" params reqs enss)))))
+
+;; ── Test 3: Arithmetic contract ─────────────────────────────────────
+;; requires (> x 0) (> y 0) ensures (> (+ x y) 0)
+(let (params : _ (cons (pair "x" "Int") (cons (pair "y" "Int") [])))
+  (let (reqs : _ (cons (triple ">" "x" "0") (cons (triple ">" "y" "0") [])))
+    (let (enss : _ (cons (triple ">" (triple "+" "x" "y") "0") []))
+      (check "Test 3 (arithmetic proven)" "proven"
+        (z3-verify-function "add_pos" params reqs enss)))))
+
+;; ── Test 4: Result variable (free, disproven) ──────────────────────
+;; requires (valid x) ensures (= result x) — result is unconstrained
+(let (params : _ (cons (pair "x" "Int") []))
+  (let (reqs : _ (cons (cons "valid" (cons "x" [])) []))
+    (let (enss : _ (cons (triple "=" "result" "x") []))
+      (check "Test 4 (result free)" "disproven"
+        (z3-verify-function "identity" params reqs enss)))))
+
+;; ── Test 5: Boolean logic ───────────────────────────────────────────
+;; requires (> x 0) ensures (not (< x 1))
+(let (params : _ (cons (pair "x" "Int") []))
+  (let (reqs : _ (cons (triple ">" "x" "0") []))
+    (let (enss : _ (cons (pair "not" (triple "<" "x" "1")) []))
+      (check "Test 5 (logic proven)" "proven"
+        (z3-verify-function "nonneg" params reqs enss)))))
+
+(println "All Z3 bridge tests passed.")

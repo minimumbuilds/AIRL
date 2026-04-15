@@ -1,0 +1,329 @@
+;; ── Z3 SMT Solver Bridge for AIRL ────────────────────────────────────
+;;
+;; Wraps the Z3 C API via airl-rt stubs (airl_z3_*).
+;; All Z3 handles are opaque i64 values.
+;; Provides z3-verify-function for static contract verification.
+
+;; ── extern-c declarations ───────────────────────────────────────────
+
+(extern-c "airl_z3_mk_config"        [-> i64])
+(extern-c "airl_z3_del_config"       [(cfg : i64) -> Nil])
+(extern-c "airl_z3_mk_context"       [(cfg : i64) -> i64])
+(extern-c "airl_z3_del_context"      [(ctx : i64) -> Nil])
+(extern-c "airl_z3_mk_solver"        [(ctx : i64) -> i64])
+(extern-c "airl_z3_del_solver"       [(ctx : i64) (solver : i64) -> Nil])
+(extern-c "airl_z3_mk_int_sort"      [(ctx : i64) -> i64])
+(extern-c "airl_z3_mk_bool_sort"     [(ctx : i64) -> i64])
+(extern-c "airl_z3_mk_string_symbol" [(ctx : i64) (name : String) -> i64])
+(extern-c "airl_z3_mk_const"         [(ctx : i64) (sym : i64) (sort : i64) -> i64])
+(extern-c "airl_z3_mk_int_val"       [(ctx : i64) (val : i64) (sort : i64) -> i64])
+(extern-c "airl_z3_mk_true"          [(ctx : i64) -> i64])
+(extern-c "airl_z3_mk_false"         [(ctx : i64) -> i64])
+(extern-c "airl_z3_mk_add2"          [(ctx : i64) (a : i64) (b : i64) -> i64])
+(extern-c "airl_z3_mk_sub2"          [(ctx : i64) (a : i64) (b : i64) -> i64])
+(extern-c "airl_z3_mk_mul2"          [(ctx : i64) (a : i64) (b : i64) -> i64])
+(extern-c "airl_z3_mk_div"           [(ctx : i64) (a : i64) (b : i64) -> i64])
+(extern-c "airl_z3_mk_mod"           [(ctx : i64) (a : i64) (b : i64) -> i64])
+(extern-c "airl_z3_mk_lt"            [(ctx : i64) (a : i64) (b : i64) -> i64])
+(extern-c "airl_z3_mk_le"            [(ctx : i64) (a : i64) (b : i64) -> i64])
+(extern-c "airl_z3_mk_gt"            [(ctx : i64) (a : i64) (b : i64) -> i64])
+(extern-c "airl_z3_mk_ge"            [(ctx : i64) (a : i64) (b : i64) -> i64])
+(extern-c "airl_z3_mk_eq"            [(ctx : i64) (a : i64) (b : i64) -> i64])
+(extern-c "airl_z3_mk_and2"          [(ctx : i64) (a : i64) (b : i64) -> i64])
+(extern-c "airl_z3_mk_or2"           [(ctx : i64) (a : i64) (b : i64) -> i64])
+(extern-c "airl_z3_mk_not"           [(ctx : i64) (a : i64) -> i64])
+(extern-c "airl_z3_mk_implies"       [(ctx : i64) (a : i64) (b : i64) -> i64])
+(extern-c "airl_z3_mk_ite"           [(ctx : i64) (c : i64) (t : i64) (e : i64) -> i64])
+(extern-c "airl_z3_solver_assert"    [(ctx : i64) (solver : i64) (ast : i64) -> Nil])
+(extern-c "airl_z3_solver_check"     [(ctx : i64) (solver : i64) -> i64])
+
+;; ── Context / solver constructors ───────────────────────────────────
+
+(define z3-make-context ()
+  (let (cfg : i64 (airl_z3_mk_config))
+    (let (ctx : i64 (airl_z3_mk_context cfg))
+      (do (airl_z3_del_config cfg)
+          ctx))))
+
+(define z3-make-solver (ctx)
+  (airl_z3_mk_solver ctx))
+
+(define z3-cleanup (ctx solver)
+  (do (airl_z3_del_solver ctx solver)
+      (airl_z3_del_context ctx)))
+
+;; ── Sort helpers ────────────────────────────────────────────────────
+
+(define z3-sort-for-type (ctx type-name)
+  (if (= type-name "Int")
+    (airl_z3_mk_int_sort ctx)
+    (if (= type-name "i64")
+      (airl_z3_mk_int_sort ctx)
+      (if (= type-name "Bool")
+        (airl_z3_mk_bool_sort ctx)
+        (airl_z3_mk_int_sort ctx)))))
+
+;; ── Named constant constructor ──────────────────────────────────────
+
+(define z3-make-named-const (ctx name sort)
+  (let (sym : i64 (airl_z3_mk_string_symbol ctx name))
+    (airl_z3_mk_const ctx sym sort)))
+
+;; ── param-map: list of [name, z3-ast] pairs ─────────────────────────
+;; Lookup by name, returning 0 if not found.
+
+(define z3-param-lookup (param-map name)
+  (if (empty? param-map)
+    0
+    (let (entry : _ (head param-map))
+      (if (= (at entry 0) name)
+        (at entry 1)
+        (z3-param-lookup (tail param-map) name)))))
+
+;; ── Build param-map from params list ────────────────────────────────
+;; params: list of [name, type-string]
+;; Returns: list of [name, z3-const-handle]
+
+(define z3-build-param-map-acc (ctx params acc)
+  (if (empty? params)
+    acc
+    (let (p : _ (head params))
+      (let (pname : _ (at p 0))
+        (let (ptype : _ (at p 1))
+          (let (sort : i64 (z3-sort-for-type ctx ptype))
+            (let (zconst : i64 (z3-make-named-const ctx pname sort))
+              (z3-build-param-map-acc ctx (tail params)
+                (cons (cons pname (cons zconst [])) acc)))))))))
+
+(define z3-build-param-map (ctx params)
+  (z3-build-param-map-acc ctx params []))
+
+;; ── Expression translator ───────────────────────────────────────────
+;; Translates a clause (nested list of strings) into a Z3 AST.
+;;
+;; Clause format:
+;;   Integer literal: "42" → Z3_mk_int(42)
+;;   Boolean: "true" / "false" → Z3_mk_true / Z3_mk_false
+;;   Variable: "x" → lookup in param-map
+;;   S-expression: ["+" "x" "1"] → Z3_mk_add(translate(x), translate(1))
+;;   Nested: [">" ["+" "x" "1"] "0"] → Z3_mk_gt(Z3_mk_add(...), ...)
+;;
+;; Returns 0 for unsupported expressions.
+
+(define z3-is-digit-char (ch)
+  (let (c : i64 (char-code ch))
+    ;; '0' = 48, '9' = 57
+    (if (>= c 48)
+      (if (<= c 57) true false)
+      false)))
+
+(define z3-is-int-string (s)
+  (if (= s "")
+    false
+    (let (first-ch : _ (char-at s 0))
+      (if (z3-is-digit-char first-ch)
+        true
+        (if (= first-ch "-")
+          (if (> (length s) 1)
+            (z3-is-digit-char (char-at s 1))
+            false)
+          false)))))
+
+(define z3-translate-expr (ctx expr param-map int-sort)
+  (if (= (type-of expr) "string")
+    ;; Atom: integer literal, boolean, or variable
+    (if (= expr "true")
+      (airl_z3_mk_true ctx)
+      (if (= expr "false")
+        (airl_z3_mk_false ctx)
+        (if (= expr "result")
+          ;; "result" is a special variable in ensures clauses
+          (let (r : i64 (z3-param-lookup param-map "result"))
+            (if (= r 0)
+              0
+              r))
+          (if (z3-is-int-string expr)
+            (airl_z3_mk_int_val ctx (string-to-int expr) int-sort)
+            ;; Variable reference
+            (let (v : i64 (z3-param-lookup param-map expr))
+              (if (= v 0)
+                0
+                v))))))
+    ;; List: s-expression [op arg1 arg2 ...]
+    (if (empty? expr)
+      0
+      (let (op : _ (head expr))
+        (let (args : _ (tail expr))
+          (z3-translate-op ctx op args param-map int-sort))))))
+
+(define z3-translate-op (ctx op args param-map int-sort)
+  ;; Arithmetic
+  (if (= op "+")
+    (let (a : i64 (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (let (b : i64 (z3-translate-expr ctx (at args 1) param-map int-sort))
+        (if (= a 0) 0
+          (if (= b 0) 0
+            (airl_z3_mk_add2 ctx a b)))))
+  (if (= op "-")
+    (let (a : i64 (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (let (b : i64 (z3-translate-expr ctx (at args 1) param-map int-sort))
+        (if (= a 0) 0
+          (if (= b 0) 0
+            (airl_z3_mk_sub2 ctx a b)))))
+  (if (= op "*")
+    (let (a : i64 (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (let (b : i64 (z3-translate-expr ctx (at args 1) param-map int-sort))
+        (if (= a 0) 0
+          (if (= b 0) 0
+            (airl_z3_mk_mul2 ctx a b)))))
+  (if (= op "/")
+    (let (a : i64 (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (let (b : i64 (z3-translate-expr ctx (at args 1) param-map int-sort))
+        (if (= a 0) 0
+          (if (= b 0) 0
+            (airl_z3_mk_div ctx a b)))))
+  (if (= op "%")
+    (let (a : i64 (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (let (b : i64 (z3-translate-expr ctx (at args 1) param-map int-sort))
+        (if (= a 0) 0
+          (if (= b 0) 0
+            (airl_z3_mk_mod ctx a b)))))
+  ;; Comparison
+  (if (= op ">")
+    (let (a : i64 (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (let (b : i64 (z3-translate-expr ctx (at args 1) param-map int-sort))
+        (if (= a 0) 0
+          (if (= b 0) 0
+            (airl_z3_mk_gt ctx a b)))))
+  (if (= op ">=")
+    (let (a : i64 (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (let (b : i64 (z3-translate-expr ctx (at args 1) param-map int-sort))
+        (if (= a 0) 0
+          (if (= b 0) 0
+            (airl_z3_mk_ge ctx a b)))))
+  (if (= op "<")
+    (let (a : i64 (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (let (b : i64 (z3-translate-expr ctx (at args 1) param-map int-sort))
+        (if (= a 0) 0
+          (if (= b 0) 0
+            (airl_z3_mk_lt ctx a b)))))
+  (if (= op "<=")
+    (let (a : i64 (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (let (b : i64 (z3-translate-expr ctx (at args 1) param-map int-sort))
+        (if (= a 0) 0
+          (if (= b 0) 0
+            (airl_z3_mk_le ctx a b)))))
+  (if (= op "=")
+    (let (a : i64 (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (let (b : i64 (z3-translate-expr ctx (at args 1) param-map int-sort))
+        (if (= a 0) 0
+          (if (= b 0) 0
+            (airl_z3_mk_eq ctx a b)))))
+  ;; Logic
+  (if (= op "and")
+    (let (a : i64 (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (let (b : i64 (z3-translate-expr ctx (at args 1) param-map int-sort))
+        (if (= a 0) 0
+          (if (= b 0) 0
+            (airl_z3_mk_and2 ctx a b)))))
+  (if (= op "or")
+    (let (a : i64 (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (let (b : i64 (z3-translate-expr ctx (at args 1) param-map int-sort))
+        (if (= a 0) 0
+          (if (= b 0) 0
+            (airl_z3_mk_or2 ctx a b)))))
+  (if (= op "not")
+    (let (a : i64 (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (if (= a 0) 0
+        (airl_z3_mk_not ctx a)))
+  (if (= op "implies")
+    (let (a : i64 (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (let (b : i64 (z3-translate-expr ctx (at args 1) param-map int-sort))
+        (if (= a 0) 0
+          (if (= b 0) 0
+            (airl_z3_mk_implies ctx a b)))))
+  (if (= op "if")
+    (let (c : i64 (z3-translate-expr ctx (at args 0) param-map int-sort))
+      (let (t : i64 (z3-translate-expr ctx (at args 1) param-map int-sort))
+        (let (e : i64 (z3-translate-expr ctx (at args 2) param-map int-sort))
+          (if (= c 0) 0
+            (if (= t 0) 0
+              (if (= e 0) 0
+                (airl_z3_mk_ite ctx c t e)))))))
+  (if (= op "valid")
+    ;; (valid x) is always true — trivial guard
+    (airl_z3_mk_true ctx)
+    ;; Unsupported operator
+    0)))))))))))))))))
+
+;; ── Assert multiple clauses ─────────────────────────────────────────
+;; Translates each clause and asserts it. Returns true if all translated OK.
+
+(define z3-assert-clauses-acc (ctx solver clauses param-map int-sort)
+  (if (empty? clauses)
+    true
+    (let (ast : i64 (z3-translate-expr ctx (head clauses) param-map int-sort))
+      (if (= ast 0)
+        false
+        (do (airl_z3_solver_assert ctx solver ast)
+            (z3-assert-clauses-acc ctx solver (tail clauses) param-map int-sort))))))
+
+;; ── Conjoin multiple clauses into one Z3 AST ────────────────────────
+;; Returns the conjunction of all translated clauses, or 0 if any fails.
+
+(define z3-conjoin-clauses-acc (ctx clauses param-map int-sort acc)
+  (if (empty? clauses)
+    acc
+    (let (ast : i64 (z3-translate-expr ctx (head clauses) param-map int-sort))
+      (if (= ast 0)
+        0
+        (if (= acc 0)
+          (z3-conjoin-clauses-acc ctx (tail clauses) param-map int-sort ast)
+          (let (conj : i64 (airl_z3_mk_and2 ctx acc ast))
+            (z3-conjoin-clauses-acc ctx (tail clauses) param-map int-sort conj)))))))
+
+(define z3-conjoin-clauses (ctx clauses param-map int-sort)
+  (z3-conjoin-clauses-acc ctx clauses param-map int-sort 0))
+
+;; ── Main verification function ──────────────────────────────────────
+;;
+;; z3-verify-function:
+;;   name            — function name (String, for diagnostics)
+;;   params          — list of [name_string type_string] pairs
+;;   requires-list   — list of clause expressions (nested lists of strings)
+;;   ensures-list    — list of clause expressions
+;;
+;; Returns: "proven" | "disproven" | "unknown"
+;;
+;; Method: assert all requires, negate conjunction of ensures,
+;; then check. UNSAT means ensures always hold ⇒ "proven".
+
+(define z3-verify-function (name params requires-list ensures-list)
+  (let (ctx : i64 (z3-make-context))
+    (let (solver : i64 (z3-make-solver ctx))
+      (let (int-sort : i64 (airl_z3_mk_int_sort ctx))
+        (let (param-map : _ (z3-build-param-map ctx params))
+          ;; Add "result" to param-map for ensures clauses
+          (let (result-const : i64 (z3-make-named-const ctx "result" int-sort))
+            (let (full-map : _ (cons (cons "result" (cons result-const [])) param-map))
+              ;; Assert all requires clauses
+              (let (req-ok : _ (z3-assert-clauses-acc ctx solver requires-list full-map int-sort))
+                (if (= req-ok false)
+                  (do (z3-cleanup ctx solver)
+                      "unknown")
+                  ;; Build negation of ensures conjunction
+                  (let (ensures-conj : i64 (z3-conjoin-clauses ctx ensures-list full-map int-sort))
+                    (if (= ensures-conj 0)
+                      (do (z3-cleanup ctx solver)
+                          "unknown")
+                      (let (neg-ensures : i64 (airl_z3_mk_not ctx ensures-conj))
+                        (do (airl_z3_solver_assert ctx solver neg-ensures)
+                            (let (check-result : i64 (airl_z3_solver_check ctx solver))
+                              (let (verdict : String
+                                    (if (= check-result -1)
+                                      "proven"
+                                      (if (= check-result 1)
+                                        "disproven"
+                                        "unknown")))
+                                (do (z3-cleanup ctx solver)
+                                    verdict))))))))))))))))

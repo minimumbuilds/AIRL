@@ -3468,9 +3468,9 @@ pub fn compile_to_executable_impl(
         }
     }
     #[cfg(target_os = "linux")]
-    { cmd.arg("-lm").arg("-lpthread").arg("-ldl").arg("-lsqlite3"); }
+    { cmd.arg("-lm").arg("-lpthread").arg("-ldl").arg("-lsqlite3").arg("-lz3"); }
     #[cfg(target_os = "macos")]
-    { cmd.arg("-lSystem").arg("-lsqlite3"); }
+    { cmd.arg("-lSystem").arg("-lsqlite3").arg("-lz3"); }
 
     let status = cmd.status().map_err(|e| format!("linker: {}", e))?;
     let _ = std::fs::remove_file(&obj_path);

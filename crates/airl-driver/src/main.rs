@@ -363,9 +363,9 @@ fn link_object_to_binary(obj_bytes: &[u8], output: &str, source_files: &[String]
         cmd.arg(&rt_lib);
     }
     #[cfg(target_os = "linux")]
-    { cmd.arg("-lm").arg("-lpthread").arg("-ldl").arg("-lcurl").arg("-lsqlite3"); }
+    { cmd.arg("-lm").arg("-lpthread").arg("-ldl").arg("-lcurl").arg("-lsqlite3").arg("-lz3"); }
     #[cfg(target_os = "macos")]
-    { cmd.arg("-lSystem").arg("-lcurl").arg("-lsqlite3"); }
+    { cmd.arg("-lSystem").arg("-lcurl").arg("-lsqlite3").arg("-lz3"); }
 
     let status = cmd.status();
 
