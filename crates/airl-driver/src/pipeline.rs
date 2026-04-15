@@ -190,18 +190,24 @@ fn z3_verify_tops(
     };
     let mut cache_keys = Vec::new();
 
+    // When AIRL_STRICT_VERIFY is set (via --strict flag), override all verify
+    // levels to Proven — every function must have provable contracts.
+    let strict_verify = std::env::var("AIRL_STRICT_VERIFY").is_ok();
+
     // Collect all function definitions, including those inside modules.
     let mut all_fns: Vec<(&airl_syntax::ast::FnDef, airl_syntax::ast::VerifyLevel)> = Vec::new();
     for top in tops {
         match top {
             airl_syntax::ast::TopLevel::Defn(f) => {
-                let level = verify_level_for_fn(&f.name, tops);
+                let mut level = verify_level_for_fn(&f.name, tops);
+                if strict_verify { level = airl_syntax::ast::VerifyLevel::Proven; }
                 all_fns.push((f, level));
             }
             airl_syntax::ast::TopLevel::Module(m) => {
                 for item in &m.body {
                     if let airl_syntax::ast::TopLevel::Defn(f) = item {
-                        all_fns.push((f, m.verify));
+                        let level = if strict_verify { airl_syntax::ast::VerifyLevel::Proven } else { m.verify };
+                        all_fns.push((f, level));
                     }
                 }
             }
@@ -1654,6 +1660,35 @@ mod tests {
         // run_source_with_mode reads AIRL_STRICT; result must be consistent with it.
         let result = run_source_with_mode("(+ 1 2)", PipelineMode::Run);
         assert!(result.is_ok(), "pipeline should handle (+ 1 2) regardless of AIRL_STRICT={strict_set}");
+    }
+
+    // ── Strict-verify (--strict) override ──────────────────────────────
+
+    #[test]
+    fn strict_verify_overrides_checked_to_proven() {
+        // A Checked module with an untranslatable ensures clause (lambda call)
+        // should succeed under normal Checked mode (warn only) but fail under
+        // AIRL_STRICT_VERIFY which elevates all levels to Proven.
+        let source = r#"
+(module sv-test
+  :version 0.1.0
+  :provides [sv-id]
+  :verify checked
+  (defn sv-id
+    :sig [(x : i32) -> i32]
+    :ensures [(= result x)]
+    :body ((fn [(y : i32)] y) x)))
+(sv-id 1)
+"#;
+        // Without AIRL_STRICT_VERIFY, Checked + Unknown succeeds (warns only)
+        let result = check_source(source);
+        assert!(result.is_ok(), "Checked mode should warn, not error: {:?}", result);
+
+        // With AIRL_STRICT_VERIFY, same code errors (elevated to Proven)
+        std::env::set_var("AIRL_STRICT_VERIFY", "1");
+        let result2 = check_source(source);
+        std::env::remove_var("AIRL_STRICT_VERIFY");
+        assert!(result2.is_err(), "strict-verify should elevate Checked to Proven and error");
     }
 
     // ── Fix 2: Z3 Unknown deduplication ──────────────────────────────────

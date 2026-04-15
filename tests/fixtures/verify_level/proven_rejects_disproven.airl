@@ -1,0 +1,14 @@
+;; ERROR: disproven
+;; VERIFY-LEVEL: proven
+;; The ensures clause claims result equals x+1 but the body returns x.
+;; Z3 finds a counterexample. Proven mode must hard-error.
+(module proven-disproven-test
+  :version 0.1.0
+  :provides [bad-inc]
+  :verify proven
+  (defn bad-inc
+    :sig [(x : i32) -> i32]
+    :intent "should increment but doesn't"
+    :ensures [(= result (+ x 1))]
+    :body x))
+(bad-inc 1)

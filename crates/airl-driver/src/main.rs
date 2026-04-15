@@ -73,6 +73,10 @@ fn cmd_run(args: &[String]) {
                     std::env::set_var("AIRL_NO_Z3_CACHE", "1");
                     i += 1;
                 }
+                "--strict" => {
+                    std::env::set_var("AIRL_STRICT_VERIFY", "1");
+                    i += 1;
+                }
                 "--" => { past_separator = true; user_args.push("--".to_string()); i += 1; }
                 _ => {
                     if main_file.is_none() {
@@ -229,6 +233,9 @@ fn cmd_compile(args: &[String]) {
                 }
             } else if args[i] == "--no-z3-cache" {
                 std::env::set_var("AIRL_NO_Z3_CACHE", "1");
+                i += 1;
+            } else if args[i] == "--strict" {
+                std::env::set_var("AIRL_STRICT_VERIFY", "1");
                 i += 1;
             } else {
                 files.push(args[i].clone());
@@ -414,15 +421,17 @@ fn find_airl_libs() -> (String, String) {
 
 fn cmd_check(args: &[String]) {
     if args.is_empty() {
-        eprintln!("Usage: airl check [--no-z3-cache] <file.airl>");
+        eprintln!("Usage: airl check [--no-z3-cache] [--strict] <file.airl>");
         std::process::exit(1);
     }
 
-    // Parse --no-z3-cache flag
+    // Parse flags: --no-z3-cache, --strict
     let mut path_idx = 0;
     for (i, arg) in args.iter().enumerate() {
         if arg == "--no-z3-cache" {
             std::env::set_var("AIRL_NO_Z3_CACHE", "1");
+        } else if arg == "--strict" {
+            std::env::set_var("AIRL_STRICT_VERIFY", "1");
         } else {
             path_idx = i;
             break;
