@@ -1,6 +1,6 @@
 # AIRL — AI Intermediate Representation Language
 
-**v0.11.1** — AIRL is a new category of software artifact: an **LLM-native executable language**. It is designed to be synthesized by a language model and compiled directly to native code — with no human authoring step in between. Initial benchmarking shows LLMs generate equivalent programs in AIRL using roughly **half the tokens** they would in Python — a structural property of the language, not the model. While AIRL is not intended to be written by humans, it is deliberately human-readable: a developer can inspect, audit, and reason about synthesized AIRL without tooling.
+**v0.15.0** — AIRL is a new category of software artifact: an **LLM-native executable language**. It is designed to be synthesized by a language model and compiled directly to native code — with no human authoring step in between. While AIRL is not intended to be written by humans, it is deliberately human-readable: a developer can inspect, audit, and reason about synthesized AIRL without tooling.
 
 ```clojure
 (defn safe-divide
@@ -15,47 +15,161 @@
 (safe-divide 9 3)  ;; → (Ok 3)
 ```
 
-## A New Category
+## Token Efficiency
 
-Every existing programming language optimizes for human readability and human authorship. AIRL does not. It is **synthesis-first**: the primary author is an LLM, the primary consumer is a compiler.
+AIRL programs require **~43% of the completion tokens** equivalent Python programs do — a structural property of the language, not the model.
 
-This makes AIRL something more specific than a programming language:
-
-> **An LLM output format that compiles directly to executable code.**
-
-Think of it as the relationship between protobuf and JSON — not a replacement for general-purpose languages, but a purpose-built format for a specific exchange: *intent → synthesis → execution*. The human expresses intent in natural language. The LLM synthesizes AIRL. The compiler produces a native binary. The human never touches the AIRL source.
-
-The design-by-contract layer (`:requires` / `:ensures`) is not documentation — it is a **verifiable interface** between the synthesis step and the execution step. Contracts the LLM generates are checked by the compiler; those that cannot be proven statically become native conditional branches at runtime.
-
-## Why Not Python
-
-Python is the dominant LLM output format today — by accident, not design. It is human-readable, has a vast ecosystem, and the models know it well. But it optimizes for humans, which has a measurable cost when used as a machine output format.
-
-Benchmarking an **untrained** model (qwen3-coder, zero AIRL exposure) against Python across 19 tasks:
+Benchmarking an untrained model (qwen3-coder, zero AIRL exposure) against Python across 19 tasks:
 
 | Metric | AIRL | Python |
 |--------|------|--------|
 | Completion tokens (avg/task) | 122 | 283 |
 | **Token ratio** | **0.43×** | 1.0× |
-| Correctness (zero-shot) | 74% | 100% |
 
-AIRL uses **43% of the completion tokens Python does** — a structural property of the language, not the model. The 74% zero-shot correctness is a floor: with a model trained on AIRL, correctness is expected to reach parity or better. The token efficiency advantage is permanent — it comes from the language design, not the model's familiarity with it.
+This isn't a vanity metric. It compounds in three ways:
 
-Fewer tokens has three compounding effects:
+- **Lower cost** — API pricing is per token. At 0.43× token usage, generating the same program in AIRL costs less than half as much. Across thousands of agentic tasks, the savings are structural.
+- **Faster generation** — LLMs generate tokens sequentially. Fewer tokens means faster time-to-result, directly.
+- **Less hallucination surface** — A 70-token AIRL function has less room for the model to go off-track than a 290-token Python function. Combined with mandatory contracts, errors are caught at compile time rather than in production.
 
-- **Lower cost** — API pricing is per token. At 0.43× token usage, generating the same program in AIRL costs roughly half as much. At scale across thousands of agentic tasks, that difference is material.
-- **Faster generation** — LLMs generate tokens sequentially. Fewer tokens means faster time-to-result, directly — not through any architectural change, just by saying the same thing in less space.
-- **Lower energy use** — Token generation is the dominant energy cost of LLM inference. Generating half the tokens to produce equivalent code consumes roughly half the energy per inference call. Across large-scale deployments, AIRL's structural conciseness translates directly to a smaller compute and carbon footprint.
+Combined with mandatory contracts that enforce correctness at compile time and unambiguous S-expression syntax that eliminates an entire class of generation errors, this produces a measurable compound effect: one developer with LLM assistance built the entire AIRL ecosystem — 26 projects, ~168K lines of code, from a microkernel to a Kafka SDK — in three weeks.
 
-## What It Solves
+## The Ecosystem
 
-- **Mandatory contracts** — The compiler rejects functions without `:requires`/`:ensures`. LLMs skip optional features; they cannot skip grammar requirements. Synthesis correctness is structurally enforced.
-- **S-expression syntax** — The AST *is* the syntax. LL(1), zero ambiguity, trivially parseable, maximally token-efficient.
-- **Messages are programs** — Agents exchange AIRL source as both the message format and the execution format. No protobuf, no gRPC, no separate serialization layer.
-- **Formal verification** — Z3 SMT solver proves contracts at compile time. What cannot be proven is checked at runtime as native conditional branches.
-- **Compiled to native** — Not interpreted, not sandboxed. AIRL compiles to native x86-64 and ARM64 binaries via Cranelift. 42× faster than Python on pure arithmetic.
-- **Linear ownership** — Rust-style move semantics with static linearity analysis. No garbage collector.
-- **Self-hosted** — The compiler is written in its own language (since v0.6.0). Fixpoint verified.
+The ecosystem is the proof that token efficiency translates to development velocity. 26 projects, ~168,000 LOC, 1,061 commits — built in approximately three weeks by one person working with LLM synthesis.
+
+### Infrastructure
+
+| Project | Description | Scale |
+|---------|-------------|-------|
+| **AIRL** | Compiler and runtime (self-hosted, fixpoint verified) | 76K LOC, 595 commits |
+| **AIRLOS** | Capability-based x86 microkernel (containers, network namespaces, GUI) | 36K LOC, 190 commits |
+| **airshell** | POSIX shell with job control, scripting, identity management | 4.6K LOC |
+
+### Networking & Protocols
+
+| Project | Description | Scale |
+|---------|-------------|-------|
+| **AIRL_castle** | Kafka SDK — binary wire protocol, 4 SASL mechanisms, 4 compression formats | 8.8K LOC |
+| **AirDB** | PostgreSQL client — SCRAM-SHA-256 auth, extended query protocol | 1K LOC |
+| **AIReqL** | HTTP client — redirects, retries, keep-alive pooling | 2.7K LOC |
+| **AirLock** | SSH client — Curve25519 key exchange, Ed25519 host keys | 2.6K LOC |
+| **AirWire** | Wire protocol primitives — binary codecs, SCRAM shared library | 600 LOC |
+
+### Web
+
+| Project | Description | Scale |
+|---------|-------------|-------|
+| **airlhttp** | HTTP/1.1 server with TLS | 2.2K LOC |
+| **AirGate** | Web framework — routing, middleware, WebSocket, CSRF, sessions, compression | 1.9K LOC |
+
+### Tooling
+
+| Project | Description | Scale |
+|---------|-------------|-------|
+| **CairLI** | CLI argument parser | 2.2K LOC |
+| **airtools** | Static analysis linter (14 rules, LSP server) | 6K LOC |
+| **airlDelivery** | Package manager | 4.2K LOC |
+| **airtest** | Test runner | 891 LOC |
+| **AIRLchart** | Code visualization (Graphviz DOT call graphs) | 1.3K LOC |
+| **AirParse** | Multi-format parser (JSON, YAML, TOML, HTML) | 1.8K LOC |
+| **AirLog** | Structured logging framework | 649 LOC |
+
+### UI & Terminal
+
+| Project | Description | Scale |
+|---------|-------------|-------|
+| **Canopy** | Algebraic TUI framework — pure functions, no mutable state | 1.4K LOC |
+| **AirMux** | Terminal multiplexer | 1.1K LOC |
+
+### AI & Integration
+
+| Project | Description | Scale |
+|---------|-------------|-------|
+| **AirNexus** | Multi-provider AI agent framework (OpenAI, Anthropic, Gemini, Ollama) | 1.6K LOC |
+| **AirTraffic** | MCP server framework | 1.4K LOC |
+| **mynameisAIRL** | MCP prompt server + code indexer | 2K LOC |
+
+### Testing & Benchmarks
+
+| Project | Description | Scale |
+|---------|-------------|-------|
+| **AIRL_bench** | Code generation benchmark (100 tasks) | 847 LOC |
+| **kafka_sdk_bench** | Kafka SDK performance benchmark | 1K LOC |
+
+### Async
+
+| Project | Description | Scale |
+|---------|-------------|-------|
+| **airline** | Share-nothing async framework (reactor, futures, work stealing) | 1.2K LOC |
+
+## Why It Works
+
+Three design choices produce the token efficiency and correctness properties:
+
+**S-expression syntax** — The AST *is* the syntax. LL(1), zero ambiguity, trivially parseable, maximally token-efficient. No indentation errors, no operator precedence bugs, no bracket matching failures. The LLM cannot produce syntactically ambiguous code because the grammar does not allow it.
+
+**Mandatory contracts** — The compiler rejects functions without `:requires`/`:ensures`. LLMs skip optional features; they cannot skip grammar requirements. Synthesis correctness is structurally enforced.
+
+**Linear ownership** — Rust-style move semantics with static linearity analysis. Memory safety without a garbage collector. No class of use-after-free or double-free bugs for the model to introduce.
+
+## Correctness
+
+AIRL achieves **100% correctness on 100 benchmark tasks** (both Sonnet 4.6 and qwen3-coder). This is not luck — it is structural:
+
+- The compiler **rejects** functions without contracts, so the LLM cannot skip verification
+- Z3 SMT solver **proves** contracts at compile time; what cannot be proven becomes native runtime checks
+- S-expression syntax eliminates the entire class of generation errors caused by ambiguous grammar
+
+Progression on untrained models: 44% (no guide) → 68% (+ guide) → 80% (+ few-shot) → 100% (stdlib improvements in v0.6.0+).
+
+## Architecture
+
+```
+AIRL Source
+    │
+    ├──── G3 (self-hosted) ───────────────────────────────────────┐
+    │     bootstrap/lexer.airl → tokens                           │
+    │     bootstrap/parser.airl → AST                             │
+    │     bootstrap/bc_compiler.airl → BCFunc bytecode            │
+    │     compile-bytecode-to-executable → native binary          │
+    │                                                             │
+    ├──── Host (Rust toolchain) ──────────────────────────────────┤
+    │     [Parser] S-expr → AST                                   │
+    │     [Type Checker] Dependent types + linearity              │
+    │     [Z3 Verifier] Prove contracts via SMT                   │
+    │     [Bytecode Compiler] AST → register-based bytecode       │
+    │          │                                                   │
+    │          ├── airl run ──► AOT compile → execute → clean     │
+    │          └── airl compile ► Cranelift AOT → executable      │
+    │                                                             │
+    └───────── Both link against libairl_rt.a ────────────────────┘
+```
+
+### Crate Structure
+
+| Crate | Purpose |
+|-------|---------|
+| `airl-syntax` | Lexer, parser, AST, diagnostics |
+| `airl-types` | Type checker, linearity, exhaustiveness |
+| `airl-contracts` | Contract violation types |
+| `airl-rt` | Runtime library (`libairl_rt.a`) — ~150 intrinsics as `extern "C"` |
+| `airl-runtime` | AOT compiler (Cranelift) |
+| `airl-codegen` | Cranelift tensor codegen |
+| `airl-solver` | Z3 SMT formal verification |
+| `airl-agent` | Transport, protocol, agent runtime |
+| `airl-driver` | CLI, pipeline, formatter |
+
+### Self-Hosted Compiler (G3)
+
+AIRL compiles itself. The G3 compiler is written entirely in AIRL and produces native x86-64 and ARM64 binaries via Cranelift. **Fixpoint verified:** the bootstrap compiler produces identical output when self-compiled.
+
+| Stage | File | Lines |
+|-------|------|-------|
+| Lexer | `bootstrap/lexer.airl` | ~365 |
+| Parser | `bootstrap/parser.airl` | ~930 |
+| Bytecode compiler | `bootstrap/bc_compiler.airl` | ~1,500 |
+| AOT backend | `compile-bytecode-to-executable` builtin | Cranelift |
 
 ## Build
 
@@ -95,21 +209,6 @@ bash scripts/build-g3.sh
 
 **Note:** The `--` separator is required. Without it, G3 tries to read its own binary as a source file.
 
-## Self-Hosted Compiler (G3)
-
-AIRL compiles itself. The G3 compiler is written entirely in AIRL and produces native x86-64 and ARM64 binaries via Cranelift.
-
-**Pipeline:**
-
-| Stage | File | Lines |
-|-------|------|-------|
-| Lexer | `bootstrap/lexer.airl` | ~365 |
-| Parser | `bootstrap/parser.airl` | ~930 |
-| Bytecode compiler | `bootstrap/bc_compiler.airl` | ~1,500 |
-| AOT backend | `compile-bytecode-to-executable` builtin | Cranelift |
-
-Cranelift (native code generation) and `libairl_rt.a` (runtime) are exposed as builtins embedded in the host binary. The resulting `g3` binary is ~39 MB. **Fixpoint verified:** the bootstrap compiler produces identical output when self-compiled.
-
 ### G3 Usage
 
 ```bash
@@ -136,6 +235,10 @@ Cranelift (native code generation) and `libairl_rt.a` (runtime) are exposed as b
 | `Compilation error: unregistered builtin 'X'` | Source uses newer builtin | Rebuild G3 |
 | Segfault at runtime | Register allocation bug | Report with source; use `airl compile` as workaround |
 | Out of memory during build | Insufficient RAM | Ensure at least 4 GB free |
+
+## Performance
+
+AIRL compiles to native x86-64 and ARM64 binaries via Cranelift. Current AOT compilation uses boxed value representation. The Kafka SDK (AIRL_castle) achieves 75% of librdkafka's throughput on sync produce, with per-value boxing identified as the primary bottleneck. Unboxed native integer compilation is designed and partially implemented; performance benchmarks will be published when it ships.
 
 ## Language Features
 
@@ -242,50 +345,6 @@ bash tests/aot/run_aot_tests.sh
 for f in tests/aot/round*.airl; do ./g3 -- "$f" -o /tmp/t && /tmp/t; done
 ```
 
-## Performance
-
-| Benchmark | AIRL AOT | Python | Ratio |
-|-----------|----------|--------|-------|
-| fib(35) | 56 ms | 2,335 ms | **42x faster** |
-| fact(20) × 100K | 6 ms | 248 ms | **41x faster** |
-
-## Architecture
-
-```
-AIRL Source
-    │
-    ├──── G3 (self-hosted) ───────────────────────────────────────┐
-    │     bootstrap/lexer.airl → tokens                           │
-    │     bootstrap/parser.airl → AST                             │
-    │     bootstrap/bc_compiler.airl → BCFunc bytecode            │
-    │     compile-bytecode-to-executable → native binary          │
-    │                                                             │
-    ├──── Host (Rust toolchain) ──────────────────────────────────┤
-    │     [Parser] S-expr → AST                                   │
-    │     [Type Checker] Dependent types + linearity              │
-    │     [Z3 Verifier] Prove contracts via SMT                   │
-    │     [Bytecode Compiler] AST → register-based bytecode       │
-    │          │                                                   │
-    │          ├── airl run ──► AOT compile → execute → clean     │
-    │          └── airl compile ► Cranelift AOT → executable      │
-    │                                                             │
-    └───────── Both link against libairl_rt.a ────────────────────┘
-```
-
-### Crate Structure
-
-| Crate | Purpose |
-|-------|---------|
-| `airl-syntax` | Lexer, parser, AST, diagnostics |
-| `airl-types` | Type checker, linearity, exhaustiveness |
-| `airl-contracts` | Contract violation types |
-| `airl-rt` | Runtime library (`libairl_rt.a`) — ~150 intrinsics as `extern "C"` |
-| `airl-runtime` | AOT compiler (Cranelift) |
-| `airl-codegen` | Cranelift tensor codegen |
-| `airl-solver` | Z3 SMT formal verification |
-| `airl-agent` | Transport, protocol, agent runtime |
-| `airl-driver` | CLI, pipeline, formatter |
-
 ## Examples
 
 | Example | Demonstrates |
@@ -303,43 +362,15 @@ AIRL Source
 cargo run --release --features aot -- run examples/01-hello-world/hello_world.airl
 ```
 
-## Ecosystem
-
-AIRL is the core language in a growing ecosystem of LLM-native libraries:
-
-| Repo | Role |
-|------|------|
-| `CairLI` | CLI framework written in AIRL |
-| `airline` | Async framework written in AIRL |
-| `AIRL_castle` | Kafka SDK written in AIRL |
-| `airl_kafka_cli` | Kafka CLI client written in AIRL |
-| `AirTraffic` | MCP server framework written in AIRL |
-| `canopy` | Algebraic TUI framework written in AIRL |
-| `AIRLOS` | Capability-based microkernel that hosts AIRL evaluation |
-| `airshell` | Interactive shell for AIRLOS written in AIRL |
-| `AirLock` | SSH client for AIRLOS written in AIRL |
-
-### mynameisAIRL — MCP Prompt Server
-
-`servers/mynameisairl/` contains an MCP server that teaches AIRL to LLMs, built on the AirTraffic framework. It serves the AIRL Language Guide as an MCP prompt called `teach_airl`.
-
-```bash
-# Build (requires g3 and AirTraffic source)
-AIRL_STDLIB=$AIRL_DIR/stdlib bash servers/mynameisairl/build.sh ./mynameisairl
-
-# Run
-./mynameisairl --guide $AIRL_DIR/servers/mynameisairl/AIRL-LLM-Guide.md
-```
-
 ## Project Stats
 
-- **v0.11.1** — self-hosted since v0.6.0, fixpoint verified
+- **v0.15.0** — self-hosted since v0.6.0, fixpoint verified
 - **75 AOT tests** — all pass through both the Rust-hosted and self-compiled pipelines
 - **~478 Rust tests** across 10 crates
 - **15 stdlib modules** + **~150 compiler intrinsics**
 - **Cross-platform** — Linux x86-64 and macOS ARM64
-- **42x faster than Python** on pure arithmetic (AOT native)
 - **0.43× completion tokens vs Python** — structural token efficiency, model-independent
+- **100% correctness** on 100 benchmark tasks (Sonnet 4.6 and qwen3-coder)
 - **Contracts always enforced** — native conditional branches in AOT
 
 ## Specification
