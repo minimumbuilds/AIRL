@@ -1537,6 +1537,31 @@
                         (let (main-lambdas : List (at result-triple 1))
                           (Ok (concat func-list (concat main-lambdas [main-func])))))))))))))
 
+(defn bc-compile-program-with-prefix-and-proofs
+  :sig [(ast-nodes : List) (mod-prefix : String) (proof-map : _) -> _]
+  :intent "Compile all AST nodes with module prefix and Z3 proof results for opcode elision."
+  :requires [(valid ast-nodes)]
+  :ensures [(valid result)]
+  :body
+    (let (split : List (bc-split-top-levels ast-nodes))
+      (let (defns : List (at split 0))
+        (let (exprs : List (at split 1))
+          (let (verify-map : _ (at split 2))
+            (match (bc-compile-defns-prefixed-with-proofs defns mod-prefix verify-map proof-map)
+              (Err e) (Err e)
+              (Ok func-list)
+                (let (main-body : _ (if (empty? exprs)
+                                      (ASTNil 0 0)
+                                      (if (= (length exprs) 1)
+                                        (head exprs)
+                                        (ASTDo exprs 0 0))))
+                  (match (bc-compile-function-ext "__main__" [] main-body 0 [] [] mod-prefix 0 "checked")
+                    (Err e) (Err e)
+                    (Ok result-triple)
+                      (let (main-func : _ (at result-triple 0))
+                        (let (main-lambdas : List (at result-triple 1))
+                          (Ok (concat func-list (concat main-lambdas [main-func])))))))))))))
+
 (defn bc-split-top-levels
   :sig [(nodes : List) -> List]
   :intent "Split AST nodes into [defns exprs verify-map]"
@@ -1592,22 +1617,60 @@
   :intent "Compile all defn nodes with module prefix and verify-level map"
   :requires [(valid defns)]
   :ensures [(valid result)]
+  :body (bc-compile-defns-prefixed-with-proofs defns mod-prefix verify-map (map-new)))
+
+(defn bc-compile-defns-prefixed-with-proofs
+  :sig [(defns : List) (mod-prefix : String) (verify-map : _) (proof-map : _) -> _]
+  :intent "Compile all defn nodes with module prefix, verify-level map, and Z3 proof results"
+  :requires [(valid defns)]
+  :ensures [(valid result)]
   :body
     (if (empty? defns) (Ok [])
       (match (head defns)
-        (ASTDefn name sig _ _ _ body _ _ _)
+        (ASTDefn name sig _ requires ensures body _ _ _)
           (match sig
             (ASTSig params ret-name)
               (let (param-names : List (map (fn [p] (match p (ASTParam n _) n _ "?")) params))
                 (let (verify-level : String (map-get-or verify-map name "checked"))
-                  (match (bc-compile-function-ext name param-names body 0 [] [] mod-prefix 0 verify-level)
-                    (Err e) (Err e)
-                    (Ok result-triple)
-                      (let (func : _ (at result-triple 0))
-                        (let (sub-lambdas : List (at result-triple 1))
-                          (match (bc-compile-defns-prefixed (tail defns) mod-prefix verify-map)
+                  (let (proof-result : String (map-get-or proof-map name "none"))
+                    ;; Z3-driven compile error: disproven contracts
+                    (if (= proof-result "disproven")
+                      (Err (str "Z3 contract violation: function '" name "' has a disproven contract"))
+                      ;; Z3-driven compile error: "proven" level but Z3 returned unknown
+                      (if (= verify-level "proven")
+                        (if (= proof-result "unknown")
+                          (let (req-list : List (if (= requires nil) [] requires))
+                            (let (ens-list : List (if (= ensures nil) [] ensures))
+                              (if (= (+ (length req-list) (length ens-list)) 0)
+                                ;; No contracts — "proven" with no contracts is fine, compile without
+                                (match (bc-compile-function-ext name param-names body 0 [] [] mod-prefix 0 verify-level)
+                                  (Err e) (Err e)
+                                  (Ok result-triple)
+                                    (let (func : _ (at result-triple 0))
+                                      (let (sub-lambdas : List (at result-triple 1))
+                                        (match (bc-compile-defns-prefixed-with-proofs (tail defns) mod-prefix verify-map proof-map)
+                                          (Err e) (Err e)
+                                          (Ok rest) (Ok (concat (cons func sub-lambdas) rest))))))
+                                (Err (str "Z3 verification failed: function '" name "' has verify-level 'proven' but contracts are unknown")))))
+                          ;; proven level with proven/none result — elide contracts by compiling as "trusted"
+                          (match (bc-compile-function-ext name param-names body 0 [] [] mod-prefix 0 "trusted")
                             (Err e) (Err e)
-                            (Ok rest) (Ok (concat (cons func sub-lambdas) rest))))))))
+                            (Ok result-triple)
+                              (let (func : _ (at result-triple 0))
+                                (let (sub-lambdas : List (at result-triple 1))
+                                  (match (bc-compile-defns-prefixed-with-proofs (tail defns) mod-prefix verify-map proof-map)
+                                    (Err e) (Err e)
+                                    (Ok rest) (Ok (concat (cons func sub-lambdas) rest)))))))
+                        ;; checked or default level: if proven → elide via "trusted", otherwise drop contracts (no assertions in g3)
+                        (let (effective-level : String (if (= proof-result "proven") "trusted" verify-level))
+                          (match (bc-compile-function-ext name param-names body 0 [] [] mod-prefix 0 effective-level)
+                            (Err e) (Err e)
+                            (Ok result-triple)
+                              (let (func : _ (at result-triple 0))
+                                (let (sub-lambdas : List (at result-triple 1))
+                                  (match (bc-compile-defns-prefixed-with-proofs (tail defns) mod-prefix verify-map proof-map)
+                                    (Err e) (Err e)
+                                    (Ok rest) (Ok (concat (cons func sub-lambdas) rest))))))))))))
             _ (Err "bc-compile-defns: defn requires sig"))
         _ (Err "bc-compile-defns: expected defn"))))
 

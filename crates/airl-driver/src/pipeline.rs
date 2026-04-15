@@ -1808,6 +1808,42 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
         aot.register_extern_c(&ext.c_name, ext.arity);
     }
 
+    // Register Z3 bridge builtins so g3's z3_bridge_g3.airl can call
+    // them without extern-c declarations.
+    #[cfg(not(target_os = "airlos"))]
+    {
+        aot.register_extern_c("airl_z3_mk_config", 0);
+        aot.register_extern_c("airl_z3_del_config", 1);
+        aot.register_extern_c("airl_z3_mk_context", 1);
+        aot.register_extern_c("airl_z3_del_context", 1);
+        aot.register_extern_c("airl_z3_mk_solver", 1);
+        aot.register_extern_c("airl_z3_del_solver", 2);
+        aot.register_extern_c("airl_z3_mk_int_sort", 1);
+        aot.register_extern_c("airl_z3_mk_bool_sort", 1);
+        aot.register_extern_c("airl_z3_mk_string_symbol", 2);
+        aot.register_extern_c("airl_z3_mk_const", 3);
+        aot.register_extern_c("airl_z3_mk_int_val", 3);
+        aot.register_extern_c("airl_z3_mk_true", 1);
+        aot.register_extern_c("airl_z3_mk_false", 1);
+        aot.register_extern_c("airl_z3_mk_add2", 3);
+        aot.register_extern_c("airl_z3_mk_sub2", 3);
+        aot.register_extern_c("airl_z3_mk_mul2", 3);
+        aot.register_extern_c("airl_z3_mk_div", 3);
+        aot.register_extern_c("airl_z3_mk_mod", 3);
+        aot.register_extern_c("airl_z3_mk_lt", 3);
+        aot.register_extern_c("airl_z3_mk_le", 3);
+        aot.register_extern_c("airl_z3_mk_gt", 3);
+        aot.register_extern_c("airl_z3_mk_ge", 3);
+        aot.register_extern_c("airl_z3_mk_eq", 3);
+        aot.register_extern_c("airl_z3_mk_and2", 3);
+        aot.register_extern_c("airl_z3_mk_or2", 3);
+        aot.register_extern_c("airl_z3_mk_not", 2);
+        aot.register_extern_c("airl_z3_mk_implies", 3);
+        aot.register_extern_c("airl_z3_mk_ite", 4);
+        aot.register_extern_c("airl_z3_solver_assert", 3);
+        aot.register_extern_c("airl_z3_solver_check", 2);
+    }
+
     for func in &all_funcs {
         aot.compile_all(std::slice::from_ref(func), &func_map)
             .map_err(|e| PipelineError::Runtime(
