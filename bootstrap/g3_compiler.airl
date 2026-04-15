@@ -54,7 +54,7 @@
 
 (defn g3-compile-source-with-z3
   :sig [(source : String) (label : String) (mod-prefix : String) -> _]
-  :intent "Compile with Z3 verification: parse → z3-verify → bc-compile with proof elision"
+  :intent "Compile with Z3 verification + disk cache: parse → cached-z3-verify → bc-compile"
   :requires [(valid source)]
   :ensures [(valid result)]
   :body
@@ -67,10 +67,19 @@
             (match (parse-program sexprs)
               (Err e) (Err (g3-format-error label e))
               (Ok ast-nodes)
-                ;; Run Z3 verification on all contracts
-                (let (proof-map : _ (z3-verify-ast ast-nodes))
-                  ;; Compile with proof results for opcode elision
-                  (bc-compile-program-with-prefix-and-proofs ast-nodes mod-prefix proof-map))))))
+                ;; Load Z3 proof cache, verify with cache, save back
+                (let (cache : _ (z3c-load ".g3-z3-cache"))
+                  (let (cv-result : _ (z3c-verify-ast-cached ast-nodes cache))
+                    (let (proof-map : _ (at cv-result 0))
+                      (let (updated-cache : _ (at cv-result 1))
+                        (let (cache-hits : _ (at cv-result 2))
+                          (let (cache-misses : _ (at cv-result 3))
+                            (do (z3c-save ".g3-z3-cache" updated-cache)
+                                (print "[z3-cache] " label ": "
+                                       cache-hits " hits, "
+                                       cache-misses " misses\n")
+                                ;; Compile with proof results for opcode elision
+                                (bc-compile-program-with-prefix-and-proofs ast-nodes mod-prefix proof-map))))))))))))
 
 ;; ── Locate stdlib directory ──────────────────────────────
 
