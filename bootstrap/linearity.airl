@@ -108,6 +108,115 @@
         ;; Not found — might be a global/builtin, skip
         [bindings []]))
 
+;; ── Track read ──────────────────────────────────────────
+
+(defn track-read
+  :sig [(bindings : List) (name : String) -> List]
+  :intent "Verify binding is readable (not moved) without consuming it. Returns [bindings diagnostics]"
+  :requires [(valid bindings)]
+  :ensures [(valid result)]
+  :body
+    (match (binding-lookup bindings name)
+      (Ok state)
+        (if (= state "moved")
+          ;; Reading a moved value is still an error
+          [bindings [(str "use of moved value '" name "'")]]
+          ;; owned or copy — readable, no state change
+          [bindings []])
+      (Err _)
+        ;; Not found — global/builtin, skip
+        [bindings []]))
+
+;; ── Non-consuming builtin classification ────────────────
+
+(defn is-non-consuming-op
+  :sig [(op-name : String) -> Bool]
+  :intent "Returns true if the named builtin does not consume its arguments (Ref/Copy semantics)"
+  :requires [(valid op-name)]
+  :ensures [(valid result)]
+  :body
+    ;; Arithmetic (Copy — operate on primitives)
+    (if (= op-name "+") true
+    (if (= op-name "-") true
+    (if (= op-name "*") true
+    (if (= op-name "/") true
+    (if (= op-name "%") true
+    (if (= op-name "abs") true
+    (if (= op-name "min") true
+    (if (= op-name "max") true
+    (if (= op-name "mod") true
+    ;; Comparison (Copy — read and return Bool)
+    (if (= op-name "=") true
+    (if (= op-name "!=") true
+    (if (= op-name "<") true
+    (if (= op-name ">") true
+    (if (= op-name "<=") true
+    (if (= op-name ">=") true
+    ;; Logic (Copy — operate on Bool)
+    (if (= op-name "not") true
+    (if (= op-name "and") true
+    (if (= op-name "or") true
+    ;; String inspection (Ref — read string, don't consume)
+    (if (= op-name "string-length") true
+    (if (= op-name "string-contains?") true
+    (if (= op-name "char-at") true
+    (if (= op-name "char-code") true
+    (if (= op-name "contains") true
+    (if (= op-name "substring") true
+    (if (= op-name "trim") true
+    ;; List inspection (Ref — read list structure)
+    (if (= op-name "length") true
+    (if (= op-name "empty?") true
+    (if (= op-name "head") true
+    (if (= op-name "tail") true
+    (if (= op-name "at") true
+    (if (= op-name "at-or") true
+    (if (= op-name "list-contains?") true
+    ;; Map inspection (Ref — read map)
+    (if (= op-name "map-has") true
+    (if (= op-name "map-get") true
+    (if (= op-name "map-get-or") true
+    (if (= op-name "map-keys") true
+    (if (= op-name "map-values") true
+    ;; I/O (Ref — read values to print)
+    (if (= op-name "print") true
+    (if (= op-name "println") true
+    (if (= op-name "eprint") true
+    (if (= op-name "eprintln") true
+    (if (= op-name "str") true
+    ;; Type inspection (Ref)
+    (if (= op-name "type-of") true
+    (if (= op-name "valid") true
+    ;; Conversion (Copy/Ref)
+    (if (= op-name "int-to-float") true
+    (if (= op-name "float-to-int") true
+    (if (= op-name "int-to-string") true
+    (if (= op-name "string-to-int") true
+    (if (= op-name "parse-int") true
+    (if (= op-name "to-string") true
+    ;; Hash/random (Ref)
+    (if (= op-name "hash") true
+    (if (= op-name "hash-bytes") true
+    (if (= op-name "sha256") true
+    (if (= op-name "random-bytes") true
+    (if (= op-name "random-int") true
+    ;; Environment (Ref)
+    (if (= op-name "getenv") true
+    ;; String operations (Ref)
+    (if (= op-name "words") true
+    (if (= op-name "split") true
+    (if (= op-name "join") true
+    (if (= op-name "replace") true
+    (if (= op-name "starts-with?") true
+    (if (= op-name "ends-with?") true
+    (if (= op-name "to-upper") true
+    (if (= op-name "to-lower") true
+    (if (= op-name "format") true
+    (if (= op-name "read-file") true
+    (if (= op-name "string-to-bytes") true
+    (if (= op-name "bytes-to-string") true
+      false)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+
 ;; ── Branch merge ────────────────────────────────────────
 
 (defn merge-branch-states-walk
@@ -453,9 +562,21 @@
 
 ;; ── Call checker ────────────────────────────────────────
 
+(defn extract-callee-name
+  :sig [(callee : _) -> String]
+  :intent "Extract the string name of a callee expression for builtin classification"
+  :requires [(valid callee)]
+  :ensures [(valid result)]
+  :body
+    (match callee
+      (ASTSymbol name _ _) name
+      (ASTStr s _ _) s
+      ;; Complex expression (higher-order call) — treat as consuming
+      _ ""))
+
 (defn linearity-check-call
   :sig [(callee : _) (args : List) (bindings : List) -> List]
-  :intent "Check function call — move each symbol argument (default Own ownership)"
+  :intent "Check function call — use non-consuming semantics for known builtins"
   :requires [(valid callee)]
   :ensures [(valid result)]
   :body
@@ -463,15 +584,18 @@
     (let (callee-result : List (linearity-check-expr callee bindings))
       (let (bindings-after-callee : List (at callee-result 0))
         (let (callee-diags : List (at callee-result 1))
-          ;; Check each argument — symbol args are moved, complex args are recursed
-          (let (args-result : List (linearity-check-call-args args bindings-after-callee))
-            (let (final-bindings : List (at args-result 0))
-              (let (args-diags : List (at args-result 1))
-                [final-bindings (concat callee-diags args-diags)])))))))
+          ;; Determine if this is a non-consuming builtin
+          (let (callee-name : String (extract-callee-name callee))
+            (let (non-consuming : Bool (is-non-consuming-op callee-name))
+              ;; Check each argument with appropriate ownership semantics
+              (let (args-result : List (linearity-check-call-args args bindings-after-callee non-consuming))
+                (let (final-bindings : List (at args-result 0))
+                  (let (args-diags : List (at args-result 1))
+                    [final-bindings (concat callee-diags args-diags)])))))))))
 
 (defn linearity-check-call-args
-  :sig [(args : List) (bindings : List) -> List]
-  :intent "Check call arguments sequentially, moving symbol args"
+  :sig [(args : List) (bindings : List) (non-consuming : Bool) -> List]
+  :intent "Check call arguments, using track-read for non-consuming builtins"
   :requires [(valid args)]
   :ensures [(valid result)]
   :body
@@ -481,14 +605,16 @@
         (let (rest : List (tail args))
           (let (arg-result : List
             (match arg
-              ;; Symbol argument — track move (default Own ownership)
+              ;; Symbol argument — use track-read for non-consuming, track-move for consuming
               (ASTSymbol name _ _)
-                (track-move bindings name)
+                (if non-consuming
+                  (track-read bindings name)
+                  (track-move bindings name))
               ;; Complex expression — recurse
               _ (linearity-check-expr arg bindings)))
             (let (new-bindings : List (at arg-result 0))
               (let (arg-diags : List (at arg-result 1))
-                (let (rest-result : List (linearity-check-call-args rest new-bindings))
+                (let (rest-result : List (linearity-check-call-args rest new-bindings non-consuming))
                   (let (final-bindings : List (at rest-result 0))
                     (let (rest-diags : List (at rest-result 1))
                       [final-bindings (concat arg-diags rest-diags)]))))))))))
