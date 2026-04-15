@@ -1296,7 +1296,7 @@
                     ;; Compile the lambda body, threading parent module-prefix and lambda counter
                     (let (parent-mod : String (map-get-or st2 "module-prefix" ""))
                       (let (parent-ctr : Int (cs-lambda-ctr st2))
-                        (match (bc-compile-function-ext lambda-name all-params body (length captured) [] [] parent-mod parent-ctr)
+                        (match (bc-compile-function-ext lambda-name all-params body (length captured) [] [] parent-mod parent-ctr "checked")
                           (Err e) (Err e)
                           (Ok result-triple)
                             (let (func : _ (at result-triple 0))
@@ -1360,7 +1360,7 @@
   :intent "Compile a function body into a BCFunc value. Returns (Ok [BCFunc [lambdas...]]) or (Err msg)."
   :requires [(valid name)]
   :ensures [(valid result)]
-  :body (match (bc-compile-function-ext name params body capture-count [] [] "" 0)
+  :body (match (bc-compile-function-ext name params body capture-count [] [] "" 0 "checked")
     (Ok triple) (Ok [(at triple 0) (at triple 1)])
     (Err e) (Err e)))
 
@@ -1369,13 +1369,13 @@
   :intent "Compile a function with contract assertions. Returns (Ok [BCFunc [lambdas...]]) or (Err msg)."
   :requires [(valid name)]
   :ensures [(valid result)]
-  :body (match (bc-compile-function-ext name params body capture-count requires-clauses ensures-clauses "" 0)
+  :body (match (bc-compile-function-ext name params body capture-count requires-clauses ensures-clauses "" 0 "checked")
     (Ok triple) (Ok [(at triple 0) (at triple 1)])
     (Err e) (Err e)))
 
 (defn bc-compile-function-ext
-  :sig [(name : String) (params : List) (body : _) (capture-count : Int) (requires-clauses : List) (ensures-clauses : List) (mod-prefix : String) (init-lambda-ctr : Int) -> _]
-  :intent "Compile function with module prefix and lambda counter. Returns (Ok [BCFunc lambdas final-lambda-ctr])."
+  :sig [(name : String) (params : List) (body : _) (capture-count : Int) (requires-clauses : List) (ensures-clauses : List) (mod-prefix : String) (init-lambda-ctr : Int) (verify-level : String) -> _]
+  :intent "Compile function with module prefix, lambda counter, and verify-level. Returns (Ok [BCFunc lambdas final-lambda-ctr])."
   :requires [(valid name)]
   :ensures [(valid result)]
   :body
@@ -1387,26 +1387,29 @@
           (let (pair : List (cs-alloc-reg st2))
             (let (st3 : _ (at pair 0))
               (let (dst-reg : Int (at pair 1))
-                ;; Emit requires assertions (before body)
-                (match (bc-emit-contract-assertions st3 name requires-clauses (op-assert-requires) dst-reg)
-                  (Err e) (Err e)
-                  (Ok st4)
-                    ;; Compile body with tail-call detection enabled for self-recursive calls
-                    (let (st4 : _ (map-set (map-set st4 "in-tail?" true) "func-name" name))
-                      (match (bc-compile-expr st4 body dst-reg)
-                        (Err e) (Err (str "in function '" name "': " e))
-                        (Ok st5)
-                          ;; Bind "result" to dst-reg for ensures clauses
-                          (let (st6 : _ (cs-set-local st5 "result" dst-reg))
-                            ;; Emit ensures assertions (after body)
-                            (match (bc-emit-contract-assertions st6 name ensures-clauses (op-assert-ensures) dst-reg)
-                              (Err e) (Err e)
-                              (Ok st7)
-                                ;; Emit return
-                                (let (st8 : _ (cs-emit st7 (op-return) 0 dst-reg 0))
-                                  ;; Build BCFunc
-                                  (let (func : _ (BCFunc name arity (cs-max-reg st8) capture-count (cs-consts st8) (cs-instrs st8)))
-                                    (Ok [func (cs-lambdas st8) (cs-lambda-ctr st8)])))))))))))))))
+                ;; When verify-level is "trusted", skip contract assertions entirely
+                (let (req : List (if (= verify-level "trusted") [] requires-clauses))
+                  (let (ens : List (if (= verify-level "trusted") [] ensures-clauses))
+                    ;; Emit requires assertions (before body)
+                    (match (bc-emit-contract-assertions st3 name req (op-assert-requires) dst-reg)
+                      (Err e) (Err e)
+                      (Ok st4)
+                        ;; Compile body with tail-call detection enabled for self-recursive calls
+                        (let (st4 : _ (map-set (map-set st4 "in-tail?" true) "func-name" name))
+                          (match (bc-compile-expr st4 body dst-reg)
+                            (Err e) (Err (str "in function '" name "': " e))
+                            (Ok st5)
+                              ;; Bind "result" to dst-reg for ensures clauses
+                              (let (st6 : _ (cs-set-local st5 "result" dst-reg))
+                                ;; Emit ensures assertions (after body)
+                                (match (bc-emit-contract-assertions st6 name ens (op-assert-ensures) dst-reg)
+                                  (Err e) (Err e)
+                                  (Ok st7)
+                                    ;; Emit return
+                                    (let (st8 : _ (cs-emit st7 (op-return) 0 dst-reg 0))
+                                      ;; Build BCFunc
+                                      (let (func : _ (BCFunc name arity (cs-max-reg st8) capture-count (cs-consts st8) (cs-instrs st8)))
+                                        (Ok [func (cs-lambdas st8) (cs-lambda-ctr st8)])))))))))))))))))
 
 (defn bc-emit-contract-assertions
   :sig [(st : _) (fn-name : String) (clauses : List) (assert-op : Int) (dst-reg : Int) -> _]
@@ -1487,26 +1490,27 @@
   :requires [(valid ast-nodes)]
   :ensures [(valid result)]
   :body
-    ;; Separate defns and expressions
+    ;; Separate defns and expressions, collect verify-level map
     (let (split : List (bc-split-top-levels ast-nodes))
       (let (defns : List (at split 0))
         (let (exprs : List (at split 1))
-          ;; Compile each defn
-          (match (bc-compile-defns defns)
-            (Err e) (Err e)
-            (Ok func-list)
-              ;; Compile remaining expressions as __main__
-              (let (main-body : _ (if (empty? exprs)
-                                    (ASTNil 0 0)
-                                    (if (= (length exprs) 1)
-                                      (head exprs)
-                                      (ASTDo exprs 0 0))))
-                (match (bc-compile-function "__main__" [] main-body 0)
-                  (Err e) (Err e)
-                  (Ok result-pair)
-                    (let (main-func : _ (at result-pair 0))
-                      (let (main-lambdas : List (at result-pair 1))
-                        (Ok (concat func-list (concat main-lambdas [main-func]))))))))))))
+          (let (verify-map : _ (at split 2))
+            ;; Compile each defn
+            (match (bc-compile-defns defns verify-map)
+              (Err e) (Err e)
+              (Ok func-list)
+                ;; Compile remaining expressions as __main__
+                (let (main-body : _ (if (empty? exprs)
+                                      (ASTNil 0 0)
+                                      (if (= (length exprs) 1)
+                                        (head exprs)
+                                        (ASTDo exprs 0 0))))
+                  (match (bc-compile-function "__main__" [] main-body 0)
+                    (Err e) (Err e)
+                    (Ok result-pair)
+                      (let (main-func : _ (at result-pair 0))
+                        (let (main-lambdas : List (at result-pair 1))
+                          (Ok (concat func-list (concat main-lambdas [main-func])))))))))))))
 
 (defn bc-compile-program-with-prefix
   :sig [(ast-nodes : List) (mod-prefix : String) -> _]
@@ -1517,59 +1521,75 @@
     (let (split : List (bc-split-top-levels ast-nodes))
       (let (defns : List (at split 0))
         (let (exprs : List (at split 1))
-          (match (bc-compile-defns-prefixed defns mod-prefix)
-            (Err e) (Err e)
-            (Ok func-list)
-              (let (main-body : _ (if (empty? exprs)
-                                    (ASTNil 0 0)
-                                    (if (= (length exprs) 1)
-                                      (head exprs)
-                                      (ASTDo exprs 0 0))))
-                (match (bc-compile-function-ext "__main__" [] main-body 0 [] [] mod-prefix 0)
-                  (Err e) (Err e)
-                  (Ok result-triple)
-                    (let (main-func : _ (at result-triple 0))
-                      (let (main-lambdas : List (at result-triple 1))
-                        (Ok (concat func-list (concat main-lambdas [main-func]))))))))))))
+          (let (verify-map : _ (at split 2))
+            (match (bc-compile-defns-prefixed defns mod-prefix verify-map)
+              (Err e) (Err e)
+              (Ok func-list)
+                (let (main-body : _ (if (empty? exprs)
+                                      (ASTNil 0 0)
+                                      (if (= (length exprs) 1)
+                                        (head exprs)
+                                        (ASTDo exprs 0 0))))
+                  (match (bc-compile-function-ext "__main__" [] main-body 0 [] [] mod-prefix 0 "checked")
+                    (Err e) (Err e)
+                    (Ok result-triple)
+                      (let (main-func : _ (at result-triple 0))
+                        (let (main-lambdas : List (at result-triple 1))
+                          (Ok (concat func-list (concat main-lambdas [main-func])))))))))))))
 
 (defn bc-split-top-levels
   :sig [(nodes : List) -> List]
-  :intent "Split AST nodes into [defns exprs]"
+  :intent "Split AST nodes into [defns exprs verify-map]"
   :requires [(valid nodes)]
   :ensures [(valid result)]
-  :body (bc-split-loop nodes [] []))
+  :body (bc-split-loop nodes [] [] (map-new)))
+
+(defn bc-tag-defns-verify
+  :sig [(vm : _) (defns : List) (level : String) -> _]
+  :intent "Add verify-level entries for each defn in the list"
+  :requires [(valid vm)]
+  :ensures [(valid result)]
+  :body
+    (if (empty? defns) vm
+      (match (head defns)
+        (ASTDefn name _ _ _ _ _ _ _ _)
+          (bc-tag-defns-verify (map-set vm name level) (tail defns) level)
+        _ (bc-tag-defns-verify vm (tail defns) level))))
 
 (defn bc-split-loop
-  :sig [(nodes : List) (defns : List) (exprs : List) -> List]
+  :sig [(nodes : List) (defns : List) (exprs : List) (verify-map : _) -> List]
   :requires [(valid nodes)]
   :ensures [(valid result)]
   :body
-    (if (empty? nodes) [defns exprs]
+    (if (empty? nodes) [defns exprs verify-map]
       (let (node : _ (head nodes))
         (match node
           (ASTDefn _ _ _ _ _ _ _ _ _)
-            (bc-split-loop (tail nodes) (append defns node) exprs)
+            (bc-split-loop (tail nodes) (append defns node) exprs verify-map)
           (ASTImport _ _ _ _ _)
-            (bc-split-loop (tail nodes) defns exprs)
+            (bc-split-loop (tail nodes) defns exprs verify-map)
           (ASTDefType _ _ _ _ _)
-            (bc-split-loop (tail nodes) defns exprs)
-          (ASTModule _ _ mod-body _ _)
-            (let (split : List (bc-split-loop mod-body [] []))
-              (bc-split-loop (tail nodes)
-                (concat defns (at split 0))
-                (concat exprs (at split 1))))
-          _ (bc-split-loop (tail nodes) defns (append exprs node))))))
+            (bc-split-loop (tail nodes) defns exprs verify-map)
+          (ASTModule _ mod-verify mod-body _ _)
+            (let (inner-split : List (bc-split-loop mod-body [] [] verify-map))
+              (let (inner-defns : List (at inner-split 0))
+                (let (inner-vm : _ (bc-tag-defns-verify (at inner-split 2) inner-defns mod-verify))
+                  (bc-split-loop (tail nodes)
+                    (concat defns inner-defns)
+                    (concat exprs (at inner-split 1))
+                    inner-vm))))
+          _ (bc-split-loop (tail nodes) defns (append exprs node) verify-map)))))
 
 (defn bc-compile-defns
-  :sig [(defns : List) -> _]
+  :sig [(defns : List) (verify-map : _) -> _]
   :intent "Compile all defn nodes into BCFunc list (including lambdas)"
   :requires [(valid defns)]
   :ensures [(valid result)]
-  :body (bc-compile-defns-prefixed defns ""))
+  :body (bc-compile-defns-prefixed defns "" verify-map))
 
 (defn bc-compile-defns-prefixed
-  :sig [(defns : List) (mod-prefix : String) -> _]
-  :intent "Compile all defn nodes with module prefix for lambda naming"
+  :sig [(defns : List) (mod-prefix : String) (verify-map : _) -> _]
+  :intent "Compile all defn nodes with module prefix and verify-level map"
   :requires [(valid defns)]
   :ensures [(valid result)]
   :body
@@ -1579,14 +1599,15 @@
           (match sig
             (ASTSig params ret-name)
               (let (param-names : List (map (fn [p] (match p (ASTParam n _) n _ "?")) params))
-                (match (bc-compile-function-ext name param-names body 0 [] [] mod-prefix 0)
-                  (Err e) (Err e)
-                  (Ok result-triple)
-                    (let (func : _ (at result-triple 0))
-                      (let (sub-lambdas : List (at result-triple 1))
-                        (match (bc-compile-defns-prefixed (tail defns) mod-prefix)
-                          (Err e) (Err e)
-                          (Ok rest) (Ok (concat (cons func sub-lambdas) rest)))))))
+                (let (verify-level : String (map-get-or verify-map name "checked"))
+                  (match (bc-compile-function-ext name param-names body 0 [] [] mod-prefix 0 verify-level)
+                    (Err e) (Err e)
+                    (Ok result-triple)
+                      (let (func : _ (at result-triple 0))
+                        (let (sub-lambdas : List (at result-triple 1))
+                          (match (bc-compile-defns-prefixed (tail defns) mod-prefix verify-map)
+                            (Err e) (Err e)
+                            (Ok rest) (Ok (concat (cons func sub-lambdas) rest))))))))
             _ (Err "bc-compile-defns: defn requires sig"))
         _ (Err "bc-compile-defns: expected defn"))))
 
