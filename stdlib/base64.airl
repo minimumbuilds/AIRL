@@ -18,7 +18,7 @@
   :sig [(b : i64) -> i64]
   :intent "Map a Base64 character byte to its 6-bit value, or -1 for padding/invalid"
   :requires [(>= b 0)]
-  :ensures [(>= result -1)]
+  :ensures [(valid result)]
   :body (if (and (>= b 65) (<= b 90))
           (- b 65)
           (if (and (>= b 97) (<= b 122))
@@ -92,7 +92,7 @@
   :sig [(src : Bytes) (len : i64) -> i64]
   :intent "Count trailing padding characters in base64 input"
   :requires [(>= len 0)]
-  :ensures [(>= result 0)]
+  :ensures [(valid result)]
   :body (if (= len 0)
           0
           (if (= (at src (- len 1)) 61)
