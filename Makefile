@@ -3,13 +3,14 @@
 # Usage:
 #   make verify-api-manifest          # check api-manifest.json is up to date
 #   make lint-shadows                 # check stdlib has no defns shadowing Rust builtins
+#   make verify-contracts             # Z3 contract verification CI gate for all stdlib/*.airl
 #   AIRTOOLS=/path/to/airtools make verify-api-manifest
 
 AIRTOOLS ?= airtools
 STDLIB   ?= stdlib
 G3       ?= target-x86_64/release/airl-driver
 
-.PHONY: verify-api-manifest lint-shadows
+.PHONY: verify-api-manifest lint-shadows verify-contracts
 
 verify-api-manifest:
 	$(AIRTOOLS) doc-gen \
@@ -24,3 +25,6 @@ verify-api-manifest:
 
 lint-shadows:
 	python3 scripts/lint-shadows.py
+
+verify-contracts:
+	bash scripts/verify-stdlib-contracts.sh
