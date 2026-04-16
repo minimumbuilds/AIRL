@@ -217,6 +217,88 @@
     (if (= op-name "bytes-to-string") true
       false)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
 
+;; ── Divergent expression detection ─────────────────────
+
+(defn is-divergent-expr
+  :sig [(expr : _) -> Bool]
+  :intent "Returns true for expressions that represent early exits (Err, error, exit)"
+  :requires [(valid expr)]
+  :ensures [(valid result)]
+  :body
+    (match expr
+      (ASTCall callee _ _ _)
+        (let (name : String (extract-callee-name callee))
+          (if (= name "Err") true
+          (if (= name "error") true
+          (if (= name "exit") true
+            false))))
+      (ASTVariant "Err" _ _ _) true
+      _ false))
+
+;; ── Non-consuming bootstrap function list ───────────────
+
+(defn is-non-consuming-bootstrap-fn
+  :sig [(fn-name : String) -> Bool]
+  :intent "Returns true for user-defined g3 bootstrap functions that read arguments without consuming"
+  :requires [(valid fn-name)]
+  :ensures [(valid result)]
+  :body
+    ;; Z3 bridge (read param-map, ctx, int-sort, bool-sort)
+    (if (= fn-name "z3-translate-expr") true
+    (if (= fn-name "z3-translate-ast-expr") true
+    (if (= fn-name "z3-translate-op") true
+    (if (= fn-name "z3-translate-ast-op") true
+    (if (= fn-name "z3-translate-quantifier") true
+    (if (= fn-name "z3-translate-match-arms") true
+    (if (= fn-name "z3-translate-pattern-cond") true
+    (if (= fn-name "z3-translate-match-arm-body") true
+    (if (= fn-name "z3-translate-ast-let") true
+    (if (= fn-name "z3-sort-for-type") true
+    (if (= fn-name "z3-make-named-const") true
+    (if (= fn-name "z3-verify-function") true
+    (if (= fn-name "z3-verify-ast") true
+    (if (= fn-name "z3-apply-uninterpreted") true
+    (if (= fn-name "z3-is-user-function") true
+    (if (= fn-name "z3-pow10") true
+    ;; Parser (read source/tokens/pos)
+    (if (= fn-name "skip-whitespace") true
+    (if (= fn-name "skip-block-comment") true
+    (if (= fn-name "skip-line-comment") true
+    (if (= fn-name "peek-char") true
+    (if (= fn-name "is-symbol-start?") true
+    (if (= fn-name "is-symbol-char?") true
+    (if (= fn-name "is-digit?") true
+    (if (= fn-name "char-at-pos") true
+    (if (= fn-name "read-token") true
+    (if (= fn-name "read-string-literal") true
+    (if (= fn-name "read-symbol") true
+    (if (= fn-name "read-number") true
+    ;; Compiler (read context/locals)
+    (if (= fn-name "bc-compile-expr") true
+    (if (= fn-name "bc-compile-call") true
+    (if (= fn-name "bc-compile-match") true
+    (if (= fn-name "bc-lookup-local") true
+    (if (= fn-name "walk-defn-clauses") true
+    (if (= fn-name "walk-module-clauses") true
+    (if (= fn-name "bc-compile-function-ext") true
+    (if (= fn-name "bc-compile-defns-prefixed-with-proofs") true
+    ;; Linearity (read bindings)
+    (if (= fn-name "binding-lookup") true
+    (if (= fn-name "is-copy-type") true
+    (if (= fn-name "is-non-consuming-op") true
+    (if (= fn-name "is-non-consuming-bootstrap-fn") true
+    (if (= fn-name "track-read") true
+    (if (= fn-name "is-divergent-expr") true
+    (if (= fn-name "linearity-check-expr") true
+    (if (= fn-name "merge-branch-states") true
+    (if (= fn-name "merge-branch-states-walk") true
+    ;; Typecheck
+    (if (= fn-name "typecheck-expr") true
+    (if (= fn-name "typecheck-call") true
+    (if (= fn-name "lookup-builtin-type") true
+    (if (= fn-name "lookup-fn-type") true
+      false))))))))))))))))))))))))))))))))))))))))))))))))))
+
 ;; ── Branch merge ────────────────────────────────────────
 
 (defn merge-branch-states-walk
@@ -471,11 +553,16 @@
                   (let (else-result : List (linearity-check-expr else-expr snapshot))
                     (let (else-bindings : List (at else-result 0))
                       (let (else-diags : List (at else-result 1))
-                        ;; Merge branch states
-                        (let (merge-result : List (merge-branch-states then-bindings else-bindings snapshot))
-                          (let (merged : List (at merge-result 0))
-                            (let (merge-diags : List (at merge-result 1))
-                              [merged (concat cond-diags (concat then-diags (concat else-diags merge-diags)))]))))))))))))))
+                        ;; If a branch is divergent (Err/error/exit), skip merge — use the non-divergent branch's state
+                        (if (is-divergent-expr else-expr)
+                          [then-bindings (concat cond-diags (concat then-diags else-diags))]
+                          (if (is-divergent-expr then-expr)
+                            [else-bindings (concat cond-diags (concat then-diags else-diags))]
+                            ;; Both non-divergent — merge branch states
+                            (let (merge-result : List (merge-branch-states then-bindings else-bindings snapshot))
+                              (let (merged : List (at merge-result 0))
+                                (let (merge-diags : List (at merge-result 1))
+                                  [merged (concat cond-diags (concat then-diags (concat else-diags merge-diags)))]))))))))))))))))
 
 ;; ── Match checker ───────────────────────────────────────
 
@@ -526,7 +613,10 @@
                           (let (rest-result : List (linearity-check-match-arms rest snapshot))
                             (let (rest-states : List (at rest-result 0))
                               (let (rest-diags : List (at rest-result 1))
-                                [(cons cleaned-state rest-states) (concat arm-diags rest-diags)])))))))))
+                                ;; If arm body is divergent (Err/error/exit), exclude its state from N-way merge
+                                (if (is-divergent-expr body)
+                                  [rest-states (concat arm-diags rest-diags)]
+                                  [(cons cleaned-state rest-states) (concat arm-diags rest-diags)]))))))))))
             ;; Not an ASTArm — skip
             _ (linearity-check-match-arms rest snapshot))))))
 
@@ -586,7 +676,9 @@
         (let (callee-diags : List (at callee-result 1))
           ;; Determine if this is a non-consuming builtin
           (let (callee-name : String (extract-callee-name callee))
-            (let (non-consuming : Bool (is-non-consuming-op callee-name))
+            (let (non-consuming : Bool
+              (if (is-non-consuming-op callee-name) true
+                (is-non-consuming-bootstrap-fn callee-name)))
               ;; Check each argument with appropriate ownership semantics
               (let (args-result : List (linearity-check-call-args args bindings-after-callee non-consuming))
                 (let (final-bindings : List (at args-result 0))
