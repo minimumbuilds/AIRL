@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "airl-agent"
-version = "0.21.3"
+version = "0.21.5"
 dependencies = [
  "airl-contracts",
  "airl-runtime",
@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "airl-codegen"
-version = "0.21.3"
+version = "0.21.5"
 dependencies = [
  "airl-syntax",
  "airl-types",
@@ -77,7 +77,7 @@ dependencies = [
 
 [[package]]
 name = "airl-contracts"
-version = "0.21.3"
+version = "0.21.5"
 dependencies = [
  "airl-syntax",
  "airl-types",
@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "airl-driver"
-version = "0.21.3"
+version = "0.21.5"
 dependencies = [
  "airl-agent",
  "airl-contracts",
@@ -98,7 +98,7 @@ dependencies = [
 
 [[package]]
 name = "airl-mlir"
-version = "0.21.3"
+version = "0.21.5"
 dependencies = [
  "cudarc",
  "melior",
@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "airl-rt"
-version = "0.21.3"
+version = "0.21.5"
 dependencies = [
  "aes-gcm",
  "base64",
@@ -132,7 +132,7 @@ dependencies = [
 
 [[package]]
 name = "airl-runtime"
-version = "0.21.3"
+version = "0.21.5"
 dependencies = [
  "airl-codegen",
  "airl-contracts",
@@ -153,7 +153,7 @@ dependencies = [
 
 [[package]]
 name = "airl-solver"
-version = "0.21.3"
+version = "0.21.5"
 dependencies = [
  "airl-syntax",
  "z3",
@@ -162,11 +162,11 @@ dependencies = [
 
 [[package]]
 name = "airl-syntax"
-version = "0.21.3"
+version = "0.21.5"
 
 [[package]]
 name = "airl-types"
-version = "0.21.3"
+version = "0.21.5"
 dependencies = [
  "airl-syntax",
 ]
