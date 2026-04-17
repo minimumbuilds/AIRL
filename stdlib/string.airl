@@ -107,7 +107,7 @@
   :sig [(s : String) (sub : String) -> i64]
   :intent "Count non-overlapping occurrences of sub in s"
   :requires [(valid s) (not (= sub ""))]
-  :ensures [(valid result)]
+  :ensures [(>= result 0)]
   :body (- (length (split s sub)) 1))
 
 ;; ══════════════════════════════════════════════════════════════════
@@ -162,7 +162,7 @@
   :sig [(haystack : Bytes) (needle : Bytes) (hlen : i64) (nlen : i64) (pos : i64) (limit : i64) -> i64]
   :intent "Find first occurrence of needle in haystack, return byte offset or -1"
   :requires [(>= pos 0)]
-  :ensures [(valid result)]
+  :ensures [(>= result -1)]
   :body (if (> pos limit)
           -1
           (if (bytes-match-at haystack needle pos nlen 0)
@@ -174,7 +174,7 @@
   :sig [(s : String) (sub : String) -> i64]
   :intent "Find byte index of first occurrence of sub in s, or -1"
   :requires [(valid s) (valid sub)]
-  :ensures [(valid result)]
+  :ensures [(>= result -1)]
   :body (let (sb : Bytes (bytes-from-string s))
              (nb : Bytes (bytes-from-string sub))
              (slen : i64 (length sb))
@@ -198,7 +198,7 @@
   :sig [(b : i64) -> i64]
   :intent "Convert ASCII uppercase byte to lowercase"
   :requires [(>= b 0)]
-  :ensures [(valid result)]
+  :ensures [(>= result 0)]
   :body (if (and (>= b 65) (<= b 90))
           (+ b 32)
           b))
@@ -207,7 +207,7 @@
   :sig [(b : i64) -> i64]
   :intent "Convert ASCII lowercase byte to uppercase"
   :requires [(>= b 0)]
-  :ensures [(valid result)]
+  :ensures [(>= result 0)]
   :body (if (and (>= b 97) (<= b 122))
           (- b 32)
           b))
@@ -270,7 +270,7 @@
   :sig [(buf : Bytes) (i : i64) (len : i64) -> i64]
   :intent "Find first non-whitespace byte position from left"
   :requires [(>= i 0)]
-  :ensures [(valid result)]
+  :ensures [(>= result 0)]
   :body (if (= i len)
           i
           (if (is-whitespace-byte (at buf i))
@@ -281,7 +281,7 @@
   :sig [(buf : Bytes) (i : i64) -> i64]
   :intent "Find last non-whitespace byte position from right (exclusive)"
   :requires [(>= i 0)]
-  :ensures [(valid result)]
+  :ensures [(>= result 0)]
   :body (if (= i 0)
           0
           (if (is-whitespace-byte (at buf (- i 1)))

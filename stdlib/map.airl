@@ -32,7 +32,7 @@
   :sig [(m : _) -> i64]
   :intent "Get the number of entries in a map"
   :requires [(valid m)]
-  :ensures [(valid result)]
+  :ensures [(>= result 0)]
   :body (length (map-keys m)))
 
 ;; ── map-get-or : get value for key with default ──
@@ -101,7 +101,7 @@
   :sig [(entries : List) -> _]
   :intent "Create a map from a list of [key value] pairs"
   :requires [(valid entries)]
-  :ensures [(valid result)]
+  :ensures [(= (map-size result) (length entries))]
   :body (map-from-entries-loop entries 0 (length entries) (map-new)))
 
 ;; ── map-merge : merge two maps (second wins on conflict) ──
@@ -129,7 +129,7 @@
   :sig [(transform : fn) (m : _) -> _]
   :intent "Apply transform to every value in the map, keeping keys"
   :requires [(valid transform)]
-  :ensures [(valid result)]
+  :ensures [(= (map-size result) (map-size m))]
   :body
     (let (entries : List (map-entries m))
       (map-map-values-loop transform entries 0 (length entries) (map-new))))
@@ -153,7 +153,7 @@
   :sig [(pred-fn : fn) (m : _) -> _]
   :intent "Keep entries where pred-fn(key, value) returns true"
   :requires [(valid pred-fn)]
-  :ensures [(valid result)]
+  :ensures [(<= (map-size result) (map-size m))]
   :body
     (let (entries : List (map-entries m))
       (map-filter-loop pred-fn entries 0 (length entries) (map-new))))
@@ -181,7 +181,7 @@
 (defn map-count-loop
   :sig [(pred-fn : fn) (entries : List) (i : i64) (len : i64) (acc : i64) -> i64]
   :requires [(>= i 0) (valid pred-fn)]
-  :ensures [(valid result)]
+  :ensures [(>= result 0)]
   :body
     (if (>= i len)
       acc
@@ -193,7 +193,7 @@
   :sig [(pred-fn : fn) (m : _) -> i64]
   :intent "Count entries where pred-fn(key, value) returns true"
   :requires [(valid pred-fn)]
-  :ensures [(valid result)]
+  :ensures [(>= result 0)]
   :body
     (let (entries : List (map-entries m))
       (map-count-loop pred-fn entries 0 (length entries) 0)))

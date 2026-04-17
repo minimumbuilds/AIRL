@@ -109,7 +109,7 @@
   :sig [(src : Bytes) (pos : i64) (len : i64) -> i64]
   :intent "Skip whitespace (space, tab, newline, CR) starting at pos"
   :requires [(>= pos 0)]
-  :ensures [(>= result 0)]
+  :ensures [(>= result pos)]
   :body (if (>= pos len)
           pos
           (let (b : i64 (at src pos))
@@ -202,7 +202,7 @@
   :sig [(src : Bytes) (pos : i64) (len : i64) -> i64]
   :intent "Find position after last digit/dot/sign/e of number"
   :requires [(>= pos 0)]
-  :ensures [(>= result 0)]
+  :ensures [(>= result pos)]
   :body (if (>= pos len)
           pos
           (let (b : i64 (at src pos))
