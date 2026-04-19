@@ -108,7 +108,7 @@
 (defn json-skip-ws
   :sig [(src : Bytes) (pos : i64) (len : i64) -> i64]
   :intent "Skip whitespace (space, tab, newline, CR) starting at pos"
-  :requires [(>= pos 0)]
+  :requires [(>= pos 0) (>= len 0)]
   :ensures [(>= result pos)]
   :body (if (>= pos len)
           pos
@@ -201,7 +201,7 @@
 (defn json-parse-number-end
   :sig [(src : Bytes) (pos : i64) (len : i64) -> i64]
   :intent "Find position after last digit/dot/sign/e of number"
-  :requires [(>= pos 0)]
+  :requires [(>= pos 0) (>= len 0)]
   :ensures [(>= result pos)]
   :body (if (>= pos len)
           pos
@@ -215,7 +215,7 @@
 (defn json-has-dot
   :sig [(src : Bytes) (start : i64) (end : i64) -> bool]
   :intent "Check if byte range contains a dot (for float detection)"
-  :requires [(>= start 0)]
+  :requires [(>= start 0) (>= end 0)]
   :ensures [(valid result)]
   :body (if (>= start end)
           false
