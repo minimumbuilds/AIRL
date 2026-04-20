@@ -2,8 +2,32 @@ use std::sync::Mutex;
 use z3::{Config, Context, SatResult, Solver};
 use z3::ast::Ast;
 use airl_syntax::ast::{Expr, ExprKind, FnDef, AstTypeKind};
-use crate::translate::{Translator, VarSort};
+use crate::translate::{Translator, VarSort, SeedVal};
 use crate::{VerifyResult, FunctionVerification};
+
+// ── Inductive verification ────────────────────────────────────────────────────
+//
+// Strategy (standard "assume-guarantee" / Hoare-style induction):
+//
+//   To prove :ensures P(params, result) of a recursive function f:
+//     1. Assert :requires (base assumptions)
+//     2. For every recursive call f(args) that appears in the body, inject an
+//        axiom "the postcondition holds for those args" — this is the
+//        *inductive hypothesis*: assume P(args, f(args)).
+//     3. Translate the body and bind `result`.
+//     4. Ask Z3: can (NOT P) be satisfied? If UNSAT → Proven.
+//
+//   This is sound for total functions (where the recursion terminates).  For
+//   partial functions Z3 may report Proven even when the postcondition is
+//   wrong on non-terminating inputs, but that is the same guarantee Dafny and
+//   other Hoare-logic tools provide.  Termination proofs are out of scope here.
+//
+// The mechanism:
+//   `inject_recursive_call_axioms` walks the body AST, finds every call whose
+//   callee matches the function name, translates the arguments into fresh Z3
+//   Int/Bool/Real vars (one per arg, named `__ind_{fn}_{i}_{arg}`), asserts the
+//   instantiated postcondition for those fresh vars, and returns.  Then normal
+//   body translation + negation check follows.
 
 /// Z3's C library uses non-thread-safe global state during context creation.
 /// Concurrent `Context::new()` calls SIGSEGV in CI. Serialize all Z3 access.
@@ -371,6 +395,353 @@ impl Z3Prover {
             ensures_results,
             invariants_results,
         }
+    }
+
+    /// Perform inductive verification for a recursive function.
+    ///
+    /// Identical to `verify_function` except that, before asserting the body
+    /// binding, we inject Z3 axioms for the inductive hypothesis:
+    /// "every recursive call to `def.name` satisfies each :ensures clause".
+    ///
+    /// Returns `None` when no recursive calls are found (caller falls back to
+    /// `verify_function`).  Returns `Some(FunctionVerification)` otherwise.
+    pub fn inductive_verify(&self, def: &FnDef) -> Option<FunctionVerification> {
+        if !body_contains_recursive_call(&def.body, &def.name) {
+            return None;
+        }
+
+        let _guard = Z3_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = Config::new();
+        let ctx = Context::new(&cfg);
+        let solver = Solver::new(&ctx);
+        let mut translator = Translator::new(&ctx);
+
+        // Declare parameters
+        let mut can_translate = true;
+        for param in &def.params {
+            if let AstTypeKind::Named(type_name) = &param.ty.kind {
+                match Translator::sort_from_type_name(type_name) {
+                    Some(VarSort::Int)  => translator.declare_int(&param.name),
+                    Some(VarSort::Bool) => translator.declare_bool(&param.name),
+                    Some(VarSort::Real) => translator.declare_real(&param.name),
+                    Some(VarSort::Str)  => translator.declare_string(&param.name),
+                    Some(VarSort::Seq)  => translator.declare_seq(&param.name),
+                    None => { can_translate = false; break; }
+                }
+            } else {
+                can_translate = false;
+                break;
+            }
+        }
+
+        // Declare result variable
+        if can_translate {
+            if let AstTypeKind::Named(type_name) = &def.return_type.kind {
+                match Translator::sort_from_type_name(type_name) {
+                    Some(VarSort::Int)  => translator.declare_int("result"),
+                    Some(VarSort::Bool) => translator.declare_bool("result"),
+                    Some(VarSort::Real) => translator.declare_real("result"),
+                    Some(VarSort::Str)  => translator.declare_string("result"),
+                    Some(VarSort::Seq)  => translator.declare_seq("result"),
+                    None => can_translate = false,
+                }
+            } else {
+                can_translate = false;
+            }
+        }
+
+        if !can_translate {
+            return Some(FunctionVerification {
+                function_name: def.name.clone(),
+                ensures_results: def.ensures.iter().map(|e| {
+                    (e.to_airl(), VerifyResult::Unknown("unsupported parameter types".into()))
+                }).collect(),
+                invariants_results: def.invariants.iter().map(|e| {
+                    (e.to_airl(), VerifyResult::Unknown("unsupported parameter types".into()))
+                }).collect(),
+            });
+        }
+
+        // Assert :requires as assumptions
+        for req in &def.requires {
+            match translator.translate_bool(req) {
+                Ok(z3_bool) => solver.assert(&z3_bool),
+                Err(_) => {
+                    return Some(FunctionVerification {
+                        function_name: def.name.clone(),
+                        ensures_results: def.ensures.iter().map(|e| {
+                            (e.to_airl(), VerifyResult::Unknown("cannot translate requires".into()))
+                        }).collect(),
+                        invariants_results: def.invariants.iter().map(|e| {
+                            (e.to_airl(), VerifyResult::Unknown("cannot translate requires".into()))
+                        }).collect(),
+                    });
+                }
+            }
+        }
+
+        // ── Inductive hypothesis injection ────────────────────────────────────
+        //
+        // For each recursive call site f(a0, a1, ...) found in the body:
+        //   1. Translate each arg using the main translator.
+        //   2. Build the uninterpreted function application f_interp(args_i) using the
+        //      SAME uninterpreted function symbol that the body translation will use.
+        //      This ensures Z3 sees the inductive hypothesis as a fact about f_interp.
+        //   3. Build a call-site Translator with params bound to arg values and
+        //      "result" bound to f_interp(args_i).
+        //   4. Translate each :ensures clause in the call-site context and assert it.
+        //
+        // The key: "result" in the axiom IS the uninterpreted app f_interp(args_i),
+        // so when the body translation later produces f_interp(args_i) as a sub-term,
+        // Z3 can connect the axiom to the body term by symbol identity.
+        let recursive_calls = collect_recursive_calls(&def.body, &def.name);
+        for (site_idx, call_args) in recursive_calls.iter().enumerate() {
+            let _ = site_idx; // only used for diagnostics
+            if call_args.len() != def.params.len() { continue; }
+
+            // Step 1: translate args and build the uninterpreted app for result.
+            // We do this with the main translator so the func_decl is shared.
+            let app_z3_result_opt = translator.apply_recursive_fn_as_result(
+                &def.name, call_args, &def.return_type, &def.params
+            );
+            let (arg_vals, result_seed) = match app_z3_result_opt {
+                Some(x) => x,
+                None => continue,
+            };
+
+            // Step 2: build call-site translator with param and result bindings.
+            let mut site_translator = Translator::new(&ctx);
+            for (param, val) in def.params.iter().zip(arg_vals.into_iter()) {
+                match val {
+                    SeedVal::Int(v)  => site_translator.seed_int(&param.name, v),
+                    SeedVal::Bool(v) => site_translator.seed_bool(&param.name, v),
+                    SeedVal::Real(v) => site_translator.seed_real(&param.name, v),
+                }
+            }
+            match result_seed {
+                SeedVal::Int(v)  => site_translator.seed_int("result", v),
+                SeedVal::Bool(v) => site_translator.seed_bool("result", v),
+                SeedVal::Real(v) => site_translator.seed_real("result", v),
+            }
+
+            // Step 3: translate each ensures clause and assert it as the IH.
+            for ensures_expr in &def.ensures {
+                if let Ok(z3_axiom) = site_translator.translate_bool(ensures_expr) {
+                    solver.assert(&z3_axiom);
+                }
+            }
+        }
+        // ── End inductive hypothesis injection ──────────────────────────────
+
+        // Translate body and bind `result`
+        let body_translated = match &def.return_type.kind {
+            AstTypeKind::Named(type_name) => match Translator::sort_from_type_name(type_name) {
+                Some(VarSort::Int) => match translator.translate_int(&def.body) {
+                    Ok(body_z3) => match translator.get_int_var("result") {
+                        Some(r) => { solver.assert(&r.clone()._eq(&body_z3)); true }
+                        None => false,
+                    },
+                    Err(_) => false,
+                },
+                Some(VarSort::Bool) => match translator.translate_bool(&def.body) {
+                    Ok(body_z3) => match translator.get_bool_var("result") {
+                        Some(r) => { solver.assert(&r.clone()._eq(&body_z3)); true }
+                        None => false,
+                    },
+                    Err(_) => false,
+                },
+                Some(VarSort::Real) => match translator.translate_real(&def.body) {
+                    Ok(body_z3) => match translator.get_real_var("result") {
+                        Some(r) => { solver.assert(&r.clone()._eq(&body_z3)); true }
+                        None => false,
+                    },
+                    Err(_) => false,
+                },
+                _ => false,
+            },
+            _ => false,
+        };
+
+        // Prove each :ensures clause
+        let mut ensures_results = Vec::new();
+        for ensures_expr in &def.ensures {
+            let clause_source = ensures_expr.to_airl();
+            if clause_references_result(ensures_expr) && !body_translated {
+                ensures_results.push((
+                    clause_source,
+                    VerifyResult::Unknown(
+                        "result postconditions require body translation (recursive body unsupported)".into(),
+                    ),
+                ));
+                continue;
+            }
+            let result = match translator.translate_bool(ensures_expr) {
+                Ok(z3_bool) => {
+                    solver.push();
+                    solver.assert(&z3_bool.not());
+                    let r = match solver.check() {
+                        SatResult::Unsat => VerifyResult::Proven,
+                        SatResult::Sat => {
+                            let mut cex = Vec::new();
+                            if let Some(model) = solver.get_model() {
+                                for param in &def.params {
+                                    if let AstTypeKind::Named(tn) = &param.ty.kind {
+                                        match Translator::sort_from_type_name(tn) {
+                                            Some(VarSort::Int) => {
+                                                if let Some(v) = translator.get_int_var(&param.name) {
+                                                    if let Some(val) = model.eval(v, true) {
+                                                        cex.push((param.name.clone(), val.to_string()));
+                                                    }
+                                                }
+                                            }
+                                            Some(VarSort::Bool) => {
+                                                if let Some(v) = translator.get_bool_var(&param.name) {
+                                                    if let Some(val) = model.eval(v, true) {
+                                                        if let Some(b) = val.as_bool() {
+                                                            cex.push((param.name.clone(), b.to_string()));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Some(VarSort::Real) => {
+                                                if let Some(v) = translator.get_real_var(&param.name) {
+                                                    if let Some(val) = model.eval(v, true) {
+                                                        cex.push((param.name.clone(), val.to_string()));
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                            VerifyResult::Disproven { counterexample: cex }
+                        }
+                        SatResult::Unknown => VerifyResult::Unknown(
+                            solver.get_reason_unknown().unwrap_or_else(|| "unknown".into())
+                        ),
+                    };
+                    solver.pop(1);
+                    r
+                }
+                Err(e) => VerifyResult::TranslationError(e.to_string()),
+            };
+            ensures_results.push((clause_source, result));
+        }
+
+        // Prove each :invariant clause
+        let mut invariants_results = Vec::new();
+        for inv_expr in &def.invariants {
+            let clause_source = inv_expr.to_airl();
+            if clause_references_result(inv_expr) && !body_translated {
+                invariants_results.push((
+                    clause_source,
+                    VerifyResult::Unknown("invariant references result but body translation failed".into()),
+                ));
+                continue;
+            }
+            let result = match translator.translate_bool(inv_expr) {
+                Ok(z3_bool) => {
+                    solver.push();
+                    solver.assert(&z3_bool.not());
+                    let r = match solver.check() {
+                        SatResult::Unsat => VerifyResult::Proven,
+                        SatResult::Sat => VerifyResult::Disproven { counterexample: vec![] },
+                        SatResult::Unknown => VerifyResult::Unknown(
+                            solver.get_reason_unknown().unwrap_or_else(|| "unknown".into())
+                        ),
+                    };
+                    solver.pop(1);
+                    r
+                }
+                Err(e) => VerifyResult::TranslationError(e.to_string()),
+            };
+            invariants_results.push((clause_source, result));
+        }
+
+        Some(FunctionVerification {
+            function_name: def.name.clone(),
+            ensures_results,
+            invariants_results,
+        })
+    }
+}
+
+// ── Body traversal helpers ────────────────────────────────────────────────────
+
+/// Returns true if the expression tree contains a direct call to `fn_name`.
+fn body_contains_recursive_call(expr: &Expr, fn_name: &str) -> bool {
+    match &expr.kind {
+        ExprKind::FnCall(callee, args) => {
+            if let ExprKind::SymbolRef(name) = &callee.kind {
+                if name == fn_name { return true; }
+            }
+            body_contains_recursive_call(callee, fn_name)
+                || args.iter().any(|a| body_contains_recursive_call(a, fn_name))
+        }
+        ExprKind::If(cond, t, e) =>
+            body_contains_recursive_call(cond, fn_name)
+                || body_contains_recursive_call(t, fn_name)
+                || body_contains_recursive_call(e, fn_name),
+        ExprKind::Let(bindings, body) =>
+            bindings.iter().any(|b| body_contains_recursive_call(&b.value, fn_name))
+                || body_contains_recursive_call(body, fn_name),
+        ExprKind::Do(exprs) => exprs.iter().any(|e| body_contains_recursive_call(e, fn_name)),
+        ExprKind::Match(scrutinee, arms) =>
+            body_contains_recursive_call(scrutinee, fn_name)
+                || arms.iter().any(|a| body_contains_recursive_call(&a.body, fn_name)),
+        ExprKind::Lambda(_, body) => body_contains_recursive_call(body, fn_name),
+        ExprKind::VariantCtor(_, args) => args.iter().any(|a| body_contains_recursive_call(a, fn_name)),
+        ExprKind::StructLit(_, fields) => fields.iter().any(|(_, e)| body_contains_recursive_call(e, fn_name)),
+        ExprKind::ListLit(elems) => elems.iter().any(|e| body_contains_recursive_call(e, fn_name)),
+        ExprKind::Try(inner) => body_contains_recursive_call(inner, fn_name),
+        ExprKind::Forall(_, guard, body) | ExprKind::Exists(_, guard, body) =>
+            guard.as_deref().map_or(false, |g| body_contains_recursive_call(g, fn_name))
+                || body_contains_recursive_call(body, fn_name),
+        _ => false,
+    }
+}
+
+/// Collect the argument lists for every direct call to `fn_name` in `expr`.
+fn collect_recursive_calls(expr: &Expr, fn_name: &str) -> Vec<Vec<Expr>> {
+    let mut out = Vec::new();
+    collect_recursive_calls_inner(expr, fn_name, &mut out);
+    out
+}
+
+fn collect_recursive_calls_inner(expr: &Expr, fn_name: &str, out: &mut Vec<Vec<Expr>>) {
+    match &expr.kind {
+        ExprKind::FnCall(callee, args) => {
+            if let ExprKind::SymbolRef(name) = &callee.kind {
+                if name == fn_name { out.push(args.clone()); }
+            }
+            collect_recursive_calls_inner(callee, fn_name, out);
+            for a in args { collect_recursive_calls_inner(a, fn_name, out); }
+        }
+        ExprKind::If(cond, t, e) => {
+            collect_recursive_calls_inner(cond, fn_name, out);
+            collect_recursive_calls_inner(t, fn_name, out);
+            collect_recursive_calls_inner(e, fn_name, out);
+        }
+        ExprKind::Let(bindings, body) => {
+            for b in bindings { collect_recursive_calls_inner(&b.value, fn_name, out); }
+            collect_recursive_calls_inner(body, fn_name, out);
+        }
+        ExprKind::Do(exprs) => { for e in exprs { collect_recursive_calls_inner(e, fn_name, out); } }
+        ExprKind::Match(scrutinee, arms) => {
+            collect_recursive_calls_inner(scrutinee, fn_name, out);
+            for arm in arms { collect_recursive_calls_inner(&arm.body, fn_name, out); }
+        }
+        ExprKind::Lambda(_, body) => collect_recursive_calls_inner(body, fn_name, out),
+        ExprKind::VariantCtor(_, args) => { for a in args { collect_recursive_calls_inner(a, fn_name, out); } }
+        ExprKind::StructLit(_, fields) => { for (_, e) in fields { collect_recursive_calls_inner(e, fn_name, out); } }
+        ExprKind::ListLit(elems) => { for e in elems { collect_recursive_calls_inner(e, fn_name, out); } }
+        ExprKind::Try(inner) => collect_recursive_calls_inner(inner, fn_name, out),
+        ExprKind::Forall(_, guard, body) | ExprKind::Exists(_, guard, body) => {
+            if let Some(g) = guard.as_deref() { collect_recursive_calls_inner(g, fn_name, out); }
+            collect_recursive_calls_inner(body, fn_name, out);
+        }
+        _ => {}
     }
 }
 
@@ -902,6 +1273,107 @@ mod tests {
         assert!(
             matches!(&v.ensures_results[0].1, VerifyResult::Proven),
             "expected Proven for length(xs) >= 0, got: {:?}", v,
+        );
+    }
+
+    // ── Inductive verification tests ──────────────────────────────────────────
+
+    #[test]
+    fn inductive_verify_non_recursive_returns_none() {
+        // A non-recursive function should return None from inductive_verify.
+        let def = make_fn("add",
+            vec![("a", "i32"), ("b", "i32")], "i32",
+            vec![],
+            vec![call("=", vec![sym("result"), call("+", vec![sym("a"), sym("b")])])],
+            call("+", vec![sym("a"), sym("b")]),
+        );
+        let prover = Z3Prover::new();
+        assert!(
+            prover.inductive_verify(&def).is_none(),
+            "non-recursive function should return None from inductive_verify",
+        );
+    }
+
+    #[test]
+    fn inductive_verify_recursive_sum_nonneg() {
+        // (defn sum [(n : i32) -> i32]
+        //   :requires [(>= n 0)]
+        //   :ensures [(>= result 0)]
+        //   :body (if (= n 0) 0 (+ n (sum (- n 1)))))
+        //
+        // Inductive proof:
+        //   - Base: n=0 → result=0 ≥ 0  ✓
+        //   - Inductive step: assume sum(n-1) ≥ 0, then result = n + sum(n-1) ≥ 0
+        //     given n ≥ 0 and IH: sum(n-1) ≥ 0.
+        let body = Expr {
+            kind: ExprKind::If(
+                Box::new(call("=", vec![sym("n"), int(0)])),
+                Box::new(int(0)),
+                Box::new(call("+", vec![sym("n"), call("sum", vec![call("-", vec![sym("n"), int(1)])])])),
+            ),
+            span: Span::dummy(),
+        };
+        let def = make_fn("sum",
+            vec![("n", "i32")], "i32",
+            vec![call(">=", vec![sym("n"), int(0)])],
+            vec![call(">=", vec![sym("result"), int(0)])],
+            body,
+        );
+        let prover = Z3Prover::new();
+        let v = prover.inductive_verify(&def).expect("should detect recursive call");
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for recursive sum ≥ 0 with inductive hypothesis, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn inductive_verify_preserves_regular_verify_for_non_recursive() {
+        // verify_function and inductive_verify should agree on non-recursive bodies.
+        let def = make_fn("mul",
+            vec![("a", "i32"), ("b", "i32")], "i32",
+            vec![],
+            vec![call("=", vec![sym("result"), call("*", vec![sym("a"), sym("b")])])],
+            call("*", vec![sym("a"), sym("b")]),
+        );
+        let prover = Z3Prover::new();
+        // inductive_verify returns None for non-recursive
+        assert!(prover.inductive_verify(&def).is_none());
+        // verify_function proves it
+        let v = prover.verify_function(&def);
+        assert!(matches!(&v.ensures_results[0].1, VerifyResult::Proven));
+    }
+
+    #[test]
+    fn inductive_verify_detects_wrong_postcondition() {
+        // A recursive function with a WRONG postcondition should be Disproven
+        // (the inductive hypothesis is not strong enough to save a false claim).
+        //
+        // (defn sum_wrong [(n : i32) -> i32]
+        //   :requires [(>= n 0)]
+        //   :ensures [(> result n)]   <-- WRONG: sum(0)=0, not > 0
+        //   :body (if (= n 0) 0 (+ n (sum_wrong (- n 1)))))
+        let body = Expr {
+            kind: ExprKind::If(
+                Box::new(call("=", vec![sym("n"), int(0)])),
+                Box::new(int(0)),
+                Box::new(call("+", vec![sym("n"), call("sum_wrong", vec![call("-", vec![sym("n"), int(1)])])])),
+            ),
+            span: Span::dummy(),
+        };
+        let def = make_fn("sum_wrong",
+            vec![("n", "i32")], "i32",
+            vec![call(">=", vec![sym("n"), int(0)])],
+            vec![call(">", vec![sym("result"), sym("n")])],
+            body,
+        );
+        let prover = Z3Prover::new();
+        let v = prover.inductive_verify(&def).expect("should detect recursive call");
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Disproven { .. }),
+            "expected Disproven for wrong postcondition (> result n), got: {:?}", v,
         );
     }
 }

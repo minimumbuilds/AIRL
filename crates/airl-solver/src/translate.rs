@@ -118,6 +118,23 @@ impl<'ctx> Translator<'ctx> {
         self.bool_vars.get(name)
     }
 
+    /// Seed an integer variable with a pre-computed Z3 expression.
+    /// Used by `Z3Prover::inductive_verify` to populate a call-site translator
+    /// with argument values computed in the parent context.
+    pub fn seed_int(&mut self, name: &str, val: ast::Int<'ctx>) {
+        self.int_vars.insert(name.to_string(), val);
+    }
+
+    /// Seed a boolean variable with a pre-computed Z3 expression.
+    pub fn seed_bool(&mut self, name: &str, val: ast::Bool<'ctx>) {
+        self.bool_vars.insert(name.to_string(), val);
+    }
+
+    /// Seed a real variable with a pre-computed Z3 expression.
+    pub fn seed_real(&mut self, name: &str, val: ast::Real<'ctx>) {
+        self.real_vars.insert(name.to_string(), val);
+    }
+
     /// Declare a string variable.
     pub fn declare_string(&mut self, name: &str) {
         let var = ast::String::new_const(self.ctx, name);
@@ -1341,6 +1358,11 @@ impl<'ctx> Translator<'ctx> {
                     range,
                 )
             };
+            // Increment the Z3 reference count so the declaration is not freed
+            // by Z3's garbage collector while this Translator (or a sibling
+            // Translator sharing the same context) is still alive.
+            // SAFETY: decl is a valid Z3_func_decl just returned by Z3_mk_func_decl.
+            unsafe { z3_sys::Z3_inc_ref(z3_ctx, z3_sys::Z3_func_decl_to_ast(z3_ctx, decl)) };
             self.func_decls.insert(cache_key, decl);
             decl
         };
@@ -1364,6 +1386,70 @@ impl<'ctx> Translator<'ctx> {
         Ok(app_ast)
     }
 
+
+    /// Build seed values for inductive hypothesis injection.
+    ///
+    /// For each recursive call site f(a0, a1, ...) in a function body:
+    ///   - Translate each argument expression to a typed Z3 value.
+    ///   - Build the uninterpreted function application f_interp(a0, a1, ...) using the
+    ///     same Z3 func_decl that body translation will use (sharing the cache ensures
+    ///     symbol identity — Z3 can relate the IH axiom to the body sub-term).
+    ///   - Return (Vec<SeedVal> for params, SeedVal for result) so the caller can seed
+    ///     a call-site Translator and translate the :ensures clause.
+    ///
+    /// Returns None if any argument cannot be translated or the return type is unsupported.
+    pub fn apply_recursive_fn_as_result(
+        &mut self,
+        fn_name: &str,
+        call_args: &[Expr],
+        return_type: &airl_syntax::ast::AstType,
+        params: &[airl_syntax::ast::Param],
+    ) -> Option<(Vec<SeedVal<'ctx>>, SeedVal<'ctx>)> {
+        // Translate each argument expression.
+        let mut arg_seeds: Vec<SeedVal<'ctx>> = Vec::with_capacity(params.len());
+        for (param, arg_expr) in params.iter().zip(call_args.iter()) {
+            if let AstTypeKind::Named(type_name) = &param.ty.kind {
+                match Self::sort_from_type_name(type_name) {
+                    Some(VarSort::Int) => match self.translate_int(arg_expr) {
+                        Ok(v) => arg_seeds.push(SeedVal::Int(v)),
+                        Err(_) => return None,
+                    },
+                    Some(VarSort::Bool) => match self.translate_bool(arg_expr) {
+                        Ok(v) => arg_seeds.push(SeedVal::Bool(v)),
+                        Err(_) => return None,
+                    },
+                    Some(VarSort::Real) => match self.translate_real(arg_expr) {
+                        Ok(v) => arg_seeds.push(SeedVal::Real(v)),
+                        Err(_) => return None,
+                    },
+                    _ => return None,
+                }
+            } else {
+                return None;
+            }
+        }
+
+        // Determine return sort and build the uninterpreted function application.
+        let return_sort = if let AstTypeKind::Named(type_name) = &return_type.kind {
+            Self::sort_from_type_name(type_name)?
+        } else {
+            return None;
+        };
+
+        // Build the app AST using the SAME uninterpreted func_decl as body translation.
+        let app_ast = self.apply_uninterpreted_fn(fn_name, call_args, return_sort).ok()?;
+
+        // Wrap the raw Z3_ast as the appropriate typed AST.
+        let result_seed = match return_sort {
+            VarSort::Int  => SeedVal::Int(unsafe { ast::Int::wrap(self.ctx, app_ast) }),
+            VarSort::Bool => SeedVal::Bool(unsafe { ast::Bool::wrap(self.ctx, app_ast) }),
+            VarSort::Real => SeedVal::Real(unsafe { ast::Real::wrap(self.ctx, app_ast) }),
+            _ => return None,
+        };
+
+        Some((arg_seeds, result_seed))
+    }
+
     /// Determine variable sort from an AIRL type name.
     pub fn sort_from_type_name(name: &str) -> Option<VarSort> {
         match name {
@@ -1375,6 +1461,35 @@ impl<'ctx> Translator<'ctx> {
             _ => None,
         }
     }
+}
+
+impl<'ctx> Drop for Translator<'ctx> {
+    /// Decrement Z3 reference counts for all cached uninterpreted function declarations.
+    ///
+    /// `apply_uninterpreted_fn` calls `Z3_inc_ref` on each new declaration to prevent
+    /// Z3's garbage collector from freeing the pointer while the Translator is alive.
+    /// This Drop impl releases those references so Z3 can reclaim the memory.
+    fn drop(&mut self) {
+        if self.func_decls.is_empty() {
+            return;
+        }
+        let z3_ctx = unsafe { raw_z3_ctx(self.ctx) };
+        for &decl in self.func_decls.values() {
+            unsafe {
+                z3_sys::Z3_dec_ref(z3_ctx, z3_sys::Z3_func_decl_to_ast(z3_ctx, decl));
+            }
+        }
+    }
+}
+
+// ── Inductive verification support ───────────────────────────────────────────
+
+/// A typed Z3 expression used to seed a call-site Translator for inductive
+/// hypothesis injection.  Created by `Translator::apply_recursive_fn_as_result`.
+pub enum SeedVal<'ctx> {
+    Int(ast::Int<'ctx>),
+    Bool(ast::Bool<'ctx>),
+    Real(ast::Real<'ctx>),
 }
 
 #[cfg(test)]
