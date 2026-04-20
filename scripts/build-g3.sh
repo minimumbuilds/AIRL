@@ -53,6 +53,7 @@ BUILDS_DIR="builds"
 mkdir -p "$BUILDS_DIR"
 
 # --- Subcommands ---
+# These run on the host — no Docker needed for listing or switching symlinks.
 
 if [ "${1:-}" = "--list" ]; then
     echo "Cached G3 builds:"
@@ -78,6 +79,31 @@ if [ "${1:-}" = "--use" ]; then
     echo "g3 -> $target"
     ./g3 -- --version 2>/dev/null || true
     exit 0
+fi
+
+# --- Docker sandbox ---
+# Re-exec inside a resource-limited container unless on macOS or already inside one.
+# exec replaces the current process so exit code and stdio pass through cleanly.
+_in_container=0
+if [[ -f /.dockerenv ]] || grep -q 'docker\|lxc' /proc/1/cgroup 2>/dev/null; then
+    _in_container=1
+fi
+
+if [[ "$_build_os" != "Darwin" && "$_in_container" -eq 0 ]]; then
+    if [[ "$AIRL_ROOT" == *:* ]]; then
+        echo "error: worktree path contains colon — use a dash-named worktree for Docker builds" >&2
+        exit 1
+    fi
+    exec docker run --rm \
+        --memory=6g --memory-swap=6g --cpus=2 \
+        -v "${AIRL_ROOT}:${AIRL_ROOT}" \
+        -w "${AIRL_ROOT}" \
+        -e "AIRL_STDLIB=${AIRL_STDLIB}" \
+        -e "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}" \
+        -e "AIRL_BIN=${AIRL_BIN:-cargo run --release --features aot --}" \
+        -e "AIRL_ROOT=${AIRL_ROOT}" \
+        rust:slim \
+        bash scripts/build-g3.sh "$@"
 fi
 
 # --- Build ---
