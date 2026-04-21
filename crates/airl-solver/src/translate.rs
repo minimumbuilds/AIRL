@@ -508,6 +508,23 @@ impl<'ctx> Translator<'ctx> {
                                 "length requires a declared list/seq variable".into()
                             ))
                         }
+                        // Bitwise ops: Z3 integer theory can't model these meaningfully.
+                        // Treating them as uninterpreted functions leaves `result`
+                        // effectively unconstrained (any i64 passes), which makes
+                        // every non-trivial ensures clause spuriously "disproven"
+                        // with an incidental counterexample — see
+                        // docs/superpowers/specs/2026-04-21-airl-castle-bugs-discovered.md
+                        // "Bug A". Return UnsupportedExpression so prover.rs falls
+                        // through to Unknown (runtime-checked), not Disproven.
+                        //
+                        // Proper fix (follow-up): translate these via Z3's BV64
+                        // theory with explicit Int↔BitVec conversion.
+                        "bitwise-and" | "bitwise-or" | "bitwise-xor"
+                        | "bitwise-shl" | "bitwise-shr" | "bitwise-not" => {
+                            Err(TranslateError::UnsupportedExpression(
+                                format!("{} (bitwise op — Z3 translation not yet implemented; see spec 2026-04-21 Bug A)", op)
+                            ))
+                        }
                         _ => {
                             // Unknown function — declare as uninterpreted with Int return
                             let app_ast = self.apply_uninterpreted_fn(op, args, VarSort::Int)?;

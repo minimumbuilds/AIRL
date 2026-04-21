@@ -838,6 +838,40 @@ mod tests {
     }
 
     #[test]
+    fn bitwise_body_yields_unknown_not_disproven() {
+        // Regression for AIRL-side Bug A (2026-04-21-airl-castle-bugs-discovered):
+        // stdlib/sha256.airl's `u32` function is
+        //   (defn u32 :sig [(x : i64) -> i64]
+        //     :ensures [(>= result 0) (<= result 4294967295)]
+        //     :body (bitwise-and x 4294967295))
+        // Z3's Int theory can't model `bitwise-and`. Before this fix, the
+        // translator emitted it as an uninterpreted function — leaving
+        // `result` unconstrained and letting Z3 spuriously disprove the
+        // ensures with an incidental counterexample. With the fix the
+        // translator returns UnsupportedExpression, which the prover
+        // reports as Unknown (runtime-checked), not Disproven.
+        let def = make_fn("u32",
+            vec![("x", "i64")], "i64",
+            vec![],
+            vec![
+                call(">=", vec![sym("result"), int(0)]),
+                call("<=", vec![sym("result"), int(4294967295)]),
+            ],
+            call("bitwise-and", vec![sym("x"), int(4294967295)]),
+        );
+        let prover = Z3Prover::new();
+        let verification = prover.verify_function(&def);
+        assert_eq!(verification.ensures_results.len(), 2);
+        for (clause, result) in &verification.ensures_results {
+            assert!(
+                matches!(result, VerifyResult::Unknown(_)),
+                "expected Unknown for ensures `{}` (bitwise-and body), got: {:?}",
+                clause, result
+            );
+        }
+    }
+
+    #[test]
     fn valid_ensures_yields_translation_error() {
         // valid() no longer translates to Z3 true — it returns Unsupported.
         // Ensures clauses using valid() should produce TranslationError, not a
