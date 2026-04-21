@@ -299,77 +299,28 @@
   :requires [(valid entry)]
   :ensures [(valid result)]
   :body
-    (match acc
-      (Err e) (Err e)
-      (Ok pair)
-        (let (paths-acc : List (at pair 0))
-          (let (needs-acc : Bool (at pair 1))
-            (let (idx : Int (at entry 0))
-              (let (path : String (at entry 1))
-                (let (source : String (read-file path))
-                  (let (obj-path : String (str output-path ".f" (int-to-string idx) ".o"))
-                    (match (g3-compile-file-to-obj source path strict obj-path true)
-                      (Err e) (Err e)
-                      (Ok bn)
-                        (Ok [(append paths-acc obj-path) (if bn true needs-acc)]))))))))))
+    (do
+      (rt-stats "g3-step3-fold-step:enter")
+      (match acc
+        (Err e) (Err e)
+        (Ok pair)
+          (let (paths-acc : List (at pair 0))
+            (let (needs-acc : Bool (at pair 1))
+              (let (idx : Int (at entry 0))
+                (let (path : String (at entry 1))
+                  (let (source : String (read-file path))
+                    (let (obj-path : String (str output-path ".f" (int-to-string idx) ".o"))
+                      (match (g3-compile-file-to-obj source path strict obj-path true)
+                        (Err e) (Err e)
+                        (Ok bn)
+                          (do
+                            (rt-stats (str "g3-step3-fold-step:done:f" (int-to-string idx)))
+                            (Ok [(append paths-acc obj-path) (if bn true needs-acc)]))))))))))))
 
 ;; ── Step 3 tail-step helper ────────────────────────────────
 ;;
 ;; After the fold, compile last-file (keeping __main__), append its .o path,
 ;; and link everything. Externalizing keeps the main body trivial.
-
-(defn g3-step3-link-tail
-  :sig [(acc : _) (last-file : String) (output-path : String) (strict : Bool) -> _]
-  :intent "Compile last-file, link all .o into output-path"
-  :requires [(valid last-file)]
-  :ensures [(valid result)]
-  :body
-    (match acc
-      (Err e) (Err e)
-      (Ok pair)
-        (let (earlier-paths : List (at pair 0))
-          (let (earlier-needs : Bool (at pair 1))
-            (let (last-source : String (read-file last-file))
-              (let (last-obj : String (str output-path ".last.o"))
-                (match (g3-compile-file-to-obj last-source "main" strict last-obj false)
-                  (Err e) (Err e)
-                  (Ok last-needs)
-                    (let (all-paths : List (append earlier-paths last-obj))
-                      (let (all-needs : Bool (if last-needs true earlier-needs))
-                        (do
-                          (print "[g3] linking " (length all-paths) " objects -> " output-path "\n")
-                          (link-objs-to-binary all-paths output-path all-needs)))))))))))
-
-;; ── Step 3 fold-step helper ────────────────────────────────
-;;
-;; One fold iteration: take the current (Ok [paths-acc needs-acc]) accumulator
-;; and an indexed entry [idx path], compile path -> .o, return updated pair.
-;; Externalized from the fold lambda to keep nesting shallow.
-
-(defn g3-step3-fold-step
-  :sig [(acc : _) (entry : List) (output-path : String) (strict : Bool) -> _]
-  :intent "One fold step: compile one source file to .o, update (paths, needs) accumulator"
-  :requires [(valid entry)]
-  :ensures [(valid result)]
-  :body
-    (match acc
-      (Err e) (Err e)
-      (Ok pair)
-        (let (paths-acc : List (at pair 0))
-          (let (needs-acc : Bool (at pair 1))
-            (let (idx : Int (at entry 0))
-              (let (path : String (at entry 1))
-                (let (source : String (read-file path))
-                  (let (obj-path : String (str output-path ".f" (int-to-string idx) ".o"))
-                    (match (g3-compile-file-to-obj source path strict obj-path true)
-                      (Err e) (Err e)
-                      (Ok bn)
-                        (Ok [(append paths-acc obj-path) (if bn true needs-acc)]))))))))))
-
-;; ── Step 3 tail-step helper ────────────────────────────────
-;;
-;; After the fold, compile last-file (keeping __main__), append its .o path,
-;; and link everything.
 
 (defn g3-step3-link-tail
   :sig [(acc : _) (last-file : String) (output-path : String) (strict : Bool) -> _]
