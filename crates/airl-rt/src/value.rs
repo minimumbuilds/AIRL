@@ -207,6 +207,27 @@ fn small_int_pool() -> &'static Vec<RtValue> {
     })
 }
 
+// Short-string interning pool — strings ≤ MAX_INTERN_LEN bytes are returned as
+// immortal singletons on first sight, and subsequent rt_str calls with the same
+// content return the same pointer. Mirrors JVM String.intern() / Ruby symbol
+// pool. Bootstrap compilation of the AIRL stdlib + G3 generates millions of
+// duplicate short-string allocations (identifiers "let", "defn", "match",
+// operator names, type names, register names) — interning eliminates the
+// duplicates, and immortal rc means retain/release are no-ops.
+//
+// Unique long strings (source code substrings, error messages, IO buffers)
+// still go through the normal allocating path.
+#[cfg(not(target_os = "airlos"))]
+pub(crate) const MAX_INTERN_LEN: usize = 64;
+
+#[cfg(not(target_os = "airlos"))]
+static INTERNED_STRS: std::sync::OnceLock<std::sync::RwLock<HashMap<String, usize>>> = std::sync::OnceLock::new();
+
+#[cfg(not(target_os = "airlos"))]
+fn intern_pool() -> &'static std::sync::RwLock<HashMap<String, usize>> {
+    INTERNED_STRS.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
+}
+
 // Rust-side constructors
 pub fn rt_nil() -> *mut RtValue {
     &NIL_SINGLETON as *const RtValue as *mut RtValue
@@ -241,6 +262,32 @@ pub fn rt_bool(v: bool) -> *mut RtValue {
 }
 
 pub fn rt_str(v: String) -> *mut RtValue {
+    #[cfg(not(target_os = "airlos"))]
+    {
+        if v.len() <= MAX_INTERN_LEN {
+            let pool = intern_pool();
+            // Fast path: read lock. Most lookups hit after the first sighting.
+            {
+                let r = pool.read().unwrap();
+                if let Some(&p) = r.get(&v) {
+                    return p as *mut RtValue;
+                }
+            }
+            // Slow path: acquire write lock and insert an immortal RtValue.
+            // Double-check the entry in case another thread inserted between
+            // our read-unlock and write-acquire.
+            let mut w = pool.write().unwrap();
+            if let Some(&p) = w.get(&v) {
+                return p as *mut RtValue;
+            }
+            let p = RtValue::alloc(TAG_STR, RtData::Str(v.clone()));
+            unsafe {
+                (*p).rc.store(u32::MAX, core::sync::atomic::Ordering::Relaxed);
+            }
+            w.insert(v, p as usize);
+            return p;
+        }
+    }
     RtValue::alloc(TAG_STR, RtData::Str(v))
 }
 
