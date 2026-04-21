@@ -166,6 +166,7 @@ pub struct RuntimeImports {
     // System
     pub cpu_count: FuncId,
     pub time_now: FuncId,
+    pub rt_stats: FuncId,
 
     // Environment
     pub getenv: FuncId,
@@ -718,6 +719,7 @@ impl BytecodeAot {
         // System
         let cpu_count = declare_import(m, "airl_cpu_count", sig_0_ptr(m, ptr));
         let time_now = declare_import(m, "airl_time_now", sig_0_ptr(m, ptr));
+        let rt_stats = declare_import(m, "airl_rt_stats", s1.clone());
 
         // Environment
         let getenv = declare_import(m, "airl_getenv", s1.clone());
@@ -895,7 +897,7 @@ impl BytecodeAot {
             char_code, char_from_code,
             sqrt, sin, cos, tan, log, exp, floor, ceil, round,
             float_to_int, int_to_float, infinity, nan_ctor, is_nan, is_infinite,
-            cpu_count, time_now, getenv, shell_exec, shell_exec_with_stdin,
+            cpu_count, time_now, rt_stats, getenv, shell_exec, shell_exec_with_stdin,
             parse_int_radix, int_to_string_radix, get_cwd,
             char_count, str_variadic, format_variadic,
             assert_fn, panic_fn, exit_fn, sleep_fn, format_time, read_lines,
@@ -1050,6 +1052,7 @@ impl BytecodeAot {
         // System — OS-level builtins (cannot be pure AIRL)
         m.insert("cpu-count".into(),  rt.cpu_count);
         m.insert("time-now".into(),   rt.time_now);
+        m.insert("rt-stats".into(),   rt.rt_stats);
         m.insert("getenv".into(),     rt.getenv);
         m.insert("get-cwd".into(),    rt.get_cwd);
 

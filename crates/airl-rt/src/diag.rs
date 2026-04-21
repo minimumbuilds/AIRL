@@ -124,6 +124,30 @@ pub fn on_free(tag: u8) {
     }
 }
 
+/// Emit a one-line snapshot of alloc/free counters to stderr, tagged with
+/// `label` so callers can correlate to phase/file boundaries. Unconditional —
+/// the caller gates on `AIRL_RT_TRACE=1` or equivalent. Used by the AIRL
+/// builtin `rt-stats` for the spec-2 bootstrap-state-isolation investigation.
+pub fn print_stats(label: &str) {
+    let a = ALLOCS.load(Relaxed);
+    let f = FREES.load(Relaxed);
+    let alive = a.saturating_sub(f);
+    let rss = rss_mib();
+    let mut per_tag: Vec<(u8, u64)> = (0..12u8)
+        .map(|t| (t, ALIVE_BY_TAG[t as usize].load(Relaxed)))
+        .filter(|(_, c)| *c > 0)
+        .collect();
+    per_tag.sort_by(|a, b| b.1.cmp(&a.1));
+    let tags_s: String = per_tag.iter().take(6)
+        .map(|(t, c)| format!("{}={}", tag_name(*t), c))
+        .collect::<Vec<_>>()
+        .join(" ");
+    eprintln!(
+        "[rt-stats:{}] rss={}MiB alive={} allocs={} freed={}  {}",
+        label, rss, alive, a, f, tags_s
+    );
+}
+
 // ── Allocation-site tagging (spec 4) ─────────────────────────────────
 //
 // Feature-gated under `rt_trace_sites`. Each call site that allocates an
