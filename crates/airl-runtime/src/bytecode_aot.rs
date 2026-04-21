@@ -2447,20 +2447,23 @@ impl BytecodeAot {
                 Op::Move => {
                     let dst = instr.dst as usize;
                     let src = instr.a as usize;
-                    // Move semantics (spec: 2026-04-06-aot-rc-move-semantics.md item 3):
-                    // release old dst, transfer ownership src->dst, zero src. No retain —
-                    // the underlying RtValue's refcount is unchanged, ownership moves.
-                    // A Move into a reg that previously held a value without this release
-                    // would leak one rc per reuse, which accumulates linearly with per-file
-                    // compile work and is the root cause of the g3 OOM on large codebases.
+                    // Matches VM Op::Move (bytecode_vm.rs:1434-1439) — retain src so
+                    // both src and dst hold a live reference; both are released at
+                    // scope end. The load-bearing addition over the prior AOT
+                    // implementation is the release of old_dst: before this, a Move
+                    // into a reg that already held a value silently leaked one
+                    // refcount per reuse (most commonly, a function body Moving its
+                    // result into reg 0 over the incoming param — the linear-in-files
+                    // leak documented in 2026-04-06-aot-rc-move-semantics.md and
+                    // confirmed by the g3 OOM regression).
                     if dst != src {
                         let old_dst = builder.use_var(vars[dst]);
                         let release_ref = self.module.declare_func_in_func(self.rt.value_release, builder.func);
                         builder.ins().call(release_ref, &[old_dst]);
                         let v = builder.use_var(vars[src]);
+                        let retain_ref = self.module.declare_func_in_func(self.rt.value_retain, builder.func);
+                        builder.ins().call(retain_ref, &[v]);
                         builder.def_var(vars[dst], v);
-                        let zero = builder.ins().iconst(self.ptr, 0);
-                        builder.def_var(vars[src], zero);
                     }
                     last_was_terminator = false;
                 }
@@ -2786,15 +2789,17 @@ impl BytecodeAot {
                 }
 
                 // ── Memory management — scope note + Op::Release ─────
-                // SCOPE NOTE: the RC protocol implemented here (move-on-Move,
-                // release-on-Release, retain-before-call) is correct only when the
-                // bytecode was compiled by bc_compiler.airl (the AIRL-written self-hosted
-                // compiler), which emits explicit Op::Release for every live value leaving
-                // scope. The Rust BytecodeCompiler (crates/airl-runtime/src/bytecode_compiler.rs)
-                // does NOT emit Op::Release — but it is used only for interpreter/VM execution
-                // (bytecode_vm.rs handles its own RC protocol). If the Rust compiler is
-                // ever extended to produce code for the AOT path, it must also be taught to
-                // emit Op::Release, or this handler must be guarded behind a flag.
+                // SCOPE NOTE: the RC protocol implemented here (retain-on-Move
+                // with release-of-old-dst, release-on-Release, retain-before-call)
+                // is correct only when the bytecode was compiled by bc_compiler.airl
+                // (the AIRL-written self-hosted compiler), which emits explicit
+                // Op::Release for every live value leaving scope. The Rust
+                // BytecodeCompiler (crates/airl-runtime/src/bytecode_compiler.rs)
+                // does NOT emit Op::Release — but it is used only for interpreter/VM
+                // execution (bytecode_vm.rs handles its own RC protocol). If the Rust
+                // compiler is ever extended to produce code for the AOT path, it must
+                // also be taught to emit Op::Release, or this handler must be guarded
+                // behind a flag.
                 Op::Release => {
                     // Decrement refcount and null the variable — matches VM semantics
                     // (bytecode_vm.rs:1965-1974). Nulling prevents use-after-free if the

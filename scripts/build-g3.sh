@@ -106,6 +106,26 @@ if [[ "$_build_os" != "Darwin" && "$_in_container" -eq 0 ]]; then
         bash scripts/build-g3.sh "$@"
 fi
 
+# --- Container build dependencies ---
+# rust:slim is minimal: install every system library the build pipeline needs.
+#   cmake + build-essential + python3  → z3-sys compiles Z3 from C++
+#   libclang-dev                       → bindgen generates Rust FFI for z3-sys
+#   libsqlite3-dev                     → libsqlite3-sys links against -lsqlite3
+#   libcurl4-openssl-dev               → airl-rt HTTP builtins link against -lcurl
+#   libz3-dev                          → G3's final link step pulls in -lz3
+#                                       (the airl-driver binary statically links
+#                                        z3-sys, but G3-emitted binaries link
+#                                        against the system -lz3)
+# Apt output is suppressed to keep the build log readable; failures still
+# surface via the non-zero exit.
+if [[ "$_in_container" -eq 1 ]] && ! command -v cmake >/dev/null 2>&1; then
+    echo "[build-g3] Installing cmake + build-essential + python3 + libclang-dev + libsqlite3-dev + libcurl4-openssl-dev + libz3-dev..."
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        cmake build-essential python3 libclang-dev libsqlite3-dev \
+        libcurl4-openssl-dev libz3-dev >/dev/null
+fi
+
 # --- Build ---
 
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
