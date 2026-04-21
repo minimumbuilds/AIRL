@@ -30,10 +30,10 @@ pub const TAG_BYTES: u8 = 10;
 /// Not visible to AOT-compiled code; fallback to nil in AOT context.
 pub const TAG_PARTIAL_APP: u8 = 11;
 /// Native-compiled bytecode function — opaque `Arc<BcFunc>` payload.
-/// Replaces the legacy nested-RtValue `(BCFunc name arity ...)` variant
-/// used by `bootstrap/bc_compiler.airl`. See spec
-/// 2026-04-21-bcfunc-native-representation.md. Phase 1 adds the tag and
-/// variant; later phases migrate construction and consumption.
+/// `bootstrap/bc_compiler.airl` constructs these via the `bc-func-from`
+/// builtin. See spec 2026-04-21-bcfunc-native-representation.md. The
+/// legacy nested-RtValue `(BCFunc name arity ...)` variant was deleted in
+/// Phase 4; no producer emits the old shape anymore.
 pub const TAG_BCFUNC: u8 = 12;
 
 /// Variant order MUST match TAG_* constants (0-12).
