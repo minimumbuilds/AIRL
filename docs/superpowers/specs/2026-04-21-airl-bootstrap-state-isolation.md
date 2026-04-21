@@ -108,3 +108,65 @@ If an AIRL closure captures `compile-state` or an AST node, that reference persi
 
 - AIRL_castle memory: combined with Z3-context-lifecycle, BCFunc-native, and NaN-boxing → expected peak 500 MB to 2 GB on 33 files. Down from "60 GiB OOM" originally, and down from the current "15-25 GiB" after Step 2.5.
 - G3 bootstrap: fits easily in 2 GiB; can restore 6 GiB Docker sandbox without question.
+
+## Phase 3 findings (2026-04-21)
+
+Instrumented G3 self-compile with rt-stats at file boundaries, measured
+via `build-g3.sh` in a 16 GiB Docker container (the default 6 GiB cap
+OOMed, confirming the problem). RSS trajectory over the 6 bootstrap files:
+
+| File index | file                           | RSS (MiB) | Alive RtValues | Δ from prev |
+|-----------:|--------------------------------|----------:|---------------:|-----------:|
+| f0 start   | (enter lexer.airl)             |       134 |           295K |           — |
+| f0 done    | lexer.airl                     |       344 |           529K |      +210   |
+| f1 done    | parser.airl                    |      1066 |          1.12M |      +722   |
+| f2 done    | z3_cache.airl                  |      3638 |          2.09M |     +2572   |
+| f3 done    | z3_bridge_g3.airl              |      5523 |          3.12M |     +1885   |
+| f4 done    | linearity.airl                 |      5569 |          3.22M |       +46   |
+| f5 done    | bc_compiler.airl               |      6053 |          3.66M |      +484   |
+
+**Interpretation:**
+
+1. **RSS does not plateau.** Each file adds to peak RSS, not back to
+   baseline. The fold accumulator in `g3-step3-fold-step` only holds
+   `[paths-list bool]` (a handful of short strings and a Bool) — the
+   retention is not in the accumulator itself.
+
+2. **Per-file growth varies widely** — f1 (parser.airl, 46 KiB source)
+   adds 722 MiB; f2 (z3_cache.airl, 4 KiB) adds 2.5 GiB; f4 (linearity.airl,
+   23 KiB) adds only 46 MiB. Growth is proportional to file *complexity*,
+   not size — consistent with the "Z3 cache/state retention" hypothesis
+   (f2 adds aggressively because it ran Z3 on a file with many contracts).
+
+3. **Lists dominate alive counts** — 1.84M lists alive after 6 files.
+   Spec 3's BCFunc migration eliminated ~500 lists-per-function of
+   that, but the overall trajectory confirms the leak is upstream of
+   BCFunc representation.
+
+**Likely culprits (in order):**
+
+a) **Z3 disk cache growing in memory.** `z3c-load` reads the entire
+   `.g3-z3-cache` file; `z3c-verify-ast-cached` walks it; the map
+   may not drop entries between files. Instrumentation: add rt-stats
+   inside the z3 verify loop to see whether allocations happen during
+   verify, or whether they persist from earlier loads.
+
+b) **AST retention across files.** Each file's parsed AST might be
+   cached by the type checker or linearity walker for cross-file
+   reference resolution. `g3-run-linearity` in particular builds
+   per-function ownership graphs; if those accumulate per compilation
+   unit, we'd see this trajectory.
+
+c) **Closure capture in the fold lambda.** The `filter (fn [f] ...)`
+   patterns inside g3-step3-fold-step capture their defining scope.
+   If that scope holds BCFunc lists or AST nodes, the closures keep
+   them alive until the fold completes — all 6 files worth.
+
+**Next action:** Add rt-stats snapshots at the phase boundaries within
+`g3-compile-file-to-obj` (after lex, after parse, after linearity, after
+z3-verify, after bc-compile). Localize which phase is leaking.
+
+**Status of top-level outcome:** the expected 500 MB to 2 GB target is
+not yet achieved. Spec 3 Phase 2/4 was necessary but not sufficient.
+Spec 2 Phase 4+ fixes remain — specifically, identifying and breaking
+whichever of (a)–(c) above is the dominant source of retention.
