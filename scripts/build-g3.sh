@@ -105,12 +105,15 @@ if [[ "$_build_os" != "Darwin" && "$_in_container" -eq 0 ]]; then
         -e "AIRL_MEM_TRACE=${AIRL_MEM_TRACE:-}" \
         -e "AIRL_NO_Z3_CACHE=${AIRL_NO_Z3_CACHE:-}" \
         -e "AIRL_RT_TRACE=${AIRL_RT_TRACE:-}" \
-        rust:slim \
+        rust:slim-bullseye \
         bash scripts/build-g3.sh "$@"
 fi
 
 # --- Container build dependencies ---
-# rust:slim is minimal: install every system library the build pipeline needs.
+# rust:slim-bullseye is minimal: install every system library the build pipeline needs.
+# Bullseye (Debian 11) has GLIBC 2.31 — older than most host systems, so the
+# Docker-built g3 binary remains runnable on the host. Newer bases (bookworm,
+# GLIBC 2.36+) produce binaries that fail on hosts with GLIBC <= 2.35.
 #   cmake + build-essential + python3  → z3-sys compiles Z3 from C++
 #   libclang-dev                       → bindgen generates Rust FFI for z3-sys
 #   libsqlite3-dev                     → libsqlite3-sys links against -lsqlite3
