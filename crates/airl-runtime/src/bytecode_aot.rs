@@ -79,6 +79,11 @@ pub struct RuntimeImports {
     pub make_variant: FuncId,
     pub match_tag:    FuncId,
 
+    // Spec 3 phase 2 — native bytecode function
+    pub bc_func_from: FuncId,
+    pub bc_func_is_main: FuncId,
+    pub bc_func_name: FuncId,
+
     // Closure
     pub make_closure: FuncId,
     pub call_closure: FuncId,
@@ -354,6 +359,15 @@ fn sig_4_ptr(m: &ObjectModule, ptr: types::Type) -> cranelift_codegen::ir::Signa
     sig.params.push(AbiParam::new(ptr));
     sig.params.push(AbiParam::new(ptr));
     sig.params.push(AbiParam::new(ptr));
+    sig.returns.push(AbiParam::new(ptr));
+    sig
+}
+
+fn sig_6_ptr(m: &ObjectModule, ptr: types::Type) -> cranelift_codegen::ir::Signature {
+    let mut sig = m.make_signature();
+    for _ in 0..6 {
+        sig.params.push(AbiParam::new(ptr));
+    }
     sig.returns.push(AbiParam::new(ptr));
     sig
 }
@@ -636,6 +650,11 @@ impl BytecodeAot {
         let make_variant = declare_import(m, "airl_make_variant", s2.clone());
         let match_tag    = declare_import(m, "airl_match_tag",    s2.clone());
 
+        // Native bytecode-function builtins (spec 3 phase 2).
+        let bc_func_from = declare_import(m, "airl_bc_func_from", sig_6_ptr(m, ptr));
+        let bc_func_is_main = declare_import(m, "airl_bc_func_is_main", s1.clone());
+        let bc_func_name = declare_import(m, "airl_bc_func_name", s1.clone());
+
         let make_closure = declare_import(m, "airl_make_closure", sig_ptr_ptr_i64_ret_ptr(m, ptr));
         let call_closure = declare_import(m, "airl_call_closure", sig_ptr_ptr_i64_ret_ptr(m, ptr));
 
@@ -881,6 +900,7 @@ impl BytecodeAot {
             not, and, or, xor,
             head, tail, cons, empty, length, at, append, list_new, at_or, set_at, list_contains,
             make_variant, match_tag,
+            bc_func_from, bc_func_is_main, bc_func_name,
             make_closure, call_closure,
             print, println, eprint, eprintln, read_line, read_stdin, print_values, type_of, valid,
             char_at, substring, chars, split, join, replace,
@@ -1053,6 +1073,11 @@ impl BytecodeAot {
         m.insert("cpu-count".into(),  rt.cpu_count);
         m.insert("time-now".into(),   rt.time_now);
         m.insert("rt-stats".into(),   rt.rt_stats);
+
+        // Spec 3 phase 2 — native bytecode function builtins
+        m.insert("bc-func-from".into(),    rt.bc_func_from);
+        m.insert("bc-func-is-main?".into(), rt.bc_func_is_main);
+        m.insert("bc-func-name".into(),    rt.bc_func_name);
         m.insert("getenv".into(),     rt.getenv);
         m.insert("get-cwd".into(),    rt.get_cwd);
 

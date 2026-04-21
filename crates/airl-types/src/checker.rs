@@ -423,6 +423,13 @@ impl TypeChecker {
         self.bind_typed("get-args", &[], list_t.clone());
         self.bind_typed("cpu-count", &[], int_t.clone());
         self.bind_typed("rt-stats", &[string_t.clone()], t.clone()); // returns Nil — diagnostic
+        // Spec 3 phase 2 — native bytecode function builtins.
+        // `bc-func-from` takes (name, arity, reg_count, capture_count, consts, instrs).
+        self.bind_typed("bc-func-from",
+            &[string_t.clone(), int_t.clone(), int_t.clone(), int_t.clone(),
+              list_t.clone(), list_t.clone()], t.clone());
+        self.bind_typed("bc-func-is-main?", &[t.clone()], bool_t.clone());
+        self.bind_typed("bc-func-name", &[t.clone()], string_t.clone());
         self.bind_typed("format-time", &[int_t.clone(), string_t.clone()], string_t.clone());
 
         // Conversion
@@ -1830,6 +1837,7 @@ mod tests {
             "delete-dir", "rename-file", "read-dir", "create-dir", "file-size",
             "is-dir?", "temp-file", "temp-dir", "file-mtime",
             "shell-exec", "time-now", "rt-stats", "sleep", "getenv", "get-args", "cpu-count",
+            "bc-func-from", "bc-func-is-main?", "bc-func-name",
             "format-time", "int-to-string", "float-to-string", "string-to-int",
             "string-to-float", "char-code", "char-from-code",
             "infinity", "nan", "is-nan?", "is-infinite?", "panic", "assert",

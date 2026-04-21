@@ -109,6 +109,7 @@ pub fn value_to_rt(v: &Value) -> *mut RtValue {
             for p in &captured_ptrs { airl_value_release(*p); }
             result
         }
+        Value::BCFuncNative(bcf) => airl_rt::value::rt_bcfunc(bcf.clone()),
     }
 }
 
@@ -169,12 +170,11 @@ pub fn rt_to_value_no_release(ptr: *mut RtValue) -> Value {
                     remaining_arity: *remaining_arity,
                 }
             }
-            // Spec 3 native bytecode function — the VM's Value model has no
-            // direct equivalent yet (Phase 2/3 territory). Preserve identity
-            // as a builtin-fn marker so any `type-of` call round-trips sensibly.
-            RtData::BCFuncNative(bcf) => {
-                Value::BuiltinFn(format!("<bcfunc@{}>", bcf.name))
-            }
+            // Spec 3 native bytecode function — cheap Arc clone through the
+            // Value layer. Consumed by bytecode_marshal::value_to_bytecode_func,
+            // which converts to BytecodeFunc directly without re-materializing
+            // a nested RtValue tree.
+            RtData::BCFuncNative(bcf) => Value::BCFuncNative(bcf.clone()),
         }
     }
 }
@@ -717,6 +717,14 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "time-now" => airl_rt::misc::airl_time_now(),
         "rt-stats" => airl_rt::misc::airl_rt_stats(a0!()),
         "cpu-count" => airl_rt::misc::airl_cpu_count(),
+        // Spec 3 phase 2 — native bytecode function builtins
+        "bc-func-from" => airl_rt::bc_func::airl_bc_func_from(
+            a0!(), a1!(), a2!(), a3!(),
+            args.get(4).copied().unwrap_or(std::ptr::null_mut()),
+            args.get(5).copied().unwrap_or(std::ptr::null_mut()),
+        ),
+        "bc-func-is-main?" => airl_rt::bc_func::airl_bc_func_is_main(a0!()),
+        "bc-func-name" => airl_rt::bc_func::airl_bc_func_name(a0!()),
         "format-time" => airl_rt::misc::airl_format_time(a0!(), a1!()),
         "get-cwd" => airl_rt::misc::airl_get_cwd(),
 
@@ -893,6 +901,13 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "airl_time_now" => airl_rt::misc::airl_time_now(),
         "airl_rt_stats" => airl_rt::misc::airl_rt_stats(a0!()),
         "airl_cpu_count" => airl_rt::misc::airl_cpu_count(),
+        "airl_bc_func_from" => airl_rt::bc_func::airl_bc_func_from(
+            a0!(), a1!(), a2!(), a3!(),
+            args.get(4).copied().unwrap_or(std::ptr::null_mut()),
+            args.get(5).copied().unwrap_or(std::ptr::null_mut()),
+        ),
+        "airl_bc_func_is_main" => airl_rt::bc_func::airl_bc_func_is_main(a0!()),
+        "airl_bc_func_name" => airl_rt::bc_func::airl_bc_func_name(a0!()),
         "airl_format_time" => airl_rt::misc::airl_format_time(a0!(), a1!()),
 
         // Identity
@@ -1000,7 +1015,9 @@ fn builtin_arity(name: &str) -> Option<usize> {
         // String — ternary
         "substring" | "replace" => Some(3),
         // I/O — unary
-        "print" | "println" | "eprint" | "eprintln" | "rt-stats" => Some(1),
+        "print" | "println" | "eprint" | "eprintln" | "rt-stats"
+        | "bc-func-is-main?" | "bc-func-name" => Some(1),
+        "bc-func-from" => Some(6),
         "read-lines" | "write-file" | "file-exists?" | "exec-file" | "append-file"
         | "delete-file" | "delete-dir" | "read-dir" | "create-dir" | "file-size"
         | "is-dir?" | "temp-file" | "temp-dir" | "file-mtime" => Some(1),

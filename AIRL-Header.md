@@ -333,6 +333,9 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (get-cwd) -> Str                      ; current working directory
 (cpu-count) -> Int                    ; logical CPU count
 (rt-stats label) -> Nil               ; print runtime alloc snapshot (diagnostic)
+(bc-func-from name arity regs caps consts instrs) -> BCFunc  ; native bytecode-func ctor
+(bc-func-is-main? bcf) -> Bool        ; true when name == "__main__"
+(bc-func-name bcf) -> Str             ; diagnostic accessor
 ```
 
 ### Network/JSON

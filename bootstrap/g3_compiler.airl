@@ -189,11 +189,10 @@
                         (let (source : String (read-file path))
                           (match (g3-compile-source-with-prefix source path mod-prefix)
                             (Err e) (Err e)
+                            ;; Spec 3 phase 2 — use bc-func-is-main? builtin
+                            ;; instead of pattern-matching the legacy variant shape.
                             (Ok new-funcs) (Ok (concat funcs-so-far
-                              (filter (fn [f]
-                                (match f
-                                  (BCFunc name _ _ _ _ _) (if (= name "__main__") false true)
-                                  _ true))
+                              (filter (fn [f] (if (bc-func-is-main? f) false true))
                                 new-funcs)))))))))
               (Ok [])
               stdlib-modules))))
@@ -278,10 +277,9 @@
       (Err e) (Err e)
       (Ok funcs)
         (let (batch : List (if strip-main
-                             (filter (fn [f]
-                                       (match f
-                                         (BCFunc name _ _ _ _ _) (if (= name "__main__") false true)
-                                         _ true))
+                             ;; Spec 3 phase 2 — bc-func-is-main? replaces the
+                             ;; legacy variant pattern match.
+                             (filter (fn [f] (if (bc-func-is-main? f) false true))
                                      funcs)
                              funcs))
           (compile-batch-to-obj batch obj-path))))
@@ -408,11 +406,9 @@
                                       (match (g3-compile-source-with-z3-strict source path "user" strict)
                                         (Err e) (Err e)
                                         (Ok new-funcs)
+                                          ;; Spec 3 phase 2 — bc-func-is-main? accessor.
                                           (Ok (append batches-so-far
-                                            (filter (fn [f]
-                                              (match f
-                                                (BCFunc name _ _ _ _ _) (if (= name "__main__") false true)
-                                                _ true))
+                                            (filter (fn [f] (if (bc-func-is-main? f) false true))
                                               new-funcs)))))))
                               (Ok [])
                               all-but-last)

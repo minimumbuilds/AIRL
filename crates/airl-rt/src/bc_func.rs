@@ -112,3 +112,106 @@ impl Drop for BcFunc {
 // RtValue itself.
 unsafe impl Send for BcFunc {}
 unsafe impl Sync for BcFunc {}
+
+// ── Builtins exposed to AIRL as (bc-func-* ...) ────────────────────────
+//
+// Phase 2 of spec 2026-04-21-bcfunc-native-representation.md. These are
+// the minimal builtins needed for bootstrap/bc_compiler.airl to emit the
+// native form and for bootstrap/g3_compiler.airl to consume it.
+//
+// `bc-func-from` is the single-shot constructor — takes the six fields as
+// separate arguments and builds an `Arc<BcFunc>` wrapped in an RtValue.
+// `bc-func-is-main?` replaces the common pattern-match site
+//   `(match f (BCFunc name _ _ _ _ _) (= name "__main__"))`.
+
+use crate::value::{rt_bcfunc, rt_bool, RtData};
+#[cfg(not(target_os = "airlos"))]
+use std::sync::Arc;
+
+/// `(bc-func-from name arity reg_count capture_count constants instructions)`
+/// Returns a BCFuncNative RtValue. Instructions are a flat list of
+/// `[op dst a b]` lists (legacy shape emitted by bc_compiler.airl).
+#[no_mangle]
+pub extern "C" fn airl_bc_func_from(
+    name: *mut RtValue,
+    arity: *mut RtValue,
+    reg_count: *mut RtValue,
+    capture_count: *mut RtValue,
+    constants: *mut RtValue,
+    instructions: *mut RtValue,
+) -> *mut RtValue {
+    let name_str = unsafe { &*name }.as_str_owned();
+    let arity_v = unsafe { &*arity }.as_int() as u16;
+    let reg_count_v = unsafe { &*reg_count }.as_int() as u16;
+    let capture_count_v = unsafe { &*capture_count }.as_int() as u16;
+
+    let const_slice_vec: Vec<*mut RtValue> = crate::list::list_items(&unsafe { &*constants }.data)
+        .iter()
+        .copied()
+        .collect();
+    let mut consts_vec: Vec<*mut RtValue> = Vec::with_capacity(const_slice_vec.len());
+    for p in &const_slice_vec {
+        crate::memory::airl_value_retain(*p);
+        consts_vec.push(*p);
+    }
+
+    let instr_slice_vec: Vec<*mut RtValue> = crate::list::list_items(&unsafe { &*instructions }.data)
+        .iter()
+        .copied()
+        .collect();
+    let mut instrs_vec: Vec<BcInstr> = Vec::with_capacity(instr_slice_vec.len());
+    for inst_ptr in &instr_slice_vec {
+        let inst_slice = crate::list::list_items(&unsafe { &**inst_ptr }.data);
+        if inst_slice.len() < 4 {
+            crate::error::rt_error("bc-func-from: each instruction must be a [op dst a b] list");
+        }
+        let op = unsafe { &*inst_slice[0] }.as_int() as u8;
+        let dst = unsafe { &*inst_slice[1] }.as_int() as u16;
+        let a = unsafe { &*inst_slice[2] }.as_int() as u16;
+        let b = unsafe { &*inst_slice[3] }.as_int() as u16;
+        instrs_vec.push(BcInstr::new(op, dst, a, b));
+    }
+
+    let bcf = Arc::new(BcFunc {
+        name: name_str,
+        arity: arity_v,
+        reg_count: reg_count_v,
+        capture_count: capture_count_v,
+        constants: consts_vec,
+        instructions: instrs_vec,
+    });
+    rt_bcfunc(bcf)
+}
+
+/// `(bc-func-is-main? bcf) -> Bool` — true when the function's name is
+/// `__main__`. Accepts both `BCFuncNative` and the legacy `(BCFunc ...)`
+/// variant shape for mixed-era programs during the Phase 2/3 transition.
+#[no_mangle]
+pub extern "C" fn airl_bc_func_is_main(bcf: *mut RtValue) -> *mut RtValue {
+    let v = unsafe { &*bcf };
+    match &v.data {
+        RtData::BCFuncNative(b) => rt_bool(b.name == "__main__"),
+        RtData::Variant { tag_name, inner } if tag_name == "BCFunc" => {
+            let inner_v = unsafe { &**inner };
+            if let RtData::List { items, offset, .. } = &inner_v.data {
+                if let Some(&first_ptr) = items.get(*offset) {
+                    if let RtData::Str(s) = &unsafe { &*first_ptr }.data {
+                        return rt_bool(s == "__main__");
+                    }
+                }
+            }
+            rt_bool(false)
+        }
+        _ => rt_bool(false),
+    }
+}
+
+/// `(bc-func-name bcf) -> String`. Diagnostic accessor.
+#[no_mangle]
+pub extern "C" fn airl_bc_func_name(bcf: *mut RtValue) -> *mut RtValue {
+    let v = unsafe { &*bcf };
+    match &v.data {
+        RtData::BCFuncNative(b) => crate::value::rt_str(b.name.clone()),
+        _ => crate::error::rt_error("bc-func-name: not a BCFuncNative"),
+    }
+}

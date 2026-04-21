@@ -793,6 +793,10 @@ fn all_builtins() -> Vec<BuiltinMeta> {
         BuiltinMeta { name: "time-now", sig: "() -> Int", doc: "Current Unix timestamp in milliseconds.", category: "system" },
         BuiltinMeta { name: "cpu-count", sig: "() -> Int", doc: "Number of logical CPU cores available.", category: "system" },
         BuiltinMeta { name: "rt-stats", sig: "(label : String) -> Nil", doc: "Print runtime allocator snapshot (alive/allocs/freed + per-tag counts) to stderr, tagged with `label`. Diagnostic only — used to localize allocation retention across phase/file boundaries.", category: "system" },
+        // Spec 3 phase 2 — native bytecode function construction/accessors.
+        BuiltinMeta { name: "bc-func-from", sig: "(name : String) (arity : Int) (reg_count : Int) (capture_count : Int) (constants : List) (instructions : List) -> BCFunc", doc: "Construct a native BCFunc value in one call. Replaces the `(BCFunc ...)` variant form — a single Arc<BcFunc> instead of ~500 nested RtValues per function.", category: "system" },
+        BuiltinMeta { name: "bc-func-is-main?", sig: "(bcf : BCFunc) -> Bool", doc: "True when the function's name is `__main__`. Accepts both BCFuncNative and the legacy BCFunc variant shape during the Phase-2/3 transition.", category: "system" },
+        BuiltinMeta { name: "bc-func-name", sig: "(bcf : BCFunc) -> String", doc: "Return the function's name. Diagnostic accessor.", category: "system" },
         BuiltinMeta { name: "format-time", sig: "(timestamp_ms : Int) (fmt : String) -> String", doc: "Format a Unix timestamp (milliseconds) using a strftime-style format string.", category: "system" },
         BuiltinMeta { name: "shell-exec", sig: "(cmd : String) (stdin : String) -> Map", doc: "Run cmd in a shell, passing stdin as input. Returns a map with keys stdout, stderr, exit_code.", category: "system" },
         BuiltinMeta { name: "shell-exec-with-stdin", sig: "(cmd : String) (args : List) (stdin : String) -> Map", doc: "Run cmd with explicit args list and stdin. Returns a map with keys stdout, stderr, exit_code.", category: "system" },

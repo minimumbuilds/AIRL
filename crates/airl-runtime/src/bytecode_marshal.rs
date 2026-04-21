@@ -160,6 +160,28 @@ fn value_to_instruction(val: &Value) -> Result<Instruction, RuntimeError> {
 ///                            List(constants), List(instructions)]))
 pub fn value_to_bytecode_func(val: &Value) -> Result<BytecodeFunc, RuntimeError> {
     match val {
+        // Spec 3 phase 2 — native BCFunc path. Convert the Arc<BcFunc> directly
+        // to BytecodeFunc with one O(n_consts) constant marshal and an
+        // O(n_instrs) opcode decode. No intermediate Value::Variant tree.
+        Value::BCFuncNative(bcf) => {
+            let mut instructions = Vec::with_capacity(bcf.instructions.len());
+            for i in &bcf.instructions {
+                let op = int_to_op(i.op as u16)?;
+                instructions.push(Instruction { op, dst: i.dst, a: i.a, b: i.b });
+            }
+            let mut constants = Vec::with_capacity(bcf.constants.len());
+            for &c in &bcf.constants {
+                constants.push(crate::bytecode_vm::rt_to_value_no_release(c));
+            }
+            Ok(BytecodeFunc {
+                name: bcf.name.clone(),
+                arity: bcf.arity,
+                register_count: bcf.reg_count,
+                capture_count: bcf.capture_count,
+                instructions,
+                constants,
+            })
+        }
         Value::Variant(tag, inner) if tag == "BCFunc" => {
             // When a variant constructor is called with N args in AIRL:
             //   N=1 → inner is the single value
