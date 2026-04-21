@@ -199,11 +199,13 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 pub(crate) mod nostd_prelude {
     pub use alloc::boxed::Box;
     pub use alloc::string::{String, ToString};
+    pub use alloc::sync::Arc;
     pub use alloc::vec::Vec;
 }
 
 pub mod value;
 pub mod memory;
+pub mod bc_func;
 #[cfg(not(target_os = "airlos"))]
 pub mod diag;
 pub mod error;
