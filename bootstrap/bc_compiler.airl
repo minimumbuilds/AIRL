@@ -1,8 +1,11 @@
 ;; bootstrap/bc_compiler.airl — Self-hosted AIRL-to-bytecode compiler
 ;; Requires: bootstrap/lexer.airl, bootstrap/parser.airl (loaded first)
 ;;
-;; Transforms AST nodes (from the parser) into BCFunc values (consumed by run-bytecode).
-;; Each BCFunc is: (BCFunc name arity reg_count capture_count [constants] [[op dst a b] ...])
+;; Transforms AST nodes (from the parser) into BCFunc values (consumed by
+;; run-bytecode). A BCFunc is a native `Arc<BcFunc>` wrapped as an RtValue
+;; (tag 12, `BCFuncNative`), constructed via the `bc-func-from` builtin:
+;;   (bc-func-from name arity reg_count capture_count [constants] [[op dst a b] ...])
+;; See spec docs/superpowers/specs/2026-04-21-bcfunc-native-representation.md.
 
 ;; ── Opcode constants ────────────────────────────────────
 ;; Must match crates/airl-runtime/src/bytecode.rs Op enum order

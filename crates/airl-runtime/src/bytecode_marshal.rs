@@ -1,14 +1,13 @@
 // crates/airl-runtime/src/bytecode_marshal.rs
 //
-// Marshals AIRL Value representations of bytecode into BytecodeFunc structs.
+// Marshals AIRL `BCFuncNative` values into the interpreter's `BytecodeFunc`
+// struct, then drives AOT compilation / bytecode execution.
 //
-// Format from AIRL:
-//   [(BCFunc "name" arity reg_count capture_count [constants...] [(op dst a b) ...])]
-//
-// In Rust terms:
-//   - A BCFunc is Value::Variant("BCFunc", Box(Value::List([name, arity, reg_count, capture_count, constants_list, instructions_list])))
-//   - Each instruction is Value::List([Value::Int(op), Value::Int(dst), Value::Int(a), Value::Int(b)])
-//   - Constants are raw Values (Int, Float, Str, Bool, Nil, etc.)
+// The AIRL bootstrap compiler emits bytecode-function values via the
+// `bc-func-from` builtin (see spec 2026-04-21-bcfunc-native-representation).
+// Every function arrives here as `Value::BCFuncNative(Arc<BcFunc>)`; the
+// legacy `Value::Variant("BCFunc", ...)` nested-list shape was removed in
+// spec 3 phase 4.
 
 use crate::bytecode::{BytecodeFunc, Instruction, Op};
 use crate::value::Value;
@@ -45,17 +44,6 @@ fn validate_linker_script_env(default: &str) -> Result<String, RuntimeError> {
             Ok(script)
         }
         Err(_) => Ok(default.into()),
-    }
-}
-
-/// Convert a Value::Int to u16, for register/index fields.
-fn value_to_u16(val: &Value, field: &str) -> Result<u16, RuntimeError> {
-    match val {
-        Value::Int(n) if *n < 0 || *n > u16::MAX as i64 => {
-            Err(type_err(&format!("{}: value {} out of u16 range", field, n)))
-        }
-        Value::Int(n) => Ok(*n as u16),
-        _ => Err(type_err(&format!("{}: expected Int, got {:?}", field, val))),
     }
 }
 
@@ -107,62 +95,14 @@ fn int_to_op(n: u16) -> Result<Op, RuntimeError> {
     }
 }
 
-/// Convert a `[op dst a b]` list Value into an Instruction.
-/// The `b` field can hold signed jump offsets; we store as u16 and the VM
-/// casts back with `as i16`.
-fn value_to_instruction(val: &Value) -> Result<Instruction, RuntimeError> {
-    match val {
-        Value::List(items) => {
-            if items.len() < 4 {
-                return Err(type_err(&format!(
-                    "instruction: expected 4 elements, got {}",
-                    items.len()
-                )));
-            }
-            let op_n = value_to_u16(&items[0], "instruction op")?;
-            let op   = int_to_op(op_n)?;
-            let dst  = value_to_u16(&items[1], "instruction dst")?;
-            let a    = value_to_u16(&items[2], "instruction a")?;
-            let b    = value_to_u16(&items[3], "instruction b")?;
-            Ok(Instruction::new(op, dst, a, b))
-        }
-        Value::IntList(ints) => {
-            if ints.len() < 4 {
-                return Err(type_err(&format!(
-                    "instruction: expected 4 elements, got {}",
-                    ints.len()
-                )));
-            }
-            for (i, &v) in ints[..4].iter().enumerate() {
-                if v < 0 || v > u16::MAX as i64 {
-                    return Err(type_err(&format!(
-                        "instruction field {}: value {} out of u16 range", i, v
-                    )));
-                }
-            }
-            let op  = int_to_op(ints[0] as u16)?;
-            let dst = ints[1] as u16;
-            let a   = ints[2] as u16;
-            let b   = ints[3] as u16;
-            Ok(Instruction::new(op, dst, a, b))
-        }
-        _ => Err(type_err("expected instruction as list [op dst a b]")),
-    }
-}
-
-/// Convert a `BCFunc` variant Value into a BytecodeFunc.
+/// Convert a `BCFunc` Value into a BytecodeFunc.
 ///
-/// Expected shape:
-///   (BCFunc "name" arity reg_count capture_count [constants...] [(op dst a b) ...])
-///
-/// which in Value terms is:
-///   Variant("BCFunc", List([Str(name), Int(arity), Int(reg_count), Int(capture_count),
-///                            List(constants), List(instructions)]))
+/// Expects a `Value::BCFuncNative(Arc<BcFunc>)` — the native form emitted by
+/// `bootstrap/bc_compiler.airl`'s `bc-func-from` builtin. The legacy
+/// `Value::Variant("BCFunc", ...)` shape was removed in spec 3 phase 4;
+/// no producer in the codebase emits it anymore.
 pub fn value_to_bytecode_func(val: &Value) -> Result<BytecodeFunc, RuntimeError> {
     match val {
-        // Spec 3 phase 2 — native BCFunc path. Convert the Arc<BcFunc> directly
-        // to BytecodeFunc with one O(n_consts) constant marshal and an
-        // O(n_instrs) opcode decode. No intermediate Value::Variant tree.
         Value::BCFuncNative(bcf) => {
             let mut instructions = Vec::with_capacity(bcf.instructions.len());
             for i in &bcf.instructions {
@@ -182,56 +122,7 @@ pub fn value_to_bytecode_func(val: &Value) -> Result<BytecodeFunc, RuntimeError>
                 constants,
             })
         }
-        Value::Variant(tag, inner) if tag == "BCFunc" => {
-            // When a variant constructor is called with N args in AIRL:
-            //   N=1 → inner is the single value
-            //   N>1 → inner is Value::Tuple([...])
-            // So (BCFunc name arity reg_count capture_count consts instrs) produces
-            // inner = Value::Tuple([name, arity, reg_count, capture_count, consts, instrs]).
-            // We also accept Value::List for programmatic construction.
-            let items: &[Value] = match inner.as_ref() {
-                Value::Tuple(items) => items,
-                Value::List(items) => items,
-                _ => return Err(type_err("BCFunc inner value must be a Tuple or List")),
-            };
-            if items.len() < 6 {
-                return Err(type_err(&format!(
-                    "BCFunc: expected 6 fields, got {}",
-                    items.len()
-                )));
-            }
-            let name = match &items[0] {
-                Value::Str(s) => s.clone(),
-                _ => return Err(type_err("BCFunc name: expected Str")),
-            };
-            let arity          = value_to_u16(&items[1], "BCFunc arity")?;
-            let register_count = value_to_u16(&items[2], "BCFunc reg_count")?;
-            let capture_count  = value_to_u16(&items[3], "BCFunc capture_count")?;
-
-            let constants = match &items[4] {
-                Value::List(cs) => cs.clone(),
-                _ => return Err(type_err("BCFunc constants: expected List")),
-            };
-
-            let instructions = match &items[5] {
-                Value::List(is) => is
-                    .iter()
-                    .map(value_to_instruction)
-                    .collect::<Result<Vec<_>, _>>()?,
-                _ => return Err(type_err("BCFunc instructions: expected List")),
-            };
-
-            Ok(BytecodeFunc {
-                name,
-                arity,
-                register_count,
-                capture_count,
-                instructions,
-                constants,
-            })
-        }
-        Value::Variant(tag, _) => Err(type_err(&format!("expected BCFunc variant, got {}", tag))),
-        _ => Err(type_err("expected Variant, got non-variant value")),
+        _ => Err(type_err("expected BCFuncNative value")),
     }
 }
 
@@ -1081,29 +972,32 @@ pub extern "C" fn airl_compile_bytecode_streaming(
 mod tests {
     use super::*;
     use crate::bytecode::Op;
+    use airl_rt::bc_func::{BcFunc, BcInstr};
+    use std::sync::Arc;
 
+    /// Build a `Value::BCFuncNative` directly from Rust-typed fields. Constants
+    /// are passed as Values (the test helpers use Int/Str literals only);
+    /// convert to owned `*mut RtValue` via airl-rt's value_to_rt at test time.
     fn make_bcfunc(name: &str, arity: i64, reg_count: i64, capture_count: i64,
-                   constants: Vec<Value>, instrs: Vec<Value>) -> Value {
-        Value::Variant(
-            "BCFunc".into(),
-            Box::new(Value::List(vec![
-                Value::Str(name.into()),
-                Value::Int(arity),
-                Value::Int(reg_count),
-                Value::Int(capture_count),
-                Value::List(constants),
-                Value::List(instrs),
-            ])),
-        )
+                   constants: Vec<Value>, instrs: Vec<BcInstr>) -> Value {
+        let mut consts_rt: Vec<*mut airl_rt::value::RtValue> = Vec::with_capacity(constants.len());
+        for v in &constants {
+            let p = crate::bytecode_vm::value_to_rt(v);
+            consts_rt.push(p);
+        }
+        let bcf = BcFunc {
+            name: name.into(),
+            arity: arity as u16,
+            reg_count: reg_count as u16,
+            capture_count: capture_count as u16,
+            constants: consts_rt,
+            instructions: instrs,
+        };
+        Value::BCFuncNative(Arc::new(bcf))
     }
 
-    fn instr(op: i64, dst: i64, a: i64, b: i64) -> Value {
-        Value::List(vec![
-            Value::Int(op),
-            Value::Int(dst),
-            Value::Int(a),
-            Value::Int(b),
-        ])
+    fn instr(op: u8, dst: u16, a: u16, b: u16) -> BcInstr {
+        BcInstr::new(op, dst, a, b)
     }
 
     #[test]
@@ -1165,9 +1059,13 @@ mod tests {
     }
 
     #[test]
-    fn test_bad_variant_tag() {
+    fn test_non_bcfunc_errors() {
+        // After spec 3 phase 4, value_to_bytecode_func only accepts
+        // Value::BCFuncNative. Any other value (including a variant) errors.
         let bad = Value::Variant("NotAFunc".into(), Box::new(Value::List(vec![])));
         assert!(value_to_bytecode_func(&bad).is_err());
+        assert!(value_to_bytecode_func(&Value::Int(42)).is_err());
+        assert!(value_to_bytecode_func(&Value::Nil).is_err());
     }
 
     #[test]

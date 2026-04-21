@@ -4,12 +4,11 @@
 //! — for a 100-instruction function, ~513 RtValue allocations collapse into a
 //! single `Arc<BcFunc>`.
 //!
-//! Phase 1 of spec `2026-04-21-bcfunc-native-representation.md`: defines the
-//! struct and `TAG_BCFUNC`. No AIRL-level use yet — the AIRL bootstrap
-//! compiler continues to emit the legacy `(BCFunc ...)` variant, and
-//! `value_to_bytecode_func` in airl-runtime keeps the old path. Later phases
-//! switch construction and consumption to go through this type, then delete
-//! the variant path.
+//! Spec `2026-04-21-bcfunc-native-representation.md`. Phase 1 introduced the
+//! struct and `TAG_BCFUNC`; Phase 2 added `bc-func-from` and migrated
+//! `bootstrap/bc_compiler.airl` to use it; Phase 4 deleted the legacy
+//! `(BCFunc ...)` nested-variant path entirely. All bytecode functions now
+//! flow exclusively through this type.
 //!
 //! Design notes:
 //!   * `Arc` rather than `Box` — a BCFunc can be referenced by closures, by
@@ -184,24 +183,14 @@ pub extern "C" fn airl_bc_func_from(
 }
 
 /// `(bc-func-is-main? bcf) -> Bool` — true when the function's name is
-/// `__main__`. Accepts both `BCFuncNative` and the legacy `(BCFunc ...)`
-/// variant shape for mixed-era programs during the Phase 2/3 transition.
+/// `__main__`. `bc_compiler.airl` only emits `BCFuncNative` via the
+/// `bc-func-from` builtin; the legacy `(BCFunc ...)` variant path was
+/// removed in spec 3 phase 4.
 #[no_mangle]
 pub extern "C" fn airl_bc_func_is_main(bcf: *mut RtValue) -> *mut RtValue {
     let v = unsafe { &*bcf };
     match &v.data {
         RtData::BCFuncNative(b) => rt_bool(b.name == "__main__"),
-        RtData::Variant { tag_name, inner } if tag_name == "BCFunc" => {
-            let inner_v = unsafe { &**inner };
-            if let RtData::List { items, offset, .. } = &inner_v.data {
-                if let Some(&first_ptr) = items.get(*offset) {
-                    if let RtData::Str(s) = &unsafe { &*first_ptr }.data {
-                        return rt_bool(s == "__main__");
-                    }
-                }
-            }
-            rt_bool(false)
-        }
         _ => rt_bool(false),
     }
 }
