@@ -134,6 +134,7 @@ pub struct RuntimeImports {
     pub compile_to_exe: FuncId,
     pub compile_bc_to_exe: FuncId,
     pub compile_bc_to_exe_with_target: FuncId,
+    pub compile_bc_to_exe_streaming: FuncId,
 
     // Type conversions
     pub int_to_string: FuncId,
@@ -683,6 +684,7 @@ impl BytecodeAot {
         let compile_to_exe = declare_import(m, "airl_compile_to_executable", s2.clone());
         let compile_bc_to_exe = declare_import(m, "airl_compile_bytecode_to_executable", s2.clone());
         let compile_bc_to_exe_with_target = declare_import(m, "airl_compile_bytecode_to_executable_with_target", sig_3_ptr(m, ptr));
+        let compile_bc_to_exe_streaming = declare_import(m, "airl_compile_bytecode_streaming", s2.clone());
 
         // Type conversions
         let int_to_string = declare_import(m, "airl_int_to_string", s1.clone());
@@ -884,6 +886,7 @@ impl BytecodeAot {
             read_dir, create_dir, file_size, is_dir,
             temp_file, temp_dir, file_mtime,
             get_args, run_bytecode, compile_to_exe, compile_bc_to_exe, compile_bc_to_exe_with_target,
+            compile_bc_to_exe_streaming,
             int_to_string, float_to_string, string_to_int, string_to_float,
             char_code, char_from_code,
             sqrt, sin, cos, tan, log, exp, floor, ceil, round,
@@ -1011,6 +1014,7 @@ impl BytecodeAot {
         m.insert("compile-to-executable".into(), rt.compile_to_exe);
         m.insert("compile-bytecode-to-executable".into(), rt.compile_bc_to_exe);
         m.insert("compile-bytecode-to-executable-with-target".into(), rt.compile_bc_to_exe_with_target);
+        m.insert("compile-bytecode-streaming".into(), rt.compile_bc_to_exe_streaming);
 
         // Type conversions
         m.insert("int-to-string".into(),   rt.int_to_string);
@@ -2972,14 +2976,26 @@ impl BytecodeAot {
                         _ => return Err("MakeClosure: func name must be string".into()),
                     };
 
-                    // AOT: use func_addr instead of raw code pointer
-                    let callee_func_id = self
-                        .compiled_funcs
-                        .get(&closure_func_name)
-                        .copied()
-                        .ok_or_else(|| {
-                            format!("MakeClosure: target '{}' not compiled", closure_func_name)
-                        })?;
+                    // AOT: use func_addr to capture the function pointer.
+                    // If the target is compiled in this batch, use the known FuncId.
+                    // If it's in a different batch (streaming), declare it as a
+                    // forward Export so the linker resolves it from the other .o file.
+                    let callee_func_id = if let Some(&id) = self.compiled_funcs.get(&closure_func_name) {
+                        id
+                    } else {
+                        let total_arity = all_functions
+                            .get(&closure_func_name)
+                            .map(|f| (f.capture_count + f.arity) as usize)
+                            .unwrap_or(0);
+                        let mut fwd_sig = self.module.make_signature();
+                        for _ in 0..total_arity {
+                            fwd_sig.params.push(AbiParam::new(types::I64));
+                        }
+                        fwd_sig.returns.push(AbiParam::new(types::I64));
+                        self.module
+                            .declare_function(&aot_symbol_name(&closure_func_name), Linkage::Export, &fwd_sig)
+                            .map_err(|e| format!("MakeClosure forward declare '{}': {}", closure_func_name, e))?
+                    };
                     let callee_ref =
                         self.module.declare_func_in_func(callee_func_id, builder.func);
                     let fn_ptr_val = builder.ins().func_addr(self.ptr, callee_ref);
@@ -3297,6 +3313,76 @@ impl BytecodeAot {
     pub fn finish(self) -> Vec<u8> {
         let product = self.module.finish();
         product.emit().unwrap()
+    }
+
+    /// Like `finish()` but without emitting an entry point.
+    /// Used in streaming compilation where each batch is a separate object file.
+    pub fn finish_no_entry(self) -> Vec<u8> {
+        let product = self.module.finish();
+        product.emit().unwrap()
+    }
+
+    /// Emit an entry point (`main` or `_start`) that calls `__airl_main_entry__`
+    /// as an external import.  Used in streaming compilation to generate the final
+    /// tiny entry-point object after all per-batch objects have been emitted.
+    pub fn emit_entry_point_external(&mut self) -> Result<(), String> {
+        let is_freestanding = self.target_triple.operating_system == target_lexicon::OperatingSystem::None_;
+        let entry_name = if is_freestanding { "_start" } else { "main" };
+
+        let mut sig = self.module.make_signature();
+        sig.returns.push(AbiParam::new(types::I32));
+
+        let main_id = self
+            .module
+            .declare_function(entry_name, Linkage::Export, &sig)
+            .map_err(|e| format!("declare {}: {}", entry_name, e))?;
+
+        let mut ctx = self.module.make_context();
+        ctx.func.signature = sig;
+
+        let mut builder_ctx = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+
+        let entry = builder.create_block();
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+
+        // Declare __airl_main_entry__ (compiled form of __main__) as an external import.
+        let mut main_entry_sig = self.module.make_signature();
+        main_entry_sig.returns.push(AbiParam::new(types::I64));
+        let main_entry_id = self.module
+            .declare_function("__airl_main_entry__", Linkage::Import, &main_entry_sig)
+            .map_err(|e| format!("declare __airl_main_entry__: {}", e))?;
+        let main_ref = self.module.declare_func_in_func(main_entry_id, builder.func);
+        builder.ins().call(main_ref, &[]);
+
+        // Flush stdout before exit
+        let flush_sig = self.module.make_signature();
+        let flush_id = self.module
+            .declare_function("airl_flush_stdout", Linkage::Import, &flush_sig)
+            .map_err(|e| format!("declare flush: {}", e))?;
+        let flush_ref = self.module.declare_func_in_func(flush_id, builder.func);
+        builder.ins().call(flush_ref, &[]);
+
+        if is_freestanding {
+            let int_ref = self.module.declare_func_in_func(self.rt.int_ctor, builder.func);
+            let zero_i64 = builder.ins().iconst(types::I64, 0);
+            let int_call = builder.ins().call(int_ref, &[zero_i64]);
+            let rt_zero = builder.inst_results(int_call)[0];
+            let exit_ref = self.module.declare_func_in_func(self.rt.exit_fn, builder.func);
+            builder.ins().call(exit_ref, &[rt_zero]);
+            builder.ins().trap(ir::TrapCode::user(1).unwrap());
+        } else {
+            let zero = builder.ins().iconst(types::I32, 0);
+            builder.ins().return_(&[zero]);
+        }
+        builder.finalize();
+
+        self.module
+            .define_function(main_id, &mut ctx)
+            .map_err(|e| format!("define {}: {}", entry_name, e))?;
+
+        Ok(())
     }
 }
 

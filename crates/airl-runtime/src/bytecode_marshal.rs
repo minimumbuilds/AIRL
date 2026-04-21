@@ -533,6 +533,240 @@ pub fn compile_bytecode_to_executable_with_target(funcs: &[Value], output_path: 
     }
 }
 
+/// Compile a list of BCFunc batches to a native executable via streaming
+/// per-file AOT compilation.  Each element of `batches` is a `Value::List`
+/// of BCFunc values; each batch is compiled to a separate object file,
+/// allowing memory to be freed between files.  A tiny entry-point object
+/// is generated last, then all objects are linked into one binary.
+///
+/// This is the host-only (non-cross-compilation) path used by g3 to avoid
+/// OOM when compiling large projects with 40+ source files.
+#[cfg(feature = "aot")]
+pub fn compile_bytecode_streaming(batches: &[Value], output_path: &str) -> Result<(), RuntimeError> {
+    use crate::bytecode_aot::BytecodeAot;
+    use std::collections::HashMap;
+
+    // Freestanding targets (airlos) are not supported by the streaming path.
+    // They are handled by the single-object compile_bytecode_to_executable_with_target.
+    let mut obj_paths: Vec<String> = Vec::new();
+    let mut needs_compiler = false;
+
+    let outer = match batches.first() {
+        None => {
+            return Err(RuntimeError::Custom("compile-bytecode-streaming: empty batch list".into()));
+        }
+        Some(_) => batches,
+    };
+
+    for (i, batch_val) in outer.iter().enumerate() {
+        let batch_funcs = match batch_val {
+            Value::List(items) => items.clone(),
+            _ => {
+                return Err(RuntimeError::Custom(format!(
+                    "compile-bytecode-streaming: batch {} must be a list of BCFunc", i
+                )));
+            }
+        };
+
+        if batch_funcs.is_empty() {
+            continue;
+        }
+
+        // Unmarshal and dedup (first-wins to match AIRL's first-def-wins semantics)
+        let mut bc_funcs: Vec<crate::bytecode::BytecodeFunc> = Vec::new();
+        for f in &batch_funcs {
+            bc_funcs.push(value_to_bytecode_func(f)?);
+        }
+        {
+            let mut seen = std::collections::HashSet::new();
+            bc_funcs.retain(|f| seen.insert(f.name.clone()));
+        }
+
+        // Check if any function in this batch needs the full runtime library
+        if !needs_compiler {
+            needs_compiler = bc_funcs.iter().any(|f| {
+                f.constants.iter().any(|c| matches!(c,
+                    Value::Str(s) if s == "compile-bytecode-to-executable"
+                        || s == "compile-bytecode-to-executable-with-target"
+                        || s == "compile-bytecode-streaming"
+                        || s == "compile-to-executable"
+                        || s == "run-bytecode"))
+            });
+        }
+
+        let func_map: HashMap<String, crate::bytecode::BytecodeFunc> = bc_funcs.iter()
+            .map(|f| (f.name.clone(), f.clone()))
+            .collect();
+
+        let mut aot = BytecodeAot::new_with_target(None)
+            .map_err(|e| RuntimeError::Custom(format!("AOT init batch {}: {}", i, e)))?;
+
+        // Register Z3 bridge builtins for this batch's module
+        #[cfg(not(target_os = "airlos"))]
+        {
+            aot.register_extern_c("airl_z3_mk_config", 0);
+            aot.register_extern_c("airl_z3_del_config", 1);
+            aot.register_extern_c("airl_z3_mk_context", 1);
+            aot.register_extern_c("airl_z3_del_context", 1);
+            aot.register_extern_c("airl_z3_mk_solver", 1);
+            aot.register_extern_c("airl_z3_del_solver", 2);
+            aot.register_extern_c("airl_z3_mk_int_sort", 1);
+            aot.register_extern_c("airl_z3_mk_bool_sort", 1);
+            aot.register_extern_c("airl_z3_mk_string_symbol", 2);
+            aot.register_extern_c("airl_z3_mk_const", 3);
+            aot.register_extern_c("airl_z3_mk_int_val", 3);
+            aot.register_extern_c("airl_z3_mk_true", 1);
+            aot.register_extern_c("airl_z3_mk_false", 1);
+            aot.register_extern_c("airl_z3_mk_add2", 3);
+            aot.register_extern_c("airl_z3_mk_sub2", 3);
+            aot.register_extern_c("airl_z3_mk_mul2", 3);
+            aot.register_extern_c("airl_z3_mk_div", 3);
+            aot.register_extern_c("airl_z3_mk_mod", 3);
+            aot.register_extern_c("airl_z3_mk_lt", 3);
+            aot.register_extern_c("airl_z3_mk_le", 3);
+            aot.register_extern_c("airl_z3_mk_gt", 3);
+            aot.register_extern_c("airl_z3_mk_ge", 3);
+            aot.register_extern_c("airl_z3_mk_eq", 3);
+            aot.register_extern_c("airl_z3_mk_and2", 3);
+            aot.register_extern_c("airl_z3_mk_or2", 3);
+            aot.register_extern_c("airl_z3_mk_not", 2);
+            aot.register_extern_c("airl_z3_mk_implies", 3);
+            aot.register_extern_c("airl_z3_mk_ite", 4);
+            aot.register_extern_c("airl_z3_solver_assert", 3);
+            aot.register_extern_c("airl_z3_solver_check", 2);
+            aot.register_extern_c("airl_z3_mk_real_sort", 1);
+            aot.register_extern_c("airl_z3_mk_real", 3);
+            aot.register_extern_c("airl_z3_mk_int2real", 2);
+            aot.register_extern_c("airl_z3_mk_string_sort", 1);
+            aot.register_extern_c("airl_z3_mk_string_val", 2);
+            aot.register_extern_c("airl_z3_mk_seq_sort", 2);
+            aot.register_extern_c("airl_z3_mk_seq_unit", 2);
+            aot.register_extern_c("airl_z3_mk_seq_length", 2);
+            aot.register_extern_c("airl_z3_mk_seq_contains", 3);
+            aot.register_extern_c("airl_z3_mk_seq_concat2", 3);
+            aot.register_extern_c("airl_z3_mk_forall_const1", 3);
+            aot.register_extern_c("airl_z3_mk_exists_const1", 3);
+            aot.register_extern_c("airl_z3_mk_forall_const2", 4);
+            aot.register_extern_c("airl_z3_mk_exists_const2", 4);
+            aot.register_extern_c("airl_z3_solver_get_model", 2);
+            aot.register_extern_c("airl_z3_model_to_string", 2);
+            aot.register_extern_c("airl_z3_mk_func_decl1", 4);
+            aot.register_extern_c("airl_z3_mk_func_decl2", 5);
+            aot.register_extern_c("airl_z3_mk_app1", 3);
+            aot.register_extern_c("airl_z3_mk_app2", 4);
+        }
+
+        for func in &bc_funcs {
+            aot.compile_all(std::slice::from_ref(func), &func_map)
+                .map_err(|e| RuntimeError::Custom(format!("AOT compile batch {} '{}': {}", i, func.name, e)))?;
+        }
+
+        let obj_bytes = aot.finish_no_entry();
+        let obj_path = format!("{}.batch{}.o", output_path, i);
+        std::fs::write(&obj_path, &obj_bytes)
+            .map_err(|e| RuntimeError::Custom(format!("write {}: {}", obj_path, e)))?;
+        obj_paths.push(obj_path);
+        // bc_funcs and func_map are dropped here — memory freed before next batch
+    }
+
+    if obj_paths.is_empty() {
+        return Err(RuntimeError::Custom("compile-bytecode-streaming: no functions to compile".into()));
+    }
+
+    // Emit the entry-point object: a minimal module that imports __airl_main_entry__
+    // and defines main() calling it.
+    let mut entry_aot = BytecodeAot::new_with_target(None)
+        .map_err(|e| RuntimeError::Custom(format!("AOT init entry: {}", e)))?;
+    entry_aot.emit_entry_point_external()
+        .map_err(|e| RuntimeError::Custom(format!("AOT entry point: {}", e)))?;
+    let entry_bytes = entry_aot.finish_no_entry();
+    let entry_obj_path = format!("{}.entry.o", output_path);
+    std::fs::write(&entry_obj_path, &entry_bytes)
+        .map_err(|e| RuntimeError::Custom(format!("write {}: {}", entry_obj_path, e)))?;
+    obj_paths.push(entry_obj_path);
+
+    // Link all object files into the final binary
+    let rt_lib = crate::bytecode_aot::get_or_extract_rt_lib()
+        .map_err(|e| RuntimeError::Custom(e))?;
+
+    let mut cmd = std::process::Command::new("cc");
+    for p in &obj_paths {
+        cmd.arg(p);
+    }
+    cmd.arg("-o").arg(output_path);
+
+    if needs_compiler {
+        let runtime_lib = crate::bytecode_aot::find_lib("airl_runtime");
+        if !runtime_lib.is_empty() {
+            cmd.arg(&runtime_lib);
+        } else {
+            cmd.arg(&rt_lib);
+        }
+    } else {
+        cmd.arg(&rt_lib);
+    }
+
+    #[cfg(target_os = "linux")]
+    { cmd.arg("-lm").arg("-lpthread").arg("-ldl").arg("-lsqlite3").arg("-lz3"); }
+    #[cfg(target_os = "macos")]
+    { cmd.arg("-lSystem").arg("-lsqlite3").arg("-lz3"); }
+
+    let status = cmd
+        .status()
+        .map_err(|e| RuntimeError::Custom(format!("linker: {}", e)))?;
+
+    for p in &obj_paths {
+        let _ = std::fs::remove_file(p);
+    }
+    if rt_lib.starts_with(&std::env::temp_dir().to_string_lossy().to_string()) {
+        let _ = std::fs::remove_file(&rt_lib);
+    }
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(RuntimeError::Custom(format!("linker failed: {:?}", status.code())))
+    }
+}
+
+/// C-ABI entry point for `compile-bytecode-streaming`.
+/// Takes a list-of-lists of BCFunc values and an output path string.
+#[cfg(feature = "aot")]
+#[no_mangle]
+pub extern "C" fn airl_compile_bytecode_streaming(
+    batches_val: *mut airl_rt::value::RtValue,
+    output_val: *mut airl_rt::value::RtValue,
+) -> *mut airl_rt::value::RtValue {
+    let batches_value = crate::bytecode_vm::rt_to_value(batches_val);
+    let output_value = crate::bytecode_vm::rt_to_value(output_val);
+
+    let batches = match &batches_value {
+        Value::List(items) => items.clone(),
+        _ => {
+            eprintln!("airl_compile_bytecode_streaming: first arg must be list of lists of BCFunc");
+            return airl_rt::value::rt_nil();
+        }
+    };
+    let output_path = match &output_value {
+        Value::Str(s) => s.clone(),
+        _ => {
+            eprintln!("airl_compile_bytecode_streaming: second arg must be output path string");
+            return airl_rt::value::rt_nil();
+        }
+    };
+
+    match compile_bytecode_streaming(&batches, &output_path) {
+        Ok(()) => {
+            use airl_rt::value::{rt_variant, rt_str};
+            rt_variant("Ok".into(), rt_str(format!("Compiled to {}", output_path)))
+        }
+        Err(e) => {
+            use airl_rt::value::{rt_variant, rt_str};
+            rt_variant("Err".into(), rt_str(format!("Compilation error: {}", e)))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

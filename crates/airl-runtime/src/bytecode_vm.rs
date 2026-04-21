@@ -492,6 +492,30 @@ fn dispatch_compile_bytecode_to_executable_with_target(args: &[*mut RtValue]) ->
     }
 }
 
+fn dispatch_compile_bytecode_streaming(args: &[*mut RtValue]) -> *mut RtValue {
+    let value_args: Vec<Value> = args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+    let batches = match value_args.first() {
+        Some(Value::List(items)) => items.clone(),
+        _ => return rt_variant("Err".into(), rt_str("compile-bytecode-streaming: first arg must be list of batches".into())),
+    };
+    let output_path = match value_args.get(1) {
+        Some(Value::Str(s)) => s.clone(),
+        _ => return rt_variant("Err".into(), rt_str("compile-bytecode-streaming: second arg must be output path string".into())),
+    };
+    #[cfg(feature = "aot")]
+    {
+        match crate::bytecode_marshal::compile_bytecode_streaming(&batches, &output_path) {
+            Ok(()) => rt_variant("Ok".into(), rt_str(format!("Compiled to {}", output_path))),
+            Err(e) => rt_variant("Err".into(), rt_str(format!("{}", e))),
+        }
+    }
+    #[cfg(not(feature = "aot"))]
+    {
+        let _ = (batches, output_path);
+        rt_variant("Err".into(), rt_str("compile-bytecode-streaming: AOT feature not enabled".into()))
+    }
+}
+
 fn dispatch_run_bytecode(args: &[*mut RtValue]) -> *mut RtValue {
     let value_args: Vec<Value> = args.iter().map(|&p| rt_to_value_no_release(p)).collect();
     let func_list = match value_args.first() {
@@ -765,6 +789,7 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "compile-to-executable" => dispatch_compile_to_executable(args),
         "compile-bytecode-to-executable" => dispatch_compile_bytecode_to_executable(args),
         "compile-bytecode-to-executable-with-target" => dispatch_compile_bytecode_to_executable_with_target(args),
+        "compile-bytecode-streaming" => dispatch_compile_bytecode_streaming(args),
         "run-bytecode" => dispatch_run_bytecode(args),
 
         // extern-c name aliases — used by io.airl AIRL wrappers to call C functions
