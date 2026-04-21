@@ -2226,9 +2226,16 @@ impl BytecodeAot {
                                 .map_err(|e| format!("call declare: {}", e))?;
                             call_targets.insert(callee_name.clone(), callee_id);
                         } else {
-                            // Warn about unresolved function but still declare it.
-                            // This allows G3 self-compilation (where bootstrap module
-                            // functions are linked separately) while flagging typos.
+                            // Warn about unresolved function but still declare it as an
+                            // Import. Under streaming per-file ObjectModule compilation
+                            // (bytecode_marshal.rs::compile_bytecode_streaming) the callee
+                            // may be defined in a sibling batch's .o file — the final
+                            // linker resolves Import references across batches. Declaring
+                            // as Export here would require this batch to emit a
+                            // definition, which we can't: we don't have the callee's
+                            // bytecode. cranelift-object's finish() debug-asserts that
+                            // Export-linked functions are defined (backend.rs:541), so the
+                            // old Export-and-hope approach panicked under streaming.
                             eprintln!(
                                 "warning: unresolved function '{}' (called from '{}') — \
                                  not found in compiled functions or builtins",
@@ -2241,7 +2248,7 @@ impl BytecodeAot {
                             call_sig.returns.push(AbiParam::new(self.ptr));
                             let callee_id = self
                                 .module
-                                .declare_function(&aot_symbol_name(callee_name), Linkage::Export, &call_sig)
+                                .declare_function(&aot_symbol_name(callee_name), Linkage::Import, &call_sig)
                                 .map_err(|e| format!("call declare: {}", e))?;
                             call_targets.insert(callee_name.clone(), callee_id);
                         }
