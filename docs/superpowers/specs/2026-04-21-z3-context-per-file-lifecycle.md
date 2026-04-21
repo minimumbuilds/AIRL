@@ -97,3 +97,32 @@ Expected results:
 | Subprocess spawn overhead dominates small files | Low | Spawn cost ~50 ms; small files take 2+ s in G3 compile. |
 | IPC serialization itself has a memory overhead | Medium | Use a streaming format (bincode-of-Value); free after write. |
 | Z3 C-library actually doesn't retain memory between context creations | Low | Worth measuring first. If false, option 3 is sufficient. |
+## Measurement result — Z3 context memory trajectory
+
+Ran 10 × 100 = 1000 `verify_function` calls against a small `(+)` contract,
+measuring `/proc/self/status` VmRSS after each batch:
+
+| verifies | RSS (MiB) | Δ from baseline |
+|---|---|---|
+| 0 (baseline) | 10 | 0 |
+| 100 | 37 | +27 |
+| 200 | 37 | +27 |
+| 300–1000 | 37 | +27 |
+
+**The trajectory is flat.** Z3's `Context::drop` does release memory
+correctly (either to the OS or back to the allocator for reuse). The
++27 MiB is one-time Z3 init overhead that plateaus after the first
+Context and does not grow.
+
+**Decision:** Spec 1's Option 2 (subprocess-per-file) is **not required**.
+The current pattern (`Context::new` per `verify_function`, dropped at end
+of scope) is sufficient. The 1.6 M alive lists observed at AIRL_castle's
+OOM are NOT from Z3 — they're from elsewhere.
+
+**Remaining suspects:**
+- Spec 2 (AIRL bootstrap state retention) — investigation in flight
+- Spec 3 (BCFunc native representation — ~500 RtValue per function × 2500 functions ≈ 1.25 M alive lists just for BCFuncs)
+
+**Spec 1 status:** resolved without code changes to Z3 lifecycle.
+Instrumentation (AIRL_Z3_MEM_TRACE, retention test) remains for future
+regressions.
