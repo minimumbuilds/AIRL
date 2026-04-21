@@ -38,6 +38,14 @@ fn mem_trace(phase: &str) {
     }
 }
 
+/// True when AIRL_Z3_MEM_TRACE=1 — fine-grained per-function Z3 RSS deltas.
+/// Separate from AIRL_MEM_TRACE because it's much noisier (one line per verified
+/// function) and is only useful when specifically investigating Z3 C-pool
+/// retention per spec 2026-04-21-z3-context-per-file-lifecycle.
+fn z3_mem_trace_enabled() -> bool {
+    std::env::var("AIRL_Z3_MEM_TRACE").ok().as_deref() == Some("1")
+}
+
 const COLLECTIONS_SOURCE: &str = include_str!("../../../stdlib/prelude.airl");
 const MATH_SOURCE: &str = include_str!("../../../stdlib/math.airl");
 const RESULT_SOURCE: &str = include_str!("../../../stdlib/result.airl");
@@ -254,7 +262,13 @@ fn z3_verify_tops(
                 let verification = if let Some(cached) = disk_cache.get(key) {
                     cached
                 } else {
+                    let before = if z3_mem_trace_enabled() { rss_mib() } else { 0 };
                     let v = z3_prover.verify_function(f);
+                    if z3_mem_trace_enabled() {
+                        let after = rss_mib();
+                        eprintln!("[z3-mem] {:>+5} MiB (now {} MiB) verify_function `{}` [proven]",
+                            after as i64 - before as i64, after, f.name);
+                    }
                     disk_cache.insert(key, &v);
                     v
                 };
@@ -290,7 +304,13 @@ fn z3_verify_tops(
                 let verification = if let Some(cached) = disk_cache.get(key) {
                     cached
                 } else {
+                    let before = if z3_mem_trace_enabled() { rss_mib() } else { 0 };
                     let v = z3_prover.verify_function(f);
+                    if z3_mem_trace_enabled() {
+                        let after = rss_mib();
+                        eprintln!("[z3-mem] {:>+5} MiB (now {} MiB) verify_function `{}` [checked]",
+                            after as i64 - before as i64, after, f.name);
+                    }
                     disk_cache.insert(key, &v);
                     v
                 };

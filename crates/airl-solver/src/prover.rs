@@ -1376,4 +1376,58 @@ mod tests {
             "expected Disproven for wrong postcondition (> result n), got: {:?}", v,
         );
     }
+
+    /// Spec 2026-04-21-z3-context-per-file-lifecycle — evidence test.
+    ///
+    /// Measures whether `z3::Context::drop` actually releases memory back to
+    /// the OS. The spec's working hypothesis is that Z3's upstream
+    /// `memory::finalize` only runs at process exit, so repeated
+    /// context creation leaks pooled term memory even though Drop is called.
+    ///
+    /// This test runs verify_function N times against a small contract,
+    /// captures RSS after each batch, and prints the trajectory. The test is
+    /// diagnostic — it always passes; inspect stderr (or run with
+    /// `cargo test --release -- --nocapture`) to see the numbers. A flat
+    /// trajectory confirms the spec's Option 3 (context-per-function) is
+    /// sufficient. A monotonically growing trajectory confirms Option 2
+    /// (subprocess) is required.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn z3_context_memory_trajectory() {
+        fn rss_mib() -> u64 {
+            if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
+                for line in s.lines() {
+                    if let Some(rest) = line.strip_prefix("VmRSS:") {
+                        if let Some(v) = rest.split_whitespace().next() {
+                            if let Ok(kib) = v.parse::<u64>() {
+                                return kib / 1024;
+                            }
+                        }
+                    }
+                }
+            }
+            0
+        }
+
+        let def = make_fn("add",
+            vec![("a", "i32"), ("b", "i32")], "i32",
+            vec![],
+            vec![call("=", vec![sym("result"), call("+", vec![sym("a"), sym("b")])])],
+            call("+", vec![sym("a"), sym("b")]),
+        );
+        let prover = Z3Prover::new();
+
+        let baseline = rss_mib();
+        eprintln!("[z3-retention] baseline RSS = {} MiB", baseline);
+        for batch in 1..=10 {
+            for _ in 0..100 {
+                let _ = prover.verify_function(&def);
+            }
+            let rss = rss_mib();
+            eprintln!(
+                "[z3-retention] after {} verifies: RSS = {} MiB (Δ +{} MiB from baseline)",
+                batch * 100, rss, rss as i64 - baseline as i64
+            );
+        }
+    }
 }
