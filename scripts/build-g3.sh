@@ -95,7 +95,7 @@ if [[ "$_build_os" != "Darwin" && "$_in_container" -eq 0 ]]; then
         exit 1
     fi
     exec docker run --rm \
-        --memory=6g --memory-swap=6g --cpus=2 \
+        --memory=${G3_BUILD_MEM:-6g} --memory-swap=${G3_BUILD_MEM:-6g} --cpus=2 \
         -v "${AIRL_ROOT}:${AIRL_ROOT}" \
         -w "${AIRL_ROOT}" \
         -e "AIRL_STDLIB=${AIRL_STDLIB}" \
