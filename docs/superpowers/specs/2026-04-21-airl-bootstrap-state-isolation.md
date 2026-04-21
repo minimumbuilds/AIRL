@@ -246,3 +246,42 @@ or elsewhere — removing guesswork.
 
 Given the spec's "investigation-first" discipline, Option C is the
 clear next step. Spec 4's alloc-site tagging was built exactly for this.
+
+## Final end-to-end measurement (2026-04-21, Bugs A + B fixed)
+
+After landing fixes for the two AIRL-side bugs that surfaced during
+measurement (see `2026-04-21-airl-castle-bugs-discovered.md`), a full
+`AIRL_castle/make test-binary` with `/usr/bin/time -v`:
+
+| Metric | Pre-session (86b301c era) | Now (main @ d269425) |
+|---|---|---|
+| Peak RSS | 60+ GiB (OOM at ~62 GiB) | **1.40 GiB** (no OOM) |
+| Files processed | aborted early | **37 of 40** |
+| Elapsed | N/A (crashed) | 9.82 s |
+| Exit cause | OOM | pre-existing AIRL_castle paren error in `kafka/fetch-buffer.airl:106` |
+
+**That's a ~43× reduction in peak RSS**, putting AIRL_castle well
+within the user's "reasonable 500 MB – 2 GB" target and well under the
+6 GiB Docker sandbox budget.
+
+The remaining error is unrelated to memory — a pre-existing paren
+imbalance in AIRL_castle source (`fetch-buffer.airl:106`) that only
+becomes reachable now that the compile gets this far. Filed as an
+AIRL_castle-side issue.
+
+**Contributors to the reduction (approximate, in rough order):**
+
+1. Spec 3 Phase 1–4 (BCFunc → Arc<BcFunc>): eliminated ~500 RtValues
+   per compiled function. Largest single contributor.
+2. Step 3 per-file emit (previous work, confirmed effective): each
+   file's `.o` drops after emit.
+3. Step 2.5 pools (small-int + short-string interning): trims the
+   noise floor.
+4. Bug fixes (Spec 2 Phase 3+4 instrumentation + fixes): revealed
+   the true hotspots but the actual state-retention fix is still
+   pending per-phase work.
+
+**Phase 5 is no longer urgent** — the 1.4 GiB peak is already at
+target. Transient `rt-stats` calls inside `g3-compile-source-with-z3-strict`
+and `g3-step3-fold-step` can be removed in a cleanup pass, and the
+`rt-stats` builtin kept as permanent diagnostic tooling.
