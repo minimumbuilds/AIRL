@@ -280,10 +280,4 @@
   :intent "Entry point: verify all contracts with cache. Returns [proof-map updated-cache hits misses]."
   :requires [(valid nodes)]
   :ensures [(valid result)]
-  :body
-    (let (skip : Bool
-          (match (getenv "AIRL_NO_Z3_BODIES")
-            (Ok val) (= val "1")
-            _ false))
-      (if skip [(map-new) cache 0 0]
-        (z3c-verify-ast-nodes-cached nodes (map-new) cache 0 0))))
+  :body (z3c-verify-ast-nodes-cached nodes (map-new) cache 0 0))
