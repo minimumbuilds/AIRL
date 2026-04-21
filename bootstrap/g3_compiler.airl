@@ -260,6 +260,32 @@
         (print "\n")
         (print "Stdlib: set AIRL_STDLIB env var or place stdlib/ in CWD\n")))
 
+;; ── Step 3 per-file emit helper ─────────────────────────────
+;;
+;; Compile one source file to a single .o file, freeing BCFuncs in place.
+;; Returns (Ok needs-compiler:Bool) or (Err msg). The caller's per-file
+;; fold only has to track obj-path strings and OR-accumulate the bool —
+;; no cross-file BCFunc retention. This is the primitive Step 3 needs;
+;; wiring it into the fold driver is left as follow-up work.
+
+(defn g3-compile-file-to-obj
+  :sig [(source : String) (label : String) (strict : Bool) (obj-path : String) (strip-main : Bool) -> _]
+  :intent "Compile one file to a .o, strip __main__ if strip-main=true"
+  :requires [(valid source)]
+  :ensures [(valid result)]
+  :body
+    (match (g3-compile-source-with-z3-strict source label "user" strict)
+      (Err e) (Err e)
+      (Ok funcs)
+        (let (batch : List (if strip-main
+                             (filter (fn [f]
+                                       (match f
+                                         (BCFunc name _ _ _ _ _) (if (= name "__main__") false true)
+                                         _ true))
+                                     funcs)
+                             funcs))
+          (compile-batch-to-obj batch obj-path))))
+
 ;; ── Main entry point ─────────────────────────────────────
 
 (let (raw-args : List (get-args))
