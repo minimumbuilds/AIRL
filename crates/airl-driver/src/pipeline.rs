@@ -12,6 +12,32 @@ use airl_runtime::bytecode_vm::BytecodeVm;
 use airl_types::checker::TypeChecker;
 use airl_types::linearity::LinearityChecker;
 
+/// Read process RSS in MiB from /proc/self/status. Returns 0 on non-Linux.
+/// Used only when AIRL_MEM_TRACE=1 to diagnose memory-hungry compile phases.
+fn rss_mib() -> u64 {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
+            for line in s.lines() {
+                if let Some(rest) = line.strip_prefix("VmRSS:") {
+                    let kib: u64 = rest.split_whitespace().next()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0);
+                    return kib / 1024;
+                }
+            }
+        }
+    }
+    0
+}
+
+/// Log a memory snapshot when AIRL_MEM_TRACE=1 is set. No-op otherwise.
+fn mem_trace(phase: &str) {
+    if std::env::var("AIRL_MEM_TRACE").ok().as_deref() == Some("1") {
+        eprintln!("[mem] {:>6} MiB  {}", rss_mib(), phase);
+    }
+}
+
 const COLLECTIONS_SOURCE: &str = include_str!("../../../stdlib/prelude.airl");
 const MATH_SOURCE: &str = include_str!("../../../stdlib/math.airl");
 const RESULT_SOURCE: &str = include_str!("../../../stdlib/result.airl");
@@ -502,26 +528,34 @@ pub fn run_source_with_z3_info(source: &str) -> Result<(Value, Vec<String>), Pip
 /// Run a file with preloaded modules (required for G3 bootstrap).
 /// Each --load module is compiled and loaded into the VM before the main file runs.
 pub fn run_file_with_preloads(path: &str, preloads: &[String]) -> Result<Value, PipelineError> {
+    mem_trace("run_file_with_preloads: start");
     let source = std::fs::read_to_string(path)
         .map_err(|e| PipelineError::Io(e.to_string()))?;
+    mem_trace(&format!("read main source ({} bytes)", source.len()));
 
     let (tops, _diags) = parse_source(&source)?;
+    mem_trace(&format!("parsed main ({} tops)", tops.len()));
 
     // Z3 contract verification
     let (proof_cache, trusted_fns) = z3_verify_tops(&tops, PipelineMode::Run)?;
+    mem_trace("z3_verify_tops(main) done");
 
     let ownership_map = build_ownership_map(&tops);
     let (ir_nodes, contracts, fn_meta) = compile_tops_with_contracts(&tops);
+    mem_trace("ir compiled for main");
     let mut bc_compiler = BytecodeCompiler::with_prefix("user");
     bc_compiler.set_ownership_map(ownership_map);
     bc_compiler.set_proven_clauses(proof_cache.into_proven_set());
     bc_compiler.set_trusted_fns(trusted_fns);
     let (funcs, main_func) = bc_compiler.compile_program_with_contracts(&ir_nodes, &contracts);
+    mem_trace(&format!("bytecode compiled for main ({} funcs)", funcs.len()));
 
     let mut vm = BytecodeVm::new();
+    mem_trace("vm created");
 
     // Load cached stdlib
     load_cached_stdlib(&mut vm)?;
+    mem_trace("stdlib loaded");
 
     // Load each preloaded module
     for preload_path in preloads {
@@ -531,7 +565,9 @@ pub fn run_file_with_preloads(path: &str, preloads: &[String]) -> Result<Value, 
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "module".to_string());
+        mem_trace(&format!("about to load preload: {}", module_name));
         compile_and_load_stdlib_bytecode(&mut vm, &preload_src, &module_name)?;
+        mem_trace(&format!("loaded preload: {}", module_name));
     }
 
     // Load user functions
@@ -542,8 +578,11 @@ pub fn run_file_with_preloads(path: &str, preloads: &[String]) -> Result<Value, 
     for meta in fn_meta {
         vm.store_fn_metadata(meta);
     }
+    mem_trace("all funcs + meta loaded; about to exec_main");
 
-    vm.exec_main().map_err(PipelineError::Runtime)
+    let result = vm.exec_main().map_err(PipelineError::Runtime);
+    mem_trace("exec_main returned");
+    result
 }
 
 pub fn run_file(path: &str) -> Result<Value, PipelineError> {
@@ -1739,6 +1778,7 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
     use airl_runtime::bytecode_aot::BytecodeAot;
     use std::collections::HashMap;
 
+    mem_trace("compile_to_object: start");
     let mut all_funcs: Vec<BytecodeFunc> = Vec::new();
 
     // 1. Compile stdlib to bytecode (skip their __main__ — they're no-op for pure defn modules)
@@ -1753,8 +1793,8 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
         (RANDOM_SOURCE, "random"),
     ] {
         let (funcs, _stdlib_main) = compile_source_to_bytecode(src, name)?;
-        // Only take named functions, skip the __main__ (which just returns nil)
         all_funcs.extend(funcs);
+        mem_trace(&format!("stdlib {} compiled (total funcs={})", name, all_funcs.len()));
     }
 
     // 1b. Compile stdlib with extern-c declarations (io.airl, sqlite.airl)
@@ -1766,6 +1806,7 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
         let (funcs, _stdlib_main, externs) = compile_source_to_bytecode_with_externs(src, name)?;
         all_funcs.extend(funcs);
         stdlib_extern_c_decls.extend(externs);
+        mem_trace(&format!("stdlib-extern {} compiled (total funcs={})", name, all_funcs.len()));
     }
 
     // 2. Parse and compile user source files with Z3 verification
@@ -1776,16 +1817,20 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
         all_source.push_str(&source);
         all_source.push('\n');
     }
+    mem_trace(&format!("read {} user source files ({} bytes)", paths.len(), all_source.len()));
 
     // Parse user source and extract extern-c declarations
     let (user_tops, user_extern_c_decls) = parse_source_with_externs(&all_source)?;
+    mem_trace(&format!("parsed user source ({} tops)", user_tops.len()));
 
     // Z3 contract verification on user code
     let (proof_cache, trusted_fns) = z3_verify_tops(&user_tops, PipelineMode::Run)?;
+    mem_trace("z3_verify_tops(user) done");
 
     // Compile user source with contracts and Z3 proof results
     let ownership_map = build_ownership_map(&user_tops);
     let (ir_nodes, contracts, _fn_meta) = compile_tops_with_contracts(&user_tops);
+    mem_trace(&format!("ir compiled ({} ir-nodes)", ir_nodes.len()));
     let mut bc_compiler = BytecodeCompiler::with_prefix("user");
     bc_compiler.set_ownership_map(ownership_map);
     bc_compiler.set_proven_clauses(proof_cache.into_proven_set());
@@ -1794,6 +1839,7 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
     let extern_c_decls = user_extern_c_decls;
     all_funcs.extend(funcs);
     all_funcs.push(main_func); // Only the user's __main__
+    mem_trace(&format!("user bytecode compiled (total funcs={})", all_funcs.len()));
 
     // 3. AOT compile bytecode → native object
     let func_map: HashMap<String, BytecodeFunc> = all_funcs.iter()
@@ -1869,18 +1915,28 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
         aot.register_extern_c("airl_z3_mk_app2", 4);
     }
 
-    for func in &all_funcs {
+    let total = all_funcs.len();
+    let trace_every = (total / 20).max(1); // ~20 snapshots across the loop
+    mem_trace(&format!("about to aot.compile_all {} funcs", total));
+    for (i, func) in all_funcs.iter().enumerate() {
         aot.compile_all(std::slice::from_ref(func), &func_map)
             .map_err(|e| PipelineError::Runtime(
                 airl_runtime::error::RuntimeError::TypeError(e)
             ))?;
+        if i % trace_every == 0 || i + 1 == total {
+            mem_trace(&format!("compile_all progress {}/{} ({})", i + 1, total, func.name));
+        }
     }
+    mem_trace("all funcs compiled via aot.compile_all");
 
     aot.emit_entry_point().map_err(|e| PipelineError::Runtime(
         airl_runtime::error::RuntimeError::TypeError(e)
     ))?;
+    mem_trace("aot entry-point emitted");
 
-    Ok(aot.finish())
+    let obj_bytes = aot.finish();
+    mem_trace(&format!("aot.finish() done ({} obj bytes)", obj_bytes.len()));
+    Ok(obj_bytes)
 }
 
 /// Compile AIRL source file with imports to a native object file.

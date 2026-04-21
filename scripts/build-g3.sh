@@ -102,6 +102,8 @@ if [[ "$_build_os" != "Darwin" && "$_in_container" -eq 0 ]]; then
         -e "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}" \
         -e "AIRL_BIN=${AIRL_BIN:-cargo run --release --features aot --}" \
         -e "AIRL_ROOT=${AIRL_ROOT}" \
+        -e "AIRL_MEM_TRACE=${AIRL_MEM_TRACE:-}" \
+        -e "AIRL_NO_Z3_CACHE=${AIRL_NO_Z3_CACHE:-}" \
         rust:slim \
         bash scripts/build-g3.sh "$@"
 fi
