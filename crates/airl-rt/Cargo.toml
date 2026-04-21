@@ -14,6 +14,10 @@ check-cfg = ['cfg(target_os, values("airlos"))']
 [features]
 default = []
 airlos = []
+# Alloc-site tagging for leak diagnostics (spec 2026-04-21-alloc-site-tagging-diagnostics).
+# Adds a u16 site_id to RtValue and per-site alive counters. On process exit prints
+# top-N sites by alive count. Off by default; opt-in only for investigation.
+rt_trace_sites = []
 
 [dependencies]
 

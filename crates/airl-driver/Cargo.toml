@@ -27,3 +27,4 @@ tempfile = "3"
 mlir = ["airl-runtime/mlir"]
 cuda = ["airl-runtime/cuda"]
 aot = ["airl-runtime/aot"]
+rt_trace_sites = ["airl-runtime/rt_trace_sites"]

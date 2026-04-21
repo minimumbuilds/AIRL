@@ -63,6 +63,14 @@ pub enum RtData {
 #[repr(C)]
 pub struct RtValue {
     pub tag: u8,
+    // When `rt_trace_sites` is enabled, repurpose the 3 bytes of padding between
+    // `tag` and `rc` to carry a 16-bit allocation-site id. Layout with the
+    // feature OFF is unchanged (tag at offset 0, rc at offset 4) — ABI-safe;
+    // AOT binaries compiled without this feature keep working. Layout with
+    // the feature ON puts site_id at offset 2; requires a full rebuild (rt +
+    // runtime + any AOT binaries linking libairl_rt.a).
+    #[cfg(feature = "rt_trace_sites")]
+    pub site_id: u16,
     pub rc: AtomicU32,
     pub data: RtData,
 }
@@ -142,9 +150,28 @@ impl Drop for SendableRtValue {
 unsafe impl Send for SendableRtValue {}
 
 impl RtValue {
+    /// Allocate a new RtValue. Without the `rt_trace_sites` feature, all
+    /// allocations are attributed to the "unknown" site (id 0). With the
+    /// feature, call sites should prefer `alloc_at` to propagate their
+    /// site id for per-site leak attribution.
     pub fn alloc(tag: u8, data: RtData) -> *mut RtValue {
+        Self::alloc_at(tag, data, 0)
+    }
+
+    /// Allocate a new RtValue with a specific allocation-site id. When the
+    /// `rt_trace_sites` feature is enabled, the site id is stored on the
+    /// RtValue and used to bump the site's alive counter; on free, the same
+    /// site is decremented. When the feature is disabled, `site_id` is
+    /// accepted for API compatibility but not stored (zero cost).
+    #[allow(unused_variables)]
+    pub fn alloc_at(tag: u8, data: RtData, site_id: u16) -> *mut RtValue {
         #[cfg(not(target_os = "airlos"))]
         crate::diag::on_alloc(tag);
+        #[cfg(all(not(target_os = "airlos"), feature = "rt_trace_sites"))]
+        crate::diag::on_alloc_at_site(site_id);
+        #[cfg(feature = "rt_trace_sites")]
+        let v = RtValue { tag, site_id, rc: AtomicU32::new(1), data };
+        #[cfg(not(feature = "rt_trace_sites"))]
         let v = RtValue { tag, rc: AtomicU32::new(1), data };
         Box::into_raw(Box::new(v))
     }
@@ -156,24 +183,32 @@ impl RtValue {
 
 static NIL_SINGLETON: RtValue = RtValue {
     tag: TAG_NIL,
+    #[cfg(feature = "rt_trace_sites")]
+    site_id: 0,
     rc: AtomicU32::new(u32::MAX),
     data: RtData::Nil,
 };
 
 static UNIT_SINGLETON: RtValue = RtValue {
     tag: TAG_UNIT,
+    #[cfg(feature = "rt_trace_sites")]
+    site_id: 0,
     rc: AtomicU32::new(u32::MAX),
     data: RtData::Unit,
 };
 
 static TRUE_SINGLETON: RtValue = RtValue {
     tag: TAG_BOOL,
+    #[cfg(feature = "rt_trace_sites")]
+    site_id: 0,
     rc: AtomicU32::new(u32::MAX),
     data: RtData::Bool(true),
 };
 
 static FALSE_SINGLETON: RtValue = RtValue {
     tag: TAG_BOOL,
+    #[cfg(feature = "rt_trace_sites")]
+    site_id: 0,
     rc: AtomicU32::new(u32::MAX),
     data: RtData::Bool(false),
 };
@@ -200,6 +235,8 @@ fn small_int_pool() -> &'static Vec<RtValue> {
         (SMALL_INT_MIN..=SMALL_INT_MAX)
             .map(|v| RtValue {
                 tag: TAG_INT,
+                #[cfg(feature = "rt_trace_sites")]
+                site_id: 0,
                 rc: AtomicU32::new(u32::MAX),
                 data: RtData::Int(v),
             })
@@ -292,19 +329,35 @@ pub fn rt_str(v: String) -> *mut RtValue {
 }
 
 pub fn rt_list(items: Vec<*mut RtValue>) -> *mut RtValue {
-    RtValue::alloc(TAG_LIST, RtData::List { items, offset: 0, parent: None })
+    rt_list_at(items, 0)
+}
+
+pub fn rt_list_at(items: Vec<*mut RtValue>, site_id: u16) -> *mut RtValue {
+    RtValue::alloc_at(TAG_LIST, RtData::List { items, offset: 0, parent: None }, site_id)
 }
 
 pub fn rt_map(m: HashMap<String, *mut RtValue>) -> *mut RtValue {
-    RtValue::alloc(TAG_MAP, RtData::Map(m))
+    rt_map_at(m, 0)
+}
+
+pub fn rt_map_at(m: HashMap<String, *mut RtValue>, site_id: u16) -> *mut RtValue {
+    RtValue::alloc_at(TAG_MAP, RtData::Map(m), site_id)
 }
 
 pub fn rt_variant(tag_name: String, inner: *mut RtValue) -> *mut RtValue {
-    RtValue::alloc(TAG_VARIANT, RtData::Variant { tag_name, inner })
+    rt_variant_at(tag_name, inner, 0)
+}
+
+pub fn rt_variant_at(tag_name: String, inner: *mut RtValue, site_id: u16) -> *mut RtValue {
+    RtValue::alloc_at(TAG_VARIANT, RtData::Variant { tag_name, inner }, site_id)
 }
 
 pub fn rt_bytes(v: Vec<u8>) -> *mut RtValue {
-    RtValue::alloc(TAG_BYTES, RtData::Bytes(v))
+    rt_bytes_at(v, 0)
+}
+
+pub fn rt_bytes_at(v: Vec<u8>, site_id: u16) -> *mut RtValue {
+    RtValue::alloc_at(TAG_BYTES, RtData::Bytes(v), site_id)
 }
 
 /// Construct a partial application value.

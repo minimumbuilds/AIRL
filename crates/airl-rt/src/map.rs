@@ -7,12 +7,31 @@ use std::collections::HashMap;
 use alloc::collections::BTreeMap as HashMap;
 use crate::error::rt_error;
 use crate::memory::{airl_value_retain, airl_value_release};
-use crate::value::{rt_bool, rt_int, rt_list, rt_map, rt_nil, rt_str, RtData, RtValue};
+use crate::value::{rt_bool, rt_int, rt_list, rt_map, rt_map_at, rt_nil, rt_str, RtData, RtValue};
+
+#[cfg(not(target_os = "airlos"))]
+static SITE_MAP_NEW: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "airlos"))]
+static SITE_MAP_FROM: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "airlos"))]
+static SITE_MAP_SET_CLONE: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "airlos"))]
+static SITE_MAP_REMOVE: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+
+#[cfg(not(target_os = "airlos"))]
+#[inline]
+fn site(slot: &'static std::sync::OnceLock<u16>, name: &'static str) -> u16 {
+    *slot.get_or_init(|| crate::diag::register_site(name))
+}
 
 /// Return an empty map.
 #[no_mangle]
 pub extern "C" fn airl_map_new() -> *mut RtValue {
-    rt_map(HashMap::new())
+    #[cfg(not(target_os = "airlos"))]
+    let sid = site(&SITE_MAP_NEW, "map.rs:airl_map_new");
+    #[cfg(target_os = "airlos")]
+    let sid = 0u16;
+    rt_map_at(HashMap::new(), sid)
 }
 
 /// Build a map from a flat alternating list: ["k1" v1 "k2" v2 ...].
@@ -40,7 +59,11 @@ pub extern "C" fn airl_map_from(pairs: *mut RtValue) -> *mut RtValue {
                 map.insert(k, val_ptr);
                 i += 2;
             }
-            rt_map(map)
+            #[cfg(not(target_os = "airlos"))]
+            let sid = site(&SITE_MAP_FROM, "map.rs:airl_map_from");
+            #[cfg(target_os = "airlos")]
+            let sid = 0u16;
+            rt_map_at(map, sid)
         }
         _ => rt_error("airl_map_from: argument must be a List"),
     }

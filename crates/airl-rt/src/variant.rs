@@ -4,7 +4,10 @@ use crate::nostd_prelude::*;
 
 use crate::error::rt_error;
 use crate::memory::airl_value_retain;
-use crate::value::{rt_variant, RtData, RtValue};
+use crate::value::{rt_variant_at, RtData, RtValue};
+
+#[cfg(not(target_os = "airlos"))]
+static SITE_MAKE_VARIANT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 
 /// Construct a variant value: (tag inner).
 /// `tag` must be a Str; `inner` can be any value.
@@ -13,7 +16,11 @@ use crate::value::{rt_variant, RtData, RtValue};
 pub extern "C" fn airl_make_variant(tag: *mut RtValue, inner: *mut RtValue) -> *mut RtValue {
     let tag_name = unsafe { &*tag }.as_str_owned();
     airl_value_retain(inner);
-    rt_variant(tag_name, inner)
+    #[cfg(not(target_os = "airlos"))]
+    let sid = *SITE_MAKE_VARIANT.get_or_init(|| crate::diag::register_site("variant.rs:airl_make_variant"));
+    #[cfg(target_os = "airlos")]
+    let sid = 0u16;
+    rt_variant_at(tag_name, inner, sid)
 }
 
 /// Attempt to match a variant against an expected tag.
