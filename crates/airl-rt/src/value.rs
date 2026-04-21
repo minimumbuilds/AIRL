@@ -29,14 +29,22 @@ pub const TAG_BYTES: u8 = 10;
 /// Interpreter-only: a partially-applied function.
 /// Not visible to AOT-compiled code; fallback to nil in AOT context.
 pub const TAG_PARTIAL_APP: u8 = 11;
+/// Native-compiled bytecode function — opaque `Arc<BcFunc>` payload.
+/// Replaces the legacy nested-RtValue `(BCFunc name arity ...)` variant
+/// used by `bootstrap/bc_compiler.airl`. See spec
+/// 2026-04-21-bcfunc-native-representation.md. Phase 1 adds the tag and
+/// variant; later phases migrate construction and consumption.
+pub const TAG_BCFUNC: u8 = 12;
 
-/// Variant order MUST match TAG_* constants (0-10).
+/// Variant order MUST match TAG_* constants (0-12).
 /// The Rust compiler assigns discriminants by position,
 /// and airl-rt functions match on RtData using these discriminants.
 /// AOT-compiled code checks the `tag` byte directly.
 /// If these diverge, AOT binaries will misidentify value types.
 ///
 /// TAG_PARTIAL_APP (11) is interpreter-only and never observed by AOT code.
+/// TAG_BCFUNC (12) is compile-time-only — held by the bootstrap compiler
+/// while emitting bytecode, never surfaces in user programs.
 pub enum RtData {
     Nil,                                                    // 0 = TAG_NIL
     Int(i64),                                               // 1 = TAG_INT
@@ -58,6 +66,11 @@ pub enum RtData {
         captured_args: Vec<*mut RtValue>,
         remaining_arity: usize,
     },
+    /// Native bytecode-function representation. The nested `(BCFunc ...)`
+    /// variant emitted by the legacy bootstrap path allocates ~500 RtValues
+    /// per compiled function; this collapses to a single Arc.
+    BCFuncNative(#[cfg(not(target_os = "airlos"))] std::sync::Arc<crate::bc_func::BcFunc>,
+                 #[cfg(target_os = "airlos")] alloc::sync::Arc<crate::bc_func::BcFunc>), // 12 = TAG_BCFUNC
 }
 
 #[repr(C)]
@@ -375,6 +388,17 @@ pub fn rt_partial_app(func_name: String, captured_args: Vec<*mut RtValue>, remai
     RtValue::alloc(TAG_PARTIAL_APP, RtData::PartialApp { func_name, captured_args, remaining_arity })
 }
 
+/// Wrap a shared `BcFunc` in an RtValue. Cheap — no constant retains needed,
+/// since constant ownership lives with the BcFunc itself.
+#[cfg(not(target_os = "airlos"))]
+pub fn rt_bcfunc(bcf: std::sync::Arc<crate::bc_func::BcFunc>) -> *mut RtValue {
+    RtValue::alloc(TAG_BCFUNC, RtData::BCFuncNative(bcf))
+}
+#[cfg(target_os = "airlos")]
+pub fn rt_bcfunc(bcf: alloc::sync::Arc<crate::bc_func::BcFunc>) -> *mut RtValue {
+    RtValue::alloc(TAG_BCFUNC, RtData::BCFuncNative(bcf))
+}
+
 // C-ABI constructors
 #[no_mangle]
 pub extern "C" fn airl_int(v: i64) -> *mut RtValue {
@@ -598,6 +622,10 @@ impl fmt::Display for RtValue {
             RtData::Bytes(v) => write!(f, "<Bytes len={}>", v.len()),
             RtData::PartialApp { func_name, captured_args, remaining_arity } => {
                 write!(f, "<partial {} args={} remaining={}>", func_name, captured_args.len(), remaining_arity)
+            }
+            RtData::BCFuncNative(bcf) => {
+                write!(f, "<bcfunc {} arity={} instr={}>",
+                    bcf.name, bcf.arity, bcf.instructions.len())
             }
         }
     }

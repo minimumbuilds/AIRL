@@ -169,6 +169,12 @@ pub fn rt_to_value_no_release(ptr: *mut RtValue) -> Value {
                     remaining_arity: *remaining_arity,
                 }
             }
+            // Spec 3 native bytecode function — the VM's Value model has no
+            // direct equivalent yet (Phase 2/3 territory). Preserve identity
+            // as a builtin-fn marker so any `type-of` call round-trips sensibly.
+            RtData::BCFuncNative(bcf) => {
+                Value::BuiltinFn(format!("<bcfunc@{}>", bcf.name))
+            }
         }
     }
 }

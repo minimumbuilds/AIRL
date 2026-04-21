@@ -769,6 +769,7 @@ pub extern "C" fn airl_type_of(v: *mut RtValue) -> *mut RtValue {
         RtData::Closure { .. } => "closure",
         RtData::Bytes(_) => "bytes",
         RtData::PartialApp { .. } => "partial-app",
+        RtData::BCFuncNative(_) => "bcfunc",
     };
     rt_str(name.to_string())
 }

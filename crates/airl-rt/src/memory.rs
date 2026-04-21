@@ -167,6 +167,11 @@ pub extern "C" fn airl_value_clone(ptr: *mut RtValue) -> *mut RtValue {
                 // rt_partial_app retains each arg internally, so just clone the vec
                 crate::value::rt_partial_app(func_name.clone(), captured_args.clone(), *remaining_arity)
             }
+            RtData::BCFuncNative(bcf) => {
+                // Arc clone — the inner constants are already owned by the
+                // single BcFunc; aliasing is cheap and drops correctly.
+                crate::value::rt_bcfunc(bcf.clone())
+            }
         }
     }
 }

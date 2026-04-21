@@ -1458,6 +1458,9 @@ pub extern "C" fn airl_json_stringify(val: *mut RtValue) -> *mut RtValue {
             RtData::PartialApp { func_name, remaining_arity, .. } => {
                 format!("\"<partial {} remaining={}>\"", func_name, remaining_arity)
             }
+            RtData::BCFuncNative(bcf) => {
+                format!("\"<bcfunc {} arity={}>\"", bcf.name, bcf.arity)
+            }
         }
     }
     let v = unsafe { &*val };
