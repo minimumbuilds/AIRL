@@ -135,6 +135,8 @@ pub struct RuntimeImports {
     pub compile_bc_to_exe: FuncId,
     pub compile_bc_to_exe_with_target: FuncId,
     pub compile_bc_to_exe_streaming: FuncId,
+    pub compile_batch_to_obj: FuncId,
+    pub link_objs_to_binary: FuncId,
 
     // Type conversions
     pub int_to_string: FuncId,
@@ -685,6 +687,8 @@ impl BytecodeAot {
         let compile_bc_to_exe = declare_import(m, "airl_compile_bytecode_to_executable", s2.clone());
         let compile_bc_to_exe_with_target = declare_import(m, "airl_compile_bytecode_to_executable_with_target", sig_3_ptr(m, ptr));
         let compile_bc_to_exe_streaming = declare_import(m, "airl_compile_bytecode_streaming", s2.clone());
+        let compile_batch_to_obj = declare_import(m, "airl_compile_batch_to_obj", s2.clone());
+        let link_objs_to_binary = declare_import(m, "airl_link_objs_to_binary", sig_3_ptr(m, ptr));
 
         // Type conversions
         let int_to_string = declare_import(m, "airl_int_to_string", s1.clone());
@@ -886,7 +890,7 @@ impl BytecodeAot {
             read_dir, create_dir, file_size, is_dir,
             temp_file, temp_dir, file_mtime,
             get_args, run_bytecode, compile_to_exe, compile_bc_to_exe, compile_bc_to_exe_with_target,
-            compile_bc_to_exe_streaming,
+            compile_bc_to_exe_streaming, compile_batch_to_obj, link_objs_to_binary,
             int_to_string, float_to_string, string_to_int, string_to_float,
             char_code, char_from_code,
             sqrt, sin, cos, tan, log, exp, floor, ceil, round,
@@ -1015,6 +1019,8 @@ impl BytecodeAot {
         m.insert("compile-bytecode-to-executable".into(), rt.compile_bc_to_exe);
         m.insert("compile-bytecode-to-executable-with-target".into(), rt.compile_bc_to_exe_with_target);
         m.insert("compile-bytecode-streaming".into(), rt.compile_bc_to_exe_streaming);
+        m.insert("compile-batch-to-obj".into(), rt.compile_batch_to_obj);
+        m.insert("link-objs-to-binary".into(), rt.link_objs_to_binary);
 
         // Type conversions
         m.insert("int-to-string".into(),   rt.int_to_string);

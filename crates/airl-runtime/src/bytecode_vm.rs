@@ -516,6 +516,67 @@ fn dispatch_compile_bytecode_streaming(args: &[*mut RtValue]) -> *mut RtValue {
     }
 }
 
+fn dispatch_compile_batch_to_obj(args: &[*mut RtValue]) -> *mut RtValue {
+    let value_args: Vec<Value> = args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+    let batch = match value_args.first() {
+        Some(Value::List(items)) => items.clone(),
+        _ => return rt_variant("Err".into(), rt_str("compile-batch-to-obj: first arg must be list of BCFunc".into())),
+    };
+    let obj_path = match value_args.get(1) {
+        Some(Value::Str(s)) => s.clone(),
+        _ => return rt_variant("Err".into(), rt_str("compile-batch-to-obj: second arg must be path string".into())),
+    };
+    #[cfg(feature = "aot")]
+    {
+        match crate::bytecode_marshal::compile_batch_to_obj(&batch, &obj_path) {
+            Ok(needs) => rt_variant("Ok".into(), crate::bytecode_vm::value_to_rt(&Value::Bool(needs))),
+            Err(e) => rt_variant("Err".into(), rt_str(format!("{}", e))),
+        }
+    }
+    #[cfg(not(feature = "aot"))]
+    {
+        let _ = (batch, obj_path);
+        rt_variant("Err".into(), rt_str("compile-batch-to-obj: AOT feature not enabled".into()))
+    }
+}
+
+fn dispatch_link_objs_to_binary(args: &[*mut RtValue]) -> *mut RtValue {
+    let value_args: Vec<Value> = args.iter().map(|&p| rt_to_value_no_release(p)).collect();
+    let paths: Vec<String> = match value_args.first() {
+        Some(Value::List(items)) => {
+            let mut v = Vec::with_capacity(items.len());
+            for it in items {
+                match it {
+                    Value::Str(s) => v.push(s.clone()),
+                    _ => return rt_variant("Err".into(), rt_str("link-objs-to-binary: paths list must contain strings".into())),
+                }
+            }
+            v
+        }
+        _ => return rt_variant("Err".into(), rt_str("link-objs-to-binary: first arg must be list of path strings".into())),
+    };
+    let output_path = match value_args.get(1) {
+        Some(Value::Str(s)) => s.clone(),
+        _ => return rt_variant("Err".into(), rt_str("link-objs-to-binary: second arg must be output path string".into())),
+    };
+    let needs_compiler = match value_args.get(2) {
+        Some(Value::Bool(b)) => *b,
+        _ => return rt_variant("Err".into(), rt_str("link-objs-to-binary: third arg must be bool".into())),
+    };
+    #[cfg(feature = "aot")]
+    {
+        match crate::bytecode_marshal::link_objs_to_binary(&paths, &output_path, needs_compiler) {
+            Ok(()) => rt_variant("Ok".into(), rt_str(output_path)),
+            Err(e) => rt_variant("Err".into(), rt_str(format!("{}", e))),
+        }
+    }
+    #[cfg(not(feature = "aot"))]
+    {
+        let _ = (paths, output_path, needs_compiler);
+        rt_variant("Err".into(), rt_str("link-objs-to-binary: AOT feature not enabled".into()))
+    }
+}
+
 fn dispatch_run_bytecode(args: &[*mut RtValue]) -> *mut RtValue {
     let value_args: Vec<Value> = args.iter().map(|&p| rt_to_value_no_release(p)).collect();
     let func_list = match value_args.first() {
@@ -790,6 +851,8 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "compile-bytecode-to-executable" => dispatch_compile_bytecode_to_executable(args),
         "compile-bytecode-to-executable-with-target" => dispatch_compile_bytecode_to_executable_with_target(args),
         "compile-bytecode-streaming" => dispatch_compile_bytecode_streaming(args),
+        "compile-batch-to-obj" => dispatch_compile_batch_to_obj(args),
+        "link-objs-to-binary" => dispatch_link_objs_to_binary(args),
         "run-bytecode" => dispatch_run_bytecode(args),
 
         // extern-c name aliases — used by io.airl AIRL wrappers to call C functions
