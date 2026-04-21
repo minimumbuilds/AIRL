@@ -60,6 +60,8 @@ pub extern "C" fn airl_value_release(ptr: *mut RtValue) {
             // Refcount is now 0 — we have exclusive access. Free.
             #[cfg(not(target_os = "airlos"))]
             crate::diag::on_free((*ptr).tag);
+            #[cfg(all(not(target_os = "airlos"), feature = "rt_trace_sites"))]
+            crate::diag::on_free_at_site((*ptr).site_id);
             free_value(ptr);
         } else if prev == 0 {
             // Double-release detected — restore to 0, do nothing.

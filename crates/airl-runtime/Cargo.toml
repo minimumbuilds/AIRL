@@ -31,3 +31,6 @@ flate2 = "1"
 mlir = ["airl-mlir"]
 cuda = ["mlir", "airl-mlir/cuda"]
 aot = ["dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-object", "dep:cranelift-module", "dep:target-lexicon", "dep:object"]
+# Propagate airl-rt's rt_trace_sites feature up so top-level callers can enable
+# diagnostics via one flag: cargo build --features aot,rt_trace_sites.
+rt_trace_sites = ["airl-rt/rt_trace_sites"]

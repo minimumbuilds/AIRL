@@ -4,7 +4,36 @@ use core::sync::atomic::Ordering;
 
 use crate::error::rt_error;
 use crate::memory::{airl_value_retain, airl_value_release};
-use crate::value::{rt_bool, rt_bytes, rt_int, rt_list, RtData, RtValue, TAG_LIST};
+use crate::value::{rt_bool, rt_bytes, rt_int, rt_list, rt_list_at, RtData, RtValue, TAG_LIST};
+
+// Allocation-site ids for leak attribution. Registered once on first use;
+// id 0 means "unregistered" (feature gate off or registry full). The
+// OnceLock<u16> is per-site so multiple sites compile cleanly alongside
+// each other. When the `rt_trace_sites` feature is off, register_site
+// returns 0 and these are zero-cost.
+#[cfg(not(target_os = "airlos"))]
+static SITE_LIST_NEW: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "airlos"))]
+static SITE_CONS_CLONE: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "airlos"))]
+static SITE_APPEND_CLONE: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "airlos"))]
+static SITE_TAIL_VIEW: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "airlos"))]
+static SITE_SET_AT_CLONE: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "airlos"))]
+static SITE_HOF_MAP: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "airlos"))]
+static SITE_HOF_FILTER: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+
+#[cfg(not(target_os = "airlos"))]
+#[inline]
+fn site(slot: &'static std::sync::OnceLock<u16>, name: &'static str) -> u16 {
+    *slot.get_or_init(|| crate::diag::register_site(name))
+}
+#[cfg(target_os = "airlos")]
+#[inline]
+fn site(_slot: &'static (), _name: &'static str) -> u16 { 0 }
 
 /// Return a slice of the list's elements, resolving views through the parent pointer.
 pub fn list_items(data: &RtData) -> &[*mut RtValue] {
@@ -62,11 +91,15 @@ pub extern "C" fn airl_tail(list: *mut RtValue) -> *mut RtValue {
 
     airl_value_retain(root);
     // Create view: empty items, offset+1, parent=root
-    RtValue::alloc(TAG_LIST, RtData::List {
+    #[cfg(not(target_os = "airlos"))]
+    let sid = site(&SITE_TAIL_VIEW, "list.rs:airl_tail.view");
+    #[cfg(target_os = "airlos")]
+    let sid = 0u16;
+    RtValue::alloc_at(TAG_LIST, RtData::List {
         items: Vec::new(),
         offset: current_offset + 1,
         parent: Some(root),
-    })
+    }, sid)
 }
 
 #[no_mangle]
@@ -92,7 +125,7 @@ pub extern "C" fn airl_cons(elem: *mut RtValue, list: *mut RtValue) -> *mut RtVa
         airl_value_retain(item);
         new_items.push(item);
     }
-    rt_list(new_items)
+    rt_list_at(new_items, site(&SITE_CONS_CLONE, "list.rs:airl_cons.clone-path"))
 }
 
 #[no_mangle]
@@ -107,8 +140,9 @@ pub extern "C" fn airl_empty(list: *mut RtValue) -> *mut RtValue {
 
 #[no_mangle]
 pub extern "C" fn airl_list_new(items: *const *mut RtValue, count: usize) -> *mut RtValue {
+    let sid = site(&SITE_LIST_NEW, "list.rs:airl_list_new");
     if count == 0 {
-        return rt_list(Vec::new());
+        return rt_list_at(Vec::new(), sid);
     }
     let slice = unsafe { core::slice::from_raw_parts(items, count) };
     let mut vec = Vec::with_capacity(count);
@@ -116,7 +150,7 @@ pub extern "C" fn airl_list_new(items: *const *mut RtValue, count: usize) -> *mu
         airl_value_retain(item);
         vec.push(item);
     }
-    rt_list(vec)
+    rt_list_at(vec, sid)
 }
 
 #[no_mangle]
@@ -197,7 +231,7 @@ pub extern "C" fn airl_append(list: *mut RtValue, elem: *mut RtValue) -> *mut Rt
             }
             airl_value_retain(elem);
             new_items.push(elem);
-            rt_list(new_items)
+            rt_list_at(new_items, site(&SITE_APPEND_CLONE, "list.rs:airl_append.clone-path"))
         }
         RtData::Bytes(bytes) => {
             let b = match unsafe { &(*elem).data } {
@@ -290,7 +324,7 @@ pub extern "C" fn airl_set_at(list: *mut RtValue, idx: *mut RtValue, val: *mut R
             new_items.push(item);
         }
     }
-    rt_list(new_items)
+    rt_list_at(new_items, site(&SITE_SET_AT_CLONE, "list.rs:airl_set_at.clone-path"))
 }
 
 /// `list-contains?(list, val)` -- check if element is in list.
@@ -341,7 +375,7 @@ pub extern "C" fn airl_map(closure: *mut RtValue, list: *mut RtValue) -> *mut Rt
         let val = airl_call_closure(closure, args.as_ptr(), 1);
         result.push(val);
     }
-    rt_list(result)
+    rt_list_at(result, site(&SITE_HOF_MAP, "list.rs:airl_map"))
 }
 
 /// filter: keep elements where closure returns true
@@ -366,7 +400,7 @@ pub extern "C" fn airl_filter(closure: *mut RtValue, list: *mut RtValue) -> *mut
             result.push(item);
         }
     }
-    rt_list(result)
+    rt_list_at(result, site(&SITE_HOF_FILTER, "list.rs:airl_filter"))
 }
 
 /// fold: left fold with accumulator
