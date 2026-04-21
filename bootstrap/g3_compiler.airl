@@ -295,43 +295,52 @@
                     ;; Check AIRL_STRICT_VERIFY for strict mode (issue-136)
                     (let (strict-env : _ (getenv "AIRL_STRICT_VERIFY"))
                       (let (strict : Bool (match strict-env (Ok v) (= v "1") _ false))
-                    ;; Step 2: Compile user source files with Z3 verification
+                    ;; Split input files: all-but-last get __main__ stripped;
+                    ;; the last file is compiled once with ALL functions kept together
+                    ;; so that __main__ and its closure lambdas share the same batch.
+                    (let (n-files : _ (length input-files))
+                      (let (all-but-last : List (take (- n-files 1) input-files))
+                        (let (last-file : String (at input-files (- n-files 1)))
+                    ;; Step 2: Compile all-but-last files, each as its own batch (strip __main__)
                     (match (fold (fn [acc path]
                               (match acc
                                 (Err e) (Err e)
-                                (Ok funcs-so-far)
+                                (Ok batches-so-far)
                                   (let (source : String (read-file path))
                                     (match (g3-compile-source-with-z3-strict source path "user" strict)
                                       (Err e) (Err e)
                                       (Ok new-funcs)
-                                        (Ok (concat funcs-so-far
+                                        (Ok (append batches-so-far
                                           (filter (fn [f]
                                             (match f
                                               (BCFunc name _ _ _ _ _) (if (= name "__main__") false true)
                                               _ true))
                                             new-funcs)))))))
                             (Ok [])
-                            input-files)
+                            all-but-last)
                       (Err e) (do (print "Compile error: " e "\n") (exit 1))
-                      (Ok user-funcs-no-main)
-                        ;; Compile last file again to get its __main__
-                        (let (last-source : String (read-file (at input-files (- (length input-files) 1))))
+                      (Ok earlier-batches)
+                        ;; Compile last file once — keep ALL functions (including __main__ + its closure lambdas)
+                        (let (last-source : String (read-file last-file))
                           (match (g3-compile-source-with-z3-strict last-source "main" "user" strict)
                             (Err e) (do (print "Compile error: " e "\n") (exit 1))
                             (Ok last-funcs)
-                              (let (user-funcs : List (concat user-funcs-no-main
-                                      (filter (fn [f]
-                                        (match f
-                                          (BCFunc name _ _ _ _ _) (= name "__main__")
-                                          _ false))
-                                        last-funcs)))
-                          ;; Step 3: Combine and AOT compile
-                          (let (all-funcs : List (concat stdlib-funcs user-funcs))
-                            (do
-                              (print "[g3] " (length all-funcs) " total -> " output-path "\n")
-                              (let (compile-result : _ (if (= target-str "")
-                                  (compile-bytecode-to-executable all-funcs output-path)
-                                  (compile-bytecode-to-executable-with-target all-funcs output-path target-str)))
-                                (match compile-result
-                                  (Err e) (do (print "[g3] COMPILE ERROR: " e "\n") (exit 1))
-                                  _ (print "[g3] done\n")))))))))))))))))))))))
+                          ;; Step 3: AOT compile
+                          (if (= target-str "")
+                            ;; Host target: streaming — each file compiles to its own .o
+                            (let (all-batches : List (concat (append [] stdlib-funcs) (append earlier-batches last-funcs)))
+                              (do
+                                (print "[g3] " (length all-batches) " batches -> " output-path "\n")
+                                (let (compile-result : _ (compile-bytecode-streaming all-batches output-path))
+                                  (match compile-result
+                                    (Err e) (do (print "[g3] COMPILE ERROR: " e "\n") (exit 1))
+                                    _ (print "[g3] done\n")))))
+                            ;; Cross-compilation: flatten earlier batches + last-funcs into one list
+                            (let (flat-earlier : List (fold (fn [acc batch] (concat acc batch)) [] earlier-batches))
+                              (let (all-funcs : List (concat stdlib-funcs (concat flat-earlier last-funcs)))
+                                (do
+                                  (print "[g3] " (length all-funcs) " total -> " output-path " [" target-str "]\n")
+                                  (let (compile-result : _ (compile-bytecode-to-executable-with-target all-funcs output-path target-str))
+                                    (match compile-result
+                                      (Err e) (do (print "[g3] COMPILE ERROR: " e "\n") (exit 1))
+                                      _ (print "[g3] done\n")))))))))))))))))))))))))))
