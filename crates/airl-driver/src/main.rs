@@ -43,7 +43,7 @@ fn cmd_run(args: &[String]) {
     #[cfg(feature = "aot")]
     {
         if args.is_empty() {
-            eprintln!("Usage: airl run [--load module.airl ...] [--no-z3-cache] <file.airl> [-- args...]");
+            eprintln!("Usage: airl run [--load module.airl ...] [--no-z3-cache] [--no-z3-bodies] <file.airl> [-- args...]");
             std::process::exit(1);
         }
 
@@ -71,6 +71,10 @@ fn cmd_run(args: &[String]) {
                 }
                 "--no-z3-cache" => {
                     std::env::set_var("AIRL_NO_Z3_CACHE", "1");
+                    i += 1;
+                }
+                "--no-z3-bodies" | "--contracts-only" => {
+                    std::env::set_var("AIRL_NO_Z3_BODIES", "1");
                     i += 1;
                 }
                 "--strict" => {
@@ -205,7 +209,7 @@ fn cmd_compile(args: &[String]) {
         use airl_driver::pipeline::compile_to_object;
 
         if args.is_empty() {
-            eprintln!("Usage: airl compile [--no-z3-cache] <file.airl ...> [-o output] [--target target]");
+            eprintln!("Usage: airl compile [--no-z3-cache] [--no-z3-bodies] <file.airl ...> [-o output] [--target target]");
             std::process::exit(1);
         }
 
@@ -233,6 +237,9 @@ fn cmd_compile(args: &[String]) {
                 }
             } else if args[i] == "--no-z3-cache" {
                 std::env::set_var("AIRL_NO_Z3_CACHE", "1");
+                i += 1;
+            } else if args[i] == "--no-z3-bodies" || args[i] == "--contracts-only" {
+                std::env::set_var("AIRL_NO_Z3_BODIES", "1");
                 i += 1;
             } else if args[i] == "--strict" {
                 std::env::set_var("AIRL_STRICT_VERIFY", "1");
@@ -421,15 +428,17 @@ fn find_airl_libs() -> (String, String) {
 
 fn cmd_check(args: &[String]) {
     if args.is_empty() {
-        eprintln!("Usage: airl check [--no-z3-cache] [--strict] <file.airl>");
+        eprintln!("Usage: airl check [--no-z3-cache] [--no-z3-bodies] [--strict] <file.airl>");
         std::process::exit(1);
     }
 
-    // Parse flags: --no-z3-cache, --strict
+    // Parse flags: --no-z3-cache, --no-z3-bodies, --strict
     let mut path_idx = 0;
     for (i, arg) in args.iter().enumerate() {
         if arg == "--no-z3-cache" {
             std::env::set_var("AIRL_NO_Z3_CACHE", "1");
+        } else if arg == "--no-z3-bodies" || arg == "--contracts-only" {
+            std::env::set_var("AIRL_NO_Z3_BODIES", "1");
         } else if arg == "--strict" {
             std::env::set_var("AIRL_STRICT_VERIFY", "1");
         } else {

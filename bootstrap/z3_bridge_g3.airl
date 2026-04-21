@@ -970,4 +970,13 @@
   :intent "Entry point: verify all contracts in parsed AST, return proof-map"
   :requires [(valid nodes)]
   :ensures [(valid result)]
-  :body (z3-verify-ast-nodes nodes (map-new)))
+  :body
+    ;; Bypass all Z3 verification when AIRL_NO_Z3_BODIES is set.
+    ;; Prevents OOM on large codebases where Z3's C allocator pools
+    ;; term memory without returning it to the OS.
+    (let (skip : Bool
+          (match (getenv "AIRL_NO_Z3_BODIES")
+            (Ok val) (= val "1")
+            _ false))
+      (if skip (map-new)
+        (z3-verify-ast-nodes nodes (map-new)))))

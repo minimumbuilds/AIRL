@@ -168,7 +168,10 @@ impl Z3Prover {
                         }
                         None => false, // "result" was not declared; skip body binding
                     },
-                    Err(_) => false,
+                    Err(e) => {
+                        eprintln!("[z3-bodies] SKIPPED: {} ({})", def.name, e);
+                        false
+                    }
                 },
                 Some(VarSort::Bool) => match translator.translate_bool(&def.body) {
                     Ok(body_z3) => match translator.get_bool_var("result") {
@@ -178,7 +181,10 @@ impl Z3Prover {
                         }
                         None => false,
                     },
-                    Err(_) => false,
+                    Err(e) => {
+                        eprintln!("[z3-bodies] SKIPPED: {} ({})", def.name, e);
+                        false
+                    }
                 },
                 Some(VarSort::Real) => match translator.translate_real(&def.body) {
                     Ok(body_z3) => match translator.get_real_var("result") {
@@ -188,7 +194,10 @@ impl Z3Prover {
                         }
                         None => false,
                     },
-                    Err(_) => false,
+                    Err(e) => {
+                        eprintln!("[z3-bodies] SKIPPED: {} ({})", def.name, e);
+                        false
+                    }
                 },
                 Some(VarSort::Str) => match translator.translate_string(&def.body) {
                     Ok(body_z3) => match translator.get_string_var("result") {
@@ -198,7 +207,10 @@ impl Z3Prover {
                         }
                         None => false,
                     },
-                    Err(_) => false,
+                    Err(e) => {
+                        eprintln!("[z3-bodies] SKIPPED: {} ({})", def.name, e);
+                        false
+                    }
                 },
                 // Seq(Int) return: body translation not yet supported — list-constructing
                 // expressions can't be translated to Z3. Contracts on list params (length,
@@ -541,21 +553,30 @@ impl Z3Prover {
                         Some(r) => { solver.assert(&r.clone()._eq(&body_z3)); true }
                         None => false,
                     },
-                    Err(_) => false,
+                    Err(e) => {
+                        eprintln!("[z3-bodies] SKIPPED: {} (body exceeded term limit or unsupported: {})", def.name, e);
+                        false
+                    }
                 },
                 Some(VarSort::Bool) => match translator.translate_bool(&def.body) {
                     Ok(body_z3) => match translator.get_bool_var("result") {
                         Some(r) => { solver.assert(&r.clone()._eq(&body_z3)); true }
                         None => false,
                     },
-                    Err(_) => false,
+                    Err(e) => {
+                        eprintln!("[z3-bodies] SKIPPED: {} (body exceeded term limit or unsupported: {})", def.name, e);
+                        false
+                    }
                 },
                 Some(VarSort::Real) => match translator.translate_real(&def.body) {
                     Ok(body_z3) => match translator.get_real_var("result") {
                         Some(r) => { solver.assert(&r.clone()._eq(&body_z3)); true }
                         None => false,
                     },
-                    Err(_) => false,
+                    Err(e) => {
+                        eprintln!("[z3-bodies] SKIPPED: {} (body exceeded term limit or unsupported: {})", def.name, e);
+                        false
+                    }
                 },
                 _ => false,
             },

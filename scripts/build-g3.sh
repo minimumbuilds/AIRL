@@ -41,12 +41,22 @@ if [[ "$_build_os" == "Darwin" ]]; then
     fi
 fi
 
-if [[ "$AIRL_ROOT" == *:* || "$_build_os" == "Darwin" ]]; then
-    export CARGO_TARGET_DIR="/tmp/g3-build-${G3_ARCH}"
-    _G3_COLON_PATH=1
+# Respect externally-set CARGO_TARGET_DIR (e.g. when caller provides a pre-built binary
+# from a user-writable directory rather than the root-owned target-x86_64 from Docker).
+if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
+    if [[ "$AIRL_ROOT" == *:* || "$_build_os" == "Darwin" ]]; then
+        export CARGO_TARGET_DIR="/tmp/g3-build-${G3_ARCH}"
+        _G3_COLON_PATH=1
+    else
+        export CARGO_TARGET_DIR="${AIRL_ROOT}/target-${G3_ARCH}"
+        _G3_COLON_PATH=0
+    fi
 else
-    export CARGO_TARGET_DIR="${AIRL_ROOT}/target-${G3_ARCH}"
-    _G3_COLON_PATH=0
+    if [[ "$AIRL_ROOT" == *:* || "$_build_os" == "Darwin" ]]; then
+        _G3_COLON_PATH=1
+    else
+        _G3_COLON_PATH=0
+    fi
 fi
 
 BUILDS_DIR="builds"
@@ -89,10 +99,22 @@ if [[ -f /.dockerenv ]] || grep -q 'docker\|lxc' /proc/1/cgroup 2>/dev/null; the
     _in_container=1
 fi
 
-if [[ "$_build_os" != "Darwin" && "$_in_container" -eq 0 ]]; then
+# G3_SKIP_DOCKER=1: bypass the container sandbox for host builds where system
+# libraries (libz3, libcurl, libsqlite3) are available on the host linker path.
+if [[ "$_build_os" != "Darwin" && "$_in_container" -eq 0 && "${G3_SKIP_DOCKER:-0}" != "1" ]]; then
     if [[ "$AIRL_ROOT" == *:* ]]; then
         echo "error: worktree path contains colon — use a dash-named worktree for Docker builds" >&2
         exit 1
+    fi
+    # Stage 1 (cargo build + z3-sys) always runs on the host — rust:slim lacks cmake/c++.
+    # Pass the pre-built binary path so Docker skips cargo build entirely and only
+    # runs the AIRL bootstrap compilation (Stage 2/3) inside the resource-limited container.
+    # Prefer AIRL_BIN from env (e.g. pointing to default target/release/) over CARGO_TARGET_DIR
+    # which may differ from where cargo actually wrote the binary.
+    _prebuilt_airl="${AIRL_BIN:-${CARGO_TARGET_DIR}/release/airl-driver}"
+    # Strip trailing "-- " or similar cargo args if AIRL_BIN was set to a cargo invocation
+    if [[ "$_prebuilt_airl" == cargo* ]]; then
+        _prebuilt_airl="${CARGO_TARGET_DIR}/release/airl-driver"
     fi
     exec docker run --rm \
         --memory=6g --memory-swap=6g --cpus=2 \
@@ -100,7 +122,7 @@ if [[ "$_build_os" != "Darwin" && "$_in_container" -eq 0 ]]; then
         -w "${AIRL_ROOT}" \
         -e "AIRL_STDLIB=${AIRL_STDLIB}" \
         -e "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}" \
-        -e "AIRL_BIN=${AIRL_BIN:-cargo run --release --features aot --}" \
+        -e "AIRL_BIN=${_prebuilt_airl}" \
         -e "AIRL_ROOT=${AIRL_ROOT}" \
         rust:slim \
         bash scripts/build-g3.sh "$@"
@@ -115,17 +137,23 @@ BUILD_PATH="${BUILDS_DIR}/${BUILD_NAME}"
 
 AIRL_BIN="${AIRL_BIN:-cargo run --release --features aot --}"
 
-echo "[build-g3] Building host binary..."
-if [[ "${_G3_COLON_PATH:-0}" -eq 1 ]]; then
-    # Fresh build order: airl-rt must be compiled before airl-runtime embeds it.
-    # Required when CARGO_TARGET_DIR is new (e.g. /tmp path for colon-path worktrees).
-    echo "[build-g3] Fresh build order (colon worktree path — CARGO_TARGET_DIR=$CARGO_TARGET_DIR)..."
-    cargo build --release -p airl-rt
-    cargo clean -p airl-runtime
+# Skip cargo build when running inside Docker (AIRL_BIN is a direct binary path).
+# The host already built the binary in Stage 1; Docker only runs Stage 2/3.
+if [[ "$AIRL_BIN" == cargo* ]]; then
+    echo "[build-g3] Building host binary..."
+    if [[ "${_G3_COLON_PATH:-0}" -eq 1 ]]; then
+        # Fresh build order: airl-rt must be compiled before airl-runtime embeds it.
+        # Required when CARGO_TARGET_DIR is new (e.g. /tmp path for colon-path worktrees).
+        echo "[build-g3] Fresh build order (colon worktree path — CARGO_TARGET_DIR=$CARGO_TARGET_DIR)..."
+        cargo build --release -p airl-rt
+        cargo clean -p airl-runtime
+    fi
+    cargo build --release --features aot
+else
+    echo "[build-g3] Using pre-built host binary: $AIRL_BIN"
 fi
-cargo build --release --features aot
 
-if [[ "${_G3_COLON_PATH:-0}" -eq 1 ]]; then
+if [[ "$AIRL_BIN" == cargo* && "${_G3_COLON_PATH:-0}" -eq 1 ]]; then
     # find_lib() in bytecode_aot.rs uses CWD-relative paths (target/release/lib*.a).
     # Since CARGO_TARGET_DIR is in /tmp, symlink libraries to the expected location.
     mkdir -p "${AIRL_ROOT}/target/release"

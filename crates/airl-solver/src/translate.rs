@@ -25,6 +25,7 @@ pub enum TranslateError {
     UnsupportedExpression(String),
     UnsupportedType(String),
     UndefinedVariable(String),
+    TermLimitExceeded(usize),
 }
 
 impl std::fmt::Display for TranslateError {
@@ -33,6 +34,7 @@ impl std::fmt::Display for TranslateError {
             TranslateError::UnsupportedExpression(e) => write!(f, "unsupported: {}", e),
             TranslateError::UnsupportedType(t) => write!(f, "unsupported type: {}", t),
             TranslateError::UndefinedVariable(v) => write!(f, "undefined: {}", v),
+            TranslateError::TermLimitExceeded(n) => write!(f, "body term limit exceeded ({} terms)", n),
         }
     }
 }
@@ -69,6 +71,11 @@ pub struct Translator<'ctx> {
     /// we declare it as an uninterpreted function so Z3 can reason about call
     /// relationships (e.g., f(x) = f(x) is provable by function congruence).
     func_decls: HashMap<String, Z3_func_decl>,
+    /// Running count of AST nodes translated for this function body.
+    term_count: usize,
+    /// Maximum term count before body translation is aborted with TermLimitExceeded.
+    /// Prevents OOM on large functions where Z3's C allocator pools term memory.
+    term_limit: usize,
 }
 
 impl<'ctx> Translator<'ctx> {
@@ -82,6 +89,11 @@ impl<'ctx> Translator<'ctx> {
             seq_vars: HashMap::new(),
             quant_counter: 0,
             func_decls: HashMap::new(),
+            term_count: 0,
+            term_limit: std::env::var("AIRL_Z3_BODY_TERM_LIMIT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(5000),
         }
     }
 
@@ -296,6 +308,10 @@ impl<'ctx> Translator<'ctx> {
 
     /// Translate an AIRL expression to a Z3 Bool (for contracts).
     pub fn translate_bool(&mut self, expr: &Expr) -> Result<ast::Bool<'ctx>, TranslateError> {
+        self.term_count += 1;
+        if self.term_count > self.term_limit {
+            return Err(TranslateError::TermLimitExceeded(self.term_count));
+        }
         match &expr.kind {
             ExprKind::BoolLit(v) => Ok(ast::Bool::from_bool(self.ctx, *v)),
 
@@ -430,6 +446,10 @@ impl<'ctx> Translator<'ctx> {
 
     /// Translate an AIRL expression to a Z3 Int.
     pub fn translate_int(&mut self, expr: &Expr) -> Result<ast::Int<'ctx>, TranslateError> {
+        self.term_count += 1;
+        if self.term_count > self.term_limit {
+            return Err(TranslateError::TermLimitExceeded(self.term_count));
+        }
         match &expr.kind {
             ExprKind::IntLit(v) => Ok(ast::Int::from_i64(self.ctx, *v)),
 
@@ -553,6 +573,10 @@ impl<'ctx> Translator<'ctx> {
 
     /// Translate an AIRL expression to a Z3 Real (for float arithmetic).
     pub fn translate_real(&mut self, expr: &Expr) -> Result<ast::Real<'ctx>, TranslateError> {
+        self.term_count += 1;
+        if self.term_count > self.term_limit {
+            return Err(TranslateError::TermLimitExceeded(self.term_count));
+        }
         match &expr.kind {
             ExprKind::FloatLit(v) => {
                 let v = *v;
@@ -683,6 +707,10 @@ impl<'ctx> Translator<'ctx> {
 
     /// Translate an AIRL expression to a Z3 String.
     pub fn translate_string(&mut self, expr: &Expr) -> Result<ast::String<'ctx>, TranslateError> {
+        self.term_count += 1;
+        if self.term_count > self.term_limit {
+            return Err(TranslateError::TermLimitExceeded(self.term_count));
+        }
         match &expr.kind {
             ExprKind::StrLit(s) => {
                 ast::String::from_str(self.ctx, s).map_err(|e| {

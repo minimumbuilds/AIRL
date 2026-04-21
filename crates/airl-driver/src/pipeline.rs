@@ -190,6 +190,13 @@ fn z3_verify_tops(
     };
     let mut cache_keys = Vec::new();
 
+    // Skip all Z3 body verification when AIRL_NO_Z3_BODIES is set.
+    // This prevents OOM on large codebases where Z3's C allocator pools
+    // term memory from body encoding without returning it to the OS.
+    if std::env::var("AIRL_NO_Z3_BODIES").is_ok() {
+        return Ok((airl_solver::ProofCache::new(), HashSet::new()));
+    }
+
     // When AIRL_STRICT_VERIFY is set (via --strict flag), override all verify
     // levels to Proven — every function must have provable contracts.
     let strict_verify = std::env::var("AIRL_STRICT_VERIFY").is_ok();
