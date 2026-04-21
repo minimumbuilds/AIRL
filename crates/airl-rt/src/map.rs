@@ -150,7 +150,11 @@ pub extern "C" fn airl_map_set(
             }
             airl_value_retain(val);
             new_map.insert(k_str.to_string(), val);
-            rt_map(new_map)
+            #[cfg(not(target_os = "airlos"))]
+            let sid = site(&SITE_MAP_SET_CLONE, "map.rs:airl_map_set.clone-path");
+            #[cfg(target_os = "airlos")]
+            let sid = 0u16;
+            rt_map_at(new_map, sid)
         }
         _ => rt_error("airl_map_set: first argument must be a Map"),
     }
@@ -193,7 +197,11 @@ pub extern "C" fn airl_map_remove(m: *mut RtValue, key: *mut RtValue) -> *mut Rt
                 airl_value_retain(existing_val);
                 new_map.insert(existing_key.clone(), existing_val);
             }
-            rt_map(new_map)
+            #[cfg(not(target_os = "airlos"))]
+            let sid = site(&SITE_MAP_REMOVE, "map.rs:airl_map_remove.clone-path");
+            #[cfg(target_os = "airlos")]
+            let sid = 0u16;
+            rt_map_at(new_map, sid)
         }
         _ => rt_error("airl_map_remove: first argument must be a Map"),
     }

@@ -14,17 +14,17 @@ use crate::value::{rt_bool, rt_bytes, rt_int, rt_list, rt_list_at, RtData, RtVal
 #[cfg(not(target_os = "airlos"))]
 static SITE_LIST_NEW: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 #[cfg(not(target_os = "airlos"))]
-static SITE_APPEND_COW: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
-#[cfg(not(target_os = "airlos"))]
 static SITE_CONS_CLONE: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 #[cfg(not(target_os = "airlos"))]
 static SITE_APPEND_CLONE: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 #[cfg(not(target_os = "airlos"))]
-static SITE_REVERSE: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
-#[cfg(not(target_os = "airlos"))]
 static SITE_TAIL_VIEW: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 #[cfg(not(target_os = "airlos"))]
-static SITE_BYTES_TO_LIST: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+static SITE_SET_AT_CLONE: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "airlos"))]
+static SITE_HOF_MAP: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "airlos"))]
+static SITE_HOF_FILTER: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 
 #[cfg(not(target_os = "airlos"))]
 #[inline]
@@ -324,7 +324,7 @@ pub extern "C" fn airl_set_at(list: *mut RtValue, idx: *mut RtValue, val: *mut R
             new_items.push(item);
         }
     }
-    rt_list(new_items)
+    rt_list_at(new_items, site(&SITE_SET_AT_CLONE, "list.rs:airl_set_at.clone-path"))
 }
 
 /// `list-contains?(list, val)` -- check if element is in list.
@@ -375,7 +375,7 @@ pub extern "C" fn airl_map(closure: *mut RtValue, list: *mut RtValue) -> *mut Rt
         let val = airl_call_closure(closure, args.as_ptr(), 1);
         result.push(val);
     }
-    rt_list(result)
+    rt_list_at(result, site(&SITE_HOF_MAP, "list.rs:airl_map"))
 }
 
 /// filter: keep elements where closure returns true
@@ -400,7 +400,7 @@ pub extern "C" fn airl_filter(closure: *mut RtValue, list: *mut RtValue) -> *mut
             result.push(item);
         }
     }
-    rt_list(result)
+    rt_list_at(result, site(&SITE_HOF_FILTER, "list.rs:airl_filter"))
 }
 
 /// fold: left fold with accumulator

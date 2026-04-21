@@ -14,7 +14,20 @@ use core::fmt::Write;
 use std::sync::OnceLock;
 use crate::error::rt_error;
 use crate::memory::airl_value_retain;
-use crate::value::{rt_bool, rt_bytes, rt_float, rt_int, rt_list, rt_map, rt_nil, rt_str, rt_variant, RtData, RtValue};
+use crate::value::{rt_bool, rt_bytes, rt_float, rt_int, rt_list, rt_list_at, rt_map, rt_nil, rt_str, rt_variant, RtData, RtValue};
+
+#[cfg(not(target_os = "airlos"))]
+static SITE_REVERSE_LIST_CLONE: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "airlos"))]
+static SITE_TAKE_CLONE: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "airlos"))]
+static SITE_DROP_CLONE: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+
+#[cfg(not(target_os = "airlos"))]
+#[inline]
+fn site(slot: &'static std::sync::OnceLock<u16>, name: &'static str) -> u16 {
+    *slot.get_or_init(|| crate::diag::register_site(name))
+}
 
 fn ok_variant(inner: *mut RtValue) -> *mut RtValue {
     rt_variant("Ok".into(), inner)
@@ -385,7 +398,7 @@ pub extern "C" fn airl_reverse_list(list: *mut RtValue) -> *mut RtValue {
     if let RtData::List { .. } = &val.data {
         let slice = crate::list::list_items(&val.data);
         let reversed: Vec<*mut RtValue> = slice.iter().rev().map(|&i| { crate::memory::airl_value_retain(i); i }).collect();
-        rt_list(reversed)
+        rt_list_at(reversed, site(&SITE_REVERSE_LIST_CLONE, "misc.rs:airl_reverse_list.clone-path"))
     } else {
         rt_list(vec![])
     }
@@ -399,7 +412,7 @@ pub extern "C" fn airl_take(n_val: *mut RtValue, list: *mut RtValue) -> *mut RtV
         let slice = crate::list::list_items(&val.data);
         let take_n = n.min(slice.len());
         let taken: Vec<*mut RtValue> = slice[..take_n].iter().map(|&i| { crate::memory::airl_value_retain(i); i }).collect();
-        rt_list(taken)
+        rt_list_at(taken, site(&SITE_TAKE_CLONE, "misc.rs:airl_take"))
     } else {
         rt_list(vec![])
     }
@@ -413,7 +426,7 @@ pub extern "C" fn airl_drop(n_val: *mut RtValue, list: *mut RtValue) -> *mut RtV
         let slice = crate::list::list_items(&val.data);
         if n >= slice.len() { return rt_list(vec![]); }
         let dropped: Vec<*mut RtValue> = slice[n..].iter().map(|&i| { crate::memory::airl_value_retain(i); i }).collect();
-        rt_list(dropped)
+        rt_list_at(dropped, site(&SITE_DROP_CLONE, "misc.rs:airl_drop"))
     } else {
         rt_list(vec![])
     }

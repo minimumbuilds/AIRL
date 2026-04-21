@@ -5,6 +5,9 @@ use crate::error::rt_error;
 use crate::memory::airl_value_retain;
 use crate::value::{RtData, RtValue, TAG_CLOSURE};
 
+#[cfg(not(target_os = "airlos"))]
+static SITE_MAKE_CLOSURE: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+
 /// Build a closure value from a raw function pointer and an array of captured values.
 /// Each capture is retained (the closure takes ownership of one reference to each).
 #[no_mangle]
@@ -21,7 +24,11 @@ pub extern "C" fn airl_make_closure(
             cap_vec.push(cap);
         }
     }
-    RtValue::alloc(TAG_CLOSURE, RtData::Closure { func_ptr, captures: cap_vec })
+    #[cfg(not(target_os = "airlos"))]
+    let sid = *SITE_MAKE_CLOSURE.get_or_init(|| crate::diag::register_site("closure.rs:airl_make_closure"));
+    #[cfg(target_os = "airlos")]
+    let sid = 0u16;
+    RtValue::alloc_at(TAG_CLOSURE, RtData::Closure { func_ptr, captures: cap_vec }, sid)
 }
 
 /// Invoke a closure with the provided arguments.

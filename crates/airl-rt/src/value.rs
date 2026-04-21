@@ -299,6 +299,10 @@ pub fn rt_bool(v: bool) -> *mut RtValue {
 }
 
 pub fn rt_str(v: String) -> *mut RtValue {
+    rt_str_at(v, 0)
+}
+
+pub fn rt_str_at(v: String, site_id: u16) -> *mut RtValue {
     #[cfg(not(target_os = "airlos"))]
     {
         if v.len() <= MAX_INTERN_LEN {
@@ -317,6 +321,8 @@ pub fn rt_str(v: String) -> *mut RtValue {
             if let Some(&p) = w.get(&v) {
                 return p as *mut RtValue;
             }
+            // Interned strings are immortal — they don't contribute to leak
+            // accounting, so we don't tag them with a site_id.
             let p = RtValue::alloc(TAG_STR, RtData::Str(v.clone()));
             unsafe {
                 (*p).rc.store(u32::MAX, core::sync::atomic::Ordering::Relaxed);
@@ -325,7 +331,7 @@ pub fn rt_str(v: String) -> *mut RtValue {
             return p;
         }
     }
-    RtValue::alloc(TAG_STR, RtData::Str(v))
+    RtValue::alloc_at(TAG_STR, RtData::Str(v), site_id)
 }
 
 pub fn rt_list(items: Vec<*mut RtValue>) -> *mut RtValue {
