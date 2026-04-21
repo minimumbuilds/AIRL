@@ -170,3 +170,79 @@ z3-verify, after bc-compile). Localize which phase is leaking.
 not yet achieved. Spec 3 Phase 2/4 was necessary but not sufficient.
 Spec 2 Phase 4+ fixes remain — specifically, identifying and breaking
 whichever of (a)–(c) above is the dominant source of retention.
+
+## Phase 4 findings (2026-04-21)
+
+Added rt-stats at 7 phase boundaries inside `g3-compile-source-with-z3-strict`
+and rebuilt G3. Per-phase RSS/alive deltas across 6 bootstrap files + main:
+
+### Per-phase RSS growth (MiB, ordered by total delta)
+
+| Phase            | f0 lex | f1 par | f2 bc  | f3 z3b | f4 zc | f5 lin | main |
+|------------------|--------|--------|--------|--------|-------|--------|------|
+| enter→after-lex  |   +102 |   +540 | +**2294** |   +528 |   +20 |   +222 |  +67 |
+| after-lex→sexpr  |     +2 |     +2 |     +6 |     +2 |    +2 |     +2 |   +2 |
+| after-sexpr→prog |     +2 |     +2 |     +4 |     +2 |     0 |     +2 |    0 |
+| after-prog→lin   |      0 |     +2 |     +4 |     +4 |     0 |      0 |   +1 |
+| after-lin→z3     |    +10 |     +2 |     +8 |    +10 |   +10 |    +14 |  +16 |
+| after-z3→bc      |    +82 |   +154 |   +238 | +**1330** |   +8 |   +241 |  +27 |
+| fold-step close  |     +7 |     +6 |     +6 |    +12 |    +2 |     +4 |  n/a |
+
+### Key observations
+
+1. **Two phases dominate: `lex` and `bc-compile`.** Together they account
+   for **>95% of memory growth** in every file. Parse-sexpr, parse-program,
+   linearity, and z3-verify combined add at most a few MiB per file.
+
+2. **Growth is roughly proportional to file size** — bc_compiler.airl
+   (largest) adds 2.3 GiB at lex alone; z3_cache.airl (smallest after stdlib)
+   adds only 20 MiB. That's consistent with "tokens retained across the
+   match-arm's body life" — `(Ok tokens) <body-using-tokens-through-bc-compile>`
+   keeps `tokens` alive for the full pipeline even though only parse uses
+   them.
+
+3. **Between-file retention is small (2–12 MiB)** but **within-file growth
+   is large and persistent** — the `alive` count at fold-step:done equals
+   the after-bc-compile count. So allocations made during a file's
+   compilation are NOT freed before the next file starts.
+
+4. **Lists dominate (1.85M alive after 6 files).** Per-file list growth:
+   f0 +207K, f1 +308K, f2 +752K, f3 +617K, f4 +39K, f5 +236K. Bytes,
+   ints, and variants grow proportionally but at lower absolute counts.
+
+### Likely root causes
+
+**For the `lex` phase blowup:** `lex source → List<Token>`. Each token is
+an AIRL list like `[kind value span]`. For a ~5000-line AIRL file, that's
+~50K–100K tokens. The token list is bound by the outer `(Ok tokens)` arm
+and stays alive through parse-sexpr-all → parse-program → linearity →
+z3-verify → bc-compile. Even after parse consumes it, the variable `tokens`
+is still in scope.
+
+**For the `bc-compile` phase blowup:** the `compile-state` map passed
+through every `cs-emit` / `cs-add-const` call accumulates `instrs` and
+`consts` lists. Although Spec 3's `bc-func-from` consumes these into
+`Arc<BcFunc>`, the AIRL-level `(cs-instrs st)` list isn't explicitly
+dropped — it lives as long as `st` lives, which is the full lifetime of
+each function's compilation.
+
+### Next action
+
+**Option A (low-risk, high-value):** Explicitly narrow the scope of the
+`tokens` and compile-state bindings. Tokens can be consumed by
+`parse-sexpr-all` and then dropped via AIRL's `move` semantics — if we
+re-bind `tokens → nil` or similar after parse consumes it, the list
+should release. Equivalent for the compile-state after `bc-func-from`
+absorbs the instrs/consts.
+
+**Option B (more intrusive):** Rewrite `g3-compile-source-with-z3-strict`
+to pass intermediate results by move, shedding the outer-scope name-
+binding retention. Requires AIRL-level restructuring.
+
+**Option C (tooling):** Build with `rt_trace_sites` feature enabled
+and get the per-site dump at exit. That pinpoints whether the leaked
+lists originate in `airl_lex` (tokens), in `cs-emit`'s instrs append,
+or elsewhere — removing guesswork.
+
+Given the spec's "investigation-first" discipline, Option C is the
+clear next step. Spec 4's alloc-site tagging was built exactly for this.
