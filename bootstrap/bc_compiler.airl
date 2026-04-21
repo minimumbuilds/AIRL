@@ -1422,8 +1422,12 @@
                                   (Ok st7)
                                     ;; Emit return
                                     (let (st8 : _ (cs-emit st7 (op-return) 0 dst-reg 0))
-                                      ;; Build BCFunc
-                                      (let (func : _ (BCFunc name arity (cs-max-reg st8) capture-count (cs-consts st8) (cs-instrs st8)))
+                                      ;; Build BCFunc via native constructor (spec 3 phase 2).
+                                      ;; Replaces the legacy `(BCFunc name arity ...)` variant
+                                      ;; construction, which allocated ~500 RtValues per function.
+                                      ;; `bc-func-from` collapses the whole thing into a single
+                                      ;; `Arc<BcFunc>` carried by one RtValue.
+                                      (let (func : _ (bc-func-from name arity (cs-max-reg st8) capture-count (cs-consts st8) (cs-instrs st8)))
                                         (Ok [func (cs-lambdas st8) (cs-lambda-ctr st8)])))))))))))))))))
 
 (defn bc-emit-contract-assertions

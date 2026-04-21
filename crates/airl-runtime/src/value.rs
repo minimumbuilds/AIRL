@@ -32,6 +32,11 @@ pub enum Value {
         captured_args: Vec<Value>,
         remaining_arity: usize,
     },
+    /// Native bytecode function — spec 3 phase 2. Cheap Arc clone, no
+    /// re-materialization of the nested RtValue tree. Only used as a
+    /// marshalling conduit between `*mut RtValue` (RtData::BCFuncNative)
+    /// and `BytecodeFunc`; the interpreter never executes these directly.
+    BCFuncNative(std::sync::Arc<airl_rt::bc_func::BcFunc>),
 }
 
 impl fmt::Display for Value {
@@ -95,6 +100,9 @@ impl fmt::Display for Value {
             Value::Bytes(v) => write!(f, "<Bytes len={}>", v.len()),
             Value::PartialApp { func, captured_args, remaining_arity } => {
                 write!(f, "<partial {} args={} remaining={}>", func, captured_args.len(), remaining_arity)
+            }
+            Value::BCFuncNative(bcf) => {
+                write!(f, "<bcfunc {} arity={}>", bcf.name, bcf.arity)
             }
         }
     }
