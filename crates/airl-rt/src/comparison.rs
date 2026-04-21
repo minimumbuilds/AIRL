@@ -29,6 +29,35 @@ pub fn rt_values_equal(a: *mut RtValue, b: *mut RtValue) -> bool {
             tn_a == tn_b && rt_values_equal(*inner_a, *inner_b)
         }
         (RtData::Bytes(a), RtData::Bytes(b)) => a == b,
+        // Spec 3 phase 2 — structural equality on native BCFunc. Arc::ptr_eq
+        // is a fast path for aliased values; otherwise fall back to field-by-
+        // field comparison. Fixpoint tests (`bootstrap/fixpoint_test.airl`)
+        // rely on this producing `true` for two independently-constructed
+        // BcFuncs with identical contents.
+        (RtData::BCFuncNative(a), RtData::BCFuncNative(b)) => {
+            #[cfg(not(target_os = "airlos"))]
+            { if std::sync::Arc::ptr_eq(a, b) { return true; } }
+            #[cfg(target_os = "airlos")]
+            { if alloc::sync::Arc::ptr_eq(a, b) { return true; } }
+            if a.name != b.name
+                || a.arity != b.arity
+                || a.reg_count != b.reg_count
+                || a.capture_count != b.capture_count
+                || a.constants.len() != b.constants.len()
+                || a.instructions.len() != b.instructions.len()
+            {
+                return false;
+            }
+            if a.instructions != b.instructions {
+                return false;
+            }
+            for (&pa, &pb) in a.constants.iter().zip(b.constants.iter()) {
+                if !rt_values_equal(pa, pb) {
+                    return false;
+                }
+            }
+            true
+        }
         // Cross-type = false
         _ => false,
     }
