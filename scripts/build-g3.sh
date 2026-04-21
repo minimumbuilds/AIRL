@@ -148,12 +148,16 @@ if [[ "${_G3_COLON_PATH:-0}" -eq 1 ]]; then
 fi
 cargo build --release --features aot
 
-if [[ "${_G3_COLON_PATH:-0}" -eq 1 ]]; then
-    # find_lib() in bytecode_aot.rs uses CWD-relative paths (target/release/lib*.a).
-    # Since CARGO_TARGET_DIR is in /tmp, symlink libraries to the expected location.
+# find_lib() in airl-driver (find_airl_libs) looks for target/release/lib*.a
+# first, then falls back to -lairl_rt. When CARGO_TARGET_DIR points elsewhere
+# (target-x86_64, /tmp/g3-build-*), stale pre-existing `target/release/lib*.a`
+# can shadow the freshly-built libraries. Symlink to the current CARGO_TARGET_DIR
+# whenever we've redirected it, regardless of whether the redirect reason was a
+# colon-path workaround or plain arch-suffix isolation.
+if [[ "${CARGO_TARGET_DIR}" != "${AIRL_ROOT}/target" ]]; then
     mkdir -p "${AIRL_ROOT}/target/release"
-    ln -sf "${CARGO_TARGET_DIR}/release/libairl_rt.a" "${AIRL_ROOT}/target/release/libairl_rt.a"
-    ln -sf "${CARGO_TARGET_DIR}/release/libairl_runtime.a" "${AIRL_ROOT}/target/release/libairl_runtime.a"
+    ln -sfn "${CARGO_TARGET_DIR}/release/libairl_rt.a" "${AIRL_ROOT}/target/release/libairl_rt.a"
+    ln -sfn "${CARGO_TARGET_DIR}/release/libairl_runtime.a" "${AIRL_ROOT}/target/release/libairl_runtime.a"
 fi
 
 echo "[build-g3] Compiling G3 -> ${BUILD_PATH}..."
