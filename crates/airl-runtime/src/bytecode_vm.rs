@@ -709,6 +709,7 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         // System — OS-level builtins (cannot be pure AIRL)
         "sleep" => airl_rt::misc::airl_sleep(a0!()),
         "time-now" => airl_rt::misc::airl_time_now(),
+        "rt-stats" => airl_rt::misc::airl_rt_stats(a0!()),
         "cpu-count" => airl_rt::misc::airl_cpu_count(),
         "format-time" => airl_rt::misc::airl_format_time(a0!(), a1!()),
         "get-cwd" => airl_rt::misc::airl_get_cwd(),
@@ -884,6 +885,7 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "airl_exit" => airl_rt::misc::airl_exit(a0!()),
         "airl_sleep" => airl_rt::misc::airl_sleep(a0!()),
         "airl_time_now" => airl_rt::misc::airl_time_now(),
+        "airl_rt_stats" => airl_rt::misc::airl_rt_stats(a0!()),
         "airl_cpu_count" => airl_rt::misc::airl_cpu_count(),
         "airl_format_time" => airl_rt::misc::airl_format_time(a0!(), a1!()),
 
@@ -992,7 +994,7 @@ fn builtin_arity(name: &str) -> Option<usize> {
         // String — ternary
         "substring" | "replace" => Some(3),
         // I/O — unary
-        "print" | "println" | "eprint" | "eprintln" => Some(1),
+        "print" | "println" | "eprint" | "eprintln" | "rt-stats" => Some(1),
         "read-lines" | "write-file" | "file-exists?" | "exec-file" | "append-file"
         | "delete-file" | "delete-dir" | "read-dir" | "create-dir" | "file-size"
         | "is-dir?" | "temp-file" | "temp-dir" | "file-mtime" => Some(1),

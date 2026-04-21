@@ -422,6 +422,7 @@ impl TypeChecker {
         self.bind_typed("getenv", &[string_t.clone()], t.clone()); // returns Result
         self.bind_typed("get-args", &[], list_t.clone());
         self.bind_typed("cpu-count", &[], int_t.clone());
+        self.bind_typed("rt-stats", &[string_t.clone()], t.clone()); // returns Nil — diagnostic
         self.bind_typed("format-time", &[int_t.clone(), string_t.clone()], string_t.clone());
 
         // Conversion
@@ -1828,7 +1829,7 @@ mod tests {
             "read-file", "write-file", "file-exists?", "append-file", "delete-file",
             "delete-dir", "rename-file", "read-dir", "create-dir", "file-size",
             "is-dir?", "temp-file", "temp-dir", "file-mtime",
-            "shell-exec", "time-now", "sleep", "getenv", "get-args", "cpu-count",
+            "shell-exec", "time-now", "rt-stats", "sleep", "getenv", "get-args", "cpu-count",
             "format-time", "int-to-string", "float-to-string", "string-to-int",
             "string-to-float", "char-code", "char-from-code",
             "infinity", "nan", "is-nan?", "is-infinite?", "panic", "assert",

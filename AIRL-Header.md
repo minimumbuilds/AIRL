@@ -332,6 +332,7 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (get-args) -> List                    ; command-line args as strings
 (get-cwd) -> Str                      ; current working directory
 (cpu-count) -> Int                    ; logical CPU count
+(rt-stats label) -> Nil               ; print runtime alloc snapshot (diagnostic)
 ```
 
 ### Network/JSON

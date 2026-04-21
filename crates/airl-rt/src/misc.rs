@@ -1095,6 +1095,31 @@ pub extern "C" fn airl_time_now() -> *mut RtValue {
     rt_int(ms)
 }
 
+/// `rt-stats(label)` — print a one-line runtime allocator snapshot to stderr,
+/// tagged with the given label. Returns Nil. Used for investigating leak
+/// sources at phase and file boundaries in the bootstrap compiler.
+///
+/// When `AIRL_RT_TRACE` is unset, this is effectively no-op: the diag
+/// counters are only bumped once tracing has been initialized, so reading
+/// them without tracing will show zeros. We still print, so scripts can
+/// detect the call ran.
+#[cfg(not(target_os = "airlos"))]
+#[no_mangle]
+pub extern "C" fn airl_rt_stats(label: *mut RtValue) -> *mut RtValue {
+    let s = match unsafe { &(*label).data } {
+        RtData::Str(s) => s.as_str(),
+        _ => "?",
+    };
+    crate::diag::print_stats(s);
+    crate::value::rt_nil()
+}
+
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_rt_stats(_label: *mut RtValue) -> *mut RtValue {
+    crate::value::rt_nil()
+}
+
 #[cfg(target_os = "airlos")]
 #[no_mangle]
 pub extern "C" fn airl_time_now() -> *mut RtValue {

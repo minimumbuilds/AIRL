@@ -792,6 +792,7 @@ fn all_builtins() -> Vec<BuiltinMeta> {
         BuiltinMeta { name: "sleep", sig: "(ms : Int) -> Nil", doc: "Sleep for ms milliseconds.", category: "system" },
         BuiltinMeta { name: "time-now", sig: "() -> Int", doc: "Current Unix timestamp in milliseconds.", category: "system" },
         BuiltinMeta { name: "cpu-count", sig: "() -> Int", doc: "Number of logical CPU cores available.", category: "system" },
+        BuiltinMeta { name: "rt-stats", sig: "(label : String) -> Nil", doc: "Print runtime allocator snapshot (alive/allocs/freed + per-tag counts) to stderr, tagged with `label`. Diagnostic only — used to localize allocation retention across phase/file boundaries.", category: "system" },
         BuiltinMeta { name: "format-time", sig: "(timestamp_ms : Int) (fmt : String) -> String", doc: "Format a Unix timestamp (milliseconds) using a strftime-style format string.", category: "system" },
         BuiltinMeta { name: "shell-exec", sig: "(cmd : String) (stdin : String) -> Map", doc: "Run cmd in a shell, passing stdin as input. Returns a map with keys stdout, stderr, exit_code.", category: "system" },
         BuiltinMeta { name: "shell-exec-with-stdin", sig: "(cmd : String) (args : List) (stdin : String) -> Map", doc: "Run cmd with explicit args list and stdin. Returns a map with keys stdout, stderr, exit_code.", category: "system" },
