@@ -12,6 +12,12 @@
 # Compiled binaries are cached in tests/aot/cache/. To force recompile, delete the cache dir.
 set -euo pipefail
 
+# Ensure cargo is on PATH when run from a non-interactive shell (e.g. CI, agents).
+if [ -f "$HOME/.cargo/env" ]; then
+  # shellcheck disable=SC1091
+  . "$HOME/.cargo/env"
+fi
+
 CACHE_DIR="tests/aot/cache"
 mkdir -p "$CACHE_DIR"
 
@@ -66,9 +72,16 @@ for test in tests/aot/round*.airl; do
 
   if [ "$need_compile" -eq 1 ]; then
     # Build command
+    # DEPS list mirrors the one in scripts/build-g3.sh — g3_compiler.airl
+    # now requires z3_cache / z3_bridge_g3 / linearity for the strict-
+    # verification pipeline that was integrated after the original DEPS
+    # list was written.
     cmd="cargo run --release --features aot -- run"
     cmd="$cmd --load bootstrap/lexer.airl"
     cmd="$cmd --load bootstrap/parser.airl"
+    cmd="$cmd --load bootstrap/z3_cache.airl"
+    cmd="$cmd --load bootstrap/z3_bridge_g3.airl"
+    cmd="$cmd --load bootstrap/linearity.airl"
     cmd="$cmd --load bootstrap/bc_compiler.airl"
     cmd="$cmd bootstrap/g3_compiler.airl --"
     if [ -n "$deps" ]; then
