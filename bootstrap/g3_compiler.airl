@@ -122,20 +122,28 @@
   :requires [(valid source)]
   :ensures [(valid result)]
   :body
+    ;; Spec 2 phase 4 — rt-stats at each phase boundary so we can see
+    ;; which phase retains memory across files. Calls are no-op when
+    ;; AIRL_RT_TRACE is unset (counters accumulate but no output).
+    (do (rt-stats (str "g3-compile:enter:" label))
     (match (lex source)
       (Err e) (Err (g3-format-error label e))
       (Ok tokens)
+        (do (rt-stats (str "g3-compile:after-lex:" label))
         (match (parse-sexpr-all tokens)
           (Err e) (Err (g3-format-error label e))
           (Ok sexprs)
+            (do (rt-stats (str "g3-compile:after-parse-sexpr:" label))
             (match (parse-program sexprs)
               (Err e) (Err (g3-format-error label e))
               (Ok ast-nodes)
+                (do (rt-stats (str "g3-compile:after-parse-program:" label))
                 ;; Linearity check — after parse, before Z3 (issue-141)
                 (let (lin-mode : String (g3-linearity-mode strict))
                   (match (g3-run-linearity ast-nodes label lin-mode)
                     (Err e) (Err e)
                     (Ok checked-nodes)
+                      (do (rt-stats (str "g3-compile:after-linearity:" label))
                       (let (cache : _ (z3c-load ".g3-z3-cache"))
                         (let (cv-result : _ (z3c-verify-ast-cached checked-nodes cache))
                           (let (proof-map : _ (at cv-result 0))
@@ -143,12 +151,16 @@
                               (let (cache-hits : _ (at cv-result 2))
                                 (let (cache-misses : _ (at cv-result 3))
                                   (do (z3c-save ".g3-z3-cache" updated-cache)
+                                      (rt-stats (str "g3-compile:after-z3:" label))
                                       (print "[z3-cache] " label ": "
                                              cache-hits " hits, "
                                              cache-misses " misses\n")
-                                      (if strict
-                                        (bc-compile-program-with-prefix-proofs-strict checked-nodes mod-prefix proof-map)
-                                        (bc-compile-program-with-prefix-and-proofs checked-nodes mod-prefix proof-map)))))))))))))))
+                                      (let (bc-result : _
+                                            (if strict
+                                              (bc-compile-program-with-prefix-proofs-strict checked-nodes mod-prefix proof-map)
+                                              (bc-compile-program-with-prefix-and-proofs checked-nodes mod-prefix proof-map)))
+                                        (do (rt-stats (str "g3-compile:after-bc-compile:" label))
+                                            bc-result))))))))))))))))))))
 
 ;; ── Locate stdlib directory ──────────────────────────────
 
