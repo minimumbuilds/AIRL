@@ -2447,13 +2447,21 @@ impl BytecodeAot {
                 Op::Move => {
                     let dst = instr.dst as usize;
                     let src = instr.a as usize;
-                    let v = builder.use_var(vars[src]);
-                    // Retain: dst now holds a second live reference to the same value.
-                    // Matches VM semantics (bytecode_vm.rs:1407). Without this, Move is
-                    // a raw pointer alias: when src is released, dst becomes dangling.
-                    let retain_ref = self.module.declare_func_in_func(self.rt.value_retain, builder.func);
-                    builder.ins().call(retain_ref, &[v]);
-                    builder.def_var(vars[dst], v);
+                    // Move semantics (spec: 2026-04-06-aot-rc-move-semantics.md item 3):
+                    // release old dst, transfer ownership src->dst, zero src. No retain —
+                    // the underlying RtValue's refcount is unchanged, ownership moves.
+                    // A Move into a reg that previously held a value without this release
+                    // would leak one rc per reuse, which accumulates linearly with per-file
+                    // compile work and is the root cause of the g3 OOM on large codebases.
+                    if dst != src {
+                        let old_dst = builder.use_var(vars[dst]);
+                        let release_ref = self.module.declare_func_in_func(self.rt.value_release, builder.func);
+                        builder.ins().call(release_ref, &[old_dst]);
+                        let v = builder.use_var(vars[src]);
+                        builder.def_var(vars[dst], v);
+                        let zero = builder.ins().iconst(self.ptr, 0);
+                        builder.def_var(vars[src], zero);
+                    }
                     last_was_terminator = false;
                 }
 
@@ -2778,21 +2786,20 @@ impl BytecodeAot {
                 }
 
                 // ── Memory management — scope note + Op::Release ─────
-                // SCOPE NOTE: the RC protocol implemented here (retain-on-Move,
-                // release-on-Release) is correct only when the bytecode was compiled by
-                // bc_compiler.airl (the AIRL-written self-hosted compiler), which emits
-                // explicit Op::Release for every live value leaving scope.  The Rust
-                // BytecodeCompiler (crates/airl-runtime/src/bytecode_compiler.rs) does NOT
-                // emit Op::Release — but it is used only for interpreter/VM execution
-                // (bytecode_vm.rs handles its own RC protocol).  If the Rust compiler is
+                // SCOPE NOTE: the RC protocol implemented here (move-on-Move,
+                // release-on-Release, retain-before-call) is correct only when the
+                // bytecode was compiled by bc_compiler.airl (the AIRL-written self-hosted
+                // compiler), which emits explicit Op::Release for every live value leaving
+                // scope. The Rust BytecodeCompiler (crates/airl-runtime/src/bytecode_compiler.rs)
+                // does NOT emit Op::Release — but it is used only for interpreter/VM execution
+                // (bytecode_vm.rs handles its own RC protocol). If the Rust compiler is
                 // ever extended to produce code for the AOT path, it must also be taught to
                 // emit Op::Release, or this handler must be guarded behind a flag.
                 Op::Release => {
                     // Decrement refcount and null the variable — matches VM semantics
                     // (bytecode_vm.rs:1965-1974). Nulling prevents use-after-free if the
-                    // same register slot is ever re-read after release.
-                    // Safe now that retain-on-Move keeps the RC balanced:
-                    // every Move that creates a second reference is paired with a Release.
+                    // same register slot is ever re-read after release, and makes
+                    // double-release safe via airl_value_release's null guard.
                     let reg = instr.a as usize;
                     let v = builder.use_var(vars[reg]);
                     let release_ref = self.module.declare_func_in_func(self.rt.value_release, builder.func);
@@ -4009,5 +4016,43 @@ mod tests {
         // Without the fix, the signature would have 1 param, matching the wrong argc,
         // and the call would silently pass 1 arg to a 2-param function.
         assert!(result.is_err(), "Should fail: caller passes 1 arg to a 2-param function");
+    }
+
+    #[test]
+    fn aot_move_semantics_move_heavy_compiles_clean() {
+        // Regression test for 2026-04-06-aot-rc-move-semantics.md item 3.
+        // Op::Move now releases old dst + zeros src. A function with many
+        // let bindings (each producing Op::Move instructions) must AOT
+        // compile without Cranelift verification errors, and the emitted
+        // code must contain the release-old-dst call before the transfer.
+        let source = r#"
+            (defn heavy-moves
+              :sig [(n : i64) -> i64]
+              :requires [(valid n)]
+              :ensures [(valid result)]
+              :body
+                (let (a : i64 (+ n 1))
+                  (let (b : i64 (+ a 2))
+                    (let (c : i64 (+ b 3))
+                      (let (d : i64 (+ c 4))
+                        (+ a (+ b (+ c d))))))))
+            (heavy-moves 10)
+        "#;
+        let (funcs, main_func) = compile_source_to_bytecode(source, "test").unwrap();
+
+        let heavy = funcs.iter().find(|f| f.name.contains("heavy-moves"))
+            .expect("heavy-moves function should be present");
+        let move_count = heavy.instructions.iter().filter(|i| i.op == Op::Move).count();
+        assert!(move_count > 0, "bytecode should contain Op::Move instructions to exercise the fix");
+
+        let mut all_map: HashMap<String, BytecodeFunc> = HashMap::new();
+        for f in &funcs { all_map.insert(f.name.clone(), f.clone()); }
+        all_map.insert(main_func.name.clone(), main_func.clone());
+        let mut all_funcs = funcs.clone();
+        all_funcs.push(main_func);
+
+        let mut aot = BytecodeAot::new().unwrap();
+        let result = aot.compile_all(&all_funcs, &all_map);
+        assert!(result.is_ok(), "AOT compile_all must succeed after Op::Move change: {:?}", result.err());
     }
 }

@@ -201,6 +201,17 @@
       (let (st2 : _ (bc-emit-releases-loop st current r))
         (map-set st2 "next-reg" r))))
 
+(defn bc-release-call-slots
+  :sig [(st : _) (dst : Int) (argc : Int) -> _]
+  :intent "Emit Release for call arg slots dst+1..dst+argc after a Call. Complements cs-free-reg-to for the case where save>dst+1 would otherwise skip the arg slots. Double-releases are null-safe."
+  :requires [(valid st) (>= argc 0)]
+  :ensures [(valid result)]
+  :body
+    (if (<= argc 0) st
+      (let (slot : Int (+ dst argc))
+        (let (st2 : _ (cs-emit st (op-release) 0 slot 0))
+          (bc-release-call-slots st2 dst (- argc 1))))))
+
 (defn cs-set-local
   :sig [(st : _) (name : String) (reg : Int) -> _]
   :intent "Bind a variable name to a register"
@@ -677,8 +688,9 @@
                               ;; Always emit Call — TailCall AOT support pending correct param-reg setup
                               (let (opcode : Int (op-call))
                                 (let (st5 : _ (cs-emit st4a opcode dst name-idx argc))
-                                  (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
-                                    (Ok (cs-free-reg-to st5 free-to))))))))))))))))))
+                                  (let (st5b : _ (bc-release-call-slots st5 dst argc))
+                                    (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
+                                      (Ok (cs-free-reg-to st5b free-to)))))))))))))))))))
 
 (defn bc-compile-call-local
   :sig [(st : _) (name : String) (callee-reg : Int) (args : List) (dst : Int) -> _]
@@ -704,14 +716,16 @@
                             (let (st5 : _ (bc-move-to-slots st4 tmp-regs dst 0))
                               (let (st5a : _ (bc-ensure-call-slots st5 dst argc))
                                 (let (st6 : _ (cs-emit st5a (op-call-reg) dst safe-reg argc))
-                                  (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
-                                    (Ok (cs-free-reg-to st6 free-to))))))))))
+                                  (let (st6b : _ (bc-release-call-slots st6 dst argc))
+                                    (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
+                                      (Ok (cs-free-reg-to st6b free-to)))))))))))
                     ;; Callee is safe, no need to save
                     (let (st3 : _ (bc-move-to-slots st2 tmp-regs dst 0))
                       (let (st3a : _ (bc-ensure-call-slots st3 dst argc))
                         (let (st4 : _ (cs-emit st3a (op-call-reg) dst callee-reg argc))
-                          (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
-                            (Ok (cs-free-reg-to st4 free-to))))))))))))))
+                          (let (st4b : _ (bc-release-call-slots st4 dst argc))
+                            (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
+                              (Ok (cs-free-reg-to st4b free-to)))))))))))))))
 
 (defn bc-in-danger-zone
   :sig [(reg : Int) (dst : Int) (argc : Int) -> Bool]
@@ -745,8 +759,9 @@
                           (let (argc : Int (length args))
                             (let (st5a : _ (bc-ensure-call-slots st5 dst argc))
                               (let (st6 : _ (cs-emit st5a (op-call-reg) dst callee-reg argc))
-                                (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
-                                  (Ok (cs-free-reg-to st6 free-to))))))))))))))))
+                                (let (st6b : _ (bc-release-call-slots st6 dst argc))
+                                  (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
+                                    (Ok (cs-free-reg-to st6b free-to)))))))))))))))))
 
 (defn bc-compile-args-to-temps
   :sig [(st : _) (args : List) -> _]
