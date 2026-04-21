@@ -65,7 +65,7 @@ fn closed_handles() -> &'static Mutex<HashSet<i64>> {
 // ── Helpers ────────────────────────────────────────────────────────
 
 fn rt_int(n: i64) -> *mut RtValue {
-    RtValue::alloc(TAG_INT, RtData::Int(n))
+    crate::value::rt_int(n)
 }
 
 fn rt_str(s: String) -> *mut RtValue {

@@ -58,6 +58,8 @@ pub extern "C" fn airl_value_release(ptr: *mut RtValue) {
         let prev = (*ptr).rc.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
             // Refcount is now 0 — we have exclusive access. Free.
+            #[cfg(not(target_os = "airlos"))]
+            crate::diag::on_free((*ptr).tag);
             free_value(ptr);
         } else if prev == 0 {
             // Double-release detected — restore to 0, do nothing.

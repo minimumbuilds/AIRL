@@ -143,6 +143,8 @@ unsafe impl Send for SendableRtValue {}
 
 impl RtValue {
     pub fn alloc(tag: u8, data: RtData) -> *mut RtValue {
+        #[cfg(not(target_os = "airlos"))]
+        crate::diag::on_alloc(tag);
         let v = RtValue { tag, rc: AtomicU32::new(1), data };
         Box::into_raw(Box::new(v))
     }
@@ -176,6 +178,35 @@ static FALSE_SINGLETON: RtValue = RtValue {
     data: RtData::Bool(false),
 };
 
+// Small-int singleton pool — values in [SMALL_INT_MIN, SMALL_INT_MAX] are
+// returned as immortal singletons (rc = u32::MAX) by rt_int(). Retain/release
+// on immortal values are no-ops (memory.rs:52). Mirrors CPython's small-int
+// cache. Bootstrap compilation of the AIRL stdlib + G3 produces tens of
+// millions of small Int allocations per file (token positions, indices,
+// bit flags); interning eliminates that entire allocation class.
+#[cfg(not(target_os = "airlos"))]
+pub(crate) const SMALL_INT_MIN: i64 = -256;
+#[cfg(not(target_os = "airlos"))]
+pub(crate) const SMALL_INT_MAX: i64 = 255;
+#[cfg(not(target_os = "airlos"))]
+pub(crate) const SMALL_INT_COUNT: usize = (SMALL_INT_MAX - SMALL_INT_MIN + 1) as usize;
+
+#[cfg(not(target_os = "airlos"))]
+static SMALL_INT_SINGLETONS: std::sync::OnceLock<Vec<RtValue>> = std::sync::OnceLock::new();
+
+#[cfg(not(target_os = "airlos"))]
+fn small_int_pool() -> &'static Vec<RtValue> {
+    SMALL_INT_SINGLETONS.get_or_init(|| {
+        (SMALL_INT_MIN..=SMALL_INT_MAX)
+            .map(|v| RtValue {
+                tag: TAG_INT,
+                rc: AtomicU32::new(u32::MAX),
+                data: RtData::Int(v),
+            })
+            .collect()
+    })
+}
+
 // Rust-side constructors
 pub fn rt_nil() -> *mut RtValue {
     &NIL_SINGLETON as *const RtValue as *mut RtValue
@@ -186,6 +217,14 @@ pub fn rt_unit() -> *mut RtValue {
 }
 
 pub fn rt_int(v: i64) -> *mut RtValue {
+    #[cfg(not(target_os = "airlos"))]
+    {
+        if v >= SMALL_INT_MIN && v <= SMALL_INT_MAX {
+            let pool = small_int_pool();
+            let idx = (v - SMALL_INT_MIN) as usize;
+            return &pool[idx] as *const RtValue as *mut RtValue;
+        }
+    }
     RtValue::alloc(TAG_INT, RtData::Int(v))
 }
 

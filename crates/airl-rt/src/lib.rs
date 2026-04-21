@@ -204,6 +204,8 @@ pub(crate) mod nostd_prelude {
 
 pub mod value;
 pub mod memory;
+#[cfg(not(target_os = "airlos"))]
+pub mod diag;
 pub mod error;
 pub mod arithmetic;
 pub mod comparison;

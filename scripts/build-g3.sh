@@ -104,6 +104,7 @@ if [[ "$_build_os" != "Darwin" && "$_in_container" -eq 0 ]]; then
         -e "AIRL_ROOT=${AIRL_ROOT}" \
         -e "AIRL_MEM_TRACE=${AIRL_MEM_TRACE:-}" \
         -e "AIRL_NO_Z3_CACHE=${AIRL_NO_Z3_CACHE:-}" \
+        -e "AIRL_RT_TRACE=${AIRL_RT_TRACE:-}" \
         rust:slim \
         bash scripts/build-g3.sh "$@"
 fi
