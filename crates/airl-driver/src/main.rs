@@ -341,10 +341,17 @@ fn link_object_to_binary(obj_bytes: &[u8], output: &str, source_files: &[String]
         rt_lib
     };
 
-    // Check if program needs the full runtime (uses run-bytecode or compile-to-executable)
+    // Check if program needs the full runtime (uses run-bytecode, compile-to-executable,
+    // compile-batch-to-obj, or link-objs-to-binary — the last two were added for Step 3's
+    // per-file emit driver; their symbols live in airl-runtime.a, not libairl_rt.a).
     let needs_runtime = source_files.iter().any(|f| {
         std::fs::read_to_string(f).ok()
-            .map(|s| s.contains("run-bytecode") || s.contains("compile-to-executable") || s.contains("run-compiled-bc"))
+            .map(|s| s.contains("run-bytecode")
+                || s.contains("compile-to-executable")
+                || s.contains("run-compiled-bc")
+                || s.contains("compile-batch-to-obj")
+                || s.contains("link-objs-to-binary")
+                || s.contains("compile-bytecode-streaming"))
             .unwrap_or(false)
     });
 

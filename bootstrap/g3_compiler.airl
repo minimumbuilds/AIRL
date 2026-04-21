@@ -286,6 +286,113 @@
                              funcs))
           (compile-batch-to-obj batch obj-path))))
 
+;; ── Step 3 fold-step helper ────────────────────────────────
+;;
+;; One fold iteration: take the current (Ok [paths-acc needs-acc]) accumulator
+;; and an indexed entry [idx path], compile path -> .o, return updated pair.
+;; Externalizing this keeps the fold's lambda trivial and avoids the parens-
+;; imbalance trap that 11-level in-line nesting causes the AIRL parser.
+
+(defn g3-step3-fold-step
+  :sig [(acc : _) (entry : List) (output-path : String) (strict : Bool) -> _]
+  :intent "One fold step: compile one source file to .o, update (paths, needs) accumulator"
+  :requires [(valid entry)]
+  :ensures [(valid result)]
+  :body
+    (match acc
+      (Err e) (Err e)
+      (Ok pair)
+        (let (paths-acc : List (at pair 0))
+          (let (needs-acc : Bool (at pair 1))
+            (let (idx : Int (at entry 0))
+              (let (path : String (at entry 1))
+                (let (source : String (read-file path))
+                  (let (obj-path : String (str output-path ".f" (int-to-string idx) ".o"))
+                    (match (g3-compile-file-to-obj source path strict obj-path true)
+                      (Err e) (Err e)
+                      (Ok bn)
+                        (Ok [(append paths-acc obj-path) (if bn true needs-acc)]))))))))))
+
+;; ── Step 3 tail-step helper ────────────────────────────────
+;;
+;; After the fold, compile last-file (keeping __main__), append its .o path,
+;; and link everything. Externalizing keeps the main body trivial.
+
+(defn g3-step3-link-tail
+  :sig [(acc : _) (last-file : String) (output-path : String) (strict : Bool) -> _]
+  :intent "Compile last-file, link all .o into output-path"
+  :requires [(valid last-file)]
+  :ensures [(valid result)]
+  :body
+    (match acc
+      (Err e) (Err e)
+      (Ok pair)
+        (let (earlier-paths : List (at pair 0))
+          (let (earlier-needs : Bool (at pair 1))
+            (let (last-source : String (read-file last-file))
+              (let (last-obj : String (str output-path ".last.o"))
+                (match (g3-compile-file-to-obj last-source "main" strict last-obj false)
+                  (Err e) (Err e)
+                  (Ok last-needs)
+                    (let (all-paths : List (append earlier-paths last-obj))
+                      (let (all-needs : Bool (if last-needs true earlier-needs))
+                        (do
+                          (print "[g3] linking " (length all-paths) " objects -> " output-path "\n")
+                          (link-objs-to-binary all-paths output-path all-needs)))))))))))
+
+;; ── Step 3 fold-step helper ────────────────────────────────
+;;
+;; One fold iteration: take the current (Ok [paths-acc needs-acc]) accumulator
+;; and an indexed entry [idx path], compile path -> .o, return updated pair.
+;; Externalized from the fold lambda to keep nesting shallow.
+
+(defn g3-step3-fold-step
+  :sig [(acc : _) (entry : List) (output-path : String) (strict : Bool) -> _]
+  :intent "One fold step: compile one source file to .o, update (paths, needs) accumulator"
+  :requires [(valid entry)]
+  :ensures [(valid result)]
+  :body
+    (match acc
+      (Err e) (Err e)
+      (Ok pair)
+        (let (paths-acc : List (at pair 0))
+          (let (needs-acc : Bool (at pair 1))
+            (let (idx : Int (at entry 0))
+              (let (path : String (at entry 1))
+                (let (source : String (read-file path))
+                  (let (obj-path : String (str output-path ".f" (int-to-string idx) ".o"))
+                    (match (g3-compile-file-to-obj source path strict obj-path true)
+                      (Err e) (Err e)
+                      (Ok bn)
+                        (Ok [(append paths-acc obj-path) (if bn true needs-acc)]))))))))))
+
+;; ── Step 3 tail-step helper ────────────────────────────────
+;;
+;; After the fold, compile last-file (keeping __main__), append its .o path,
+;; and link everything.
+
+(defn g3-step3-link-tail
+  :sig [(acc : _) (last-file : String) (output-path : String) (strict : Bool) -> _]
+  :intent "Compile last-file, link all .o into output-path"
+  :requires [(valid last-file)]
+  :ensures [(valid result)]
+  :body
+    (match acc
+      (Err e) (Err e)
+      (Ok pair)
+        (let (earlier-paths : List (at pair 0))
+          (let (earlier-needs : Bool (at pair 1))
+            (let (last-source : String (read-file last-file))
+              (let (last-obj : String (str output-path ".last.o"))
+                (match (g3-compile-file-to-obj last-source "main" strict last-obj false)
+                  (Err e) (Err e)
+                  (Ok last-needs)
+                    (let (all-paths : List (append earlier-paths last-obj))
+                      (let (all-needs : Bool (if last-needs true earlier-needs))
+                        (do
+                          (print "[g3] linking " (length all-paths) " objects -> " output-path "\n")
+                          (link-objs-to-binary all-paths output-path all-needs)))))))))))
+
 ;; ── Main entry point ─────────────────────────────────────
 
 (let (raw-args : List (get-args))
@@ -327,46 +434,48 @@
                     (let (n-files : _ (length input-files))
                       (let (all-but-last : List (take (- n-files 1) input-files))
                         (let (last-file : String (at input-files (- n-files 1)))
-                    ;; Step 2: Compile all-but-last files, each as its own batch (strip __main__)
-                    (match (fold (fn [acc path]
-                              (match acc
-                                (Err e) (Err e)
-                                (Ok batches-so-far)
-                                  (let (source : String (read-file path))
-                                    (match (g3-compile-source-with-z3-strict source path "user" strict)
-                                      (Err e) (Err e)
-                                      (Ok new-funcs)
-                                        (Ok (append batches-so-far
-                                          (filter (fn [f]
-                                            (match f
-                                              (BCFunc name _ _ _ _ _) (if (= name "__main__") false true)
-                                              _ true))
-                                            new-funcs)))))))
-                            (Ok [])
-                            all-but-last)
-                      (Err e) (do (print "Compile error: " e "\n") (exit 1))
-                      (Ok earlier-batches)
-                        ;; Compile last file once — keep ALL functions (including __main__ + its closure lambdas)
-                        (let (last-source : String (read-file last-file))
-                          (match (g3-compile-source-with-z3-strict last-source "main" "user" strict)
-                            (Err e) (do (print "Compile error: " e "\n") (exit 1))
-                            (Ok last-funcs)
-                          ;; Step 3: AOT compile
-                          (if (= target-str "")
-                            ;; Host target: streaming — each file compiles to its own .o
-                            (let (all-batches : List (concat (append [] stdlib-funcs) (append earlier-batches last-funcs)))
-                              (do
-                                (print "[g3] " (length all-batches) " batches -> " output-path "\n")
-                                (let (compile-result : _ (compile-bytecode-streaming all-batches output-path))
-                                  (match compile-result
-                                    (Err e) (do (print "[g3] COMPILE ERROR: " e "\n") (exit 1))
-                                    _ (print "[g3] done\n")))))
-                            ;; Cross-compilation: flatten earlier batches + last-funcs into one list
-                            (let (flat-earlier : List (fold (fn [acc batch] (concat acc batch)) [] earlier-batches))
-                              (let (all-funcs : List (concat stdlib-funcs (concat flat-earlier last-funcs)))
-                                (do
-                                  (print "[g3] " (length all-funcs) " total -> " output-path " [" target-str "]\n")
-                                  (let (compile-result : _ (compile-bytecode-to-executable-with-target all-funcs output-path target-str))
-                                    (match compile-result
-                                      (Err e) (do (print "[g3] COMPILE ERROR: " e "\n") (exit 1))
-                                      _ (print "[g3] done\n")))))))))))))))))))))))))))
+                    ;; Step 2/3: Host uses per-file emit via helpers; cross-target unchanged.
+                    (if (= target-str "")
+                      ;; Host: stdlib.o + per-file .o + link
+                      (let (stdlib-obj : String (str output-path ".stdlib.o"))
+                        (match (compile-batch-to-obj stdlib-funcs stdlib-obj)
+                          (Err e) (do (print "[g3] stdlib err: " e "\n") (exit 1))
+                          (Ok stdlib-needs)
+                            (let (init-acc : _ (Ok [[stdlib-obj] stdlib-needs]))
+                              (let (fold-result : _ (fold (fn [acc entry] (g3-step3-fold-step acc entry output-path strict))
+                                                          init-acc
+                                                          (enumerate all-but-last)))
+                                (match (g3-step3-link-tail fold-result last-file output-path strict)
+                                  (Err e) (do (print "[g3] err: " e "\n") (exit 1))
+                                  _ (print "[g3] done\n"))))))
+                      ;; Cross-target: accumulate then single-object compile (unchanged)
+                      (match (fold (fn [acc path]
+                                (match acc
+                                  (Err e) (Err e)
+                                  (Ok batches-so-far)
+                                    (let (source : String (read-file path))
+                                      (match (g3-compile-source-with-z3-strict source path "user" strict)
+                                        (Err e) (Err e)
+                                        (Ok new-funcs)
+                                          (Ok (append batches-so-far
+                                            (filter (fn [f]
+                                              (match f
+                                                (BCFunc name _ _ _ _ _) (if (= name "__main__") false true)
+                                                _ true))
+                                              new-funcs)))))))
+                              (Ok [])
+                              all-but-last)
+                        (Err e) (do (print "Compile error: " e "\n") (exit 1))
+                        (Ok earlier-batches)
+                          (let (last-source : String (read-file last-file))
+                            (match (g3-compile-source-with-z3-strict last-source "main" "user" strict)
+                              (Err e) (do (print "Compile error: " e "\n") (exit 1))
+                              (Ok last-funcs)
+                                (let (flat-earlier : List (fold (fn [acc batch] (concat acc batch)) [] earlier-batches))
+                                  (let (all-funcs : List (concat stdlib-funcs (concat flat-earlier last-funcs)))
+                                    (do
+                                      (print "[g3] " (length all-funcs) " total -> " output-path " [" target-str "]\n")
+                                      (let (compile-result : _ (compile-bytecode-to-executable-with-target all-funcs output-path target-str))
+                                        (match compile-result
+                                          (Err e) (do (print "[g3] COMPILE ERROR: " e "\n") (exit 1))
+                                          _ (print "[g3] done\n")))))))))))))))))))))))))))
