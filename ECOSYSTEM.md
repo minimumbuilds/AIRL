@@ -194,7 +194,7 @@ Multi-provider AI agent framework for building LLM-powered applications in AIRL.
 | **Commits** | 7 |
 | **Version** | 0.1.0 |
 | **Status** | Functional. All providers, streaming, tool use, and orchestration complete. 33 tests passing. |
-| **Depends on** | AIReqL (HTTP transport), AirLog, AirTraffic, stdlib (json, base64) |
+| **Depends on** | [AIReqL](AIReqL) (HTTP transport), AirLog, AirTraffic, stdlib (json, base64) |
 
 ### mynameisAIRL -- MCP Prompt Server + Code Indexer
 
