@@ -892,17 +892,23 @@
                         (let (neg-ensures : _ (airl_z3_mk_not ctx ensures-conj))
                           (do (airl_z3_solver_assert ctx solver neg-ensures)
                               (let (check-result : _ (airl_z3_solver_check ctx solver))
+                                ;; Spec 2026-04-21 Bug A (AIRL-side fix):
+                                ;; g3's Z3 bridge does NOT translate the function
+                                ;; body, only its contracts. So `result` is
+                                ;; unconstrained when Z3 runs — any SAT verdict
+                                ;; on a `result`-referencing ensures is meaningless
+                                ;; (Z3 trivially picks a value that satisfies
+                                ;; requires and violates ensures). Demote SAT to
+                                ;; "unknown" rather than report a spurious
+                                ;; "disproven". Proven (UNSAT) remains reliable:
+                                ;; when requires + negated-ensures is UNSAT, the
+                                ;; ensures holds for *every* possible `result`,
+                                ;; which is strictly stronger than a body-aware
+                                ;; proof.
                                 (let (verdict : String
                                       (if (= check-result -1)
                                         "proven"
-                                        (if (= check-result 1)
-                                          ;; SAT = disproven — extract counterexample (issue-136)
-                                          (let (model : _ (airl_z3_solver_get_model ctx solver))
-                                            (let (model-str : _ (airl_z3_model_to_string ctx model))
-                                              (if (= model-str 0)
-                                                "disproven"
-                                                (str "disproven:" model-str))))
-                                          "unknown")))
+                                        "unknown"))
                                   (do (z3-cleanup ctx solver)
                                       verdict))))))))))))))))
 
