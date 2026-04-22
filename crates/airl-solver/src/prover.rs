@@ -209,6 +209,13 @@ impl Z3Prover {
             _ => false,
         };
 
+        // Assert any axioms emitted during body translation (e.g., bitwise
+        // range bounds). Order matters: must happen after body-binding, before
+        // the requires ∧ ¬ensures check for each ensures clause below.
+        for axiom in translator.drain_axioms() {
+            solver.assert(&axiom);
+        }
+
         // Prove each :ensures clause
         let mut ensures_results = Vec::new();
         for ensures_expr in &def.ensures {
@@ -562,6 +569,13 @@ impl Z3Prover {
             _ => false,
         };
 
+        // Assert any axioms emitted during body translation (e.g., bitwise
+        // range bounds). Order matters: must happen after body-binding, before
+        // the requires ∧ ¬ensures check for each ensures clause below.
+        for axiom in translator.drain_axioms() {
+            solver.assert(&axiom);
+        }
+
         // Prove each :ensures clause
         let mut ensures_results = Vec::new();
         for ensures_expr in &def.ensures {
@@ -837,19 +851,18 @@ mod tests {
         );
     }
 
+    // ── Bitwise axiom tests (restored from a03e980) ──
+    //
+    // The fresh-variable + range-axiom approach lets Z3 prove that bitwise
+    // results lie in bounded ranges without modeling bit-level semantics.
+    // See translate.rs bitwise arms and the axiom-drain in verify_function.
+
     #[test]
-    fn bitwise_body_yields_unknown_not_disproven() {
-        // Regression for AIRL-side Bug A (2026-04-21-airl-castle-bugs-discovered):
-        // stdlib/sha256.airl's `u32` function is
-        //   (defn u32 :sig [(x : i64) -> i64]
-        //     :ensures [(>= result 0) (<= result 4294967295)]
-        //     :body (bitwise-and x 4294967295))
-        // Z3's Int theory can't model `bitwise-and`. Before this fix, the
-        // translator emitted it as an uninterpreted function — leaving
-        // `result` unconstrained and letting Z3 spuriously disprove the
-        // ensures with an incidental counterexample. With the fix the
-        // translator returns UnsupportedExpression, which the prover
-        // reports as Unknown (runtime-checked), not Disproven.
+    fn prove_bitwise_and_mask_range() {
+        // (defn u32 :sig [(x : i64) -> i64]
+        //   :ensures [(>= result 0) (<= result 4294967295)]
+        //   :body (bitwise-and x 4294967295))
+        // With bitwise axioms, Z3 knows bitwise-and(x, mask) ∈ [0, mask].
         let def = make_fn("u32",
             vec![("x", "i64")], "i64",
             vec![],
@@ -860,12 +873,93 @@ mod tests {
             call("bitwise-and", vec![sym("x"), int(4294967295)]),
         );
         let prover = Z3Prover::new();
-        let verification = prover.verify_function(&def);
-        assert_eq!(verification.ensures_results.len(), 2);
-        for (clause, result) in &verification.ensures_results {
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 2);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for (>= result 0), got: {:?}", v,
+        );
+        assert!(
+            matches!(&v.ensures_results[1].1, VerifyResult::Proven),
+            "expected Proven for (<= result 4294967295), got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn prove_bitwise_or_nonneg() {
+        let def = make_fn("bor",
+            vec![("a", "i64"), ("b", "i64")], "i64",
+            vec![],
+            vec![call(">=", vec![sym("result"), int(0)])],
+            call("bitwise-or", vec![sym("a"), sym("b")]),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for bitwise-or result >= 0, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn prove_bitwise_xor_nonneg() {
+        let def = make_fn("bxor",
+            vec![("a", "i64"), ("b", "i64")], "i64",
+            vec![],
+            vec![call(">=", vec![sym("result"), int(0)])],
+            call("bitwise-xor", vec![sym("a"), sym("b")]),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for bitwise-xor result >= 0, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn prove_bitwise_shr_nonneg() {
+        let def = make_fn("bshr",
+            vec![("x", "i64"), ("n", "i64")], "i64",
+            vec![call(">=", vec![sym("x"), int(0)])],
+            vec![call(">=", vec![sym("result"), int(0)])],
+            call("bitwise-shr", vec![sym("x"), sym("n")]),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for bitwise-shr result >= 0, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn sha256_u32_contract_proven_end_to_end() {
+        // Regression gate against 89f5e0f-style accidental deletion. This is
+        // the actual stdlib/sha256.airl::u32 shape — must prove cleanly, not
+        // fall back to Unknown.
+        let def = make_fn("u32",
+            vec![("x", "i64")], "i64",
+            vec![],
+            vec![
+                call(">=", vec![sym("result"), int(0)]),
+                call("<=", vec![sym("result"), int(4294967295)]),
+            ],
+            call("bitwise-and", vec![sym("x"), int(4294967295)]),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 2);
+        for (clause, result) in &v.ensures_results {
             assert!(
-                matches!(result, VerifyResult::Unknown(_)),
-                "expected Unknown for ensures `{}` (bitwise-and body), got: {:?}",
+                matches!(result, VerifyResult::Proven),
+                "expected Proven for sha256::u32 ensures `{}`, got: {:?} — \
+                 if this is Unknown, the axiom-drain hook in verify_function \
+                 has regressed. If Disproven, the translator's bitwise arm \
+                 has regressed.",
                 clause, result
             );
         }
