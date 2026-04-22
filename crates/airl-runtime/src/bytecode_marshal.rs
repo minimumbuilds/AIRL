@@ -17,6 +17,30 @@ fn type_err(msg: &str) -> RuntimeError {
     RuntimeError::TypeError(format!("bytecode marshal: {}", msg))
 }
 
+/// Process-global set of function names that have already been emitted to a
+/// `.o` file during this g3 compile. Populated by `compile_batch_to_obj`;
+/// used to drop later duplicates before they reach the linker and collide.
+///
+/// Why global: `compile_batch_to_obj` is called once per source file by g3's
+/// per-file fold, each call a separate FFI boundary. The Rust side has no
+/// other continuity across those calls. A `Mutex<HashSet<String>>` keyed by
+/// emitted name is the minimum state needed to implement AIRL's first-def-
+/// wins semantics across batches.
+///
+/// Why not reset: within a single g3 process invocation, we want first-def-
+/// wins to hold across all files. A fresh g3 invocation gets a fresh process,
+/// so the global resets naturally.
+///
+/// Only used by `compile_batch_to_obj`. `compile_bytecode_streaming` and
+/// `compile_bytecode_to_executable_with_target` have local seen-sets that
+/// span their entire batch list within one call; they don't need this.
+fn emitted_names() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    use std::sync::{Mutex, OnceLock};
+    use std::collections::HashSet;
+    static EMITTED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    EMITTED.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
 /// SEC-15: Validate the AIRL_LINKER_SCRIPT env var if explicitly set.
 /// When the env var is not set, returns the default path without validation
 /// (the linker will handle missing defaults). When explicitly set, validates
@@ -681,15 +705,26 @@ pub fn compile_batch_to_obj(batch: &[Value], obj_path: &str) -> Result<bool, Run
         return Err(RuntimeError::Custom("compile-batch-to-obj: empty batch".into()));
     }
 
-    // Unmarshal and dedup (first-wins to match AIRL's first-def-wins semantics)
+    // Unmarshal. Dedup happens below against both this batch (intra-batch)
+    // and every prior batch emitted by this g3 process (cross-batch). The
+    // cross-batch piece uses `emitted_names()` to survive across the FFI
+    // boundary of each `compile_batch_to_obj` call.
     let mut bc_funcs: Vec<crate::bytecode::BytecodeFunc> = Vec::new();
     for f in batch {
         bc_funcs.push(value_to_bytecode_func(f)?);
     }
     {
-        let mut seen = std::collections::HashSet::new();
-        bc_funcs.retain(|f| seen.insert(f.name.clone()));
+        let mut emitted = emitted_names().lock().unwrap();
+        // retain returns true to keep — insert returns true on first-seen.
+        bc_funcs.retain(|f| emitted.insert(f.name.clone()));
     }
+
+    // If cross-batch dedup drops every function (e.g. a patch-override
+    // file whose replacements were all already claimed by an earlier batch),
+    // Cranelift below still produces a valid-but-symbolless ELF object —
+    // ld.bfd/gold accept these as empty contributions to the final link.
+    // No special-case needed; the rest of the function handles empty
+    // bc_funcs naturally.
 
     let needs_compiler = bc_funcs.iter().any(|f| {
         f.constants.iter().any(|c| matches!(c,
