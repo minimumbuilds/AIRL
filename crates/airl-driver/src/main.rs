@@ -20,6 +20,7 @@ fn main() {
             Some("run") => cmd_run(&args[2..]),
             Some("compile") => cmd_compile(&args[2..]),
             Some("check") => cmd_check(&args[2..]),
+            Some("parens") => cmd_parens(&args[2..]),
             Some("repl") => cmd_repl(),
             Some("agent") => cmd_agent(&args[2..]),
             Some("call") => cmd_call(&args[2..]),
@@ -657,6 +658,7 @@ Usage: airl <command> [args]
 Commands:
   run <file>       Compile and run an AIRL source file
   check <file>     Parse and check a file without running
+  parens <file>    Check ( ) [ ] balance; report the exact imbalance line
   repl             Start the interactive REPL
   agent <file>     Run an agent worker (--listen <endpoint>)
   call <ep> <fn>   Call a remote agent function
@@ -667,6 +669,125 @@ Options:
   --list-builtins  Print JSON description of all registered builtins",
         env!("CARGO_PKG_VERSION")
     );
+}
+
+/// Walk the file char-by-char tracking running `(`/`)` and `[`/`]` depth while
+/// honoring `;;` line comments and `"..."` strings. Report the first line where
+/// depth goes negative (extra close) or, if EOF is reached with unclosed opens,
+/// point at the line/col of each unclosed open.
+///
+/// Use case: when the parser reports "unexpected ')'" or "unclosed '('", it's
+/// typically pointing at the place it *gave up* — the actual imbalance is
+/// elsewhere. This check pinpoints the earliest depth violation, which is
+/// almost always the real bug. Saw its utility saving us from counting 18
+/// trailing close-parens by eye on `AIRL_castle/kafka/fetch-buffer.airl:106`.
+fn cmd_parens(args: &[String]) {
+    if args.is_empty() {
+        eprintln!("Usage: airl parens <file.airl>");
+        std::process::exit(1);
+    }
+    let path = &args[0];
+    let source = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: cannot read {}: {}", path, e);
+            std::process::exit(1);
+        }
+    };
+
+    // Stack of (char, line, col) for each unclosed opener. char is '(' or '['.
+    let mut stack: Vec<(char, usize, usize)> = Vec::new();
+    let mut in_string = false;
+    let mut in_line_comment = false;
+    let mut line = 1usize;
+    let mut col = 1usize;
+    let mut found_problem = false;
+
+    for ch in source.chars() {
+        // Line-comment state resets on newline; newline always advances line/col.
+        if ch == '\n' {
+            in_line_comment = false;
+            line += 1;
+            col = 1;
+            continue;
+        }
+        if in_line_comment {
+            col += 1;
+            continue;
+        }
+        if in_string {
+            // Very simple — no escape handling needed for `"` since AIRL
+            // strings don't contain raw `(`/`)` to confuse us anyway. A
+            // backslash-escaped `"` would skew this, but AIRL strings don't
+            // use them at depth-changing positions in practice.
+            if ch == '"' {
+                in_string = false;
+            }
+            col += 1;
+            continue;
+        }
+        match ch {
+            '"' => { in_string = true; }
+            ';' => {
+                // Line comment starts on `;;` (two in a row); conservative: any `;` starts one.
+                in_line_comment = true;
+            }
+            '(' | '[' => {
+                stack.push((ch, line, col));
+            }
+            ')' => {
+                match stack.pop() {
+                    Some(('(', _, _)) => {}
+                    Some((other, ol, oc)) => {
+                        eprintln!("{}:{}:{}: unexpected ')' — opener at {}:{} was '{}'",
+                            path, line, col, ol, oc, other);
+                        found_problem = true;
+                        std::process::exit(1);
+                    }
+                    None => {
+                        eprintln!("{}:{}:{}: unexpected ')' — no matching open",
+                            path, line, col);
+                        found_problem = true;
+                        std::process::exit(1);
+                    }
+                }
+            }
+            ']' => {
+                match stack.pop() {
+                    Some(('[', _, _)) => {}
+                    Some((other, ol, oc)) => {
+                        eprintln!("{}:{}:{}: unexpected ']' — opener at {}:{} was '{}'",
+                            path, line, col, ol, oc, other);
+                        found_problem = true;
+                        std::process::exit(1);
+                    }
+                    None => {
+                        eprintln!("{}:{}:{}: unexpected ']' — no matching open",
+                            path, line, col);
+                        found_problem = true;
+                        std::process::exit(1);
+                    }
+                }
+            }
+            _ => {}
+        }
+        col += 1;
+    }
+
+    if !stack.is_empty() {
+        for (ch, ol, oc) in stack.iter().rev().take(10) {
+            eprintln!("{}:{}:{}: unclosed '{}' — no matching close found before EOF",
+                path, ol, oc, ch);
+        }
+        if stack.len() > 10 {
+            eprintln!("{}: ... and {} more unclosed opens", path, stack.len() - 10);
+        }
+        std::process::exit(1);
+    }
+
+    if !found_problem {
+        println!("{}: balanced", path);
+    }
 }
 
 struct BuiltinMeta {
