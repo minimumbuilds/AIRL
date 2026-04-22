@@ -712,12 +712,14 @@ fn check_paren_balance(source: &str) -> ParenReport {
     let mut stack: Vec<(char, usize, usize)> = Vec::new();
     let mut in_string = false;
     let mut in_line_comment = false;
+    let mut escape_next = false;
     let mut line = 1usize;
     let mut col = 1usize;
 
     for ch in source.chars() {
         if ch == '\n' {
             in_line_comment = false;
+            escape_next = false;
             line += 1;
             col = 1;
             continue;
@@ -727,8 +729,12 @@ fn check_paren_balance(source: &str) -> ParenReport {
             continue;
         }
         if in_string {
-            // AIRL strings don't use backslash-escaped `"`, so a naive close works.
-            if ch == '"' {
+            // Respect `\\`, `\"`, `\n` etc. — one char after `\` is literal.
+            if escape_next {
+                escape_next = false;
+            } else if ch == '\\' {
+                escape_next = true;
+            } else if ch == '"' {
                 in_string = false;
             }
             col += 1;
