@@ -612,6 +612,15 @@ fn print_pipeline_error(err: &PipelineError, path: &str) {
         PipelineError::Syntax(diag) => {
             let source = std::fs::read_to_string(path).unwrap_or_default();
             eprint!("{}", format_diagnostic_with_source(diag, &source, path));
+            // The syntax error's line:col is where the parser gave up, which
+            // is often downstream of the actual imbalance. Auto-run the paren
+            // checker and append its result so users get the real location.
+            let report = check_paren_balance(&source);
+            if let Some(hint) = format_paren_report(path, &report) {
+                eprintln!();
+                eprintln!("paren-balance check:");
+                eprint!("{}", hint);
+            }
         }
         PipelineError::Parse(diags) => {
             let source = std::fs::read_to_string(path).unwrap_or_default();
@@ -681,6 +690,115 @@ Options:
 /// elsewhere. This check pinpoints the earliest depth violation, which is
 /// almost always the real bug. Saw its utility saving us from counting 18
 /// trailing close-parens by eye on `AIRL_castle/kafka/fetch-buffer.airl:106`.
+/// Result of a paren/bracket balance check.
+#[derive(Debug)]
+enum ParenReport {
+    /// File is balanced.
+    Balanced,
+    /// The first depth violation encountered. `line:col` is where the stray
+    /// close appeared; `opener_hint` is None if there was no matching open
+    /// at all, or Some((ol, oc, open_ch)) if the innermost open was of a
+    /// different bracket kind.
+    UnexpectedClose { line: usize, col: usize, close_ch: char, opener_hint: Option<(usize, usize, char)> },
+    /// File ends with unclosed opens. Entries are in top-of-stack-first order
+    /// (innermost last); we report innermost-first in the CLI for clarity.
+    Unclosed(Vec<(char, usize, usize)>),
+}
+
+/// Walk an AIRL source string and check `(`/`)` + `[`/`]` balance. Honors
+/// `;;` line comments and `"..."` strings. Returns the first violation
+/// encountered, or `Balanced` if the whole file is clean.
+fn check_paren_balance(source: &str) -> ParenReport {
+    let mut stack: Vec<(char, usize, usize)> = Vec::new();
+    let mut in_string = false;
+    let mut in_line_comment = false;
+    let mut line = 1usize;
+    let mut col = 1usize;
+
+    for ch in source.chars() {
+        if ch == '\n' {
+            in_line_comment = false;
+            line += 1;
+            col = 1;
+            continue;
+        }
+        if in_line_comment {
+            col += 1;
+            continue;
+        }
+        if in_string {
+            // AIRL strings don't use backslash-escaped `"`, so a naive close works.
+            if ch == '"' {
+                in_string = false;
+            }
+            col += 1;
+            continue;
+        }
+        match ch {
+            '"' => { in_string = true; }
+            ';' => { in_line_comment = true; }
+            '(' | '[' => {
+                stack.push((ch, line, col));
+            }
+            ')' | ']' => {
+                let expected = if ch == ')' { '(' } else { '[' };
+                match stack.pop() {
+                    Some((o, _, _)) if o == expected => {}
+                    Some((other, ol, oc)) => {
+                        return ParenReport::UnexpectedClose {
+                            line, col, close_ch: ch,
+                            opener_hint: Some((ol, oc, other)),
+                        };
+                    }
+                    None => {
+                        return ParenReport::UnexpectedClose {
+                            line, col, close_ch: ch,
+                            opener_hint: None,
+                        };
+                    }
+                }
+            }
+            _ => {}
+        }
+        col += 1;
+    }
+
+    if stack.is_empty() {
+        ParenReport::Balanced
+    } else {
+        ParenReport::Unclosed(stack)
+    }
+}
+
+/// Format a `ParenReport` as one or more `path:line:col: message` lines.
+/// `Balanced` returns `None`; callers can print their own "balanced" message
+/// when appropriate.
+fn format_paren_report(path: &str, report: &ParenReport) -> Option<String> {
+    match report {
+        ParenReport::Balanced => None,
+        ParenReport::UnexpectedClose { line, col, close_ch, opener_hint: None } => {
+            Some(format!("{}:{}:{}: unexpected '{}' — no matching open\n",
+                path, line, col, close_ch))
+        }
+        ParenReport::UnexpectedClose { line, col, close_ch, opener_hint: Some((ol, oc, ohc)) } => {
+            Some(format!("{}:{}:{}: unexpected '{}' — innermost opener at {}:{} was '{}'\n",
+                path, line, col, close_ch, ol, oc, ohc))
+        }
+        ParenReport::Unclosed(stack) => {
+            let mut out = String::new();
+            for (ch, ol, oc) in stack.iter().rev().take(10) {
+                out.push_str(&format!("{}:{}:{}: unclosed '{}' — no matching close before EOF\n",
+                    path, ol, oc, ch));
+            }
+            if stack.len() > 10 {
+                out.push_str(&format!("{}: ... and {} more unclosed opens\n",
+                    path, stack.len() - 10));
+            }
+            Some(out)
+        }
+    }
+}
+
 fn cmd_parens(args: &[String]) {
     if args.is_empty() {
         eprintln!("Usage: airl parens <file.airl>");
@@ -695,98 +813,15 @@ fn cmd_parens(args: &[String]) {
         }
     };
 
-    // Stack of (char, line, col) for each unclosed opener. char is '(' or '['.
-    let mut stack: Vec<(char, usize, usize)> = Vec::new();
-    let mut in_string = false;
-    let mut in_line_comment = false;
-    let mut line = 1usize;
-    let mut col = 1usize;
-    let mut found_problem = false;
-
-    for ch in source.chars() {
-        // Line-comment state resets on newline; newline always advances line/col.
-        if ch == '\n' {
-            in_line_comment = false;
-            line += 1;
-            col = 1;
-            continue;
+    let report = check_paren_balance(&source);
+    match format_paren_report(path, &report) {
+        None => {
+            println!("{}: balanced", path);
         }
-        if in_line_comment {
-            col += 1;
-            continue;
+        Some(msg) => {
+            eprint!("{}", msg);
+            std::process::exit(1);
         }
-        if in_string {
-            // Very simple — no escape handling needed for `"` since AIRL
-            // strings don't contain raw `(`/`)` to confuse us anyway. A
-            // backslash-escaped `"` would skew this, but AIRL strings don't
-            // use them at depth-changing positions in practice.
-            if ch == '"' {
-                in_string = false;
-            }
-            col += 1;
-            continue;
-        }
-        match ch {
-            '"' => { in_string = true; }
-            ';' => {
-                // Line comment starts on `;;` (two in a row); conservative: any `;` starts one.
-                in_line_comment = true;
-            }
-            '(' | '[' => {
-                stack.push((ch, line, col));
-            }
-            ')' => {
-                match stack.pop() {
-                    Some(('(', _, _)) => {}
-                    Some((other, ol, oc)) => {
-                        eprintln!("{}:{}:{}: unexpected ')' — opener at {}:{} was '{}'",
-                            path, line, col, ol, oc, other);
-                        found_problem = true;
-                        std::process::exit(1);
-                    }
-                    None => {
-                        eprintln!("{}:{}:{}: unexpected ')' — no matching open",
-                            path, line, col);
-                        found_problem = true;
-                        std::process::exit(1);
-                    }
-                }
-            }
-            ']' => {
-                match stack.pop() {
-                    Some(('[', _, _)) => {}
-                    Some((other, ol, oc)) => {
-                        eprintln!("{}:{}:{}: unexpected ']' — opener at {}:{} was '{}'",
-                            path, line, col, ol, oc, other);
-                        found_problem = true;
-                        std::process::exit(1);
-                    }
-                    None => {
-                        eprintln!("{}:{}:{}: unexpected ']' — no matching open",
-                            path, line, col);
-                        found_problem = true;
-                        std::process::exit(1);
-                    }
-                }
-            }
-            _ => {}
-        }
-        col += 1;
-    }
-
-    if !stack.is_empty() {
-        for (ch, ol, oc) in stack.iter().rev().take(10) {
-            eprintln!("{}:{}:{}: unclosed '{}' — no matching close found before EOF",
-                path, ol, oc, ch);
-        }
-        if stack.len() > 10 {
-            eprintln!("{}: ... and {} more unclosed opens", path, stack.len() - 10);
-        }
-        std::process::exit(1);
-    }
-
-    if !found_problem {
-        println!("{}: balanced", path);
     }
 }
 
