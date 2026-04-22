@@ -24,6 +24,7 @@
            "text" "I know kung-fu."])])]]))
     (let (server : Map (airtraffic-new "mynameisAIRL" (mni-version) "supervisor" ""))
       (let (server2 : Map (airtraffic-prompt server prompt-def))
-        (let (cache : Map (map-from []))
-          (airtraffic-serve-batch server2 (fn [tool-name args]
-            (airmunch-dispatch cache tool-name args))))))))
+        (let (server3 : Map (fold (fn [s t] (airtraffic-tool s t)) server2 (make-tool-defs)))
+          (let (cache : Map (map-from []))
+            (airtraffic-serve-batch server3 (fn [tool-name args]
+              (airmunch-dispatch cache tool-name args)))))))))
