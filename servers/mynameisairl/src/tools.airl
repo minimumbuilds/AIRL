@@ -109,7 +109,8 @@
                         (if (= tool-name "airl_dependency_graph") (handle-dependency-graph args)
                           (if (= tool-name "airl_blast_radius") (handle-blast-radius args)
                             (if (= tool-name "airl_session_stats") (handle-session-stats args)
-                              (Err (str "Unknown tool: " tool-name))))))))))))))
+                              (if (= tool-name "airl_check_parens") (handle-check-parens args)
+                                (Err (str "Unknown tool: " tool-name)))))))))))))))
     (match handler-result
       (Ok json)
         (let (fb : i64 (file-bytes-for-tool tool-name args))
@@ -180,6 +181,40 @@
             symbols))
           (Ok (json-stringify (map-from
             ["file" file "symbols" outline])))))))))
+
+;; ─── handle-check-parens ─────────────────────────────────────────────
+;; Shells out to `airl parens <full-path>`. Returns structured JSON:
+;;   balanced:      {"balanced": true}
+;;   unbalanced:    {"balanced": false, "message": "<path>:<line>:<col>: ..."}
+;; Useful for LLMs generating/editing AIRL — localizes paren imbalances
+;; precisely instead of relying on the parser's downstream "unexpected ')'"
+;; error. Matches the behavior of the `airl parens` CLI subcommand.
+(defn handle-check-parens
+  :sig [(args : Map) -> Result]
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (let (path : String (map-get-or args "path" ""))
+             (file : String (map-get-or args "file" ""))
+    (if (or (= path "") (= file ""))
+      (Err "missing required arguments: path, file")
+      (if (not (safe-path? file))
+        (Err "invalid file path: directory traversal not allowed")
+        (let (full-path : String (str path "/" file))
+          (match (shell-exec "airl" ["parens" full-path])
+            (Err e) (Err (str "failed to invoke airl parens: " e))
+            (Ok result)
+              (let (exit-code : i64 (map-get-or result "exit-code" -1))
+                   (stderr : String (map-get-or result "stderr" ""))
+                   (stdout : String (map-get-or result "stdout" ""))
+                (if (= exit-code 0)
+                  (Ok (json-stringify (map-from
+                    ["balanced" true
+                     "file" file])))
+                  ;; Non-zero exit: stderr contains the `path:line:col: msg` report.
+                  (Ok (json-stringify (map-from
+                    ["balanced" false
+                     "file" file
+                     "message" (if (= stderr "") stdout stderr)])))))))))))
 
 ;; ─── handle-get-symbol ───────────────────────────────────────────────
 (defn handle-get-symbol
@@ -460,4 +495,12 @@
                "inputSchema" (map-from
                  ["type" "object"
                   "properties" (map-from [])
-                  "required" []])])])
+                  "required" []])])
+    (map-from ["name" "airl_check_parens"
+               "description" "Check paren and bracket balance in an AIRL source file and pinpoint the first imbalance by line and column. Much more precise than the parser's downstream unexpected-RParen error. Respects line comments and string contents. Returns balanced=true when clean, or balanced=false with a message of the form path:line:col: ..."
+               "inputSchema" (map-from
+                 ["type" "object"
+                  "properties" (map-from
+                    ["path" (map-from ["type" "string" "description" "Absolute path to the project root"])
+                     "file" (map-from ["type" "string" "description" "Relative path to the .airl file within the project"])])
+                  "required" ["path" "file"]])])])
