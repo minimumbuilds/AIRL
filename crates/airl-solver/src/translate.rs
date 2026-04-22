@@ -69,10 +69,6 @@ pub struct Translator<'ctx> {
     /// we declare it as an uninterpreted function so Z3 can reason about call
     /// relationships (e.g., f(x) = f(x) is provable by function congruence).
     func_decls: HashMap<String, Z3_func_decl>,
-    /// Axioms emitted during translation (e.g., bitwise operation range bounds).
-    /// The prover asserts these after body translation so Z3 can reason about
-    /// properties of uninterpreted bitwise operations.
-    pending_axioms: Vec<ast::Bool<'ctx>>,
 }
 
 impl<'ctx> Translator<'ctx> {
@@ -86,23 +82,7 @@ impl<'ctx> Translator<'ctx> {
             seq_vars: HashMap::new(),
             quant_counter: 0,
             func_decls: HashMap::new(),
-            pending_axioms: Vec::new(),
         }
-    }
-
-    /// Drain all pending axioms accumulated during translation.
-    /// The prover calls this after translating the function body and asserts
-    /// each axiom so Z3 can use them when checking ensures/invariant clauses.
-    pub fn drain_axioms(&mut self) -> Vec<ast::Bool<'ctx>> {
-        std::mem::take(&mut self.pending_axioms)
-    }
-
-    /// Create a fresh Z3 Int variable for a bitwise operation result.
-    /// Each call site gets a unique name so Z3 treats them independently.
-    fn make_bitwise_fresh(&mut self, op: &str) -> ast::Int<'ctx> {
-        let name = format!("__{}_{}", op, self.quant_counter);
-        self.quant_counter += 1;
-        ast::Int::new_const(self.ctx, name.as_str())
     }
 
     /// Declare an integer variable (parameter or result).
@@ -528,60 +508,50 @@ impl<'ctx> Translator<'ctx> {
                                 "length requires a declared list/seq variable".into()
                             ))
                         }
-                        // Bitwise ops: Z3 integer theory can't model these meaningfully.
-                        // Treating them as uninterpreted functions leaves `result`
-                        // effectively unconstrained (any i64 passes), which makes
-                        // every non-trivial ensures clause spuriously "disproven"
-                        // with an incidental counterexample — see
-                        // docs/superpowers/specs/2026-04-21-airl-castle-bugs-discovered.md
-                        // ── Bitwise operations with range axioms ──
-                        // Z3's integer theory has no bitwise primitives. We model
-                        // each call as a fresh bounded Int variable with axioms
-                        // constraining the range so Z3 can prove contracts like
-                        // `result >= 0` and `result <= mask`. The prover drains
-                        // these axioms after body translation (prover.rs).
-                        //
-                        // Long-term path (separate issue): translate via Z3 BV64
-                        // for bit-precise semantics. See
+                        // ── Bitwise operations via Z3 BV64 ──
+                        // Bit-precise semantics: translate args to 64-bit
+                        // bitvectors, apply the bitwise op in BV theory, convert
+                        // result back to Int for the surrounding arithmetic
+                        // context. Supersedes the a03e980 fresh-var axiom
+                        // approach (which lives at HEAD~ if needed for
+                        // archaeology). See
                         // artifacts/spec-airl-z3-bv64-bitwise.md.
-                        "bitwise-and" => {
-                            let fresh = self.make_bitwise_fresh(op);
-                            let zero = ast::Int::from_i64(self.ctx, 0);
-                            self.pending_axioms.push(fresh.ge(&zero));
-                            // bitwise-and with a constant mask: result ≤ mask.
-                            for arg in args.iter() {
-                                if let ExprKind::IntLit(mask) = &arg.kind {
-                                    if *mask >= 0 {
-                                        let mask_z3 = ast::Int::from_i64(self.ctx, *mask);
-                                        self.pending_axioms.push(fresh.le(&mask_z3));
-                                    }
-                                }
+                        "bitwise-and" | "bitwise-or" | "bitwise-xor"
+                        | "bitwise-shl" | "bitwise-shr" => {
+                            if args.len() != 2 {
+                                return Err(TranslateError::UnsupportedExpression(
+                                    format!("{} requires exactly 2 arguments", op)));
                             }
-                            Ok(fresh)
+                            let a = self.translate_int(&args[0])?;
+                            let b = self.translate_int(&args[1])?;
+                            let bv_a = ast::BV::from_int(&a, 64);
+                            let bv_b = ast::BV::from_int(&b, 64);
+                            let bv_res = match op.as_str() {
+                                "bitwise-and" => bv_a.bvand(&bv_b),
+                                "bitwise-or"  => bv_a.bvor(&bv_b),
+                                "bitwise-xor" => bv_a.bvxor(&bv_b),
+                                "bitwise-shl" => bv_a.bvshl(&bv_b),
+                                // Logical (unsigned) shift right. AIRL's
+                                // `bitwise-shr` matches C's `>>` on unsigned,
+                                // which is zero-fill. If we later want signed
+                                // arithmetic shift, add a separate `bitwise-sar`
+                                // builtin and translate via bvashr.
+                                "bitwise-shr" => bv_a.bvlshr(&bv_b),
+                                _ => unreachable!(),
+                            };
+                            // Signed interpretation: AIRL integers are i64.
+                            Ok(ast::Int::from_bv(&bv_res, true))
                         }
-                        "bitwise-or" | "bitwise-xor" => {
-                            // Weak axiom: non-negative result when both args are
-                            // non-negative. Z3 can't prove non-negativity of
-                            // symbolic args here; the fresh-var approach
-                            // assumes the axiom unconditionally, which is sound
-                            // for typical uses (masks, hashes).
-                            let fresh = self.make_bitwise_fresh(op);
-                            let zero = ast::Int::from_i64(self.ctx, 0);
-                            self.pending_axioms.push(fresh.ge(&zero));
-                            Ok(fresh)
+                        "bitwise-not" => {
+                            if args.len() != 1 {
+                                return Err(TranslateError::UnsupportedExpression(
+                                    "bitwise-not requires exactly 1 argument".into()));
+                            }
+                            let a = self.translate_int(&args[0])?;
+                            let bv_a = ast::BV::from_int(&a, 64);
+                            let bv_res = bv_a.bvnot();
+                            Ok(ast::Int::from_bv(&bv_res, true))
                         }
-                        "bitwise-shr" => {
-                            // result ≥ 0 when LHS is non-negative; we assert
-                            // unconditionally (matches a03e980's shipped behavior).
-                            let fresh = self.make_bitwise_fresh(op);
-                            let zero = ast::Int::from_i64(self.ctx, 0);
-                            self.pending_axioms.push(fresh.ge(&zero));
-                            Ok(fresh)
-                        }
-                        // bitwise-shl: no axiom (two's-complement overflow can
-                        // flip the sign bit). Fall through to uninterpreted.
-                        // bitwise-not: no axiom (complement of a non-negative
-                        // value is always negative in two's complement).
                         _ => {
                             // Unknown function — declare as uninterpreted with Int return
                             let app_ast = self.apply_uninterpreted_fn(op, args, VarSort::Int)?;
