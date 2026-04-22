@@ -1,11 +1,11 @@
-# AirTraffic Unified Tool Registration
+# AirTraffic Unified Tool Registration + Workflow Deconflation
 
 **Date:** 2026-04-22
 **Status:** Design approved, ready for implementation plan
-**Scope:** AirTraffic library (`~/repos/AirTraffic`) + mynameisAIRL (only
-current consumer)
+**Scope:** AirTraffic library (`~/repos/AirTraffic`) + mynameisAIRL
+(only current consumer)
 
-## Problem
+## Problem 1 — Registration / dispatch drift
 
 AirTraffic's MCP tool registration and tool dispatch are structurally
 independent:
@@ -26,6 +26,45 @@ Nothing ties the two together. An author can:
 We hit case 1 on 2026-04-22 when mynameisAIRL's entry point called
 `airtraffic-prompt` but no `airtraffic-tool` — 12 handlers existed, zero
 surfaced to MCP clients.
+
+## Problem 2 — Workflow taxonomy conflated into the framework
+
+`airtraffic.airl:9-44` hardcodes a role/tool allowlist that belongs to
+a specific application domain (the airl-workflow orchestration system)
+inside what the top-level ecosystem README explicitly labels the
+generic MCP framework:
+
+```airl
+(defn airtraffic-role-tools
+  :body (if (= role "supervisor")
+    ["workflow_dispatch" "workflow_unblock" "workflow_query"
+     "workflow_check_g3_staleness" "workflow_check_stale"]
+    (if (= role "worker")
+      ["workflow_submit" "workflow_req_spec" "workflow_query"] ...)))
+
+(defn airtraffic-valid-role
+  :body (list-contains? ["supervisor" "worker" "approver" "critic" "merger"] role))
+```
+
+The ATC orchestration server (the actual home of these roles)
+lives at `~/repos/airl-workflow/atc/` and is implemented in Python
+with an entirely different tool-name schema (`dispatch_issue`,
+`claim_issue`, `intake_issue`, `submit`, `approve`, `escalate` — surfaced
+as the `mcp__atc__*` tool family). The AIRL taxonomy hardcoded in
+AirTraffic references tool names that no current consumer implements.
+Verified by grep on 2026-04-22: no AIRL or Python file in
+`~/repos/airl-workflow/` (or anywhere else on disk) references
+`workflow_dispatch`, `workflow_submit`, or `airtraffic-role-tools`.
+
+The practical consequence: every non-workflow AirTraffic consumer
+(mynameisAIRL is the only one we have today) must ship a
+`patch-tool-allowed.airl` that uses first-def-wins to override
+`airtraffic-tool-allowed`. That patch is load-bearing for the build —
+without it, `airtraffic-tool` rejects every `airl_*` name. The patch
+is not extensibility; it's shimming around a design mistake.
+
+`worker-id` in `airtraffic-new` is the same story — a workflow-identity
+field leaked into the generic server state.
 
 ## Why the obvious fix didn't happen sooner
 
@@ -52,10 +91,21 @@ dispatcher-fn) pattern that allows drift.
 
 ## Design
 
-Collapse schema and handler into one map entry. Dispatch derives from
-registered tools.
+Two coordinated changes:
 
-### New `airtraffic-tool` (3-arity)
+**A.** Collapse schema and handler into one map entry; dispatch derives
+from registered tools (solves Problem 1 — drift).
+
+**B.** Remove hardcoded workflow taxonomy; make role-based tool gating
+pluggable via an optional allowlist supplied at `airtraffic-new` time
+(solves Problem 2 — conflation).
+
+They land together because both break `airtraffic-new` / `airtraffic-tool`
+signatures. Coordinating them is cheaper than sequencing them.
+
+---
+
+### A1. New `airtraffic-tool` (3-arity)
 
 ```airl
 (defn airtraffic-tool
@@ -77,7 +127,7 @@ convention for "internal, not serialized" — consistent with how many
 JSON-oriented frameworks handle internal state adjacent to wire-format
 fields.
 
-### New `airtraffic-tools` (list variant — ergonomic)
+### A2. New `airtraffic-tools` (list variant — ergonomic)
 
 ```airl
 (defn airtraffic-tools
@@ -96,7 +146,7 @@ Bindings are maps `{"schema" <tool-def>, "handler" <fn>}`. This lets
 server authors define a single list-of-tool-bindings function rather
 than maintaining a parallel schema list + dispatch if-chain.
 
-### New `airtraffic-serve` (replaces `airtraffic-serve-batch`)
+### A3. New `airtraffic-serve` (replaces `airtraffic-serve-batch`)
 
 Inlines the existing read loop (from `airtraffic-serve-batch`'s body).
 The public API no longer requires the caller to supply a dispatcher —
@@ -125,7 +175,7 @@ The existing `airtraffic-dispatch` / `airtraffic-handle-tools-call`
 internals work unchanged — they already accept a dispatcher fn. We just
 stop requiring the server author to write one.
 
-### `airtraffic-handle-tools-list` must strip `_handler`
+### A4. `airtraffic-handle-tools-list` must strip `_handler`
 
 Today the handler returns `(map-get server "tools")` verbatim. With
 `_handler` embedded, we'd leak a function value into JSON serialization
@@ -150,7 +200,7 @@ to its MCP-visible fields:
       (jsonrpc-response id (map-from ["tools" public]))))
 ```
 
-### Deprecation of `airtraffic-serve-batch`
+### A5. Deprecation of `airtraffic-serve-batch`
 
 Keep it as a thin shim that registers a no-op tool set and uses the old
 batch dispatcher — OR remove it entirely. mynameisAIRL is the only known
@@ -158,7 +208,7 @@ consumer, and it's moving to the new API in the same PR. **Decision:
 remove it.** Cleanliness > backward-compat for a library with one
 consumer.
 
-### Remove stale fn-in-map comment
+### A6. Remove stale fn-in-map comment
 
 `airtraffic.airl:83-84` currently reads:
 
@@ -169,6 +219,81 @@ Replace with a factual note about the current design (static content
 only for resources, because per-request generation requires passing
 request context, which isn't wired through `airtraffic-handle-resources-read`
 today). Do not retain the false claim about AOT.
+
+---
+
+### B1. Delete hardcoded workflow taxonomy
+
+Remove from `airtraffic.airl`:
+
+- `airtraffic-role-tools` (lines 11-28) — entire definition
+- `airtraffic-valid-role` (lines 32-36) — entire definition
+- The default body of `airtraffic-tool-allowed` that consults
+  `airtraffic-role-tools` — it gets a new implementation (B3).
+
+No migration path is needed for the tool-name list because **no file in
+`~/repos/` references `workflow_dispatch`, `workflow_submit`, or
+`airtraffic-role-tools` outside of AirTraffic itself.** The taxonomy is
+referenced only by its own definition. Nothing consumes it.
+
+### B2. `airtraffic-new` takes an optional allowlist
+
+New signature (arity-4 stays, but the 3rd argument changes meaning —
+still a breaking change):
+
+```airl
+(defn airtraffic-new
+  :sig [(name : _) (version : _) (role : _) (allowlist : _) -> Map]
+  :requires [(valid name) (valid version) (valid role)]
+  :ensures [(valid result)]
+  :body (map-from
+    ["name" name
+     "version" version
+     "role" role
+     "allowlist" allowlist       ;; nil | (fn [role name] -> Bool)
+     "tools" []
+     "prompts" []
+     "resources" []]))
+```
+
+- `role` remains a free-form string. AirTraffic no longer validates it.
+  (The field is kept purely so the allowlist closure can see "who is
+  asking" — consumers can ignore it and gate purely on tool-name if
+  preferred.)
+- `allowlist` is either `nil` (treated as "allow everything" — useful
+  for prototype servers and for consumers that do their own gating
+  elsewhere) or a closure `(fn [role tool-name] -> Bool)`.
+- The old `worker-id` field is removed from the server state. It was
+  workflow-specific identity that AirTraffic itself never read.
+
+### B3. `airtraffic-tool-allowed` reads from the server, not a global
+
+```airl
+(defn airtraffic-tool-allowed
+  :sig [(server : _) (tool-name : String) -> Bool]
+  :requires [(valid server) (valid tool-name)]
+  :ensures [(valid result)]
+  :body
+    (let (allowlist : _ (map-get-or server "allowlist" nil))
+         (role : String (map-get server "role"))
+      (if (= allowlist nil)
+        true                          ;; no allowlist ⇒ allow everything
+        (allowlist role tool-name))))
+```
+
+Signature changes from `(role, tool-name) → Bool` to
+`(server, tool-name) → Bool`. Call sites inside AirTraffic update
+accordingly. This also means `patch-tool-allowed.airl` style overrides
+are no longer needed (or possible — the library function now reads
+from the server record, not a global).
+
+### B4. Remove `worker-id` from server state
+
+The field is unused by AirTraffic itself. It's a workflow-identity leak.
+Servers that care about worker identity can store it under any key they
+want (e.g., in a separate "metadata" map).
+
+---
 
 ## Consumer-side changes (mynameisAIRL)
 
@@ -221,14 +346,23 @@ Collapses from:
 to:
 
 ```airl
-(let (server : Map (airtraffic-new "mynameisAIRL" (mni-version) "supervisor" ""))
+(let (allowlist : _ (fn [role name] (starts-with? name "airl_")))
+     (server : Map (airtraffic-new "mynameisAIRL" (mni-version) "" allowlist))
      (cache : Map (map-from []))
      (server2 : Map (airtraffic-prompt server prompt-def))
      (server3 : Map (airtraffic-tools server2 (make-tool-bindings cache)))
   (airtraffic-serve server3))
 ```
 
-No dispatch fn. No fold. No two-structure drift surface.
+- No dispatch fn. No fold. No two-structure drift surface.
+- No reliance on a hardcoded "supervisor" role — we pass an empty string
+  and gate purely on the `airl_*` name prefix.
+- No `patch-tool-allowed.airl`. Delete the file.
+
+### Files to delete
+
+- `servers/mynameisairl/patch-tool-allowed.airl` — obsoleted by the
+  pluggable allowlist. Also remove its entry from `build.sh`.
 
 ## Test plan
 
@@ -250,27 +384,49 @@ No dispatch fn. No fold. No two-structure drift surface.
    rather than crashing.
 5. **Leak test for `_handler`** — grep the `tools/list` response JSON;
    assert no occurrence of `_handler`.
+6. **Allowlist enforcement** — create a server with allowlist
+   `(fn [_role name] (= name "foo"))`, register tools "foo" and "bar",
+   assert only "foo" appears in `tools/list` and `tools/call bar`
+   returns `"unknown tool: bar"`.
+7. **No-allowlist default** — create a server with `nil` allowlist,
+   register any tool, assert it registers and dispatches without
+   gating.
+8. **`worker-id` absence** — assert `airtraffic-new` does not accept
+   a `worker-id` argument and server state maps have no `worker-id`
+   key.
 
 ## Migration path
 
-Single PR spanning both repos (AirTraffic and AIRL/servers/mynameisairl),
-since the breaking change requires coordinated updates:
+Single coordinated landing across two repos. Both changes (A and B)
+ship together because both break `airtraffic-new` / `airtraffic-tool`
+signatures, and mynameisAIRL is the sole consumer for both:
 
 1. Update `AirTraffic/src/airtraffic.airl`:
-   - 3-arity `airtraffic-tool`
-   - new `airtraffic-tools`
-   - new `airtraffic-serve`
-   - remove `airtraffic-serve-batch` (no shim — mynameisAIRL is the
-     only consumer and moves in the same PR)
-   - strip `_handler` in `airtraffic-handle-tools-list`
-   - fix stale comment
+   - **A:** 3-arity `airtraffic-tool`, new `airtraffic-tools`, new
+     `airtraffic-serve`, remove `airtraffic-serve-batch` (no shim),
+     strip `_handler` in `airtraffic-handle-tools-list`, fix stale
+     fn-in-map comment.
+   - **B:** delete `airtraffic-role-tools` and `airtraffic-valid-role`.
+     Change `airtraffic-new` to take an allowlist closure and remove
+     `worker-id`. Change `airtraffic-tool-allowed` to read from the
+     server's allowlist slot instead of a global function.
 2. Update `AIRL/servers/mynameisairl/src/tools.airl`:
-   - replace `make-tool-defs` with `make-tool-bindings`
-   - delete `airmunch-dispatch`
+   - Replace `make-tool-defs` with `make-tool-bindings` (schema +
+     handler pairs).
+   - Delete `airmunch-dispatch`.
 3. Update `AIRL/servers/mynameisairl/mynameisairl.airl`:
-   - use `airtraffic-tools` + `airtraffic-serve`
-4. Rebuild mynameisAIRL, run test plan items 3–5.
-5. Optional: add the fn-in-map fixture from test plan item 1 to AIRL.
+   - Pass a prefix-based allowlist closure to `airtraffic-new`.
+   - Use `airtraffic-tools` + `airtraffic-serve`.
+4. **Delete** `AIRL/servers/mynameisairl/patch-tool-allowed.airl` and
+   remove it from `build.sh`'s file list.
+5. Rebuild mynameisAIRL; run all test-plan items.
+6. Add the fn-in-map fixtures from test plan item 1 to AIRL
+   (regression gate).
+
+**No third repo:** the workflow taxonomy is deleted rather than moved.
+If the airl-workflow project ever implements an AIRL-side MCP server
+that needs the supervisor/worker/critic role system, it'll supply its
+own allowlist to `airtraffic-new`.
 
 ## Out of scope
 
@@ -294,11 +450,20 @@ since the breaking change requires coordinated updates:
   relies on that. Add to test plan item 1.
 - **Map ordering.** Our `map-from` preserves insertion order; dispatch
   relies on `name` lookup, not order. No risk.
-- **Patch files in mynameisAIRL.** `patch-tool-allowed.airl` overrides
-  `airtraffic-tool-allowed`. That override fires inside the new
-  `airtraffic-tool` before `_handler` is attached — still works.
-  `patch-json-result.airl` and `patch-prompts-list.airl` don't touch
-  tool paths — unaffected.
+- **Other patch files in mynameisAIRL.** `patch-json-result.airl` and
+  `patch-prompts-list.airl` don't touch tool-allowlist or registration
+  paths — unaffected by either A or B. `patch-tool-allowed.airl` is
+  deleted outright by step 4 of the migration.
+- **The `role` field in `airtraffic-new` is now purely a label.**
+  AirTraffic itself doesn't interpret it. If future consumers want
+  typed role constants, they can layer validation on top. This is the
+  intended shape for a generic framework.
+- **Closure-based allowlists in the server state.** Server state is
+  passed around by value (maps are persistent). Storing a closure in
+  the map means each `airtraffic-tool` call duplicates a pointer to
+  the same closure value, not the closure itself. No GC/lifetime
+  surprises expected, but the fn-in-map closure sanity test (test plan
+  item 1) covers this path too.
 
 ## Acceptance criteria
 
@@ -308,3 +473,7 @@ since the breaking change requires coordinated updates:
 - `tools/call airl_check_parens` returns the expected paren report.
 - Unknown tool name returns a clear error, not a crash.
 - AirTraffic source no longer claims AOT rejects fn-in-map.
+- AirTraffic source contains no references to `workflow_*` tool names,
+  no hardcoded role taxonomy, and no `worker-id` field.
+- mynameisAIRL no longer contains `patch-tool-allowed.airl` and still
+  builds and serves correctly.
