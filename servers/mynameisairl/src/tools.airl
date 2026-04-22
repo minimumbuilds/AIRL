@@ -87,38 +87,24 @@
         (fold (fn [acc f] (+ acc (file-size f))) 0 (find-airl-files path))
         0))))
 
-;; ─── airmunch-dispatch ───────────────────────────────────────────────
-;; Main tool dispatcher. Called by airtraffic-serve-batch.
-;; Wraps every Ok response with _meta token savings data and persists
-;; the cumulative total to ~/.airl-mcp/savings.json.
-(defn airmunch-dispatch
-  :sig [(cache : Map) (tool-name : String) (args : Map) -> Result]
-  :intent "Dispatch tool calls to appropriate handler"
-  :requires [(valid tool-name) (valid args)]
+;; ─── wrap-with-meta ──────────────────────────────────────────────────
+;; Wrap a handler's Ok response with _meta token-savings data and persist
+;; cumulative savings to ~/.airl-mcp/savings.json. Bindings invoke this
+;; around each handler's result.
+(defn wrap-with-meta
+  :sig [(tool-name : String) (args : Map) (handler-result : Result) -> Result]
+  :intent "Add _meta and persist cumulative token savings"
+  :requires [(valid tool-name) (valid args) (valid handler-result)]
   :ensures [(valid result)]
   :body
-  (let (handler-result : Result
-        (if (= tool-name "airl_index_project") (handle-index-project args)
-          (if (= tool-name "airl_file_tree") (handle-file-tree args)
-            (if (= tool-name "airl_file_outline") (handle-file-outline args)
-              (if (= tool-name "airl_get_symbol") (handle-get-symbol args)
-                (if (= tool-name "airl_search_symbols") (handle-search-symbols args)
-                  (if (= tool-name "airl_get_content") (handle-get-content args)
-                    (if (= tool-name "airl_repo_outline") (handle-repo-outline args)
-                      (if (= tool-name "airl_find_callers") (handle-find-callers args)
-                        (if (= tool-name "airl_dependency_graph") (handle-dependency-graph args)
-                          (if (= tool-name "airl_blast_radius") (handle-blast-radius args)
-                            (if (= tool-name "airl_session_stats") (handle-session-stats args)
-                              (if (= tool-name "airl_check_parens") (handle-check-parens args)
-                                (Err (str "Unknown tool: " tool-name)))))))))))))))
     (match handler-result
       (Ok json)
         (let (fb : i64 (file-bytes-for-tool tool-name args))
-          (let (rb : i64 (length json))
-            (let (saved : i64 (if (> (- fb rb) 0) (/ (- fb rb) 4) 0))
-              (let (_ : Bool (save-savings (+ (load-savings) saved)))
-                (Ok (add-meta json fb))))))
-      (Err msg) (Err msg))))
+             (rb : i64 (length json))
+             (saved : i64 (if (> (- fb rb) 0) (/ (- fb rb) 4) 0))
+             (_ : Bool (save-savings (+ (load-savings) saved)))
+          (Ok (add-meta json fb)))
+      (Err msg) (Err msg)))
 
 ;; ─── handle-index-project ────────────────────────────────────────────
 (defn handle-index-project
@@ -404,12 +390,13 @@
       ["total_tokens_saved" total
        "savings_file" (savings-path)])))))
 
-;; ─── Tool Definitions ────────────────────────────────────────────────
-;; Each tool definition is a Map compatible with airtraffic-tool.
+;; ─── Tool Schemas ────────────────────────────────────────────────────
+;; Schema list kept internal to this file — make-tool-bindings below
+;; pairs each schema with its closure handler for airtraffic-tools.
 
-(defn make-tool-defs
+(defn tool-schemas
   :sig [-> List]
-  :intent "Create list of all AirMunch tool definitions"
+  :intent "Internal: list of all AirMunch tool schema maps"
   :requires []
   :ensures [(valid result)]
   :body [
@@ -507,3 +494,59 @@
                     ["path" (map-from ["type" "string" "description" "Absolute path to the project root"])
                      "file" (map-from ["type" "string" "description" "Relative path to the .airl file within the project"])])
                   "required" ["path" "file"]])])])
+
+;; ─── find-schema-by-name ─────────────────────────────────────────────
+;; Helper: look up a tool schema by name within (tool-schemas).
+(defn find-schema-by-name
+  :sig [(name : String) -> Map]
+  :requires [(valid name)]
+  :ensures [(valid result)]
+  :body (head (filter (fn [s] (= (map-get s "name") name)) (tool-schemas))))
+
+;; ─── make-tool-bindings ──────────────────────────────────────────────
+;; Build the {schema, handler} pair list consumed by airtraffic-tools.
+;; Each handler is a lambda (required by g3's indirect-call path — named
+;; defns stored in maps fail at runtime). Each wraps its handler result
+;; with _meta token-savings via wrap-with-meta.
+(defn make-tool-bindings
+  :sig [-> List]
+  :intent "Bind every AirMunch tool schema to its handler closure"
+  :requires []
+  :ensures [(valid result)]
+  :body
+    [(map-from ["schema"  (find-schema-by-name "airl_index_project")
+                "handler" (fn [args] (wrap-with-meta "airl_index_project" args
+                                       (handle-index-project args)))])
+     (map-from ["schema"  (find-schema-by-name "airl_file_tree")
+                "handler" (fn [args] (wrap-with-meta "airl_file_tree" args
+                                       (handle-file-tree args)))])
+     (map-from ["schema"  (find-schema-by-name "airl_file_outline")
+                "handler" (fn [args] (wrap-with-meta "airl_file_outline" args
+                                       (handle-file-outline args)))])
+     (map-from ["schema"  (find-schema-by-name "airl_get_symbol")
+                "handler" (fn [args] (wrap-with-meta "airl_get_symbol" args
+                                       (handle-get-symbol args)))])
+     (map-from ["schema"  (find-schema-by-name "airl_search_symbols")
+                "handler" (fn [args] (wrap-with-meta "airl_search_symbols" args
+                                       (handle-search-symbols args)))])
+     (map-from ["schema"  (find-schema-by-name "airl_get_content")
+                "handler" (fn [args] (wrap-with-meta "airl_get_content" args
+                                       (handle-get-content args)))])
+     (map-from ["schema"  (find-schema-by-name "airl_repo_outline")
+                "handler" (fn [args] (wrap-with-meta "airl_repo_outline" args
+                                       (handle-repo-outline args)))])
+     (map-from ["schema"  (find-schema-by-name "airl_find_callers")
+                "handler" (fn [args] (wrap-with-meta "airl_find_callers" args
+                                       (handle-find-callers args)))])
+     (map-from ["schema"  (find-schema-by-name "airl_dependency_graph")
+                "handler" (fn [args] (wrap-with-meta "airl_dependency_graph" args
+                                       (handle-dependency-graph args)))])
+     (map-from ["schema"  (find-schema-by-name "airl_blast_radius")
+                "handler" (fn [args] (wrap-with-meta "airl_blast_radius" args
+                                       (handle-blast-radius args)))])
+     (map-from ["schema"  (find-schema-by-name "airl_session_stats")
+                "handler" (fn [args] (wrap-with-meta "airl_session_stats" args
+                                       (handle-session-stats args)))])
+     (map-from ["schema"  (find-schema-by-name "airl_check_parens")
+                "handler" (fn [args] (wrap-with-meta "airl_check_parens" args
+                                       (handle-check-parens args)))])])

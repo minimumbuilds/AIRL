@@ -49,7 +49,6 @@ echo "Generated _generated.airl (version ${VERSION}), copied guide ($(wc -l < "$
     "$AT_ROOT/src/schema.airl" \
     "$SCRIPT_DIR/patch-prompts-list.airl" \
     "$SCRIPT_DIR/patch-json-result.airl" \
-    "$SCRIPT_DIR/patch-tool-allowed.airl" \
     "$SCRIPT_DIR/_generated.airl" \
     "$AT_ROOT/src/airtraffic.airl" \
     "$SCRIPT_DIR/src/sexpr-reader.airl" \

@@ -1,0 +1,19 @@
+;; EXPECT: 142|42
+;; Closure (lambda) stored as map value, retrieved by name, called
+;; dynamically. Both a closure that captures an outer binding and a
+;; closure that doesn't must work through g3's AOT path.
+;; Load-bearing for AirTraffic unified tool registration — handlers
+;; must be wrapped in (fn [...] ...) to become Closure-tagged values.
+;; Bare named defns stored in a map and called via (map-get) fail
+;; with "airl_call_closure: not a Closure" — that's an accepted g3
+;; limitation for now.
+
+(let (cache : i64 100)
+     (m : Map (map-from
+       ["with-capture"    (fn [x] (+ cache x))
+        "without-capture" (fn [x] x)]))
+     (hc : _ (map-get m "with-capture"))
+     (hu : _ (map-get m "without-capture"))
+     (r1 : i64 (hc 42))
+     (r2 : i64 (hu 42))
+  (print (str (int-to-string r1) "|" (int-to-string r2))))

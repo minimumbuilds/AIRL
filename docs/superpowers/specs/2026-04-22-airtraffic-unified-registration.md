@@ -66,28 +66,40 @@ is not extensibility; it's shimming around a design mistake.
 `worker-id` in `airtraffic-new` is the same story — a workflow-identity
 field leaked into the generic server state.
 
-## Why the obvious fix didn't happen sooner
+## Why the obvious fix didn't happen sooner (and its real constraint)
 
 `airtraffic.airl:83-84` claims g3 AOT does not support functions as map
 values, which would rule out bundling the handler into the tool-def map.
-Verified 2026-04-22: the comment is stale. Post-Spec-3 (BCFuncNative),
-`(map-get handlers name)` returning a function and being called via
-`(h args)` works in AOT. Test case:
+Verified 2026-04-22 — the comment is **partially** right, **fully**
+misleading, and we can work around the real constraint:
 
-```airl
-(defn handle-foo :sig [(args : Map) -> String] :body "foo")
-(defn handle-bar :sig [(args : Map) -> String] :body "bar")
+| Form                                               | g3 AOT |
+|---                                                 |---     |
+| `(fn [x] ...)` stored in Map, retrieved, called   | ✅     |
+| `(fn [x] (f cache x))` (closure) in Map, called   | ✅     |
+| Bare named `defn` in Map, retrieved, called        | ❌ `airl_call_closure: not a Closure` |
+| Bare named `defn` in List, retrieved, called       | ❌ same |
 
-(let (handlers : Map (map-from ["foo" handle-foo "bar" handle-bar]))
-     (h : _ (map-get handlers "bar"))
-     (result : String (h (map-from [])))
-  (eprintln result))
-;; → prints "bar"
-```
+g3's indirect-call path only recognizes the **Closure** tag. Named
+`defn` values have a different runtime tag (suited for static dispatch)
+that `airl_call_closure` rejects. But any `(fn [...] ...)` lambda —
+whether it captures outer bindings or not — is Closure-tagged and works
+through map/list lookup. The stale comment overstated the limitation
+and caused the design to avoid fn-in-map entirely when the real
+workaround (always wrap) is trivial.
 
-Compiled through the AOT path, runs correctly. The stale comment blocked
-the natural design and forced the two-structure (schema-list +
-dispatcher-fn) pattern that allows drift.
+**Design rule:** handlers passed to `airtraffic-tool` MUST be lambdas,
+not bare named defns. `airtraffic-tool` could enforce this by wrapping
+the handler in `(fn [args] (handler args))` before storing it — but
+that wrapper itself invokes a named defn through an indirect call,
+which fails for the same reason. The robust approach is to require
+callers to pass lambdas. mynameisAIRL's cache-capture pattern already
+produces lambdas naturally (`(fn [args] (handle-foo cache args))`),
+so no friction there.
+
+Regression gate: `tests/aot/round2_fn_in_map.airl` exercises both
+capturing and non-capturing closures in a map, retrieved and called
+through g3 — must stay green.
 
 ## Design
 
