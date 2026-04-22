@@ -95,6 +95,45 @@ Land A1 immediately — unblocks AIRL_castle compile without weakening
 any real verification. A2 as follow-up work (improves actual coverage).
 A3 can be bundled with A2 or done independently.
 
+### Prior art (2026-04-22 update — A1 superseded)
+
+This spec's A1 turned out to be a *regression rediscovery*, not a new
+fix. Git archaeology after the A1 landing surfaced `a03e980`
+(2026-04-16, "fix(solver): add Z3 bitwise axioms — unblock sha256/crypto
+contract verification") which had already solved this problem — using
+a stronger approach than A1 — a week earlier. That axiom machinery was
+then silently deleted on 2026-04-20 by `89f5e0f` ("feat(z3): add
+inductive verification to prover.rs and translate.rs") as unrelated
+collateral damage in a large refactor. The commit message did not
+mention bitwise or axioms, and the 59-line regression went unnoticed
+until `AIRL_castle` hit the `u32` contract error that triggered this
+spec on 2026-04-21.
+
+**A1 is superseded** by restoring `a03e980`'s bounded-fresh-variable
+axiom approach. Tracked under
+`artifacts/spec-airl-bitwise-axioms-restore.md` (priority 10):
+
+- `bitwise-and x mask` ⇒ fresh Int with axiom `0 ≤ fresh ≤ mask` (when
+  `mask` is a non-negative constant), else `fresh ≥ 0`
+- `bitwise-or/xor/shr` ⇒ fresh Int with axiom `fresh ≥ 0`
+- `bitwise-shl`, `bitwise-not` ⇒ no axiom (overflow/two's-complement)
+- Prover drains axioms after body-binding, before the ensures check.
+
+**A2 (BV64) remains the canonical long-term path** and has its own
+spec at `artifacts/spec-airl-z3-bv64-bitwise.md` (priority 6). BV64
+produces bit-precise results, handles `bitwise-not` + non-constant
+shifts + overflow, and supersedes the axiom approach once implemented.
+A2 depends on A1's test scaffolding and Phase 1 of BV64 coexists with
+the axioms before the cutover in Phase 3.
+
+**Lessons for future reviews.** The A1-era review missed the
+regression because the 2026-04-21 investigation started from "bitwise
+ops don't work" rather than "bitwise ops used to work — what changed?"
+When a supposedly-new bug affects a well-understood area, check
+`git log -- <path> -S<symbol>` before writing a new spec. Had we done
+that on 2026-04-21, the spec would have opened with "restore
+`a03e980`" and never shipped the weaker A1.
+
 ---
 
 ## Bug B — AIRL parser rejects `(let (name : _ symbol-expr) (do ...))`
