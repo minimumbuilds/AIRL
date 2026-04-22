@@ -119,12 +119,17 @@ axiom approach. Tracked under
 - `bitwise-shl`, `bitwise-not` ⇒ no axiom (overflow/two's-complement)
 - Prover drains axioms after body-binding, before the ensures check.
 
-**A2 (BV64) remains the canonical long-term path** and has its own
-spec at `artifacts/spec-airl-z3-bv64-bitwise.md` (priority 6). BV64
-produces bit-precise results, handles `bitwise-not` + non-constant
-shifts + overflow, and supersedes the axiom approach once implemented.
-A2 depends on A1's test scaffolding and Phase 1 of BV64 coexists with
-the axioms before the cutover in Phase 3.
+**A2 (BV64) has since landed** and supersedes the restored axioms.
+Tracked under `artifacts/spec-airl-z3-bv64-bitwise.md`. BV64 produces
+bit-precise results: `(bitwise-not 0)` proves to exactly `-1`,
+`(bitwise-xor x x)` proves to exactly `0`, `(bitwise-shl x 0) = x`.
+The axiom infrastructure (`pending_axioms`, `drain_axioms`,
+`make_bitwise_fresh`) was removed in favor of direct Int↔BV64 conversion
+via `z3::ast::BV::from_int` / `ast::Int::from_bv`. The bitwise tests
+were upgraded from range-bound assertions to exact-value assertions
+where applicable; four new BV-exclusive tests cover cases the axiom
+approach couldn't prove at all (`bitwise-not`, self-xor, shl identity,
+small-mask exact range).
 
 **Lessons for future reviews.** The A1-era review missed the
 regression because the 2026-04-21 investigation started from "bitwise

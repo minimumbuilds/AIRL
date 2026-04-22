@@ -1,6 +1,13 @@
 use std::sync::Mutex;
-use z3::{Config, Context, SatResult, Solver};
+use z3::{Config, Context, Params, SatResult, Solver};
 use z3::ast::Ast;
+
+/// Maximum time Z3 may spend on a single check-sat, in milliseconds.
+/// Prevents unbounded solve time on tough BV queries (mixed Int/BV
+/// problems can balloon under bit-blasting). On timeout, Z3 returns
+/// Unknown, which the prover handles the same as any other Unknown —
+/// ensures falls back to runtime checking.
+const Z3_CHECK_TIMEOUT_MS: u32 = 10_000;
 use airl_syntax::ast::{Expr, ExprKind, FnDef, AstTypeKind};
 use crate::translate::{Translator, VarSort, SeedVal};
 use crate::{VerifyResult, FunctionVerification};
@@ -88,6 +95,9 @@ impl Z3Prover {
         let cfg = Config::new();
         let ctx = Context::new(&cfg);
         let solver = Solver::new(&ctx);
+        let mut params = Params::new(&ctx);
+        params.set_u32("timeout", Z3_CHECK_TIMEOUT_MS);
+        solver.set_params(&params);
         let mut translator = Translator::new(&ctx);
 
         // Declare variables for params
@@ -208,13 +218,6 @@ impl Z3Prover {
             },
             _ => false,
         };
-
-        // Assert any axioms emitted during body translation (e.g., bitwise
-        // range bounds). Order matters: must happen after body-binding, before
-        // the requires ∧ ¬ensures check for each ensures clause below.
-        for axiom in translator.drain_axioms() {
-            solver.assert(&axiom);
-        }
 
         // Prove each :ensures clause
         let mut ensures_results = Vec::new();
@@ -421,6 +424,9 @@ impl Z3Prover {
         let cfg = Config::new();
         let ctx = Context::new(&cfg);
         let solver = Solver::new(&ctx);
+        let mut params = Params::new(&ctx);
+        params.set_u32("timeout", Z3_CHECK_TIMEOUT_MS);
+        solver.set_params(&params);
         let mut translator = Translator::new(&ctx);
 
         // Declare parameters
@@ -568,13 +574,6 @@ impl Z3Prover {
             },
             _ => false,
         };
-
-        // Assert any axioms emitted during body translation (e.g., bitwise
-        // range bounds). Order matters: must happen after body-binding, before
-        // the requires ∧ ¬ensures check for each ensures clause below.
-        for axiom in translator.drain_axioms() {
-            solver.assert(&axiom);
-        }
 
         // Prove each :ensures clause
         let mut ensures_results = Vec::new();
@@ -851,11 +850,11 @@ mod tests {
         );
     }
 
-    // ── Bitwise axiom tests (restored from a03e980) ──
+    // ── Bitwise BV64 tests ──
     //
-    // The fresh-variable + range-axiom approach lets Z3 prove that bitwise
-    // results lie in bounded ranges without modeling bit-level semantics.
-    // See translate.rs bitwise arms and the axiom-drain in verify_function.
+    // Bitwise ops translate to Z3 BitVec64. Results are bit-precise, not just
+    // range-bounded, so contracts asserting specific values can prove cleanly
+    // (not just `result ∈ [lo, hi]`). See translate.rs bitwise arms.
 
     #[test]
     fn prove_bitwise_and_mask_range() {
@@ -885,62 +884,23 @@ mod tests {
         );
     }
 
-    #[test]
-    fn prove_bitwise_or_nonneg() {
-        let def = make_fn("bor",
-            vec![("a", "i64"), ("b", "i64")], "i64",
-            vec![],
-            vec![call(">=", vec![sym("result"), int(0)])],
-            call("bitwise-or", vec![sym("a"), sym("b")]),
-        );
-        let prover = Z3Prover::new();
-        let v = prover.verify_function(&def);
-        assert_eq!(v.ensures_results.len(), 1);
-        assert!(
-            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
-            "expected Proven for bitwise-or result >= 0, got: {:?}", v,
-        );
-    }
-
-    #[test]
-    fn prove_bitwise_xor_nonneg() {
-        let def = make_fn("bxor",
-            vec![("a", "i64"), ("b", "i64")], "i64",
-            vec![],
-            vec![call(">=", vec![sym("result"), int(0)])],
-            call("bitwise-xor", vec![sym("a"), sym("b")]),
-        );
-        let prover = Z3Prover::new();
-        let v = prover.verify_function(&def);
-        assert_eq!(v.ensures_results.len(), 1);
-        assert!(
-            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
-            "expected Proven for bitwise-xor result >= 0, got: {:?}", v,
-        );
-    }
-
-    #[test]
-    fn prove_bitwise_shr_nonneg() {
-        let def = make_fn("bshr",
-            vec![("x", "i64"), ("n", "i64")], "i64",
-            vec![call(">=", vec![sym("x"), int(0)])],
-            vec![call(">=", vec![sym("result"), int(0)])],
-            call("bitwise-shr", vec![sym("x"), sym("n")]),
-        );
-        let prover = Z3Prover::new();
-        let v = prover.verify_function(&def);
-        assert_eq!(v.ensures_results.len(), 1);
-        assert!(
-            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
-            "expected Proven for bitwise-shr result >= 0, got: {:?}", v,
-        );
-    }
+    // Note: the a03e980-era tests `prove_bitwise_or_nonneg`,
+    // `prove_bitwise_xor_nonneg`, and `prove_bitwise_shr_nonneg` were
+    // removed in the BV64 migration. Under bit-precise semantics, those
+    // properties are either FALSE for symbolic arguments (e.g.
+    // `(bitwise-or -1 0) = -1`, not ≥ 0) or require Int↔BV linking
+    // axioms to prove. The axiom-era tests were silently asserting
+    // unsound properties that happened to hold under the fresh-var
+    // approximation. Symbolic-argument proofs across Int↔BV remain a
+    // TODO — see artifacts/spec-airl-z3-bv64-bitwise.md "Out of scope"
+    // note about linking axioms.
 
     #[test]
     fn sha256_u32_contract_proven_end_to_end() {
-        // Regression gate against 89f5e0f-style accidental deletion. This is
-        // the actual stdlib/sha256.airl::u32 shape — must prove cleanly, not
-        // fall back to Unknown.
+        // Regression gate: stdlib/sha256.airl::u32 shape must prove cleanly.
+        // If this regresses to Unknown, the bitwise translator path has broken.
+        // If this regresses to Disproven, the BV-to-Int back-conversion is
+        // producing unconstrained Int.
         let def = make_fn("u32",
             vec![("x", "i64")], "i64",
             vec![],
@@ -956,10 +916,96 @@ mod tests {
         for (clause, result) in &v.ensures_results {
             assert!(
                 matches!(result, VerifyResult::Proven),
-                "expected Proven for sha256::u32 ensures `{}`, got: {:?} — \
-                 if this is Unknown, the axiom-drain hook in verify_function \
-                 has regressed. If Disproven, the translator's bitwise arm \
-                 has regressed.",
+                "expected Proven for sha256::u32 ensures `{}`, got: {:?}",
+                clause, result
+            );
+        }
+    }
+
+    // ── BV-exclusive tests (not provable under the axiom approach) ──
+
+    #[test]
+    fn prove_bitwise_not_twos_complement() {
+        // (bitwise-not 0) must be exactly -1 in two's complement i64.
+        // The axiom approach had no rule for `bitwise-not` at all.
+        let def = make_fn("bnot0",
+            vec![], "i64",
+            vec![],
+            vec![call("=", vec![sym("result"), int(-1)])],
+            call("bitwise-not", vec![int(0)]),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for (bitwise-not 0) = -1, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn prove_bitwise_xor_self_is_zero() {
+        // (bitwise-xor x x) must be 0 for any i64 x. BV semantics prove this
+        // directly; the axiom approach could only bound the result, not pin it.
+        let def = make_fn("bxor_self",
+            vec![("x", "i64")], "i64",
+            vec![],
+            vec![call("=", vec![sym("result"), int(0)])],
+            call("bitwise-xor", vec![sym("x"), sym("x")]),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for (bitwise-xor x x) = 0, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn prove_bitwise_shl_by_zero_on_concrete() {
+        // (bitwise-shl 5 0) = 5 — concrete identity. Symbolic version
+        // (`(bitwise-shl x 0) = x` for symbolic x) needs Int↔BV linking
+        // axioms to bridge the round-trip, which is out of scope for this
+        // spec. See artifacts/spec-airl-z3-bv64-bitwise.md risks.
+        let def = make_fn("bshl0_5",
+            vec![], "i64",
+            vec![],
+            vec![call("=", vec![sym("result"), int(5)])],
+            call("bitwise-shl", vec![int(5), int(0)]),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 1);
+        assert!(
+            matches!(&v.ensures_results[0].1, VerifyResult::Proven),
+            "expected Proven for (bitwise-shl 5 0) = 5, got: {:?}", v,
+        );
+    }
+
+    #[test]
+    fn prove_bitwise_and_mask_exact_range() {
+        // Strengthen sha256::u32 to assert exact mask semantics: result =
+        // (bitwise-and x 0xFF) ⇒ 0 ≤ result ≤ 255 ∧ result ≤ x when x is
+        // non-negative. Axiom approach could prove the first conjunct; BV
+        // can prove richer relationships. Here we exercise that the result
+        // of a small mask is actually bounded exactly by the mask.
+        let def = make_fn("u8_mask",
+            vec![("x", "i64")], "i64",
+            vec![],
+            vec![
+                call(">=", vec![sym("result"), int(0)]),
+                call("<=", vec![sym("result"), int(255)]),
+            ],
+            call("bitwise-and", vec![sym("x"), int(255)]),
+        );
+        let prover = Z3Prover::new();
+        let v = prover.verify_function(&def);
+        assert_eq!(v.ensures_results.len(), 2);
+        for (clause, result) in &v.ensures_results {
+            assert!(
+                matches!(result, VerifyResult::Proven),
+                "expected Proven for u8_mask ensures `{}`, got: {:?}",
                 clause, result
             );
         }
