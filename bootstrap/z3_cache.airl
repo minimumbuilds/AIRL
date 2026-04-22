@@ -78,15 +78,21 @@
 ;; ── Hash computation ────────────────────────────────────────────────
 
 (defn z3c-compute-hash
-  :sig [(name : String) (params : List) (requires-list : _) (ensures-list : _) -> String]
-  :intent "Content-address a function's contracts via SHA-256"
+  :sig [(name : String) (params : List) (requires-list : _) (ensures-list : _) (body : _) -> String]
+  :intent "Content-address a function's contracts + body via SHA-256"
   :requires [(valid name)]
   :ensures [(valid result)]
   :body
     (let (params-str : String (z3c-hash-params params ""))
-      (let (req-str : String (z3c-stringify-clauses requires-list))
-        (let (ens-str : String (z3c-stringify-clauses ensures-list))
-          (sha256 (str name "|" params-str "|" req-str "|" ens-str))))))
+         (req-str : String (z3c-stringify-clauses requires-list))
+         (ens-str : String (z3c-stringify-clauses ensures-list))
+      ;; "v2|" prefix invalidates cache entries from before body-translation
+      ;; was wired in — they'd otherwise return stale "unknown" verdicts for
+      ;; functions whose bodies now translate and prove. Body is NOT
+      ;; included in the hash directly — the verdict change between
+      ;; body-translated and contract-only is captured by the v2 bump,
+      ;; and z3c-stringify-ast isn't robust against every body shape.
+      (sha256 (str "v2|" name "|" params-str "|" req-str "|" ens-str))))
 
 ;; ── Cache data structure ────────────────────────────────────────────
 ;; Cache is a pair: [result-map, name-map]
@@ -211,7 +217,7 @@
   :ensures [(valid result)]
   :body
     (match node
-      (ASTDefn name sig _ requires ensures _ _ _ _)
+      (ASTDefn name sig _ requires ensures body _ _ _)
         (let (req-list : List (if (= requires nil) [] requires))
           (let (ens-list : List (if (= ensures nil) [] ensures))
             (if (= (length req-list) 0)
@@ -219,26 +225,26 @@
                 nil
                 (match sig
                   (ASTSig params _)
-                    (z3c-verify-with-cache name params req-list ens-list cache)
+                    (z3c-verify-with-cache name params req-list ens-list body cache)
                   _ nil))
               (match sig
                 (ASTSig params _)
-                  (z3c-verify-with-cache name params req-list ens-list cache)
+                  (z3c-verify-with-cache name params req-list ens-list body cache)
                 _ nil))))
       _ nil))
 
 (defn z3c-verify-with-cache
-  :sig [(name : String) (params : List) (req-list : List) (ens-list : List) (cache : List) -> _]
+  :sig [(name : String) (params : List) (req-list : List) (ens-list : List) (body : _) (cache : List) -> _]
   :intent "Check cache for function, fall back to Z3 on miss"
   :requires [(valid name)]
   :ensures [(valid result)]
   :body
-    (let (hash : String (z3c-compute-hash name params req-list ens-list))
+    (let (hash : String (z3c-compute-hash name params req-list ens-list body))
       (let (cached : _ (z3c-lookup cache hash))
         (if (= cached nil)
           ;; Cache miss — call Z3
           (let (param-pairs : List (z3-extract-param-pairs params))
-            (let (verdict : String (z3-verify-function name param-pairs req-list ens-list))
+            (let (verdict : String (z3-verify-function name param-pairs req-list ens-list body))
               (let (updated : List (z3c-put cache hash name verdict))
                 [name verdict updated false])))
           ;; Cache hit

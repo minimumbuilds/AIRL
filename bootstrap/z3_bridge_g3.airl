@@ -397,8 +397,15 @@
           (ASTInt value _ _)
             (airl_z3_mk_int_val ctx (string-to-int value) int-sort)
           ;; Float literal → Z3 Real (issue-133)
+          ;; Guard: value should be a string like "3.14". If the AOT
+          ;; pipeline serializes ASTFloat with a non-string value field
+          ;; (e.g. a raw float), the downstream string-length call
+          ;; crashes with "airl_length: not a List, Str, Map, or Bytes".
+          ;; Treat that as "unsupported" and return 0.
           (ASTFloat value _ _)
-            (z3-translate-float-literal ctx value)
+            (if (= (type-of value) "string")
+              (z3-translate-float-literal ctx value)
+              0)
           ;; String literal → Z3 String (issue-133)
           (ASTStr value _ _)
             (airl_z3_mk_string_val ctx value)
@@ -860,14 +867,19 @@
 ;;   params          — list of [name_string type_string] pairs
 ;;   requires-list   — list of clause expressions (nested lists of strings)
 ;;   ensures-list    — list of clause expressions
+;;   body            — function body AST node (nil when unavailable or
+;;                     untranslatable)
 ;;
 ;; Returns: "proven" | "disproven" | "unknown"
 ;;
-;; Method: assert all requires, negate conjunction of ensures,
-;; then check. UNSAT means ensures always hold ⇒ "proven".
+;; Method: assert all requires, assert `result = body_z3` when the body
+;; translates, negate conjunction of ensures, then check. UNSAT ⇒
+;; "proven"; SAT with body asserted ⇒ "disproven"; SAT without body
+;; (untranslatable) is demoted to "unknown" because `result` is
+;; unconstrained in that regime and the SAT witness is spurious.
 
 (defn z3-verify-function
-  :sig [(name : String) (params : List) (requires-list : List) (ensures-list : List) -> String]
+  :sig [(name : String) (params : List) (requires-list : List) (ensures-list : List) (body : _) -> String]
   :intent "Verify function contracts using Z3 SMT solver"
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -884,33 +896,58 @@
                   (if (= req-ok false)
                     (do (z3-cleanup ctx solver)
                         "unknown")
-                    ;; Build negation of ensures conjunction
-                    (let (ensures-conj : _ (z3-conjoin-clauses ctx ensures-list full-map int-sort))
-                      (if (= ensures-conj 0)
-                        (do (z3-cleanup ctx solver)
-                            "unknown")
-                        (let (neg-ensures : _ (airl_z3_mk_not ctx ensures-conj))
-                          (do (airl_z3_solver_assert ctx solver neg-ensures)
-                              (let (check-result : _ (airl_z3_solver_check ctx solver))
-                                ;; Spec 2026-04-21 Bug A (AIRL-side fix):
-                                ;; g3's Z3 bridge does NOT translate the function
-                                ;; body, only its contracts. So `result` is
-                                ;; unconstrained when Z3 runs — any SAT verdict
-                                ;; on a `result`-referencing ensures is meaningless
-                                ;; (Z3 trivially picks a value that satisfies
-                                ;; requires and violates ensures). Demote SAT to
-                                ;; "unknown" rather than report a spurious
-                                ;; "disproven". Proven (UNSAT) remains reliable:
-                                ;; when requires + negated-ensures is UNSAT, the
-                                ;; ensures holds for *every* possible `result`,
-                                ;; which is strictly stronger than a body-aware
-                                ;; proof.
-                                (let (verdict : String
-                                      (if (= check-result -1)
-                                        "proven"
-                                        "unknown"))
-                                  (do (z3-cleanup ctx solver)
-                                      verdict))))))))))))))))
+                    ;; Try to translate and assert the body as
+                    ;; `result = body_z3`. A nil body, non-translatable shape,
+                    ;; or a 0-return from the translator means we fall back
+                    ;; to contract-only reasoning and demote any SAT verdict
+                    ;; below to "unknown".
+                    ;;
+                    ;; Scope (spec Phase 1): only translate bodies whose
+                    ;; overall return sort is Int. Float-returning bodies
+                    ;; (ASTFloat literals, f64 contracts) route through a
+                    ;; Real-sort translator that is not yet integrated with
+                    ;; the Int result-const binding. Let / Match / Do / If
+                    ;; are handled by z3-translate-ast-expr recursively, so
+                    ;; only filter the direct-is-float case.
+                    (let (body-is-float : Bool
+                          (match body
+                            (ASTFloat _ _ _) true
+                            _ false))
+                      (let (body-translated : Bool
+                            (if (or (= body nil) body-is-float)
+                              false
+                              (let (body-z3 : _ (z3-translate-ast-expr ctx body full-map int-sort))
+                                (if (= body-z3 0)
+                                  false
+                                  (do (airl_z3_solver_assert ctx solver
+                                        (airl_z3_mk_eq ctx result-const body-z3))
+                                      true)))))
+                      ;; Body translation status determined. Continue with
+                      ;; the ensures check below.
+                      ;; Build negation of ensures conjunction
+                      (let (ensures-conj : _ (z3-conjoin-clauses ctx ensures-list full-map int-sort))
+                        (if (= ensures-conj 0)
+                          (do (z3-cleanup ctx solver)
+                              "unknown")
+                          (let (neg-ensures : _ (airl_z3_mk_not ctx ensures-conj))
+                            (do (airl_z3_solver_assert ctx solver neg-ensures)
+                                (let (check-result : _ (airl_z3_solver_check ctx solver))
+                                  ;; check-result: -1 = UNSAT (proven),
+                                  ;; 1 = SAT, 0 = unknown.
+                                  ;; Body-translated: SAT = real
+                                  ;; counterexample ⇒ "disproven".
+                                  ;; Body-untranslated: SAT is spurious
+                                  ;; (result unconstrained) ⇒ "unknown"
+                                  ;; (matches the pre-body-translator safety
+                                  ;; rule from d269425).
+                                  (let (verdict : String
+                                        (if (= check-result -1)
+                                          "proven"
+                                          (if (= check-result 1)
+                                            (if body-translated "disproven" "unknown")
+                                            "unknown")))
+                                    (do (z3-cleanup ctx solver)
+                                        verdict))))))))))))))))))
 
 ;; ── AST contract extraction for g3 pipeline ─────────────────────────
 ;; These helpers extract requires/ensures clauses from parsed AST defns
@@ -936,7 +973,7 @@
   :ensures [(valid result)]
   :body
     (match node
-      (ASTDefn name sig _ requires ensures _ _ _ _)
+      (ASTDefn name sig _ requires ensures body _ _ _)
         (let (req-list : List (if (= requires nil) [] requires))
           (let (ens-list : List (if (= ensures nil) [] ensures))
             (if (= (length req-list) 0)
@@ -944,11 +981,11 @@
                 nil  ;; No contracts to verify
                 (match sig
                   (ASTSig params _)
-                    [name (z3-verify-function name (z3-extract-param-pairs params) req-list ens-list)]
+                    [name (z3-verify-function name (z3-extract-param-pairs params) req-list ens-list body)]
                   _ nil))
               (match sig
                 (ASTSig params _)
-                  [name (z3-verify-function name (z3-extract-param-pairs params) req-list ens-list)]
+                  [name (z3-verify-function name (z3-extract-param-pairs params) req-list ens-list body)]
                 _ nil))))
       _ nil))
 
