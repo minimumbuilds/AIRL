@@ -464,6 +464,20 @@ pub fn compile_bytecode_streaming(batches: &[Value], output_path: &str) -> Resul
     let mut obj_paths: Vec<String> = Vec::new();
     let mut needs_compiler = false;
 
+    // Cross-batch dedup: each batch emits its own `.o`, so if two batches
+    // define the same function name, the linker sees multiple definitions
+    // of `__airl_fn_<name>` and fails. AIRL's first-def-wins semantics apply
+    // globally across the whole compile, not just within one file — so we
+    // carry a seen-set across the batch loop and skip any function whose
+    // name was emitted by an earlier batch.
+    //
+    // Concrete repro: mynameisAIRL's build lists patch files (patch-json-
+    // result.airl) BEFORE the upstream files they override (airtraffic.airl,
+    // which loads json.airl). Before this cross-batch dedup, the linker
+    // reported "multiple definition of `__airl_fn_json_parse`" and similar
+    // for every patched function.
+    let mut global_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     let outer = match batches.first() {
         None => {
             return Err(RuntimeError::Custom("compile-bytecode-streaming: empty batch list".into()));
@@ -485,14 +499,19 @@ pub fn compile_bytecode_streaming(batches: &[Value], output_path: &str) -> Resul
             continue;
         }
 
-        // Unmarshal and dedup (first-wins to match AIRL's first-def-wins semantics)
+        // Unmarshal, then dedup against both this batch and earlier batches
+        // (first-wins globally — matches AIRL-level first-def-wins).
         let mut bc_funcs: Vec<crate::bytecode::BytecodeFunc> = Vec::new();
         for f in &batch_funcs {
             bc_funcs.push(value_to_bytecode_func(f)?);
         }
-        {
-            let mut seen = std::collections::HashSet::new();
-            bc_funcs.retain(|f| seen.insert(f.name.clone()));
+        bc_funcs.retain(|f| global_seen.insert(f.name.clone()));
+
+        // If every function in this batch was already emitted by an earlier
+        // batch, skip it — nothing to compile, and emitting an empty `.o`
+        // would just be noise.
+        if bc_funcs.is_empty() {
+            continue;
         }
 
         // Check if any function in this batch needs the full runtime library
