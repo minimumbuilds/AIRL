@@ -188,7 +188,8 @@
                                    [(str stdlib-dir "/result.airl") "result"]
                                    [(str stdlib-dir "/string.airl") "string"]
                                    [(str stdlib-dir "/map.airl") "map"]
-                                   [(str stdlib-dir "/set.airl") "set"]])
+                                   [(str stdlib-dir "/set.airl") "set"]
+                                   [(str stdlib-dir "/json.airl") "json"]])
         ;; Compile each module separately with its own prefix.
         ;; Lambda names become __lambda_collections_0, __lambda_math_0 etc.
         ;; matching the Rust compiler's naming convention.

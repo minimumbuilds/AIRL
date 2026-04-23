@@ -55,6 +55,11 @@ const SET_SOURCE: &str = include_str!("../../../stdlib/set.airl");
 const IO_SOURCE: &str = include_str!("../../../stdlib/io.airl");
 const PATH_SOURCE: &str = include_str!("../../../stdlib/path.airl");
 const RANDOM_SOURCE: &str = include_str!("../../../stdlib/random.airl");
+// json.airl is auto-included (like prelude.airl) because the Rust builtins
+// `json-parse` and `json-stringify` were deregistered in bytecode_aot.rs and
+// bytecode_vm.rs; the AIRL implementations in stdlib/json.airl are now the
+// only providers of those symbols.
+const JSON_SOURCE: &str = include_str!("../../../stdlib/json.airl");
 #[cfg(not(target_os = "airlos"))]
 const SQLITE_SOURCE: &str = include_str!("../../../stdlib/sqlite.airl");
 
@@ -1052,6 +1057,7 @@ const STDLIB_PATHS: &[&str] = &[
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/io.airl"),
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/path.airl"),
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/random.airl"),
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/json.airl"),
     #[cfg(not(target_os = "airlos"))]
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/sqlite.airl"),
 ];
@@ -1070,6 +1076,7 @@ fn stdlib_embed_hash() -> u64 {
     IO_SOURCE.hash(&mut hasher);
     PATH_SOURCE.hash(&mut hasher);
     RANDOM_SOURCE.hash(&mut hasher);
+    JSON_SOURCE.hash(&mut hasher);
     #[cfg(not(target_os = "airlos"))]
     SQLITE_SOURCE.hash(&mut hasher);
     hasher.finish()
@@ -1111,6 +1118,7 @@ fn compile_stdlib_all() -> Result<Vec<(Vec<BytecodeFunc>, BytecodeFunc)>, Pipeli
         (IO_SOURCE, "io"),
         (PATH_SOURCE, "path"),
         (RANDOM_SOURCE, "random"),
+        (JSON_SOURCE, "json"),
     ];
     #[cfg(not(target_os = "airlos"))]
     let stdlib_modules: &[(&str, &str)] = &[
@@ -1123,6 +1131,7 @@ fn compile_stdlib_all() -> Result<Vec<(Vec<BytecodeFunc>, BytecodeFunc)>, Pipeli
         (IO_SOURCE, "io"),
         (PATH_SOURCE, "path"),
         (RANDOM_SOURCE, "random"),
+        (JSON_SOURCE, "json"),
         (SQLITE_SOURCE, "sqlite"),
     ];
     let mut result = Vec::new();
