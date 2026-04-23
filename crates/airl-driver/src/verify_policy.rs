@@ -223,6 +223,53 @@ where
     Ok(out)
 }
 
+/// Extract (key, level) pairs for every module and top-level defn in the file.
+///
+/// Multi-module files emit qualified keys (path#modname / path#defnname).
+/// Single-entry files use a plain-path key only when the result is unambiguous.
+pub fn extract_verify_entries(
+    path: &str,
+    tops: &[airl_syntax::ast::TopLevel],
+) -> Vec<(BaselineKey, airl_syntax::ast::VerifyLevel)> {
+    use airl_syntax::ast::TopLevel;
+
+    let mut modules: Vec<(String, airl_syntax::ast::VerifyLevel)> = Vec::new();
+    let mut bare_defns: Vec<(String, airl_syntax::ast::VerifyLevel)> = Vec::new();
+
+    for top in tops {
+        match top {
+            TopLevel::Module(m) => {
+                modules.push((m.name.clone(), m.verify));
+            }
+            TopLevel::Defn(f) => {
+                let level = f.verify.unwrap_or_default();
+                bare_defns.push((f.name.clone(), level));
+            }
+            _ => {}
+        }
+    }
+
+    // Use a plain (whole-file) key only when there is exactly one module and no
+    // bare top-level defns.  Bare defns always get a name-qualified key so the
+    // function name is preserved regardless of how many top-level items there are.
+    let single_module = modules.len() == 1 && bare_defns.is_empty();
+
+    let mut out = Vec::new();
+    for (name, level) in modules {
+        let key = if single_module {
+            BaselineKey::whole_file(path)
+        } else {
+            BaselineKey::qualified(path, name)
+        };
+        out.push((key, level));
+    }
+    for (name, level) in bare_defns {
+        // Always qualified for bare defns.
+        out.push((BaselineKey::qualified(path, name), level));
+    }
+    out
+}
+
 /// Walk the tree rooted at `root`, collecting `.airl` files.
 /// Excludes `tests/fixtures/**` and anything under a `target/` or `.git/` directory.
 pub fn enumerate_airl_files(root: &Path) -> Vec<PathBuf> {
@@ -364,6 +411,60 @@ grandfathered_trusted = []
         let m_pos = rendered.find("m.airl").unwrap();
         let z_pos = rendered.find("z.airl").unwrap();
         assert!(a_pos < m_pos && m_pos < z_pos, "entries not sorted:\n{}", rendered);
+    }
+
+    // ── Task 4.2 helpers ──────────────────────────────────────────────────────
+
+    /// Parse AIRL source into a Vec<TopLevel> using the public airl-syntax API.
+    fn parse_tops(src: &str) -> Vec<airl_syntax::ast::TopLevel> {
+        use airl_syntax::{Lexer, parse_sexpr_all, parser, diagnostic::Diagnostics};
+        let tokens = Lexer::new(src).lex_all().expect("lex_all failed");
+        let sexprs = parse_sexpr_all(tokens).expect("parse_sexpr_all failed");
+        let mut diags = Diagnostics::new();
+        let mut tops = Vec::new();
+        for sexpr in &sexprs {
+            match parser::parse_top_level(sexpr, &mut diags) {
+                Ok(top) => tops.push(top),
+                Err(d) => panic!("parse_top_level failed: {:?}", d),
+            }
+        }
+        tops
+    }
+
+    #[test]
+    fn extract_entries_from_module() {
+        let src = r#"(module foo :verify checked (defn x :pub :sig [-> i64] :requires [true] :body 0))"#;
+        let tops = parse_tops(src);
+        let entries = extract_verify_entries("path/foo.airl", &tops);
+        assert_eq!(entries.len(), 1);
+        let (key, level) = &entries[0];
+        assert_eq!(key, &BaselineKey::whole_file("path/foo.airl"));
+        assert_eq!(*level, airl_syntax::ast::VerifyLevel::Checked);
+    }
+
+    #[test]
+    fn extract_entries_multi_module_file() {
+        let src = r#"
+          (module foo :verify checked (defn x :pub :sig [-> i64] :requires [true] :body 0))
+          (module bar :verify trusted (defn y :pub :sig [-> i64] :requires [true] :body 0))
+        "#;
+        let tops = parse_tops(src);
+        let entries = extract_verify_entries("path/f.airl", &tops);
+        assert_eq!(entries.len(), 2);
+        let names: Vec<Option<String>> = entries.iter().map(|(k, _)| k.name.clone()).collect();
+        assert!(names.contains(&Some("foo".to_string())));
+        assert!(names.contains(&Some("bar".to_string())));
+    }
+
+    #[test]
+    fn extract_entries_top_level_defn() {
+        let src = r#"(defn foo :pub :verify checked :sig [-> i64] :requires [true] :body 0)"#;
+        let tops = parse_tops(src);
+        let entries = extract_verify_entries("path/f.airl", &tops);
+        assert_eq!(entries.len(), 1);
+        let (key, level) = &entries[0];
+        assert_eq!(key.name.as_deref(), Some("foo"));
+        assert_eq!(*level, airl_syntax::ast::VerifyLevel::Checked);
     }
 
     #[test]
