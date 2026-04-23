@@ -591,9 +591,85 @@ fn apply_edits(src: &str, mut edits: Vec<(usize, &str)>) -> String {
     out
 }
 
-fn run_init(_root: &Path) -> i32 {
-    eprintln!("verify-policy --init: not yet implemented (see Phase 6)");
-    2
+fn run_init(root: &Path) -> i32 {
+    let files = enumerate_airl_files(root);
+    let mut baseline = Baseline::load(&root.join(BASELINE_FILE)).unwrap_or_default();
+
+    for file in &files {
+        let src = match std::fs::read_to_string(file) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error: reading {}: {}", file.display(), e);
+                return 2;
+            }
+        };
+        let tops = match parse_file_tops(&src) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("error: parsing {}: {}", file.display(), e);
+                return 2;
+            }
+        };
+        let rel = file.strip_prefix(root).unwrap_or(file).to_string_lossy().replace('\\', "/");
+
+        // First pass: collect existing explicit Checked/Trusted entries into baseline.
+        for (key, level) in extract_verify_entries(&rel, &tops) {
+            match level {
+                airl_syntax::ast::VerifyLevel::Checked => {
+                    if !baseline.grandfathered_checked.contains(&key) {
+                        baseline.grandfathered_checked.push(key);
+                    }
+                }
+                airl_syntax::ast::VerifyLevel::Trusted => {
+                    if !baseline.grandfathered_trusted.contains(&key) {
+                        baseline.grandfathered_trusted.push(key);
+                    }
+                }
+                airl_syntax::ast::VerifyLevel::Proven => {}
+            }
+        }
+
+        // Second pass: rewrite implicit-default modules/defns to explicit :verify checked.
+        let rewritten_mods = insert_verify_checked_into_modules(&src, &tops);
+        // Re-parse after module rewrite so bare-defn spans are still valid for the second rewrite.
+        let rewritten_all = match parse_file_tops(&rewritten_mods) {
+            Ok(new_tops) => insert_verify_checked_into_top_level_defns(&rewritten_mods, &new_tops),
+            Err(_) => rewritten_mods.clone(),
+        };
+
+        if rewritten_all != src {
+            if let Err(e) = std::fs::write(file, &rewritten_all) {
+                eprintln!("error: writing {}: {}", file.display(), e);
+                return 2;
+            }
+            // Re-parse the rewritten file and re-extract entries so the newly
+            // explicit Checked entries land in the baseline too.
+            if let Ok(reparsed) = parse_file_tops(&rewritten_all) {
+                for (key, level) in extract_verify_entries(&rel, &reparsed) {
+                    if level == airl_syntax::ast::VerifyLevel::Checked
+                        && !baseline.grandfathered_checked.contains(&key)
+                    {
+                        baseline.grandfathered_checked.push(key);
+                    }
+                }
+            }
+        }
+    }
+    baseline.grandfathered_checked.sort();
+    baseline.grandfathered_checked.dedup();
+    baseline.grandfathered_trusted.sort();
+    baseline.grandfathered_trusted.dedup();
+    if let Err(e) = baseline.write(&root.join(BASELINE_FILE)) {
+        eprintln!("error: writing baseline: {}", e);
+        return 2;
+    }
+    println!(
+        "verify-policy --init: {} files scanned, {} checked + {} trusted in baseline",
+        files.len(),
+        baseline.grandfathered_checked.len(),
+        baseline.grandfathered_trusted.len()
+    );
+    0
 }
 
 fn run_prune(_root: &Path) -> i32 {
@@ -816,6 +892,46 @@ grandfathered_trusted = []
         let diff = compute_diff(&b, &scanned);
         assert_eq!(diff.new_trusted.len(), 1);
         assert!(diff.new_checked.is_empty());
+    }
+
+    // ── Task 6.1 tests ───────────────────────────────────────────────────────
+
+    // ── Task 6.2 tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn init_populates_baseline_and_rewrites_sources() {
+        use tempfile::TempDir;
+        let td = TempDir::new().unwrap();
+        let root = td.path();
+        std::fs::create_dir_all(root.join("crates/a/src")).unwrap();
+        std::fs::write(root.join("crates/a/src/lib.airl"),
+            "(module a (defn x :sig [-> i64] :requires [true] :body 0))").unwrap();
+
+        let code = run_init(root);
+        assert_eq!(code, 0, "init should succeed");
+
+        let baseline = Baseline::load(&root.join(BASELINE_FILE)).unwrap();
+        assert!(baseline.grandfathered_checked.iter()
+            .any(|k| k.path == "crates/a/src/lib.airl"), "missing entry: {:?}", baseline);
+
+        let rewritten = std::fs::read_to_string(root.join("crates/a/src/lib.airl")).unwrap();
+        assert!(rewritten.contains(":verify checked"), "module not rewritten: {}", rewritten);
+    }
+
+    #[test]
+    fn init_is_idempotent() {
+        use tempfile::TempDir;
+        let td = TempDir::new().unwrap();
+        let root = td.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.airl"),
+            "(module a (defn x :sig [-> i64] :requires [true] :body 0))").unwrap();
+
+        assert_eq!(run_init(root), 0);
+        let first = std::fs::read_to_string(root.join("src/lib.airl")).unwrap();
+        assert_eq!(run_init(root), 0);
+        let second = std::fs::read_to_string(root.join("src/lib.airl")).unwrap();
+        assert_eq!(first, second, "init not idempotent");
     }
 
     // ── Task 6.1 tests ───────────────────────────────────────────────────────
