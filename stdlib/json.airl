@@ -320,13 +320,15 @@
                       (json-parse-number src p len)))))))))
 
 ;; ── json-parse : parse a JSON string into an AIRL value ──
+;; Returns (Ok value) on success, (Err message) on failure.
+;; Matches the interface of the deregistered Rust builtin.
 (defn json-parse :verify checked
   :sig [(s : String) -> Any]
-  :intent "Parse a JSON string into an AIRL value"
+  :intent "Parse a JSON string into an AIRL value, returning Ok/Err Result"
   :requires [(valid s)]
   :ensures [(valid result)]
   :body (let (src : Bytes (bytes-from-string s))
              (len : i64 (length src))
           (if (= len 0)
-            nil
-            (at (json-parse-value src 0 len) 0))))
+            (Err "json-parse: empty input")
+            (Ok (at (json-parse-value src 0 len) 0)))))
