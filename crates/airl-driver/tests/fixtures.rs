@@ -515,3 +515,22 @@ fn module_compilation_fixtures() {
     assert!(run_count > 0, "No ;;RUN-MODULE fixtures found in verify_level/");
     eprintln!("  {} module compilation fixtures passed", run_count);
 }
+
+// ── Coverage-gate fixture tests ──────────────────────────
+
+#[test]
+fn coverage_fixture_pub_fn_no_ensures() {
+    // NOTE: Mutates AIRL_COVERAGE_ENFORCE env var. If parallel test execution
+    // causes flakiness, serialize with the COVERAGE_ENV_LOCK pattern (see
+    // crates/airl-driver/src/pipeline.rs test module for the mutex).
+    std::env::set_var("AIRL_COVERAGE_ENFORCE", "1");
+    let path = fixtures_root()
+        .join("coverage")
+        .join("pub_fn_no_ensures.airl");
+    let src = std::fs::read_to_string(&path).expect("fixture missing");
+    let result = airl_driver::pipeline::run_source(&src);
+    std::env::remove_var("AIRL_COVERAGE_ENFORCE");
+    let err = result.expect_err("expected ContractCoverageMissing");
+    let msg = format!("{}", err);
+    assert!(msg.contains("has no :ensures"), "unexpected error: {}", msg);
+}
