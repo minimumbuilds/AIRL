@@ -684,12 +684,22 @@ fn run_prune(root: &Path) -> i32 {
 
     let mut scanned = Vec::new();
     for file in enumerate_airl_files(root) {
-        let src = std::fs::read_to_string(&file).unwrap_or_default();
-        if src.is_empty() { continue; }
+        let src = match std::fs::read_to_string(&file) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error: reading {}: {}", file.display(), e);
+                return 2;
+            }
+        };
         let rel = file.strip_prefix(root).unwrap_or(&file).to_string_lossy().replace('\\', "/");
-        if let Ok(tops) = parse_file_tops(&src) {
-            scanned.extend(extract_verify_entries(&rel, &tops));
-        }
+        let tops = match parse_file_tops(&src) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("error: parsing {}: {}", rel, e);
+                return 2;
+            }
+        };
+        scanned.extend(extract_verify_entries(&rel, &tops));
     }
 
     let diff = compute_diff(&baseline, &scanned);
