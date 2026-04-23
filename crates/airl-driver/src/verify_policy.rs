@@ -487,6 +487,110 @@ fn parse_file_tops(src: &str) -> Result<Vec<airl_syntax::ast::TopLevel>, String>
     Ok(tops)
 }
 
+/// Rewrite source to insert `:verify checked` after each module's name symbol,
+/// but only for modules that have no explicit :verify annotation.
+///
+/// Uses parsed spans: for each module, find the name token's end within the
+/// module's span, insert ` :verify checked` there. Working right-to-left on
+/// edits preserves earlier byte offsets.
+pub fn insert_verify_checked_into_modules(
+    src: &str,
+    tops: &[airl_syntax::ast::TopLevel],
+) -> String {
+    let mut edits: Vec<(usize, &str)> = Vec::new();
+    for top in tops {
+        if let airl_syntax::ast::TopLevel::Module(m) = top {
+            if is_module_verify_explicit_in_source(src, m) {
+                continue;
+            }
+            let ins_offset = locate_after_module_name(src, m);
+            edits.push((ins_offset, " :verify checked"));
+        }
+    }
+    apply_edits(src, edits)
+}
+
+pub fn insert_verify_checked_into_top_level_defns(
+    src: &str,
+    tops: &[airl_syntax::ast::TopLevel],
+) -> String {
+    let mut edits: Vec<(usize, &str)> = Vec::new();
+    for top in tops {
+        if let airl_syntax::ast::TopLevel::Defn(f) = top {
+            if f.verify.is_some() {
+                continue;
+            }
+            let ins_offset = locate_after_defn_name(src, f);
+            edits.push((ins_offset, " :verify checked"));
+        }
+    }
+    apply_edits(src, edits)
+}
+
+fn is_module_verify_explicit_in_source(src: &str, m: &airl_syntax::ast::ModuleDef) -> bool {
+    // The parser defaults m.verify to Checked if the keyword is absent.
+    // Inspect the source slice within the module's span for the `:verify` keyword.
+    let start = m.span.start;
+    let end = m.span.end.min(src.len());
+    src.get(start..end).map_or(false, |slice| slice.contains(":verify"))
+}
+
+fn locate_after_module_name(src: &str, m: &airl_syntax::ast::ModuleDef) -> usize {
+    // Find the `module` keyword inside the module's span, then skip whitespace
+    // to find the name token, then return its end offset.
+    let start = m.span.start;
+    let slice = &src[start..];
+    let mod_kw = slice.find("module").expect("module keyword present in source");
+    let after_kw = start + mod_kw + "module".len();
+    // Skip whitespace
+    let mut i = after_kw;
+    while i < src.len() && src.as_bytes()[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    // Consume the name token (until whitespace, ')', keyword ':', or '(').
+    while i < src.len() {
+        let b = src.as_bytes()[i];
+        if b.is_ascii_whitespace() || b == b')' || b == b':' || b == b'(' {
+            break;
+        }
+        i += 1;
+    }
+    i
+}
+
+fn locate_after_defn_name(src: &str, f: &airl_syntax::ast::FnDef) -> usize {
+    // Find `defn` token within the function's span, then the name.
+    // Note: :pub modifier goes AFTER the name in AIRL, so locate_after_name
+    // returns the offset just after the name token — insertion there is
+    // valid regardless of :pub presence.
+    let start = f.span.start;
+    let slice = &src[start..];
+    let defn_kw = slice.find("defn").expect("defn keyword present in source");
+    let after_kw = start + defn_kw + "defn".len();
+    let mut i = after_kw;
+    // Skip whitespace
+    while i < src.len() && src.as_bytes()[i].is_ascii_whitespace() { i += 1; }
+    // Name token
+    while i < src.len() {
+        let b = src.as_bytes()[i];
+        if b.is_ascii_whitespace() || b == b')' || b == b':' || b == b'(' {
+            break;
+        }
+        i += 1;
+    }
+    i
+}
+
+fn apply_edits(src: &str, mut edits: Vec<(usize, &str)>) -> String {
+    // Apply right-to-left so offsets stay valid.
+    edits.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut out = src.to_string();
+    for (offset, text) in edits {
+        out.insert_str(offset, text);
+    }
+    out
+}
+
 fn run_init(_root: &Path) -> i32 {
     eprintln!("verify-policy --init: not yet implemented (see Phase 6)");
     2
@@ -712,6 +816,45 @@ grandfathered_trusted = []
         let diff = compute_diff(&b, &scanned);
         assert_eq!(diff.new_trusted.len(), 1);
         assert!(diff.new_checked.is_empty());
+    }
+
+    // ── Task 6.1 tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn rewrite_inserts_verify_checked_into_module_header() {
+        let src = "(module foo\n  :version 0.1.0\n  (defn x :sig [-> i64] :requires [true] :body 0))";
+        let tops = parse_tops(src);
+        let out = insert_verify_checked_into_modules(src, &tops);
+        assert!(out.contains(":verify checked"), "missing insertion: {}", out);
+        // Re-parse must succeed and yield VerifyLevel::Checked
+        let reparsed = parse_tops(&out);
+        match &reparsed[0] {
+            airl_syntax::ast::TopLevel::Module(m) => assert_eq!(m.verify, airl_syntax::ast::VerifyLevel::Checked),
+            _ => panic!("expected module"),
+        }
+    }
+
+    #[test]
+    fn rewrite_skips_modules_with_explicit_verify() {
+        let src = "(module foo :verify proven (defn x :sig [-> i64] :requires [true] :ensures [(= result 0)] :body 0))";
+        let tops = parse_tops(src);
+        let out = insert_verify_checked_into_modules(src, &tops);
+        // Proven should be preserved; no :verify checked injected.
+        assert!(!out.contains(":verify checked"));
+        assert!(out.contains(":verify proven"));
+    }
+
+    #[test]
+    fn rewrite_inserts_into_top_level_defn() {
+        let src = "(defn foo :pub :sig [-> i64] :requires [true] :body 0)";
+        let tops = parse_tops(src);
+        let out = insert_verify_checked_into_top_level_defns(src, &tops);
+        assert!(out.contains(":verify checked"), "missing: {}", out);
+        let reparsed = parse_tops(&out);
+        match &reparsed[0] {
+            airl_syntax::ast::TopLevel::Defn(f) => assert_eq!(f.verify, Some(airl_syntax::ast::VerifyLevel::Checked)),
+            _ => panic!("expected defn"),
+        }
     }
 
     #[test]
