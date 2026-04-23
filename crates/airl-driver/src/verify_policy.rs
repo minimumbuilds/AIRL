@@ -109,6 +109,55 @@ impl Baseline {
             grandfathered_trusted: trusted,
         })
     }
+
+    /// Render the baseline as a stable, sorted TOML string.
+    pub fn render(&self) -> String {
+        let mut s = String::new();
+        s.push_str("# Managed by `airl verify-policy`. Hand-edits are allowed; CI validates\n");
+        s.push_str("# consistency on every run. Remove an entry to ratchet — requires upgrading\n");
+        s.push_str("# the module's :verify to proven and adding :ensures to every :pub defn.\n");
+        s.push_str(&format!("version = {}\n", self.version));
+        s.push_str("\n");
+        s.push_str("grandfathered_checked = [\n");
+        let mut checked: Vec<BaselineKey> = self.grandfathered_checked.clone();
+        checked.sort();
+        checked.dedup();
+        for k in &checked {
+            s.push_str(&format!("  \"{}\",\n", k.to_string()));
+        }
+        s.push_str("]\n");
+        s.push_str("\n");
+        s.push_str("grandfathered_trusted = [\n");
+        let mut trusted: Vec<BaselineKey> = self.grandfathered_trusted.clone();
+        trusted.sort();
+        trusted.dedup();
+        for k in &trusted {
+            s.push_str(&format!("  \"{}\",\n", k.to_string()));
+        }
+        s.push_str("]\n");
+        s
+    }
+
+    /// Read baseline from disk, or return `Ok(Baseline::new())` if missing.
+    pub fn load(path: &Path) -> Result<Self, String> {
+        if !path.exists() {
+            return Ok(Baseline::new());
+        }
+        let src = std::fs::read_to_string(path)
+            .map_err(|e| format!("reading {}: {}", path.display(), e))?;
+        Baseline::parse(&src)
+    }
+
+    /// Write baseline to disk atomically-ish (write then rename).
+    pub fn write(&self, path: &Path) -> Result<(), String> {
+        let rendered = self.render();
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, rendered.as_bytes())
+            .map_err(|e| format!("writing {}: {}", tmp.display(), e))?;
+        std::fs::rename(&tmp, path)
+            .map_err(|e| format!("renaming to {}: {}", path.display(), e))?;
+        Ok(())
+    }
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -246,5 +295,35 @@ grandfathered_checked = []
 grandfathered_trusted = []
 "#;
         assert!(Baseline::parse(src).is_err());
+    }
+
+    #[test]
+    fn baseline_writer_roundtrip() {
+        let mut b = Baseline::new();
+        b.grandfathered_checked = vec![
+            BaselineKey::whole_file("crates/a.airl"),
+            BaselineKey::qualified("crates/b.airl", "mod2"),
+        ];
+        b.grandfathered_trusted = vec![
+            BaselineKey::whole_file("bootstrap/x.airl"),
+        ];
+        let rendered = b.render();
+        let parsed = Baseline::parse(&rendered).expect("roundtrip parse failed");
+        assert_eq!(parsed, b);
+    }
+
+    #[test]
+    fn baseline_writer_sorts_entries() {
+        let mut b = Baseline::new();
+        b.grandfathered_checked = vec![
+            BaselineKey::whole_file("z.airl"),
+            BaselineKey::whole_file("a.airl"),
+            BaselineKey::whole_file("m.airl"),
+        ];
+        let rendered = b.render();
+        let a_pos = rendered.find("a.airl").unwrap();
+        let m_pos = rendered.find("m.airl").unwrap();
+        let z_pos = rendered.find("z.airl").unwrap();
+        assert!(a_pos < m_pos && m_pos < z_pos, "entries not sorted:\n{}", rendered);
     }
 }
