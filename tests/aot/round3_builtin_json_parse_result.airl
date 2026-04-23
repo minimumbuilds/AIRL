@@ -10,11 +10,11 @@
   (let (v1 : String (match r1 (Ok v) (str v) (Err e) (str "err:" e)))
        (v2 : String (match r2 (Ok v) (str v) (Err e) (str "err:" e)))
        (v3 : String (match r3 (Ok v) (str (length v)) (Err e) (str "err:" e)))
-       (v4 : String (match r4 (Ok v) "nil-ok" (Err e) (str "err:" e)))
+       (v4 : String (match r4 (Ok v) "unexpected-ok" (Err e) (if (contains e "empty") "empty-err" (str "other-err:" e))))
        (v5 : String (match r5 (Ok v) (if v "true-ok" "bad") (Err e) (str "err:" e)))
     (print (str
       "ok1:" (if (= v1 "42") "ok" (str "bad:" v1))
       "|ok2:" (if (= v2 "hello") "ok" (str "bad:" v2))
       "|ok3:" (if (= v3 "3") "ok" (str "bad:" v3))
-      "|ok4:" (if (= v4 "nil-ok") "ok" (str "bad:" v4))
+      "|ok4:" (if (= v4 "empty-err") "ok" (str "bad:" v4))
       "|ok5:" (if (= v5 "true-ok") "ok" (str "bad:" v5))))))

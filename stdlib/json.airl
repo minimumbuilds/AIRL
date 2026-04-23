@@ -332,5 +332,5 @@
   :body (let (src : Bytes (bytes-from-string s))
              (len : i64 (length src))
           (if (= len 0)
-            (Ok nil)
+            (Err "json-parse: empty input")
             (Ok (at (json-parse-value src 0 len) 0)))))
