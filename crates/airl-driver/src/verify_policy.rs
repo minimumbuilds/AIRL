@@ -6,7 +6,7 @@
 //!   grandfathered_checked = [ "path/a.airl", "path/b.airl#module" ]
 //!   grandfathered_trusted = [ "path/c.airl" ]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// An entry in the baseline — either a whole file or a file#name suffix.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -223,6 +223,41 @@ where
     Ok(out)
 }
 
+/// Walk the tree rooted at `root`, collecting `.airl` files.
+/// Excludes `tests/fixtures/**` and anything under a `target/` or `.git/` directory.
+pub fn enumerate_airl_files(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
+}
+
+fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let rel = path.strip_prefix(root).unwrap_or(&path);
+        let rel_str = rel.to_string_lossy();
+        // Exclusions
+        if rel_str.starts_with("tests/fixtures/") || rel_str.starts_with("tests\\fixtures\\") {
+            continue;
+        }
+        if let Some(name) = path.file_name() {
+            if name == "target" || name == ".git" {
+                continue;
+            }
+        }
+        if path.is_dir() {
+            walk(root, &path, out);
+        } else if path.extension().map_or(false, |e| e == "airl") {
+            out.push(path);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +364,26 @@ grandfathered_trusted = []
         let m_pos = rendered.find("m.airl").unwrap();
         let z_pos = rendered.find("z.airl").unwrap();
         assert!(a_pos < m_pos && m_pos < z_pos, "entries not sorted:\n{}", rendered);
+    }
+
+    #[test]
+    fn scan_airl_files_excludes_fixtures() {
+        use tempfile::TempDir;
+        let td = TempDir::new().unwrap();
+        let root = td.path();
+        std::fs::create_dir_all(root.join("crates/a/src")).unwrap();
+        std::fs::create_dir_all(root.join("tests/fixtures/valid")).unwrap();
+        std::fs::write(root.join("crates/a/src/lib.airl"),
+            "(module a (defn x :sig [-> i64] :requires [true] :body 0))").unwrap();
+        std::fs::write(root.join("tests/fixtures/valid/skip.airl"),
+            "(module skip (defn x :sig [-> i64] :requires [true] :body 0))").unwrap();
+        std::fs::write(root.join("crates/a/src/notes.md"), "# not airl").unwrap();
+
+        let files = enumerate_airl_files(root);
+        let rel: Vec<String> = files.iter()
+            .map(|p: &std::path::PathBuf| p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"))
+            .collect();
+        assert!(rel.iter().any(|p: &String| p == "crates/a/src/lib.airl"), "missing lib.airl: {:?}", rel);
+        assert!(!rel.iter().any(|p: &String| p.starts_with("tests/fixtures/")), "included fixture: {:?}", rel);
     }
 }
