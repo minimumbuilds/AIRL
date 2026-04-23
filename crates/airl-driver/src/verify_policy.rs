@@ -380,6 +380,128 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+// ── Subcommand dispatch ───────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy)]
+enum Mode {
+    Check,
+    Init,
+    Prune,
+    ListUncovered,
+}
+
+/// Entry point for `airl verify-policy [...]`.
+/// Returns a process exit code.
+pub fn run_command(args: &[String]) -> i32 {
+    let mut mode = Mode::Check;
+    for arg in args {
+        match arg.as_str() {
+            "--check" => mode = Mode::Check,
+            "--init" => mode = Mode::Init,
+            "--prune" => mode = Mode::Prune,
+            "--list-uncovered" => mode = Mode::ListUncovered,
+            _ => {
+                eprintln!("verify-policy: unknown argument `{}`", arg);
+                eprintln!("usage: airl verify-policy [--check | --init | --prune | --list-uncovered]");
+                return 2;
+            }
+        }
+    }
+    let root = match std::env::current_dir() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("verify-policy: cannot determine current directory: {}", e);
+            return 2;
+        }
+    };
+    match mode {
+        Mode::Check => run_check(&root),
+        Mode::Init => run_init(&root),
+        Mode::Prune => run_prune(&root),
+        Mode::ListUncovered => run_list_uncovered(&root),
+    }
+}
+
+fn run_check(root: &Path) -> i32 {
+    let baseline_path = root.join(BASELINE_FILE);
+    let baseline = match Baseline::load(&baseline_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: reading {}: {}", baseline_path.display(), e);
+            return 2;
+        }
+    };
+    let mut scanned: Vec<(BaselineKey, airl_syntax::ast::VerifyLevel)> = Vec::new();
+    for file in enumerate_airl_files(root) {
+        let src = match std::fs::read_to_string(&file) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error: reading {}: {}", file.display(), e);
+                return 2;
+            }
+        };
+        let rel = file.strip_prefix(root).unwrap_or(&file).to_string_lossy().replace('\\', "/");
+        let tops = match parse_file_tops(&src) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("error: parsing {}: {}", rel, e);
+                return 2;
+            }
+        };
+        scanned.extend(extract_verify_entries(&rel, &tops));
+    }
+    let diff = compute_diff(&baseline, &scanned);
+    if diff.is_clean() {
+        println!("verify-policy: OK ({} checked, {} trusted, {} stale)",
+                 baseline.grandfathered_checked.len(),
+                 baseline.grandfathered_trusted.len(),
+                 diff.stale_checked.len() + diff.stale_trusted.len());
+        0
+    } else {
+        eprintln!("verify-policy: REGRESSION");
+        for k in &diff.new_checked {
+            eprintln!("  + :verify checked (not in baseline): {}", k.to_string());
+        }
+        for k in &diff.new_trusted {
+            eprintln!("  + :verify trusted (not in baseline): {}", k.to_string());
+        }
+        eprintln!("fix: upgrade the module's :verify annotation, or add the entry to {}", BASELINE_FILE);
+        1
+    }
+}
+
+/// Parse an AIRL source file's top-level forms. Thin wrapper around the
+/// three-step lex+sexpr+toplevel pipeline.
+fn parse_file_tops(src: &str) -> Result<Vec<airl_syntax::ast::TopLevel>, String> {
+    use airl_syntax::{Lexer, parse_sexpr_all, parser, diagnostic::Diagnostics};
+    let tokens = Lexer::new(src).lex_all().map_err(|d| format!("{:?}", d))?;
+    let sexprs = parse_sexpr_all(tokens).map_err(|d| format!("{:?}", d))?;
+    let mut diags = Diagnostics::new();
+    let mut tops = Vec::new();
+    for sexpr in &sexprs {
+        match parser::parse_top_level(sexpr, &mut diags) {
+            Ok(t) => tops.push(t),
+            Err(d) => return Err(format!("{:?}", d)),
+        }
+    }
+    Ok(tops)
+}
+
+fn run_init(_root: &Path) -> i32 {
+    eprintln!("verify-policy --init: not yet implemented (see Phase 6)");
+    2
+}
+
+fn run_prune(_root: &Path) -> i32 {
+    eprintln!("verify-policy --prune: not yet implemented (see Phase 6)");
+    2
+}
+
+fn run_list_uncovered(_root: &Path) -> i32 {
+    eprintln!("verify-policy --list-uncovered: not yet implemented (see Phase 6)");
+    2
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

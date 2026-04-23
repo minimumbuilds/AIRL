@@ -25,6 +25,10 @@ fn main() {
             Some("agent") => cmd_agent(&args[2..]),
             Some("call") => cmd_call(&args[2..]),
             Some("fmt") => cmd_fmt(&args[2..]),
+            Some("verify-policy") => {
+                let rest: Vec<String> = args.iter().skip(2).cloned().collect();
+                std::process::exit(airl_driver::verify_policy::run_command(&rest));
+            }
             Some("--version") | Some("-V") => {
                 println!("airl {} (built {})", env!("CARGO_PKG_VERSION"), env!("AIRL_BUILD_TIME"));
             }
