@@ -1840,9 +1840,11 @@ mod tests {
         // Previous value (16774069352182620680) was from the consolidation refactor.
         // A mismatch here means the refactor changed iteration order or included/excluded
         // sources — both are regressions, not intended behavior changes.
-        // Captured after audit + base64 merges (stdlib/json.airl updated to return
-        // Result; stdlib/base64.airl added to STDLIB_MODULES).
-        const EXPECTED: u64 = 5399544521157553627;
+        // Captured after all merges in this round:
+        // - audit/builtin-parity (json-parse Result sig + getenv Result sig)
+        // - base64-completeness (stdlib/base64.airl in STDLIB_MODULES)
+        // - json-parse-errors (full error propagation + bytes-match helpers)
+        const EXPECTED: u64 = 9029740778319491667;
         assert_eq!(stdlib_embed_hash(), EXPECTED, "stdlib embed hash changed — refactor has a drift bug");
     }
 

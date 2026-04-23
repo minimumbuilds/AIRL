@@ -8,7 +8,7 @@
 ;; ══════════════════════════════════════════════════
 
 ;; ── json-escape-loop : escape special chars in a string ──
-(defn json-escape-loop :verify checked
+(defn json-escape-loop
   :sig [(src : Bytes) (i : i64) (len : i64) -> List]
   :intent "Build list of byte chunks with JSON escapes applied"
   :requires [(>= i 0)]
@@ -35,7 +35,7 @@
 
 
 ;; ── json-escape : escape a string for JSON ──
-(defn json-escape :verify checked
+(defn json-escape
   :sig [(s : String) -> String]
   :intent "Escape special characters in a string for JSON output"
   :requires [(valid s)]
@@ -47,7 +47,7 @@
           (bytes-to-string result 0 (length result))))
 
 ;; ── json-stringify-list-loop : stringify list elements with commas ──
-(defn json-stringify-list-loop :verify checked
+(defn json-stringify-list-loop
   :sig [(lst : List) (first? : Bool) -> String]
   :intent "Stringify list elements separated by commas using head/tail recursion"
   :requires [(valid lst)]
@@ -59,7 +59,7 @@
                    (json-stringify-list-loop (tail lst) false)] ""))))
 
 ;; ── json-stringify-map-loop : stringify map entries ──
-(defn json-stringify-map-loop :verify checked
+(defn json-stringify-map-loop
   :sig [(entries : List) (first? : Bool) -> String]
   :intent "Stringify map key-value pairs separated by commas using head/tail recursion"
   :requires [(valid entries)]
@@ -74,7 +74,7 @@
             (join [prefix entry (json-stringify-map-loop (tail entries) false)] ""))))
 
 ;; ── json-stringify : convert any AIRL value to JSON string ──
-(defn json-stringify :verify checked
+(defn json-stringify
   :sig [(val : Any) -> String]
   :intent "Serialize an AIRL value to a JSON string"
   :requires [(valid val)]
@@ -101,11 +101,10 @@
 ;; JSON Parser — recursive descent
 ;; ══════════════════════════════════════════════════
 
-;; The parser returns [value, next-position] pairs so we can
-;; track how far we've consumed in the input.
+;; The parser returns (Ok [value, next-position]) or (Err "message").
 
 ;; ── json-skip-ws : skip whitespace bytes ──
-(defn json-skip-ws :verify checked
+(defn json-skip-ws
   :sig [(src : Bytes) (pos : i64) (len : i64) -> i64]
   :intent "Skip whitespace (space, tab, newline, CR) starting at pos"
   :requires [(>= pos 0) (>= len 0)]
@@ -118,7 +117,7 @@
               pos))))
 
 ;; ── hex-digit-to-int : ASCII hex digit byte → 0–15 ──
-(defn hex-digit-to-int :verify checked
+(defn hex-digit-to-int
   :sig [(b : i64) -> i64]
   :intent "Convert an ASCII hex digit byte (0-9, a-f, A-F) to its integer value"
   :requires [(or (and (>= b 48) (<= b 57)) (or (and (>= b 65) (<= b 70)) (and (>= b 97) (<= b 102))))]
@@ -130,7 +129,7 @@
             (- b 87))))
 
 ;; ── unicode-escape-to-bytes : \uXXXX → UTF-8 Bytes ──
-(defn unicode-escape-to-bytes :verify checked
+(defn unicode-escape-to-bytes
   :sig [(src : Bytes) (pos : i64) -> Bytes]
   :intent "Decode 4 hex digits at pos into UTF-8 bytes for the Unicode codepoint"
   :requires [(>= pos 0)]
@@ -155,47 +154,89 @@
               (bytes-from-int8 (bitwise-or 128 (bitwise-and (bitwise-shr cp 6) 63)))
               (bytes-from-int8 (bitwise-or 128 (bitwise-and cp 63)))))))))
 
+;; ── bytes-match-3 : check that 3 bytes at pos match b0 b1 b2 ──
+;; Local helper (not pub) for literal dispatch (true/false/null).
+(defn bytes-match-3 :verify checked
+  :sig [(src : Bytes) (pos : i64) (len : i64) (b0 : i64) (b1 : i64) (b2 : i64) -> Bool]
+  :intent "Return true iff src[pos..pos+3] == [b0, b1, b2] without going out of bounds"
+  :requires [(>= pos 0) (>= len 0)]
+  :ensures [(valid result)]
+  :body (if (> (+ pos 3) len)
+          false
+          (if (= (at src pos) b0)
+            (if (= (at src (+ pos 1)) b1)
+              (= (at src (+ pos 2)) b2)
+              false)
+            false)))
+
+;; ── bytes-match-4 : check that 4 bytes at pos match b0 b1 b2 b3 ──
+;; Local helper for "alse" (false has 5 bytes: f + 4 remaining).
+(defn bytes-match-4 :verify checked
+  :sig [(src : Bytes) (pos : i64) (len : i64) (b0 : i64) (b1 : i64) (b2 : i64) (b3 : i64) -> Bool]
+  :intent "Return true iff src[pos..pos+4] == [b0, b1, b2, b3] without going out of bounds"
+  :requires [(>= pos 0) (>= len 0)]
+  :ensures [(valid result)]
+  :body (if (> (+ pos 4) len)
+          false
+          (if (= (at src pos) b0)
+            (if (= (at src (+ pos 1)) b1)
+              (if (= (at src (+ pos 2)) b2)
+                (= (at src (+ pos 3)) b3)
+                false)
+              false)
+            false)))
+
 ;; ── json-parse-string-loop : collect bytes of a JSON string ──
+;; Returns (Ok [bytesList, endPos]) or (Err "json-parse: unterminated string").
 (defn json-parse-string-loop :verify checked
-  :sig [(src : Bytes) (pos : i64) (len : i64) -> List]
-  :intent "Collect string bytes handling escapes (including \\uXXXX), return [bytesList, endPos]"
+  :sig [(src : Bytes) (pos : i64) (len : i64) -> _]
+  :intent "Collect string bytes handling escapes (including \\uXXXX), return (Ok [bytesList, endPos]) or (Err msg)"
   :requires [(>= pos 0)]
   :ensures [(valid result)]
   :body (if (>= pos len)
-          [[] pos]
+          ;; Reached end of input without finding closing quote
+          (Err "json-parse: unterminated string")
           (let (b : i64 (at src pos))
             (if (= b 34) ;; closing quote
-              [[] pos]
+              (Ok [[] pos])
               (if (= b 92) ;; backslash escape
-                (let (next : i64 (at src (+ pos 1)))
-                  (if (= next 117) ;; \u unicode escape — consume 6 chars: \uXXXX
-                    (let (esc-bytes : Bytes (unicode-escape-to-bytes src (+ pos 2)))
-                         (rest : List (json-parse-string-loop src (+ pos 6) len))
-                      [(concat [esc-bytes] (at rest 0)) (at rest 1)])
-                    (let (escaped : Bytes (if (= next 110) (bytes-from-int8 10)   ;; \n
-                                            (if (= next 116) (bytes-from-int8 9)  ;; \t
-                                              (if (= next 114) (bytes-from-int8 13) ;; \r
-                                                (if (= next 98) (bytes-from-int8 8)  ;; \b
-                                                  (if (= next 102) (bytes-from-int8 12) ;; \f
-                                                    (bytes-from-int8 next)))))))        ;; \\ \" etc
-                         (rest : List (json-parse-string-loop src (+ pos 2) len))
-                      [(concat [escaped] (at rest 0)) (at rest 1)])))
-                (let (rest : List (json-parse-string-loop src (+ pos 1) len))
-                  [(concat [(bytes-from-int8 b)] (at rest 0)) (at rest 1)]))))))
+                (if (>= (+ pos 1) len)
+                  (Err "json-parse: unterminated string")
+                  (let (next : i64 (at src (+ pos 1)))
+                    (if (= next 117) ;; \u unicode escape — consume 6 chars: \uXXXX
+                      (let (esc-bytes : Bytes (unicode-escape-to-bytes src (+ pos 2)))
+                        (match (json-parse-string-loop src (+ pos 6) len)
+                          (Ok rest) (Ok [(concat [esc-bytes] (at rest 0)) (at rest 1)])
+                          (Err e) (Err e)))
+                      (let (escaped : Bytes (if (= next 110) (bytes-from-int8 10)   ;; \n
+                                              (if (= next 116) (bytes-from-int8 9)  ;; \t
+                                                (if (= next 114) (bytes-from-int8 13) ;; \r
+                                                  (if (= next 98) (bytes-from-int8 8)  ;; \b
+                                                    (if (= next 102) (bytes-from-int8 12) ;; \f
+                                                      (bytes-from-int8 next)))))))        ;; \\ \" etc
+                        (match (json-parse-string-loop src (+ pos 2) len)
+                          (Ok rest) (Ok [(concat [escaped] (at rest 0)) (at rest 1)])
+                          (Err e) (Err e))))))
+                (match (json-parse-string-loop src (+ pos 1) len)
+                  (Ok rest) (Ok [(concat [(bytes-from-int8 b)] (at rest 0)) (at rest 1)])
+                  (Err e) (Err e)))))))
 
 ;; ── json-parse-string : parse a JSON string starting after opening quote ──
+;; Returns (Ok [string-value, position-after-closing-quote]) or (Err msg).
 (defn json-parse-string :verify checked
-  :sig [(src : Bytes) (pos : i64) (len : i64) -> List]
-  :intent "Parse JSON string, return [string-value, position-after-closing-quote]"
+  :sig [(src : Bytes) (pos : i64) (len : i64) -> _]
+  :intent "Parse JSON string, return (Ok [string-value, position-after-closing-quote]) or (Err msg)"
   :requires [(>= pos 0)]
   :ensures [(valid result)]
-  :body (let (result : List (json-parse-string-loop src pos len))
-             (parts : List (at result 0))
-             (end-pos : i64 (at result 1))
-          (if (= (length parts) 0)
-            ["" (+ end-pos 1)]
-            (let (bytes : Bytes (bytes-concat-all parts))
-              [(bytes-to-string bytes 0 (length bytes)) (+ end-pos 1)]))))
+  :body (match (json-parse-string-loop src pos len)
+    (Ok result)
+      (let (parts : List (at result 0))
+           (end-pos : i64 (at result 1))
+        (if (= (length parts) 0)
+          (Ok ["" (+ end-pos 1)])
+          (let (bytes : Bytes (bytes-concat-all parts))
+            (Ok [(bytes-to-string bytes 0 (length bytes)) (+ end-pos 1)]))))
+    (Err e) (Err e)))
 
 ;; ── json-parse-number-end : find end of number literal ──
 (defn json-parse-number-end :verify checked
@@ -212,7 +253,7 @@
               pos))))
 
 ;; ── json-has-dot : check if number bytes contain a decimal point ──
-(defn json-has-dot :verify checked
+(defn json-has-dot
   :sig [(src : Bytes) (start : i64) (end : i64) -> bool]
   :intent "Check if byte range contains a dot (for float detection)"
   :requires [(>= start 0) (>= end 0)]
@@ -240,90 +281,140 @@
               (json-parse-int-loop src (+ pos 1) end (+ (* acc 10) digit) neg)))))
 
 ;; ── json-parse-number : parse a JSON number ──
+;; Returns (Ok [value, next-position]) or (Err msg).
 (defn json-parse-number :verify checked
-  :sig [(src : Bytes) (pos : i64) (len : i64) -> List]
-  :intent "Parse JSON number, return [value, next-position]"
+  :sig [(src : Bytes) (pos : i64) (len : i64) -> _]
+  :intent "Parse JSON number, return (Ok [value, next-position]) or (Err msg)"
   :requires [(>= pos 0)]
   :ensures [(valid result)]
   :body (let (end : i64 (json-parse-number-end src pos len))
-             (num-str : String (bytes-to-string src pos (- end pos)))
-          (if (json-has-dot src pos end)
-            ;; Float — use AIRL's built-in float parsing
-            [(match (string-to-float num-str) (Ok v) v (Err _) 0) end]
-            ;; Integer — propagate overflow Err
-            (let (neg : bool (= (at src pos) 45))
-                 (start : i64 (if neg (+ pos 1) pos))
-              [(match (json-parse-int-loop src start end 0 neg)
-                 (Err e) (Err e)
-                 (Ok v)  v) end]))))
+          (if (= end pos)
+            ;; No number characters consumed at all
+            (Err "json-parse: invalid number")
+            (let (num-str : String (bytes-to-string src pos (- end pos)))
+              (if (json-has-dot src pos end)
+                ;; Float — use AIRL's built-in float parsing
+                (match (string-to-float num-str)
+                  (Ok v) (Ok [v end])
+                  (Err _) (Err "json-parse: invalid number"))
+                ;; Integer — propagate overflow Err
+                (let (neg : bool (= (at src pos) 45))
+                     (start : i64 (if neg (+ pos 1) pos))
+                  (if (= start end)
+                    ;; Just a minus sign with no digits
+                    (Err "json-parse: invalid number")
+                    (match (json-parse-int-loop src start end 0 neg)
+                      (Ok v) (Ok [v end])
+                      (Err e) (Err e)))))))))
 
 ;; ── json-parse-array-loop : parse array elements ──
+;; Returns (Ok [elements-list, next-position]) or (Err msg).
 (defn json-parse-array-loop :verify checked
-  :sig [(src : Bytes) (pos : i64) (len : i64) -> List]
-  :intent "Parse comma-separated array elements, return [elements-list, next-position]"
+  :sig [(src : Bytes) (pos : i64) (len : i64) -> _]
+  :intent "Parse comma-separated array elements, return (Ok [elements-list, next-position]) or (Err msg)"
   :requires [(>= pos 0)]
   :ensures [(valid result)]
   :body (let (p : i64 (json-skip-ws src pos len))
-          (if (= (at src p) 93) ;; ]
-            [[] (+ p 1)]
-            (let (result : List (json-parse-value src p len))
-                 (val : Any (at result 0))
-                 (p2 : i64 (json-skip-ws src (at result 1) len))
-                 (next-pos : i64 (if (= (at src p2) 44) (+ p2 1) p2))
-                 (rest : List (json-parse-array-loop src next-pos len))
-              [(cons val (at rest 0)) (at rest 1)]))))
+          (if (>= p len)
+            ;; Reached end of input without finding ]
+            (Err "json-parse: unterminated array")
+            (if (= (at src p) 93) ;; ]
+              (Ok [[] (+ p 1)])
+              (match (json-parse-value src p len)
+                (Ok result)
+                  (let (val : Any (at result 0))
+                       (p2 : i64 (json-skip-ws src (at result 1) len))
+                    (if (>= p2 len)
+                      (Err "json-parse: unterminated array")
+                      (let (next-pos : i64 (if (= (at src p2) 44) (+ p2 1) p2))
+                        (match (json-parse-array-loop src next-pos len)
+                          (Ok rest) (Ok [(cons val (at rest 0)) (at rest 1)])
+                          (Err e) (Err e)))))
+                (Err e) (Err e))))))
 
 ;; ── json-parse-object-loop : parse object key-value pairs ──
+;; Returns (Ok [map, next-position]) or (Err msg).
 (defn json-parse-object-loop :verify checked
-  :sig [(src : Bytes) (pos : i64) (len : i64) (acc : Map) -> List]
-  :intent "Parse comma-separated key:value pairs, return [map, next-position]"
+  :sig [(src : Bytes) (pos : i64) (len : i64) (acc : Map) -> _]
+  :intent "Parse comma-separated key:value pairs, return (Ok [map, next-position]) or (Err msg)"
   :requires [(>= pos 0)]
   :ensures [(valid result)]
   :body (let (p : i64 (json-skip-ws src pos len))
-          (if (= (at src p) 125) ;; }
-            [acc (+ p 1)]
-            ;; Parse key (must be a string)
-            (let (key-result : List (json-parse-string src (+ p 1) len))
-                 (key : String (at key-result 0))
-                 (p2 : i64 (json-skip-ws src (at key-result 1) len))
-                 ;; Skip colon
-                 (p3 : i64 (+ p2 1))
-                 ;; Parse value
-                 (val-result : List (json-parse-value src p3 len))
-                 (val : Any (at val-result 0))
-                 (p4 : i64 (json-skip-ws src (at val-result 1) len))
-                 (next-pos : i64 (if (= (at src p4) 44) (+ p4 1) p4))
-              (json-parse-object-loop src next-pos len (map-set acc key val))))))
+          (if (>= p len)
+            ;; Reached end of input without finding }
+            (Err "json-parse: unterminated object")
+            (if (= (at src p) 125) ;; }
+              (Ok [acc (+ p 1)])
+              ;; Parse key: expect opening quote
+              (if (!= (at src p) 34)
+                (Err "json-parse: expected string key in object")
+                (match (json-parse-string src (+ p 1) len)
+                  (Ok key-result)
+                    (let (key : String (at key-result 0))
+                         (p2 : i64 (json-skip-ws src (at key-result 1) len))
+                      ;; Expect colon
+                      (if (>= p2 len)
+                        (Err "json-parse: unterminated object")
+                        (if (!= (at src p2) 58)
+                          (Err "json-parse: expected ':' in object")
+                          ;; Skip colon
+                          (let (p3 : i64 (+ p2 1))
+                            ;; Parse value
+                            (match (json-parse-value src p3 len)
+                              (Ok val-result)
+                                (let (val : Any (at val-result 0))
+                                     (p4 : i64 (json-skip-ws src (at val-result 1) len))
+                                  (if (>= p4 len)
+                                    (Err "json-parse: unterminated object")
+                                    (let (next-pos : i64 (if (= (at src p4) 44) (+ p4 1) p4))
+                                      (json-parse-object-loop src next-pos len (map-set acc key val)))))
+                              (Err e) (Err e))))))
+                  (Err e) (Err e)))))))
 
 ;; ── json-parse-value : parse any JSON value ──
+;; Returns (Ok [value, next-position]) or (Err msg).
 (defn json-parse-value :verify checked
-  :sig [(src : Bytes) (pos : i64) (len : i64) -> List]
-  :intent "Parse a JSON value at pos, return [value, next-position]"
+  :sig [(src : Bytes) (pos : i64) (len : i64) -> _]
+  :intent "Parse a JSON value at pos, return (Ok [value, next-position]) or (Err msg)"
   :requires [(>= pos 0)]
   :ensures [(valid result)]
   :body (let (p : i64 (json-skip-ws src pos len))
-             (b : i64 (at src p))
-          ;; Dispatch on first byte
-          (if (= b 34) ;; " -> string
-            (json-parse-string src (+ p 1) len)
-            (if (= b 91) ;; [ -> array
-              (json-parse-array-loop src (+ p 1) len)
-              (if (= b 123) ;; { -> object
-                (json-parse-object-loop src (+ p 1) len (map-new))
-                (if (= b 116) ;; t -> true
-                  [true (+ p 4)]
-                  (if (= b 102) ;; f -> false
-                    [false (+ p 5)]
-                    (if (= b 110) ;; n -> null
-                      [nil (+ p 4)]
-                      ;; Must be a number
-                      (json-parse-number src p len)))))))))
+          (if (>= p len)
+            (Err "json-parse: unexpected end of input")
+            (let (b : i64 (at src p))
+              ;; Dispatch on first byte
+              (if (= b 34) ;; " -> string
+                (match (json-parse-string src (+ p 1) len)
+                  (Ok pair) (Ok pair)
+                  (Err e) (Err e))
+                (if (= b 91) ;; [ -> array
+                  (match (json-parse-array-loop src (+ p 1) len)
+                    (Ok pair) (Ok pair)
+                    (Err e) (Err e))
+                  (if (= b 123) ;; { -> object
+                    (match (json-parse-object-loop src (+ p 1) len (map-new))
+                      (Ok pair) (Ok pair)
+                      (Err e) (Err e))
+                    (if (= b 116) ;; t -> true (check "rue" follows)
+                      (if (bytes-match-3 src (+ p 1) len 114 117 101)
+                        (Ok [true (+ p 4)])
+                        (Err "json-parse: expected 'true'"))
+                      (if (= b 102) ;; f -> false (check "alse" follows)
+                        (if (bytes-match-4 src (+ p 1) len 97 108 115 101)
+                          (Ok [false (+ p 5)])
+                          (Err "json-parse: expected 'false'"))
+                        (if (= b 110) ;; n -> null (check "ull" follows)
+                          (if (bytes-match-3 src (+ p 1) len 117 108 108)
+                            (Ok [nil (+ p 4)])
+                            (Err "json-parse: expected 'null'"))
+                          ;; Must be a number (or error)
+                          (match (json-parse-number src p len)
+                            (Ok pair) (Ok pair)
+                            (Err e) (Err e))))))))))))
 
 ;; ── json-parse : parse a JSON string into an AIRL value ──
 ;; Returns (Ok value) on success, (Err "message") on failure.
 ;; Matches the return shape of the former Rust builtin (airl_json_parse).
-;; Note: the pure-AIRL recursive-descent parser does not propagate detailed
-;; error positions; invalid JSON returns (Err "json-parse: invalid JSON").
 (defn json-parse :verify checked
   :sig [(s : String) -> Result]
   :intent "Parse a JSON string into an AIRL value, returning (Ok value) or (Err msg)"
@@ -333,4 +424,12 @@
              (len : i64 (length src))
           (if (= len 0)
             (Err "json-parse: empty input")
-            (Ok (at (json-parse-value src 0 len) 0)))))
+            (match (json-parse-value src 0 len)
+              (Ok pair)
+                (let (v : _ (at pair 0))
+                     (end-pos : i64 (at pair 1))
+                     (trailing-pos : i64 (json-skip-ws src end-pos len))
+                  (if (= trailing-pos len)
+                    (Ok v)
+                    (Err "json-parse: unexpected trailing content after value")))
+              (Err e) (Err e)))))
