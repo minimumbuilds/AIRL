@@ -1,0 +1,12 @@
+;; EXPECT: str-rt:ok|str-known:ok|bytes-rt:ok|bytes-known:ok
+(let (s1 : String (base64-encode "Hello, AIRL!"))
+     (rt1 : String (base64-decode s1))
+     (known1 : String "SGVsbG8sIEFJUkwh")
+     (b1 : Bytes (bytes-from-string "Hello, AIRL!"))
+     (s2 : Bytes (base64-encode-bytes b1))
+     (rt2 : Bytes (base64-decode-bytes s2))
+  (print (str
+    "str-rt:" (if (= rt1 "Hello, AIRL!") "ok" (str "bad:" rt1))
+    "|str-known:" (if (= s1 known1) "ok" (str "bad:" s1))
+    "|bytes-rt:" (if (= (bytes-to-string rt2 0 (length rt2)) "Hello, AIRL!") "ok" (str "bad:" (bytes-to-string rt2 0 (length rt2))))
+    "|bytes-known:" (if (= (bytes-to-string s2 0 (length s2)) known1) "ok" (str "bad:" (bytes-to-string s2 0 (length s2)))))))

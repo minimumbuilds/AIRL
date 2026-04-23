@@ -791,7 +791,14 @@ fn dispatch_rt_builtin(name: &str, args: &[*mut RtValue]) -> Option<*mut RtValue
         "aes-256-gcm-decrypt" => airl_rt::misc::airl_aes_256_gcm_decrypt(a0!(), a1!(), a2!()),
         "bytes-xor" => airl_rt::misc::airl_bytes_xor(a0!(), a1!()),
         "bytes-xor-scalar" => airl_rt::misc::airl_bytes_xor_scalar(a0!(), a1!()),
-        // base64-decode-bytes, base64-encode-bytes removed above
+        // Crypto
+        // base64-encode, base64-decode: AIRL stdlib impl in base64.airl (deregistered as Rust builtins).
+        // base64-encode-bytes, base64-decode-bytes: re-registered as Rust builtins 2026-04-23 after audit
+        //   found them unreachable (no AIRL impl existed for Bytes→Bytes).
+        #[cfg(not(target_os = "airlos"))]
+        "base64-encode-bytes" => airl_rt::misc::airl_base64_encode_bytes(a0!()),
+        #[cfg(not(target_os = "airlos"))]
+        "base64-decode-bytes" => airl_rt::misc::airl_base64_decode_bytes(a0!()),
         "bitwise-xor" => airl_rt::misc::airl_bitwise_xor(a0!(), a1!()),
         "bitwise-and" => airl_rt::misc::airl_bitwise_and(a0!(), a1!()),
         "bitwise-or" => airl_rt::misc::airl_bitwise_or(a0!(), a1!()),

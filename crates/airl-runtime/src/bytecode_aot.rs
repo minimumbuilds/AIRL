@@ -223,6 +223,8 @@ pub struct RuntimeImports {
     pub aes_256_gcm_decrypt: FuncId,
     pub bytes_xor: FuncId,
     pub bytes_xor_scalar: FuncId,
+    pub base64_encode_bytes: FuncId,
+    pub base64_decode_bytes: FuncId,
     pub bitwise_xor: FuncId,
     pub bitwise_and: FuncId,
     pub bitwise_or: FuncId,
@@ -789,6 +791,11 @@ impl BytecodeAot {
         let aes_256_gcm_decrypt = declare_import(m, "airl_aes_256_gcm_decrypt", sig_3_ptr(m, ptr));
         let bytes_xor = declare_import(m, "airl_bytes_xor", s2.clone());
         let bytes_xor_scalar = declare_import(m, "airl_bytes_xor_scalar", s2.clone());
+        // base64-encode-bytes and base64-decode-bytes: re-registered as Rust builtins 2026-04-23
+        //   after audit found them unreachable (no AIRL impl existed for Bytes→Bytes).
+        //   Airlos stubs exist in airl-rt/src/misc.rs, so declare_import is unconditional.
+        let base64_encode_bytes = declare_import(m, "airl_base64_encode_bytes", s1.clone());
+        let base64_decode_bytes = declare_import(m, "airl_base64_decode_bytes", s1.clone());
         let bitwise_xor = declare_import(m, "airl_bitwise_xor", s2.clone());
         let bitwise_and = declare_import(m, "airl_bitwise_and", s2.clone());
         let bitwise_or = declare_import(m, "airl_bitwise_or", s2.clone());
@@ -932,6 +939,8 @@ impl BytecodeAot {
             aes_256_gcm_decrypt,
             bytes_xor,
             bytes_xor_scalar,
+            base64_encode_bytes,
+            base64_decode_bytes,
             bitwise_xor, bitwise_and, bitwise_or, bitwise_shr, bitwise_shl,
             bytes_alloc, bytes_get, bytes_set, bytes_length,
             bytes_new, bytes_from_int8, bytes_from_int16, bytes_from_int32, bytes_from_int64,
@@ -1113,8 +1122,11 @@ impl BytecodeAot {
         m.insert("hmac-sha256".into(),         rt.hmac_sha256);
         m.insert("sha256-bytes".into(),        rt.sha256_bytes);
         m.insert("hmac-sha256-bytes".into(),   rt.hmac_sha256_bytes);
-        // base64-encode, base64-decode, base64-encode-bytes, base64-decode-bytes
-        // deregistered — AIRL stdlib equivalents take over
+        // base64-encode, base64-decode: AIRL stdlib impl in base64.airl (deregistered as Rust builtins).
+        // base64-encode-bytes, base64-decode-bytes: re-registered as Rust builtins 2026-04-23 after audit
+        //   found them unreachable (no AIRL impl existed for Bytes→Bytes).
+        m.insert("base64-encode-bytes".into(), rt.base64_encode_bytes);
+        m.insert("base64-decode-bytes".into(), rt.base64_decode_bytes);
         m.insert("random-bytes".into(),  rt.random_bytes);
         m.insert("sha512".into(),              rt.sha512);
         m.insert("hmac-sha512".into(),         rt.hmac_sha512);
