@@ -229,18 +229,20 @@ fn z3_verify_tops(
     let strict_verify = std::env::var("AIRL_STRICT_VERIFY").is_ok();
 
     // Collect all function definitions, including those inside modules.
+    // Precedence: FnDef.verify > ModuleDef.verify > VerifyLevel::default().
     let mut all_fns: Vec<(&airl_syntax::ast::FnDef, airl_syntax::ast::VerifyLevel)> = Vec::new();
     for top in tops {
         match top {
             airl_syntax::ast::TopLevel::Defn(f) => {
-                let mut level = verify_level_for_fn(&f.name, tops);
+                let mut level = f.verify.unwrap_or_else(airl_syntax::ast::VerifyLevel::default);
                 if strict_verify { level = airl_syntax::ast::VerifyLevel::Proven; }
                 all_fns.push((f, level));
             }
             airl_syntax::ast::TopLevel::Module(m) => {
                 for item in &m.body {
                     if let airl_syntax::ast::TopLevel::Defn(f) = item {
-                        let level = if strict_verify { airl_syntax::ast::VerifyLevel::Proven } else { m.verify };
+                        let mut level = f.verify.unwrap_or(m.verify);
+                        if strict_verify { level = airl_syntax::ast::VerifyLevel::Proven; }
                         all_fns.push((f, level));
                     }
                 }
@@ -349,20 +351,29 @@ fn z3_verify_tops(
     Ok((proof_cache, trusted_fns))
 }
 
-/// Look up the verify level for a function by finding its containing module.
+/// Look up the verify level for a function.
+/// Precedence: FnDef.verify > enclosing ModuleDef.verify > VerifyLevel::default().
 fn verify_level_for_fn(fn_name: &str, tops: &[airl_syntax::ast::TopLevel]) -> airl_syntax::ast::VerifyLevel {
     for top in tops {
-        if let airl_syntax::ast::TopLevel::Module(m) = top {
-            for item in &m.body {
-                if let airl_syntax::ast::TopLevel::Defn(f) = item {
-                    if f.name == fn_name {
-                        return m.verify;
+        match top {
+            airl_syntax::ast::TopLevel::Module(m) => {
+                for item in &m.body {
+                    if let airl_syntax::ast::TopLevel::Defn(f) = item {
+                        if f.name == fn_name {
+                            return f.verify.unwrap_or(m.verify);
+                        }
                     }
                 }
             }
+            airl_syntax::ast::TopLevel::Defn(f) => {
+                if f.name == fn_name {
+                    return f.verify.unwrap_or_else(airl_syntax::ast::VerifyLevel::default);
+                }
+            }
+            _ => {}
         }
     }
-    airl_syntax::ast::VerifyLevel::Checked
+    airl_syntax::ast::VerifyLevel::default()
 }
 
 pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, PipelineError> {
@@ -1810,6 +1821,38 @@ mod tests {
         assert!(s.contains("foo"), "expected fn name in message: {}", s);
         assert!(s.contains("bar.airl"), "expected module in message: {}", s);
         assert!(s.contains(":ensures") || s.contains("ensures"), "expected hint about :ensures: {}", s);
+    }
+
+    #[test]
+    fn per_defn_verify_overrides_module_level() {
+        // Module is :verify proven, but one defn overrides to :verify checked.
+        let src = r#"
+          (module test-mod
+            :verify proven
+            (defn foo
+              :verify checked
+              :sig [(x : i64) -> i64]
+              :requires [(>= x 0)]
+              :body x))
+        "#;
+        let (tops, _diags) = parse_source(src).expect("parse failed");
+        let level = verify_level_for_fn("foo", &tops);
+        assert_eq!(level, airl_syntax::ast::VerifyLevel::Checked);
+    }
+
+    #[test]
+    fn defn_without_override_inherits_module_level() {
+        let src = r#"
+          (module test-mod
+            :verify proven
+            (defn bar
+              :sig [(x : i64) -> i64]
+              :requires [(>= x 0)]
+              :body x))
+        "#;
+        let (tops, _diags) = parse_source(src).expect("parse failed");
+        let level = verify_level_for_fn("bar", &tops);
+        assert_eq!(level, airl_syntax::ast::VerifyLevel::Proven);
     }
 }
 
