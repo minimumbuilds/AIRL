@@ -72,7 +72,7 @@
 ;; ════════════════════════════════════════════════════════════════
 
 (extern-c "airl_get_args"    [-> List])
-(extern-c "airl_getenv"      [(name : String) -> String])
+(extern-c "airl_getenv"      [(name : String) -> Result])
 (extern-c "airl_exit"        [(code : i64) -> Unit])
 (extern-c "airl_sleep"       [(ms : i64) -> Unit])
 (extern-c "airl_time_now"    [-> i64])
@@ -85,7 +85,7 @@
   :body (airl_get_args))
 
 (defn getenv
-  :sig [(name : String) -> String]
+  :sig [(name : String) -> Result]
   :requires [(valid name)]
   :ensures [(valid result)]
   :body (airl_getenv name))

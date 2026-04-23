@@ -342,7 +342,7 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 
 ### Network/JSON
 ```
-(json-parse s) -> any
+(json-parse s) -> Result[any, Str]   ; (Ok value) or (Err "json-parse: invalid JSON")
 (json-stringify v) -> Str
 ```
 
@@ -497,3 +497,16 @@ Targets: `x86-64` (default), `i686`, `i686-airlos` (freestanding), `x86_64-airlo
 ```
 (fold (fn [acc x] (map-update-or acc x 0 (fn [n] (+ n 1)))) (map-new) xs)
 ```
+
+---
+
+## Deregistering a Rust builtin
+
+When replacing a Rust `extern "C"` builtin with an AIRL stdlib implementation:
+
+1. **Before commenting out the Rust registration,** confirm the AIRL implementation has the same visible signature as the Rust one — parameter count, types, and especially return type (raw value vs `Result`). The `airl_json_parse` → `json-parse` case is the canonical example of return-type drift: Rust returned `Result`, AIRL returned raw `Any`, invisible until the module became reachable.
+2. **Add the AIRL stdlib file to `STDLIB_MODULES` in `crates/airl-driver/src/pipeline.rs`** if it's not already there. Otherwise the AIRL replacement will be unreachable and the deregistration produces silent latent bugs.
+3. **Add a row to** `docs/superpowers/audits/2026-04-23-builtin-deregistration-parity.md` — the tracked audit of every deregistered builtin. Update the Summary counts.
+4. **Run the AOT suite** (`bash tests/aot/run_aot_tests.sh`) with a fixture that exercises the deregistered function; the AIRL replacement must pass the same test.
+
+Background: see `docs/superpowers/specs/2026-04-23-airl-rust-builtin-parity-audit-design.md` and the full audit at `docs/superpowers/audits/2026-04-23-builtin-deregistration-parity.md`.

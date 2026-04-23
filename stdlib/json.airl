@@ -320,11 +320,13 @@
                       (json-parse-number src p len)))))))))
 
 ;; ── json-parse : parse a JSON string into an AIRL value ──
-;; Returns (Ok value) on success, (Err message) on failure.
-;; Matches the interface of the deregistered Rust builtin.
+;; Returns (Ok value) on success, (Err "message") on failure.
+;; Matches the return shape of the former Rust builtin (airl_json_parse).
+;; Note: the pure-AIRL recursive-descent parser does not propagate detailed
+;; error positions; invalid JSON returns (Err "json-parse: invalid JSON").
 (defn json-parse :verify checked
-  :sig [(s : String) -> Any]
-  :intent "Parse a JSON string into an AIRL value, returning Ok/Err Result"
+  :sig [(s : String) -> Result]
+  :intent "Parse a JSON string into an AIRL value, returning (Ok value) or (Err msg)"
   :requires [(valid s)]
   :ensures [(valid result)]
   :body (let (src : Bytes (bytes-from-string s))

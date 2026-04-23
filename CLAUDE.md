@@ -60,6 +60,7 @@ airl-rt: extern "C" runtime (builtins for AOT)
 - Multi-binding `let` preferred: `(let (x : T v1) (y : T v2) body)`
 - Builtins: `extern "C"` in `crates/airl-rt/`, dispatched via `CallBuiltin` opcode
 - **Default verification level is `:verify proven`.** Modules without an explicit `:verify` annotation require provable contracts on every `:pub defn`. Grandfathered modules are listed in `.airl-verify-baseline.toml`; run `airl verify-policy` to check the baseline, `airl verify-policy --list-uncovered` to see which `:pub defn`s need `:ensures`.
+- **Deregistering a Rust builtin:** audit AIRL replacement for signature parity. See `AIRL-Header.md` § "Deregistering a Rust builtin" and the tracked audit at `docs/superpowers/audits/2026-04-23-builtin-deregistration-parity.md`.
 
 ## Module System
 
