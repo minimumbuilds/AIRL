@@ -832,6 +832,7 @@ fn parse_defn(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Fn
     let mut body = None;
     let mut execute_on = None;
     let mut priority = None;
+    let mut verify: Option<VerifyLevel> = None;
 
     let mut i = start_idx;
     while i < items.len() {
@@ -916,6 +917,13 @@ fn parse_defn(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Fn
                     }
                     priority = Some(parse_priority(&items[i])?);
                 }
+                "verify" => {
+                    i += 1;
+                    if i >= items.len() {
+                        return Err(Diagnostic::error("expected verify level after :verify", span));
+                    }
+                    verify = Some(parse_verify_level(&items[i])?);
+                }
                 _ => {
                     diags.add(Diagnostic::warning(
                         format!("unknown keyword :{} in defn", kw),
@@ -973,7 +981,7 @@ fn parse_defn(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Fn
         execute_on,
         priority,
         is_public,
-        verify: None,
+        verify,
         span,
     })
 }
@@ -2411,6 +2419,39 @@ mod tests {
             assert_eq!(m.version.as_ref().map(|v| v.patch), Some(0));
         } else {
             panic!("expected module");
+        }
+    }
+
+    // ── :verify keyword on defn tests ───────────────────
+
+    #[test]
+    fn parse_defn_with_verify_override() {
+        let tops = parse_top(r#"
+          (defn foo
+            :verify checked
+            :sig [(x : i64) -> i64]
+            :requires [(>= x 0)]
+            :body x)
+        "#);
+        if let TopLevel::Defn(f) = &tops[0] {
+            assert_eq!(f.verify, Some(VerifyLevel::Checked));
+        } else {
+            panic!("expected Defn");
+        }
+    }
+
+    #[test]
+    fn parse_defn_without_verify_is_none() {
+        let tops = parse_top(r#"
+          (defn bar
+            :sig [(x : i64) -> i64]
+            :requires [(>= x 0)]
+            :body x)
+        "#);
+        if let TopLevel::Defn(f) = &tops[0] {
+            assert_eq!(f.verify, None);
+        } else {
+            panic!("expected Defn");
         }
     }
 }
