@@ -711,9 +711,58 @@ fn run_prune(root: &Path) -> i32 {
     0
 }
 
-fn run_list_uncovered(_root: &Path) -> i32 {
-    eprintln!("verify-policy --list-uncovered: not yet implemented (see Phase 6)");
-    2
+fn run_list_uncovered(root: &Path) -> i32 {
+    let (code, report) = run_list_uncovered_collect(root);
+    print!("{}", report);
+    code
+}
+
+/// Testable variant — returns (exit_code, human_report).
+fn run_list_uncovered_collect(root: &Path) -> (i32, String) {
+    let mut report = String::new();
+    let mut total = 0;
+    for file in enumerate_airl_files(root) {
+        let src = match std::fs::read_to_string(&file) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let rel = file.strip_prefix(root).unwrap_or(&file).to_string_lossy().replace('\\', "/");
+        let tops = match parse_file_tops(&src) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        for top in &tops {
+            match top {
+                airl_syntax::ast::TopLevel::Module(m) => {
+                    for item in &m.body {
+                        if let airl_syntax::ast::TopLevel::Defn(f) = item {
+                            let level = f.verify.unwrap_or(m.verify);
+                            if level == airl_syntax::ast::VerifyLevel::Proven
+                                && f.is_public
+                                && f.ensures.is_empty()
+                            {
+                                report.push_str(&format!("{}: :pub defn `{}` missing :ensures\n", rel, f.name));
+                                total += 1;
+                            }
+                        }
+                    }
+                }
+                airl_syntax::ast::TopLevel::Defn(f) => {
+                    let level = f.verify.unwrap_or_default();
+                    if level == airl_syntax::ast::VerifyLevel::Proven
+                        && f.is_public
+                        && f.ensures.is_empty()
+                    {
+                        report.push_str(&format!("{}: :pub defn `{}` missing :ensures\n", rel, f.name));
+                        total += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    report.push_str(&format!("{} uncovered :pub defns\n", total));
+    (0, report)
 }
 
 #[cfg(test)]
@@ -929,6 +978,23 @@ grandfathered_trusted = []
     }
 
     // ── Task 6.1 tests ───────────────────────────────────────────────────────
+
+    // ── Task 6.4 tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn list_uncovered_reports_missing_ensures() {
+        use tempfile::TempDir;
+        let td = TempDir::new().unwrap();
+        let root = td.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.airl"),
+            "(module a :verify proven (defn x :pub :sig [-> i64] :requires [true] :body 0))").unwrap();
+
+        let (code, report) = run_list_uncovered_collect(root);
+        assert_eq!(code, 0);
+        assert!(report.contains("x"), "missing fn name in report: {}", report);
+        assert!(report.contains("src/lib.airl"), "missing path: {}", report);
+    }
 
     // ── Task 6.3 tests ───────────────────────────────────────────────────────
 
