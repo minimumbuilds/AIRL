@@ -228,6 +228,11 @@ fn z3_verify_tops(
     // levels to Proven — every function must have provable contracts.
     let strict_verify = std::env::var("AIRL_STRICT_VERIFY").is_ok();
 
+    // When AIRL_COVERAGE_ENFORCE is set, reject :pub defn in :verify proven
+    // modules that have no :ensures clause. Env-gated during development;
+    // will become unconditional once grandfather baseline lands.
+    let coverage_enforce = std::env::var("AIRL_COVERAGE_ENFORCE").is_ok();
+
     // Collect all function definitions, including those inside modules.
     // Precedence: FnDef.verify > ModuleDef.verify > VerifyLevel::default().
     let mut all_fns: Vec<(&airl_syntax::ast::FnDef, airl_syntax::ast::VerifyLevel)> = Vec::new();
@@ -252,6 +257,21 @@ fn z3_verify_tops(
     }
 
     for (f, level) in &all_fns {
+        // Coverage gate: :pub defn in :verify proven module must have :ensures.
+        // Checked before the expensive match arm (Z3 calls, disk cache reads) to
+        // avoid wasted work on uncovered pub defns.
+        if coverage_enforce
+            && *level == airl_syntax::ast::VerifyLevel::Proven
+            && f.is_public
+            && f.ensures.is_empty()
+        {
+            let module = module_path_for_fn(&f.name, tops);
+            return Err(PipelineError::ContractCoverageMissing {
+                fn_name: f.name.clone(),
+                module,
+            });
+        }
+
         match level {
             airl_syntax::ast::VerifyLevel::Trusted => {
                 // Skip Z3 entirely — contracts are trusted, not checked
@@ -374,6 +394,23 @@ fn verify_level_for_fn(fn_name: &str, tops: &[airl_syntax::ast::TopLevel]) -> ai
         }
     }
     airl_syntax::ast::VerifyLevel::default()
+}
+
+/// Return the containing module name for a function, or "<top-level>" if the
+/// function is a bare top-level defn.
+fn module_path_for_fn(fn_name: &str, tops: &[airl_syntax::ast::TopLevel]) -> String {
+    for top in tops {
+        if let airl_syntax::ast::TopLevel::Module(m) = top {
+            for item in &m.body {
+                if let airl_syntax::ast::TopLevel::Defn(f) = item {
+                    if f.name == fn_name {
+                        return m.name.clone();
+                    }
+                }
+            }
+        }
+    }
+    "<top-level>".to_string()
 }
 
 pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, PipelineError> {
@@ -1853,6 +1890,98 @@ mod tests {
         let (tops, _diags) = parse_source(src).expect("parse failed");
         let level = verify_level_for_fn("bar", &tops);
         assert_eq!(level, airl_syntax::ast::VerifyLevel::Proven);
+    }
+
+    // ── Coverage gate (Task 2.3) ──────────────────────────────────────────
+    //
+    // These tests mutate process-wide env vars. Cargo runs tests in parallel
+    // by default, which causes races. We serialize them via a static Mutex so
+    // only one coverage-gate test holds the env at a time.
+
+    static COVERAGE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn coverage_gate_fires_for_pub_fn_without_ensures() {
+        let _guard = COVERAGE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("AIRL_COVERAGE_ENFORCE", "1");
+        // No top-level call — module definition alone is enough for the gate to fire
+        // (coverage check happens inside z3_verify_tops, before bytecode compilation).
+        // Note: AIRL :pub modifier comes after the function name: (defn name :pub ...)
+        let src = r#"
+          (module mymod
+            :verify proven
+            (defn foo :pub
+              :sig [(x : i64) -> i64]
+              :requires [(>= x 0)]
+              :body x))
+        "#;
+        let result = run_source_with_mode(src, PipelineMode::Check);
+        std::env::remove_var("AIRL_COVERAGE_ENFORCE");
+        match result {
+            Err(PipelineError::ContractCoverageMissing { ref fn_name, .. }) => {
+                assert_eq!(fn_name, "foo");
+            }
+            other => panic!("expected ContractCoverageMissing, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn coverage_gate_skips_private_fn() {
+        let _guard = COVERAGE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("AIRL_COVERAGE_ENFORCE", "1");
+        let src = r#"
+          (module mymod
+            :verify proven
+            (defn foo
+              :sig [(x : i64) -> i64]
+              :requires [(>= x 0)]
+              :body x))
+        "#;
+        let result = run_source_with_mode(src, PipelineMode::Check);
+        std::env::remove_var("AIRL_COVERAGE_ENFORCE");
+        // Private defn without :ensures is exempt; should not hit coverage gate.
+        if let Err(PipelineError::ContractCoverageMissing { .. }) = result {
+            panic!("coverage gate fired for private defn");
+        }
+    }
+
+    #[test]
+    fn coverage_gate_skips_checked_module() {
+        let _guard = COVERAGE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("AIRL_COVERAGE_ENFORCE", "1");
+        // :pub modifier after function name per AIRL syntax
+        let src = r#"
+          (module mymod
+            :verify checked
+            (defn foo :pub
+              :sig [(x : i64) -> i64]
+              :requires [(>= x 0)]
+              :body x))
+        "#;
+        let result = run_source_with_mode(src, PipelineMode::Check);
+        std::env::remove_var("AIRL_COVERAGE_ENFORCE");
+        if let Err(PipelineError::ContractCoverageMissing { .. }) = result {
+            panic!("coverage gate fired for :verify checked module");
+        }
+    }
+
+    #[test]
+    fn coverage_gate_disabled_when_env_not_set() {
+        let _guard = COVERAGE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("AIRL_COVERAGE_ENFORCE");
+        // :pub modifier after function name per AIRL syntax
+        let src = r#"
+          (module mymod
+            :verify proven
+            (defn foo :pub
+              :sig [(x : i64) -> i64]
+              :requires [(>= x 0)]
+              :body x))
+        "#;
+        let result = run_source_with_mode(src, PipelineMode::Check);
+        if let Err(PipelineError::ContractCoverageMissing { .. }) = result {
+            panic!("coverage gate fired without AIRL_COVERAGE_ENFORCE set");
+        }
     }
 }
 
