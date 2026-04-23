@@ -59,6 +59,7 @@ airl-rt: extern "C" runtime (builtins for AOT)
 - Fixtures: `tests/fixtures/{valid,type_errors,contract_errors,linearity_errors,agent}/`
 - Multi-binding `let` preferred: `(let (x : T v1) (y : T v2) body)`
 - Builtins: `extern "C"` in `crates/airl-rt/`, dispatched via `CallBuiltin` opcode
+- **Deregistering a Rust builtin:** audit AIRL replacement for signature parity. See `AIRL-Header.md` § "Deregistering a Rust builtin" and the tracked audit at `docs/superpowers/audits/2026-04-23-builtin-deregistration-parity.md`.
 
 ## Module System
 

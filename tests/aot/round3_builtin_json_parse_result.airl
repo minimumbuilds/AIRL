@@ -1,0 +1,20 @@
+;; EXPECT: ok1:ok|ok2:ok|ok3:ok|ok4:ok|ok5:ok
+;; DEPS: stdlib/json.airl
+;; Parity test: json-parse must return Result (Ok value) not raw value.
+;; Regression for audit 2026-04-23-builtin-deregistration-parity row #27.
+(let (r1 : Result (json-parse "42"))
+     (r2 : Result (json-parse "\"hello\""))
+     (r3 : Result (json-parse "[1,2,3]"))
+     (r4 : Result (json-parse ""))
+     (r5 : Result (json-parse "true"))
+  (let (v1 : String (match r1 (Ok v) (str v) (Err e) (str "err:" e)))
+       (v2 : String (match r2 (Ok v) (str v) (Err e) (str "err:" e)))
+       (v3 : String (match r3 (Ok v) (str (length v)) (Err e) (str "err:" e)))
+       (v4 : String (match r4 (Ok v) "nil-ok" (Err e) (str "err:" e)))
+       (v5 : String (match r5 (Ok v) (if v "true-ok" "bad") (Err e) (str "err:" e)))
+    (print (str
+      "ok1:" (if (= v1 "42") "ok" (str "bad:" v1))
+      "|ok2:" (if (= v2 "hello") "ok" (str "bad:" v2))
+      "|ok3:" (if (= v3 "3") "ok" (str "bad:" v3))
+      "|ok4:" (if (= v4 "nil-ok") "ok" (str "bad:" v4))
+      "|ok5:" (if (= v5 "true-ok") "ok" (str "bad:" v5))))))
