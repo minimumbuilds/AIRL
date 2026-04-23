@@ -161,7 +161,7 @@
   :intent "Return true iff src[pos..pos+3] == [b0, b1, b2] without going out of bounds"
   :requires [(>= pos 0) (>= len 0)]
   :ensures [(valid result)]
-  :body (if (> (+ pos 2) len)
+  :body (if (> (+ pos 3) len)
           false
           (if (= (at src pos) b0)
             (if (= (at src (+ pos 1)) b1)
@@ -176,7 +176,7 @@
   :intent "Return true iff src[pos..pos+4] == [b0, b1, b2, b3] without going out of bounds"
   :requires [(>= pos 0) (>= len 0)]
   :ensures [(valid result)]
-  :body (if (> (+ pos 3) len)
+  :body (if (> (+ pos 4) len)
           false
           (if (= (at src pos) b0)
             (if (= (at src (+ pos 1)) b1)
