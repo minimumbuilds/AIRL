@@ -229,18 +229,20 @@ fn z3_verify_tops(
     let strict_verify = std::env::var("AIRL_STRICT_VERIFY").is_ok();
 
     // Collect all function definitions, including those inside modules.
+    // Precedence: FnDef.verify > ModuleDef.verify > VerifyLevel::default().
     let mut all_fns: Vec<(&airl_syntax::ast::FnDef, airl_syntax::ast::VerifyLevel)> = Vec::new();
     for top in tops {
         match top {
             airl_syntax::ast::TopLevel::Defn(f) => {
-                let mut level = verify_level_for_fn(&f.name, tops);
+                let mut level = f.verify.unwrap_or_else(airl_syntax::ast::VerifyLevel::default);
                 if strict_verify { level = airl_syntax::ast::VerifyLevel::Proven; }
                 all_fns.push((f, level));
             }
             airl_syntax::ast::TopLevel::Module(m) => {
                 for item in &m.body {
                     if let airl_syntax::ast::TopLevel::Defn(f) = item {
-                        let level = if strict_verify { airl_syntax::ast::VerifyLevel::Proven } else { m.verify };
+                        let mut level = f.verify.unwrap_or(m.verify);
+                        if strict_verify { level = airl_syntax::ast::VerifyLevel::Proven; }
                         all_fns.push((f, level));
                     }
                 }
@@ -250,6 +252,20 @@ fn z3_verify_tops(
     }
 
     for (f, level) in &all_fns {
+        // Coverage gate: :pub defn in :verify proven module must have :ensures.
+        // Checked before the expensive match arm (Z3 calls, disk cache reads) to
+        // avoid wasted work on uncovered pub defns.
+        if *level == airl_syntax::ast::VerifyLevel::Proven
+            && f.is_public
+            && f.ensures.is_empty()
+        {
+            let module = module_path_for_fn(&f.name, tops);
+            return Err(PipelineError::ContractCoverageMissing {
+                fn_name: f.name.clone(),
+                module,
+            });
+        }
+
         match level {
             airl_syntax::ast::VerifyLevel::Trusted => {
                 // Skip Z3 entirely — contracts are trusted, not checked
@@ -349,20 +365,46 @@ fn z3_verify_tops(
     Ok((proof_cache, trusted_fns))
 }
 
-/// Look up the verify level for a function by finding its containing module.
+/// Look up the verify level for a function.
+/// Precedence: FnDef.verify > enclosing ModuleDef.verify > VerifyLevel::default().
 fn verify_level_for_fn(fn_name: &str, tops: &[airl_syntax::ast::TopLevel]) -> airl_syntax::ast::VerifyLevel {
+    for top in tops {
+        match top {
+            airl_syntax::ast::TopLevel::Module(m) => {
+                for item in &m.body {
+                    if let airl_syntax::ast::TopLevel::Defn(f) = item {
+                        if f.name == fn_name {
+                            return f.verify.unwrap_or(m.verify);
+                        }
+                    }
+                }
+            }
+            airl_syntax::ast::TopLevel::Defn(f) => {
+                if f.name == fn_name {
+                    return f.verify.unwrap_or_else(airl_syntax::ast::VerifyLevel::default);
+                }
+            }
+            _ => {}
+        }
+    }
+    airl_syntax::ast::VerifyLevel::default()
+}
+
+/// Return the containing module name for a function, or "<top-level>" if the
+/// function is a bare top-level defn.
+fn module_path_for_fn(fn_name: &str, tops: &[airl_syntax::ast::TopLevel]) -> String {
     for top in tops {
         if let airl_syntax::ast::TopLevel::Module(m) = top {
             for item in &m.body {
                 if let airl_syntax::ast::TopLevel::Defn(f) = item {
                     if f.name == fn_name {
-                        return m.verify;
+                        return m.name.clone();
                     }
                 }
             }
         }
     }
-    airl_syntax::ast::VerifyLevel::Checked
+    "<top-level>".to_string()
 }
 
 pub fn run_source_with_mode(source: &str, mode: PipelineMode) -> Result<Value, PipelineError> {
@@ -1415,6 +1457,10 @@ pub enum PipelineError {
     Parse(Diagnostics),
     TypeCheck(Diagnostics),
     Runtime(RuntimeError),
+    ContractCoverageMissing {
+        fn_name: String,
+        module: String,
+    },
     ContractDisproven {
         fn_name: String,
         clause: String,
@@ -1445,6 +1491,15 @@ impl std::fmt::Display for PipelineError {
                 Ok(())
             }
             PipelineError::Runtime(e) => write!(f, "Runtime error: {}", e),
+            PipelineError::ContractCoverageMissing { fn_name, module } => {
+                write!(
+                    f,
+                    "public function `{}` in module `{}` has no :ensures clause\n  \
+                     note: `:verify proven` modules require every :pub defn to have at least one :ensures\n  \
+                     help: add an :ensures clause, or mark the module or function :verify checked",
+                    fn_name, module
+                )
+            }
             PipelineError::ContractDisproven { fn_name, clause, counterexample } => {
                 write!(f, "Contract disproven in `{}`: {} (counterexample: {:?})", fn_name, clause, counterexample)
             }
@@ -1526,7 +1581,7 @@ mod tests {
     #[test]
     fn run_defn_and_call() {
         let source = r#"
-            (defn add
+            (defn add :verify checked
               :sig [(x : i32) (y : i32) -> i32]
               :intent "Add two numbers"
               :requires [(valid x) (valid y)]
@@ -1785,6 +1840,111 @@ mod tests {
         // where source files are not present). We just verify it doesn't panic.
         let _result = stdlib_disk_hash();
         // No assertion needed — just confirming no panic.
+    }
+
+    #[test]
+    fn contract_coverage_missing_display() {
+        let e = PipelineError::ContractCoverageMissing {
+            fn_name: "foo".to_string(),
+            module: "bar.airl".to_string(),
+        };
+        let s = format!("{}", e);
+        assert!(s.contains("foo"), "expected fn name in message: {}", s);
+        assert!(s.contains("bar.airl"), "expected module in message: {}", s);
+        assert!(s.contains(":ensures") || s.contains("ensures"), "expected hint about :ensures: {}", s);
+    }
+
+    #[test]
+    fn per_defn_verify_overrides_module_level() {
+        // Module is :verify proven, but one defn overrides to :verify checked.
+        let src = r#"
+          (module test-mod
+            :verify proven
+            (defn foo
+              :verify checked
+              :sig [(x : i64) -> i64]
+              :requires [(>= x 0)]
+              :body x))
+        "#;
+        let (tops, _diags) = parse_source(src).expect("parse failed");
+        let level = verify_level_for_fn("foo", &tops);
+        assert_eq!(level, airl_syntax::ast::VerifyLevel::Checked);
+    }
+
+    #[test]
+    fn defn_without_override_inherits_module_level() {
+        let src = r#"
+          (module test-mod
+            :verify proven
+            (defn bar
+              :sig [(x : i64) -> i64]
+              :requires [(>= x 0)]
+              :body x))
+        "#;
+        let (tops, _diags) = parse_source(src).expect("parse failed");
+        let level = verify_level_for_fn("bar", &tops);
+        assert_eq!(level, airl_syntax::ast::VerifyLevel::Proven);
+    }
+
+    // ── Coverage gate ─────────────────────────────────────────────────────
+    //
+    // Coverage gate is unconditional: :pub defn in :verify proven modules
+    // must have at least one :ensures clause. No env gate needed.
+
+    #[test]
+    fn coverage_gate_fires_for_pub_fn_without_ensures() {
+        // No top-level call — module definition alone is enough for the gate to fire
+        // (coverage check happens inside z3_verify_tops, before bytecode compilation).
+        // Note: AIRL :pub modifier comes after the function name: (defn name :pub ...)
+        let src = r#"
+          (module mymod
+            :verify proven
+            (defn foo :pub
+              :sig [(x : i64) -> i64]
+              :requires [(>= x 0)]
+              :body x))
+        "#;
+        let result = run_source_with_mode(src, PipelineMode::Check);
+        match result {
+            Err(PipelineError::ContractCoverageMissing { ref fn_name, .. }) => {
+                assert_eq!(fn_name, "foo");
+            }
+            other => panic!("expected ContractCoverageMissing, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn coverage_gate_skips_private_fn() {
+        let src = r#"
+          (module mymod
+            :verify proven
+            (defn foo
+              :sig [(x : i64) -> i64]
+              :requires [(>= x 0)]
+              :body x))
+        "#;
+        let result = run_source_with_mode(src, PipelineMode::Check);
+        // Private defn without :ensures is exempt; should not hit coverage gate.
+        if let Err(PipelineError::ContractCoverageMissing { .. }) = result {
+            panic!("coverage gate fired for private defn");
+        }
+    }
+
+    #[test]
+    fn coverage_gate_skips_checked_module() {
+        // :pub modifier after function name per AIRL syntax
+        let src = r#"
+          (module mymod
+            :verify checked
+            (defn foo :pub
+              :sig [(x : i64) -> i64]
+              :requires [(>= x 0)]
+              :body x))
+        "#;
+        let result = run_source_with_mode(src, PipelineMode::Check);
+        if let Err(PipelineError::ContractCoverageMissing { .. }) = result {
+            panic!("coverage gate fired for :verify checked module");
+        }
     }
 }
 

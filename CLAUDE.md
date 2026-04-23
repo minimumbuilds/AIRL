@@ -59,6 +59,7 @@ airl-rt: extern "C" runtime (builtins for AOT)
 - Fixtures: `tests/fixtures/{valid,type_errors,contract_errors,linearity_errors,agent}/`
 - Multi-binding `let` preferred: `(let (x : T v1) (y : T v2) body)`
 - Builtins: `extern "C"` in `crates/airl-rt/`, dispatched via `CallBuiltin` opcode
+- **Default verification level is `:verify proven`.** Modules without an explicit `:verify` annotation require provable contracts on every `:pub defn`. Grandfathered modules are listed in `.airl-verify-baseline.toml`; run `airl verify-policy` to check the baseline, `airl verify-policy --list-uncovered` to see which `:pub defn`s need `:ensures`.
 
 ## Module System
 

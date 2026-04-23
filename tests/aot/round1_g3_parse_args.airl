@@ -1,6 +1,6 @@
 ;; EXPECT: files:2 output:out.bin
 ;; g3-parse-args inlined (can't --load g3_compiler.airl due to main body)
-(defn g3-parse-args
+(defn g3-parse-args :verify checked
   :sig [(args : List) -> _]
   :requires [(valid args)]
   :ensures [(valid result)]

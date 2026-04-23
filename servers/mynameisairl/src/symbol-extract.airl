@@ -6,7 +6,7 @@
 ;; ─── extract-symbols-from-file ───────────────────────────────────────
 ;; Extract all symbols from a file's source content.
 ;; Returns a list of symbol Maps.
-(defn extract-symbols-from-file
+(defn extract-symbols-from-file :verify checked
   :sig [(path : String) (content : String) -> List]
   :intent "Extract all symbol definitions from an AIRL source file"
   :requires [(valid path) (valid content)]
@@ -32,7 +32,7 @@
 
 ;; ─── extract-defn ────────────────────────────────────────────────────
 ;; Extract a defn form into a symbol Map.
-(defn extract-defn
+(defn extract-defn :verify checked
   :sig [(form : String) (file : String) (line : i64) (end-line : i64) -> Map]
   :intent "Parse a defn form and extract all metadata into a symbol map"
   :requires [(valid form) (valid file)]
@@ -63,7 +63,7 @@
 
 ;; ─── extract-define ──────────────────────────────────────────────────
 ;; Extract a define form into a symbol Map.
-(defn extract-define
+(defn extract-define :verify checked
   :sig [(form : String) (file : String) (line : i64) (end-line : i64) -> Map]
   :intent "Parse a define form and extract metadata"
   :requires [(valid form) (valid file)]
@@ -90,7 +90,7 @@
 
 ;; ─── extract-deftype ─────────────────────────────────────────────────
 ;; Extract a deftype form into a symbol Map.
-(defn extract-deftype
+(defn extract-deftype :verify checked
   :sig [(form : String) (file : String) (line : i64) (end-line : i64) -> Map]
   :intent "Parse a deftype form and extract type information"
   :requires [(valid form) (valid file)]
@@ -115,7 +115,7 @@
 
 ;; ─── extract-extern-c ────────────────────────────────────────────────
 ;; Extract an extern-c form into a symbol Map.
-(defn extract-extern-c
+(defn extract-extern-c :verify checked
   :sig [(form : String) (file : String) (line : i64) (end-line : i64) -> Map]
   :intent "Parse an extern-c declaration and extract metadata"
   :requires [(valid form) (valid file)]
@@ -140,7 +140,7 @@
 
 ;; ─── extract-top-let ─────────────────────────────────────────────────
 ;; Extract a top-level let binding as a constant symbol.
-(defn extract-top-let
+(defn extract-top-let :verify checked
   :sig [(form : String) (file : String) (line : i64) (end-line : i64) -> Map]
   :intent "Parse a top-level let binding as a constant definition"
   :requires [(valid form) (valid file)]
@@ -167,7 +167,7 @@
 ;; ─── extract-section-text ────────────────────────────────────────────
 ;; Find a keyword like :sig, :body, etc. in tokens and return the text
 ;; of the following balanced expression.
-(defn extract-section-text
+(defn extract-section-text :verify checked
   :sig [(tokens : List) (keyword : String) -> String]
   :intent "Extract the text of a section after a keyword in token list"
   :requires [(valid tokens) (valid keyword)]
@@ -179,7 +179,7 @@
 
 ;; ─── find-token-index ────────────────────────────────────────────────
 ;; Find the index of a token in a list, starting from a given position.
-(defn find-token-index
+(defn find-token-index :verify checked
   :sig [(tokens : List) (target : String) (start : i64) -> Any]
   :intent "Find index of target token starting from position"
   :requires [(valid tokens) (valid target) (>= start 0)]
@@ -193,7 +193,7 @@
 ;; ─── extract-balanced-at ─────────────────────────────────────────────
 ;; Starting at index, extract a balanced expression (brackets or parens)
 ;; and return it as a joined string.
-(defn extract-balanced-at
+(defn extract-balanced-at :verify checked
   :sig [(tokens : List) (start : i64) -> String]
   :intent "Extract balanced sub-expression starting at index"
   :requires [(valid tokens) (>= start 0)]
@@ -210,7 +210,7 @@
 
 ;; ─── collect-balanced ────────────────────────────────────────────────
 ;; Collect tokens for a balanced bracket/paren expression.
-(defn collect-balanced
+(defn collect-balanced :verify checked
   :sig [(tokens : List) (pos : i64) (depth : i64) (acc : List) -> Map]
   :intent "Collect tokens from a balanced expression"
   :requires [(valid tokens) (>= pos 0) (>= depth 0)]
@@ -229,7 +229,7 @@
 
 ;; ─── extract-bracket-text ────────────────────────────────────────────
 ;; Extract a [...] expression starting at or after position.
-(defn extract-bracket-text
+(defn extract-bracket-text :verify checked
   :sig [(tokens : List) (start : i64) -> String]
   :intent "Extract bracket expression starting at position"
   :requires [(valid tokens) (>= start 0)]
@@ -241,7 +241,7 @@
 
 ;; ─── extract-define-params ───────────────────────────────────────────
 ;; Extract parameter names from a define form: (define name (p1 p2) body)
-(defn extract-define-params
+(defn extract-define-params :verify checked
   :sig [(tokens : List) -> List]
   :intent "Extract parameter names from a define form"
   :requires [(valid tokens)]
@@ -257,7 +257,7 @@
 ;; ─── extract-calls-from-tokens ───────────────────────────────────────
 ;; Extract function call names from tokens.
 ;; A call is identified as a symbol immediately after "(".
-(defn extract-calls-from-tokens
+(defn extract-calls-from-tokens :verify checked
   :sig [(tokens : List) -> List]
   :intent "Extract function names called in the body"
   :requires [(valid tokens)]
@@ -270,7 +270,7 @@
 
 ;; ─── extract-call-pairs ──────────────────────────────────────────────
 ;; Walk tokens finding ( followed by a symbol name.
-(defn extract-call-pairs
+(defn extract-call-pairs :verify checked
   :sig [(tokens : List) (pos : i64) (acc : List) -> List]
   :intent "Collect symbols that appear after open-parens"
   :requires [(valid tokens) (>= pos 0)]
@@ -288,7 +288,7 @@
 ;; ─── is-call-target ──────────────────────────────────────────────────
 ;; Check if a token looks like a function call target (not a keyword,
 ;; paren, bracket, string literal, or number).
-(defn is-call-target
+(defn is-call-target :verify checked
   :sig [(tok : String) -> Bool]
   :intent "Check if token is a plausible function name"
   :requires [(valid tok)]
@@ -308,7 +308,7 @@
 
 ;; ─── strip-quotes ────────────────────────────────────────────────────
 ;; Remove surrounding double quotes from a string token.
-(defn strip-quotes
+(defn strip-quotes :verify checked
   :sig [(s : String) -> String]
   :intent "Remove surrounding quotes from a string literal token"
   :requires [(valid s)]
@@ -323,7 +323,7 @@
 
 ;; ─── extract-ownership-from-sig ──────────────────────────────────────
 ;; Extract ownership annotations (own, ref, mut, copy) from a sig string.
-(defn extract-ownership-from-sig
+(defn extract-ownership-from-sig :verify checked
   :sig [(sig-text : String) -> String]
   :intent "Extract ownership annotations from signature text"
   :requires [(valid sig-text)]

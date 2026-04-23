@@ -1,7 +1,7 @@
 ;; ── AIRL Standard Library: Collections ──────────────────
 
 ;; ── map : apply f to each element ──
-(defn map
+(defn map :verify checked
   :sig [(f : fn) (xs : List) -> List]
   :intent "Apply function to each element of a list"
   :requires [(valid f)]
@@ -11,7 +11,7 @@
           (cons (f (head xs)) (map f (tail xs)))))
 
 ;; ── filter : keep elements matching predicate ──
-(defn filter
+(defn filter :verify checked
   :sig [(pred : fn) (xs : List) -> List]
   :intent "Keep elements where predicate returns true"
   :requires [(valid pred)]
@@ -23,7 +23,7 @@
             (filter pred (tail xs)))))
 
 ;; ── fold : left fold with accumulator ──
-(defn fold
+(defn fold :verify checked
   :sig [(f : fn) (init : _) (xs : List) -> _]
   :intent "Reduce a list to a single value using accumulator"
   :requires [(valid f)]
@@ -33,7 +33,7 @@
           (fold f (f init (head xs)) (tail xs))))
 
 ;; ── reverse : reverse a list ──
-(defn reverse
+(defn reverse :verify checked
   :sig [(xs : List) -> List]
   :intent "Reverse a list"
   :requires [(valid xs)]
@@ -41,7 +41,7 @@
   :body (fold (fn [acc x] (cons x acc)) [] xs))
 
 ;; ── concat : concatenate two lists ──
-(defn concat
+(defn concat :verify checked
   :sig [(xs : List) (ys : List) -> List]
   :intent "Concatenate two lists"
   :requires [(valid xs)]
@@ -51,7 +51,7 @@
           (cons (head xs) (concat (tail xs) ys))))
 
 ;; ── zip : pair elements from two lists ──
-(defn zip
+(defn zip :verify checked
   :sig [(xs : List) (ys : List) -> List]
   :intent "Pair corresponding elements from two lists"
   :requires [(valid xs)]
@@ -61,7 +61,7 @@
           (cons [(head xs) (head ys)] (zip (tail xs) (tail ys)))))
 
 ;; ── flatten : flatten list of lists ──
-(defn flatten
+(defn flatten :verify checked
   :sig [(xss : List) -> List]
   :intent "Flatten a list of lists into a single list"
   :requires [(valid xss)]
@@ -74,7 +74,7 @@
                    [] xss)))
 
 ;; ── range : generate integers [start, end) ──
-(defn range
+(defn range :verify checked
   :sig [(start : i64) (end : i64) -> List]
   :intent "Generate a list of integers from start to end (exclusive)"
   :requires [(<= start end)]
@@ -84,7 +84,7 @@
           (cons start (range (+ start 1) end))))
 
 ;; ── take : first n elements ──
-(defn take
+(defn take :verify checked
   :sig [(n : i64) (xs : List) -> List]
   :intent "Take the first n elements of a list"
   :requires [(>= n 0)]
@@ -94,7 +94,7 @@
           (cons (head xs) (take (- n 1) (tail xs)))))
 
 ;; ── drop : skip first n elements ──
-(defn drop
+(defn drop :verify checked
   :sig [(n : i64) (xs : List) -> List]
   :intent "Drop the first n elements of a list"
   :requires [(>= n 0)]
@@ -104,7 +104,7 @@
           (drop (- n 1) (tail xs))))
 
 ;; ── any : does any element satisfy predicate ──
-(defn any
+(defn any :verify checked
   :sig [(pred : fn) (xs : List) -> bool]
   :intent "Check if any element satisfies the predicate"
   :requires [(valid pred)]
@@ -116,7 +116,7 @@
             (any pred (tail xs)))))
 
 ;; ── all : do all elements satisfy predicate ──
-(defn all
+(defn all :verify checked
   :sig [(pred : fn) (xs : List) -> bool]
   :intent "Check if all elements satisfy the predicate"
   :requires [(valid pred)]
@@ -128,7 +128,7 @@
             false)))
 
 ;; ── find : first element satisfying predicate ──
-(defn find
+(defn find :verify checked
   :sig [(pred : fn) (xs : List) -> _]
   :intent "Find first element satisfying predicate, or nil"
   :requires [(valid pred)]
@@ -140,7 +140,7 @@
             (find pred (tail xs)))))
 
 ;; ── merge : merge two sorted lists ──
-(defn merge
+(defn merge :verify checked
   :sig [(cmp : fn) (xs : List) (ys : List) -> List]
   :intent "Merge two sorted lists using comparison function"
   :requires [(valid cmp)]
@@ -154,7 +154,7 @@
               (cons (head ys) (merge cmp xs (tail ys)))))))
 
 ;; ── sort : merge sort with comparison function ──
-(defn sort
+(defn sort :verify checked
   :sig [(cmp : fn) (xs : List) -> List]
   :intent "Sort a list using merge sort with comparison function"
   :requires [(valid cmp)]
@@ -167,7 +167,7 @@
             (merge cmp (sort cmp left) (sort cmp right)))))
 
 ;; ── unique : remove duplicate elements (preserves first occurrence) ──
-(defn unique
+(defn unique :verify checked
   :sig [(xs : List) -> List]
   :intent "Remove duplicate elements from a list, preserving first occurrence"
   :requires [(valid xs)]
@@ -185,7 +185,7 @@
       (reverse (at pair 1))))
 
 ;; ── enumerate : pair each element with its index ──
-(defn enumerate
+(defn enumerate :verify checked
   :sig [(xs : List) -> List]
   :intent "Pair each element with its 0-based index"
   :requires [(valid xs)]
@@ -193,7 +193,7 @@
   :body (zip (range 0 (length xs)) xs))
 
 ;; ── group-by : group elements by key function ──
-(defn group-by
+(defn group-by :verify checked
   :sig [(f : fn) (xs : List) -> Map]
   :intent "Group elements by key function into a map of lists"
   :requires [(valid f)]

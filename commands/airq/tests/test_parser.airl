@@ -1,6 +1,6 @@
 ;; ── airq: Parser Tests ──────────────────────────────────────
 
-(defn test-assert
+(defn test-assert :verify checked
   :sig [(label : String) (actual : _) (expected : _) -> _]
   :requires [(valid label)]
   :ensures [(valid result)]

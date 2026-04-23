@@ -1,17 +1,17 @@
-(defn my-abs :pub
+(defn my-abs :pub :verify checked
   :sig [(x : i64) -> i64]
   :requires [(valid x)]
   :ensures [(>= result 0)]
   :body (if (< x 0) (- 0 x) x))
 
-(defn my-square :pub
+(defn my-square :pub :verify checked
   :sig [(x : i64) -> i64]
   :requires [(valid x)]
   :ensures [(>= result 0)]
   :body (* x x))
 
 ;; Private helper — should NOT be accessible from importers
-(defn internal-helper
+(defn internal-helper :verify checked
   :sig [(x : i64) -> i64]
   :requires [(valid x)]
   :ensures [(> result x)]

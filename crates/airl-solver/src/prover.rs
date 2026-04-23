@@ -792,6 +792,7 @@ mod tests {
             execute_on: None,
             priority: None,
             is_public: false,
+            verify: None,
             span: Span::dummy(),
         }
     }

@@ -7,35 +7,35 @@
 
 ;; ── Helper predicates ───────────────────────────────
 
-(defn is-whitespace?
+(defn is-whitespace? :verify checked
   :sig [(ch : String) -> Bool]
   :intent "Check if single-char string is whitespace"
   :requires [(valid ch)]
   :ensures [(valid result)]
   :body (or (= ch " ") (or (= ch "\t") (or (= ch "\n") (= ch "\r")))))
 
-(defn is-digit?
+(defn is-digit? :verify checked
   :sig [(ch : String) -> Bool]
   :intent "Check if single-char string is a decimal digit"
   :requires [(valid ch)]
   :ensures [(valid result)]
   :body (contains "0123456789" ch))
 
-(defn digit-value
+(defn digit-value :verify checked
   :sig [(ch : String) -> i64]
   :intent "Return numeric value of a digit character"
   :requires [(valid ch)]
   :ensures [(valid result)]
   :body (index-of "0123456789" ch))
 
-(defn is-symbol-start?
+(defn is-symbol-start? :verify checked
   :sig [(ch : String) -> Bool]
   :intent "Check if char can start a symbol"
   :requires [(valid ch)]
   :ensures [(valid result)]
   :body (contains "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!$%&*+-./<=>?@^_~" ch))
 
-(defn is-symbol-char?
+(defn is-symbol-char? :verify checked
   :sig [(ch : String) -> Bool]
   :intent "Check if char can continue a symbol"
   :requires [(valid ch)]
@@ -44,7 +44,7 @@
 
 ;; ── Helper: safe peek at next char ──────────────────
 
-(defn peek-next-is?
+(defn peek-next-is? :verify checked
   :sig [(source : String) (pos : i64) (expected : String) -> Bool]
   :intent "Check if char at pos+1 equals expected, bounds-safe"
   :requires [(valid source)]
@@ -56,7 +56,7 @@
 
 ;; ── Whitespace and comment skipping ─────────────────
 
-(defn skip-block-comment
+(defn skip-block-comment :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (depth : i64) -> List]
   :intent "Skip nestable block comment, return (Ok [pos line col]) or (Err msg)"
   :requires [(valid source)]
@@ -84,7 +84,7 @@
               (skip-block-comment source (+ pos 1) (+ line 1) 0 depth)
               (skip-block-comment source (+ pos 1) line (+ col 1) depth)))))))
 
-(defn skip-line-comment
+(defn skip-line-comment :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
   :intent "Skip to end of line, then continue skipping whitespace"
   :requires [(valid source)]
@@ -96,7 +96,7 @@
         (skip-ws source (+ pos 1) (+ line 1) 0)
         (skip-line-comment source (+ pos 1) line (+ col 1)))))
 
-(defn skip-ws
+(defn skip-ws :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
   :intent "Skip whitespace and comments, return (Ok [pos line col]) or (Err msg)"
   :requires [(valid source)]
@@ -125,7 +125,7 @@
 
 ;; ── Sub-lexers ──────────────────────────────────────
 
-(defn read-symbol-chars
+(defn read-symbol-chars :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) -> List]
   :intent "Read consecutive symbol characters, return [text pos line col]"
   :requires [(valid source)]
@@ -138,7 +138,7 @@
           (read-symbol-chars source (+ pos 1) line (+ col 1) (+ acc ch))
           [acc pos line col]))))
 
-(defn lex-symbol
+(defn lex-symbol :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
   :intent "Lex a symbol, checking for true/false/nil"
   :requires [(valid source)]
@@ -154,7 +154,7 @@
               (if (= text "nil")   (Ok [(Token "nil" nil start-line start-col) new-pos new-line new-col])
                 (Ok [(Token "symbol" text start-line start-col) new-pos new-line new-col]))))))
 
-(defn lex-keyword
+(defn lex-keyword :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
   :intent "Lex a keyword (colon already consumed)"
   :requires [(valid source)]
@@ -169,7 +169,7 @@
 
 ;; ── Numeric helpers ──────────────────────────────────
 
-(defn digit-value-f
+(defn digit-value-f :verify checked
   :sig [(ch : String) -> f64]
   :intent "Return float value of a digit character"
   :requires [(valid ch)]
@@ -186,7 +186,7 @@
     (if (= ch "8") 8.0
       9.0))))))))))
 
-(defn int-to-float
+(defn int-to-float :verify checked
   :sig [(n : i64) -> f64]
   :intent "Convert integer to float"
   :requires [(valid n)]
@@ -199,7 +199,7 @@
 
 ;; ── Number sub-lexer ────────────────────────────────
 
-(defn read-digits
+(defn read-digits :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : i64) -> List]
   :intent "Read consecutive digits, accumulate integer value, return [value pos line col]"
   :requires [(valid source)]
@@ -212,7 +212,7 @@
           (read-digits source (+ pos 1) line (+ col 1) (+ (* acc 10) (digit-value ch)))
           [acc pos line col]))))
 
-(defn read-frac-digits
+(defn read-frac-digits :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : f64) (divisor : f64) -> List]
   :intent "Read fractional digits after '.', return [frac-value pos line col]"
   :requires [(valid source)]
@@ -227,7 +227,7 @@
             (* divisor 10.0))
           [acc pos line col]))))
 
-(defn lex-number
+(defn lex-number :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : i64) (negative : Bool) (start-line : i64) (start-col : i64) -> List]
   :intent "Lex an integer or float literal"
   :requires [(valid source)]
@@ -262,7 +262,7 @@
 
 ;; ── String sub-lexer ────────────────────────────────
 
-(defn lex-string
+(defn lex-string :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
   :intent "Lex a string literal (opening quote already consumed)"
   :requires [(valid source)]
@@ -293,7 +293,7 @@
 
 ;; ── Core lexer ──────────────────────────────────────
 
-(defn next-token
+(defn next-token :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
   :intent "Read next token from source at pos, return (Ok [token pos line col]) or (Err msg)"
   :requires [(valid source)]
@@ -335,7 +335,7 @@
                     (Err (+ "unexpected character '" (+ ch "'")))))
                   )))))))))))))
 
-(defn lex-loop
+(defn lex-loop :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (tokens : List) -> List]
   :intent "Accumulate tokens until EOF, return (Ok tokens) or (Err msg)"
   :requires [(valid source)]
@@ -355,7 +355,7 @@
                         (Ok new-tokens)
                         (lex-loop source new-pos new-line new-col new-tokens))))))
 
-(defn lex
+(defn lex :verify checked
   :sig [(source : String) -> List]
   :intent "Tokenize source string, return (Ok token-list) or (Err msg)"
   :requires [(valid source)]
@@ -369,21 +369,21 @@
 
 ;; ── Helpers ───────────────────────────────────────
 
-(defn is-upper?
+(defn is-upper? :verify checked
   :sig [(ch : String) -> Bool]
   :intent "Check if single-char string is uppercase letter"
   :requires [(valid ch)]
   :ensures [(valid result)]
   :body (contains "ABCDEFGHIJKLMNOPQRSTUVWXYZ" ch))
 
-(defn parse-error
+(defn parse-error :verify checked
   :sig [(msg : String) (line : i64) (col : i64) -> List]
   :intent "Create a structured parse error"
   :requires [(valid msg)]
   :ensures [(valid result)]
   :body (Err (ParseError msg line col)))
 
-(defn token-line
+(defn token-line :verify checked
   :sig [(tok : Any) -> i64]
   :intent "Extract line number from a Token"
   :requires [(valid tok)]
@@ -391,7 +391,7 @@
   :body (match tok
     (Token _ _ line _) line))
 
-(defn token-col
+(defn token-col :verify checked
   :sig [(tok : Any) -> i64]
   :intent "Extract column number from a Token"
   :requires [(valid tok)]
@@ -399,7 +399,7 @@
   :body (match tok
     (Token _ _ _ col) col))
 
-(defn token-kind
+(defn token-kind :verify checked
   :sig [(tok : Any) -> String]
   :intent "Extract kind string from a Token"
   :requires [(valid tok)]
@@ -407,7 +407,7 @@
   :body (match tok
     (Token kind _ _ _) kind))
 
-(defn token-value
+(defn token-value :verify checked
   :sig [(tok : Any) -> Any]
   :intent "Extract value from a Token"
   :requires [(valid tok)]
@@ -417,7 +417,7 @@
 
 ;; ── Phase 1: Token → S-Expression grouping ────────
 
-(defn parse-sexpr
+(defn parse-sexpr :verify checked
   :sig [(tokens : List) (pos : i64) -> List]
   :intent "Parse one S-expression from token list at pos, return (Ok [sexpr new-pos]) or (Err ...)"
   :requires [(valid tokens)]
@@ -468,7 +468,7 @@
                       ;; Any other token is an atom
                       (Ok [(SAtom tok) (+ pos 1)]))))))))))
 
-(defn parse-sexprs
+(defn parse-sexprs :verify checked
   :sig [(tokens : List) (pos : i64) (stop-kind : String) -> List]
   :intent "Parse S-expressions until stop token or EOF, return (Ok [sexprs pos])"
   :requires [(valid tokens)]
@@ -498,7 +498,7 @@
                           (Err e) (Err e)))
                   (Err e) (Err e))))))))
 
-(defn parse-sexpr-all
+(defn parse-sexpr-all :verify checked
   :sig [(tokens : List) -> List]
   :intent "Parse all tokens into S-expressions, return (Ok sexprs) or (Err ...)"
   :requires [(valid tokens)]
@@ -510,7 +510,7 @@
 
 ;; ── Phase 2: S-Expression → AST ──────────────────
 
-(defn parse-atom
+(defn parse-atom :verify checked
   :sig [(tok : Any) -> List]
   :intent "Convert a token to an AST atom node"
   :requires [(valid tok)]
@@ -531,7 +531,7 @@
             (Ok (ASTSymbol value line col)))
           (Err (ParseError (+ "unexpected token kind: " kind) line col)))))))))))
 
-(defn parse-list-items
+(defn parse-list-items :verify checked
   :sig [(sexprs : List) (pos : i64) -> List]
   :intent "Parse a list of S-expressions into AST exprs, return (Ok exprs) or (Err ...)"
   :requires [(valid sexprs)]
@@ -546,7 +546,7 @@
             (Err e) (Err e))
         (Err e) (Err e))))
 
-(defn parse-expr
+(defn parse-expr :verify checked
   :sig [(sexpr : Any) -> List]
   :intent "Parse an S-expression into an AST expression node"
   :requires [(valid sexpr)]
@@ -611,7 +611,7 @@
 
 ;; ── Compound expression parsers ───────────────────
 
-(defn parse-if
+(defn parse-if :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (if cond then else) expression"
   :requires [(valid items)]
@@ -631,7 +631,7 @@
         (Err e) (Err e))
       (Err (ParseError "if requires exactly 3 arguments (cond then else)" line col))))
 
-(defn parse-let-binding
+(defn parse-let-binding :verify checked
   :sig [(sexpr : Any) -> List]
   :intent "Parse a single let binding (name : Type value)"
   :requires [(valid sexpr)]
@@ -663,7 +663,7 @@
               _ (Err (ParseError "expected symbol name in let binding" line col)))))
       _ (Err (ParseError "let binding must be a list" 0 0))))
 
-(defn parse-let-bindings
+(defn parse-let-bindings :verify checked
   :sig [(items : List) (pos : i64) (end : i64) -> List]
   :intent "Parse let bindings from items[pos] to items[end-1], return (Ok bindings)"
   :requires [(valid items)]
@@ -678,7 +678,7 @@
             (Err e) (Err e))
         (Err e) (Err e))))
 
-(defn parse-let
+(defn parse-let :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (let (bindings...) body) expression"
   :requires [(valid items)]
@@ -698,7 +698,7 @@
                 (Err e) (Err e))
             (Err e) (Err e)))))
 
-(defn parse-do
+(defn parse-do :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (do expr1 expr2 ...) expression"
   :requires [(valid items)]
@@ -713,7 +713,7 @@
 
 ;; ── Pattern parsing ───────────────────────────────
 
-(defn parse-pattern
+(defn parse-pattern :verify checked
   :sig [(sexpr : Any) -> List]
   :intent "Parse an S-expression into a pattern node"
   :requires [(valid sexpr)]
@@ -758,7 +758,7 @@
 
       _ (Err (ParseError "unexpected S-expression in pattern" 0 0))))
 
-(defn parse-patterns
+(defn parse-patterns :verify checked
   :sig [(items : List) (pos : i64) -> List]
   :intent "Parse sub-patterns from items[pos..], return (Ok patterns)"
   :requires [(valid items)]
@@ -775,7 +775,7 @@
 
 ;; ── Match expression ──────────────────────────────
 
-(defn parse-match-arms
+(defn parse-match-arms :verify checked
   :sig [(items : List) (pos : i64) -> List]
   :intent "Parse pattern/body pairs from items[pos..], return (Ok arms)"
   :requires [(valid items)]
@@ -796,7 +796,7 @@
               (Err e) (Err e))
           (Err e) (Err e)))))
 
-(defn parse-match
+(defn parse-match :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (match scrutinee pattern body ...) expression"
   :requires [(valid items)]
@@ -818,7 +818,7 @@
 
 ;; ── Lambda ────────────────────────────────────────
 
-(defn parse-lambda-params
+(defn parse-lambda-params :verify checked
   :sig [(items : List) (pos : i64) -> List]
   :intent "Parse lambda parameter names from bracket items"
   :requires [(valid items)]
@@ -837,7 +837,7 @@
                 (Err (ParseError "lambda parameter must be a symbol" 0 0))))
         _ (Err (ParseError "lambda parameter must be a symbol" 0 0)))))
 
-(defn parse-lambda
+(defn parse-lambda :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (fn [params] body) expression"
   :requires [(valid items)]
@@ -858,7 +858,7 @@
 
 ;; ── Try ───────────────────────────────────────────
 
-(defn parse-try
+(defn parse-try :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (try expr) expression"
   :requires [(valid items)]
@@ -872,7 +872,7 @@
 
 ;; ── Signature parsing ─────────────────────────────
 
-(defn parse-param
+(defn parse-param :verify checked
   :sig [(sexpr : Any) -> List]
   :intent "Parse a parameter (name : Type) from S-expression"
   :requires [(valid sexpr)]
@@ -902,7 +902,7 @@
               _ (Err (ParseError "expected symbol name in parameter" line col)))))
       _ (Err (ParseError "parameter must be a list" 0 0))))
 
-(defn parse-sig-params
+(defn parse-sig-params :verify checked
   :sig [(items : List) (pos : i64) (arrow-pos : i64) -> List]
   :intent "Parse signature parameters from items[pos..arrow-pos]"
   :requires [(valid items)]
@@ -917,7 +917,7 @@
             (Err e) (Err e))
         (Err e) (Err e))))
 
-(defn find-arrow
+(defn find-arrow :verify checked
   :sig [(items : List) (pos : i64) -> i64]
   :intent "Find index of -> arrow token in S-expr list, return -1 if not found"
   :requires [(valid items)]
@@ -934,7 +934,7 @@
                 (find-arrow items (+ pos 1))))
         _ (find-arrow items (+ pos 1)))))
 
-(defn parse-sig
+(defn parse-sig :verify checked
   :sig [(sexpr : Any) -> List]
   :intent "Parse :sig [(params...) -> ReturnType] from bracket S-expression"
   :requires [(valid sexpr)]
@@ -966,7 +966,7 @@
 
 ;; ── defn clause walker ────────────────────────────
 
-(defn walk-defn-clauses
+(defn walk-defn-clauses :verify checked
   :sig [(items : List) (pos : i64) (sig : Any) (intent : String) (requires : List) (ensures : List) (body : Any) -> List]
   :intent "Walk keyword clauses in defn, accumulate values"
   :requires [(valid items)]
@@ -1022,7 +1022,7 @@
         ;; Non-atom — error
         _ (Err (ParseError "expected keyword clause in defn" 0 0)))))
 
-(defn parse-defn
+(defn parse-defn :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (defn name :clause value ...) definition"
   :requires [(valid items)]
@@ -1051,7 +1051,7 @@
 
 ;; ── Top-level and entry point ─────────────────────
 
-(defn parse-top-level
+(defn parse-top-level :verify checked
   :sig [(sexpr : Any) -> List]
   :intent "Parse a top-level S-expression into an AST node"
   :requires [(valid sexpr)]
@@ -1073,7 +1073,7 @@
             _ (parse-expr sexpr)))
       _ (parse-expr sexpr)))
 
-(defn parse-top-levels
+(defn parse-top-levels :verify checked
   :sig [(sexprs : List) (pos : i64) -> List]
   :intent "Parse all top-level S-expressions into AST nodes"
   :requires [(valid sexprs)]
@@ -1088,14 +1088,14 @@
             (Err e) (Err e))
         (Err e) (Err e))))
 
-(defn parse-program
+(defn parse-program :verify checked
   :sig [(sexprs : List) -> List]
   :intent "Parse a list of S-expressions into AST nodes"
   :requires [(valid sexprs)]
   :ensures [(valid result)]
   :body (parse-top-levels sexprs 0))
 
-(defn parse
+(defn parse :verify checked
   :sig [(source : String) -> List]
   :intent "Full pipeline: source → tokens → S-exprs → AST"
   :requires [(valid source)]
@@ -1113,7 +1113,7 @@
 
 ;; ─── Value Unwrap Helpers ─────────────────────────────────
 
-(defn unwrap-int
+(defn unwrap-int :verify checked
   :sig [(v : Any) -> i64]
   :intent "Extract integer from ValInt"
   :requires [(valid v)]
@@ -1122,7 +1122,7 @@
     (ValInt n) n
     _ (do (print "ERROR: expected ValInt, got" v) 0)))
 
-(defn unwrap-float
+(defn unwrap-float :verify checked
   :sig [(v : Any) -> f64]
   :intent "Extract float from ValFloat"
   :requires [(valid v)]
@@ -1131,7 +1131,7 @@
     (ValFloat n) n
     _ (do (print "ERROR: expected ValFloat, got" v) 0.0)))
 
-(defn unwrap-str
+(defn unwrap-str :verify checked
   :sig [(v : Any) -> Str]
   :intent "Extract string from ValStr"
   :requires [(valid v)]
@@ -1140,7 +1140,7 @@
     (ValStr s) s
     _ (do (print "ERROR: expected ValStr, got" v) "")))
 
-(defn unwrap-bool
+(defn unwrap-bool :verify checked
   :sig [(v : Any) -> Bool]
   :intent "Extract bool from ValBool"
   :requires [(valid v)]
@@ -1149,7 +1149,7 @@
     (ValBool b) b
     _ (do (print "ERROR: expected ValBool, got" v) false)))
 
-(defn unwrap-list
+(defn unwrap-list :verify checked
   :sig [(v : Any) -> List]
   :intent "Extract list from ValList"
   :requires [(valid v)]
@@ -1158,7 +1158,7 @@
     (ValList xs) xs
     _ (do (print "ERROR: expected ValList, got" v) [])))
 
-(defn unwrap-raw
+(defn unwrap-raw :verify checked
   :sig [(v : Any) -> Any]
   :intent "Extract the raw AIRL value from any Val wrapper"
   :requires [(valid v)]
@@ -1174,35 +1174,35 @@
 ;; ─── Environment Operations ──────────────────────────────
 ;; Environment is a list of maps (frame stack). Head = innermost scope.
 
-(defn env-new
+(defn env-new :verify checked
   :sig [(_u : Any) -> List]
   :intent "Create a new environment with one empty frame"
   :requires [(valid _u)]
   :ensures [(valid result)]
   :body [(map-new)])
 
-(defn env-push
+(defn env-push :verify checked
   :sig [(env : List) -> List]
   :intent "Push a new empty frame onto the environment"
   :requires [(valid env)]
   :ensures [(valid result)]
   :body (cons (map-new) env))
 
-(defn env-pop
+(defn env-pop :verify checked
   :sig [(env : List) -> List]
   :intent "Pop the innermost frame from the environment"
   :requires [(valid env)]
   :ensures [(valid result)]
   :body (tail env))
 
-(defn env-bind
+(defn env-bind :verify checked
   :sig [(env : List) (name : Str) (val : Any) -> List]
   :intent "Bind a name to a value in the top frame"
   :requires [(valid env)]
   :ensures [(valid result)]
   :body (cons (map-set (head env) name val) (tail env)))
 
-(defn env-get
+(defn env-get :verify checked
   :sig [(env : List) (name : Str) -> Any]
   :intent "Look up a name in the environment, searching from innermost frame outward"
   :requires [(valid env)]
@@ -1215,7 +1215,7 @@
 
 ;; ─── Builtin Dispatch ────────────────────────────────────
 
-(defn call-builtin
+(defn call-builtin :verify checked
   :sig [(name : Str) (args : List) -> Any]
   :intent "Dispatch a builtin call by name, returning (Ok val) or (Err msg)"
   :requires [(valid name)]
@@ -1323,7 +1323,7 @@
     (Err (+ "unknown builtin: " name))
     ))))))))))))))))))))))))))))))))))))))))))))))))))))
 
-(defn make-initial-env
+(defn make-initial-env :verify checked
   :sig [(_u : Any) -> List]
   :intent "Create environment with all builtins bound"
   :requires [(valid _u)]
@@ -1383,7 +1383,7 @@
          (e : Any (env-bind e "xor" (ValBuiltin "xor")))
       e))
 
-(defn eval-args-acc
+(defn eval-args-acc :verify checked
   :sig [(args : List) (env : List) (acc : List) -> Any]
   :intent "Accumulate evaluated argument values"
   :requires [(valid args)]
@@ -1395,7 +1395,7 @@
         (Ok pair)
           (eval-args-acc (tail args) (at pair 1) (append acc (at pair 0))))))
 
-(defn eval-args
+(defn eval-args :verify checked
   :sig [(args : List) (env : List) -> Any]
   :intent "Evaluate a list of argument expressions left-to-right"
   :requires [(valid args)]
@@ -1404,7 +1404,7 @@
 
 ;; ─── Control Flow Helpers ────────────────────────────────
 
-(defn eval-let-bindings
+(defn eval-let-bindings :verify checked
   :sig [(bindings : List) (env : List) -> Any]
   :intent "Evaluate let bindings sequentially, threading env"
   :requires [(valid bindings)]
@@ -1419,7 +1419,7 @@
               (eval-let-bindings (tail bindings) (env-bind (at pair 1) name (at pair 0))))
         _ (Err "eval: invalid let binding"))))
 
-(defn eval-do
+(defn eval-do :verify checked
   :sig [(exprs : List) (env : List) -> Any]
   :intent "Evaluate a sequence of expressions, threading env, return last value"
   :requires [(valid exprs)]
@@ -1435,7 +1435,7 @@
 
 ;; ─── Pattern Matching ────────────────────────────────────
 
-(defn try-match-patterns
+(defn try-match-patterns :verify checked
   :sig [(patterns : List) (values : List) -> Any]
   :intent "Match a list of patterns against a list of values, collecting bindings"
   :requires [(valid patterns)]
@@ -1450,7 +1450,7 @@
               (Err e) (Err e)
               (Ok binds2) (Ok (concat binds1 binds2)))))))
 
-(defn try-match-pattern
+(defn try-match-pattern :verify checked
   :sig [(pattern : Any) (value : Any) -> Any]
   :intent "Try to match a pattern against a value, returning (Ok bindings) or (Err msg)"
   :requires [(valid pattern)]
@@ -1476,7 +1476,7 @@
         _ (Err "no match"))
     _ (Err "no match")))
 
-(defn bind-match-bindings
+(defn bind-match-bindings :verify checked
   :sig [(env : List) (bindings : List) -> List]
   :intent "Bind pattern match capture bindings into the top frame"
   :requires [(valid env)]
@@ -1488,7 +1488,7 @@
           (env-bind env (at pair 0) (at pair 1))
           (tail bindings)))))
 
-(defn eval-match-arms
+(defn eval-match-arms :verify checked
   :sig [(arms : List) (value : Any) (env : List) -> Any]
   :intent "Try each match arm against the scrutinee value"
   :requires [(valid arms)]
@@ -1509,7 +1509,7 @@
 
 ;; ─── Function Helpers ────────────────────────────────────
 
-(defn extract-param-names
+(defn extract-param-names :verify checked
   :sig [(sig : Any) -> List]
   :intent "Extract parameter name strings from an ASTSig node"
   :requires [(valid sig)]
@@ -1519,7 +1519,7 @@
       (map (fn [p] (match p (ASTParam name _) name _ "?")) params)
     _ []))
 
-(defn bind-params
+(defn bind-params :verify checked
   :sig [(env : List) (names : List) (vals : List) -> List]
   :intent "Bind parameter names to argument values in the top frame"
   :requires [(valid env)]
@@ -1533,7 +1533,7 @@
 
 ;; ─── Evaluator Core ──────────────────────────────────────
 
-(defn eval-list-items
+(defn eval-list-items :verify checked
   :sig [(items : List) (env : List) (acc : List) -> Any]
   :intent "Evaluate list literal items left-to-right"
   :requires [(valid items)]
@@ -1545,7 +1545,7 @@
         (Ok pair)
           (eval-list-items (tail items) (at pair 1) (append acc (at pair 0))))))
 
-(defn eval-node
+(defn eval-node :verify checked
   :sig [(node : Any) (env : List) -> Any]
   :intent "Evaluate a single AST node, returning (Ok [val env]) or (Err msg)"
   :requires [(valid node)]
@@ -1655,7 +1655,7 @@
 
 ;; ─── Top-Level Evaluation ────────────────────────────────
 
-(defn eval-top-level
+(defn eval-top-level :verify checked
   :sig [(node : Any) (env : List) -> Any]
   :intent "Evaluate a top-level node (defn or expression)"
   :requires [(valid node)]
@@ -1667,7 +1667,7 @@
           (Ok [(ValNil) (env-bind env name fn-val)]))
     _ (eval-node node env)))
 
-(defn eval-program
+(defn eval-program :verify checked
   :sig [(nodes : List) (env : List) -> Any]
   :intent "Evaluate a list of top-level nodes sequentially, threading env"
   :requires [(valid nodes)]
@@ -1683,7 +1683,7 @@
 
 ;; ─── Full Pipeline ───────────────────────────────────────
 
-(defn run-source
+(defn run-source :verify checked
   :sig [(source : Str) -> Any]
   :intent "Lex, parse, and evaluate an AIRL source string"
   :requires [(valid source)]
@@ -1700,7 +1700,7 @@
               (Ok ast-nodes)
                 (eval-program ast-nodes (make-initial-env 0))))))
 
-(defn assert-eq
+(defn assert-eq :verify checked
   :sig [(a : Any) (b : Any) -> Bool]
   :intent "Assert equality"
   :requires [(valid a) (valid b)]

@@ -4,7 +4,7 @@
 ;; hidden file filtering, glob patterns, and file type filters.
 
 ;; ── is-hidden : check if a filename starts with . ──
-(defn is-hidden
+(defn is-hidden :verify checked
   :sig [(name : String) -> Bool]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -14,7 +14,7 @@
 
 ;; ── should-skip-entry : decide if entry should be skipped ──
 ;; opts is a map with keys: "hidden" (bool), "no-ignore" (bool)
-(defn should-skip-entry
+(defn should-skip-entry :verify checked
   :sig [(name : String) (rel-path : String) (is-dir : Bool) (rules : List) (opts : _) -> Bool]
   :requires [(valid name) (valid rel-path)]
   :ensures [(valid result)]
@@ -29,7 +29,7 @@
               false))))
 
 ;; ── file-passes-filters : check glob and type filters ──
-(defn file-passes-filters
+(defn file-passes-filters :verify checked
   :sig [(rel-path : String) (opts : _) -> Bool]
   :requires [(valid rel-path)]
   :ensures [(valid result)]
@@ -45,7 +45,7 @@
               true))))
 
 ;; ── walk-entries-rec : process directory entries ──
-(defn walk-entries-rec
+(defn walk-entries-rec :verify checked
   :sig [(entries : List) (dir-path : String) (rel-base : String) (rules : List) (opts : _) (depth : i64) (acc : List) -> List]
   :requires [(valid entries)]
   :ensures [(valid result)]
@@ -69,7 +69,7 @@
                   (walk-entries-rec (tail entries) dir-path rel-base rules opts depth acc)))))))))
 
 ;; ── walk-dir-rec : recursive walk with depth tracking ──
-(defn walk-dir-rec
+(defn walk-dir-rec :verify checked
   :sig [(dir-path : String) (rel-base : String) (rules : List) (opts : _) (depth : i64) (acc : List) -> List]
   :requires [(valid dir-path)]
   :ensures [(valid result)]
@@ -80,7 +80,7 @@
               (walk-entries-rec entries dir-path rel-base rules opts depth acc)))))
 
 ;; ── walk-files : entry point, returns list of file paths matching filters ──
-(defn walk-files
+(defn walk-files :verify checked
   :sig [(start-path : String) (opts : _) -> List]
   :requires [(valid start-path)]
   :ensures [(valid result)]

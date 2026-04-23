@@ -5,7 +5,7 @@
 ;; pattern-matches on Ok/Err. This wrapper restores the Result convention.
 ;; Compiled before json.airl so first-def-wins applies.
 
-(defn json-parse
+(defn json-parse :verify checked
   :sig [(s : String) -> Result]
   :requires [(valid s)]
   :ensures [(valid result)]

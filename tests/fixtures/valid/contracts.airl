@@ -1,5 +1,5 @@
 ;; EXPECT: 6
-(defn add-one
+(defn add-one :verify checked
   :sig [(x : i32) -> i32]
   :intent "add one"
   :requires [(valid x)]

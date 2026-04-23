@@ -1,7 +1,7 @@
 ;; ── AIRL Standard Library: Math ──────────────────
 
 ;; ── abs : absolute value ──
-(defn abs
+(defn abs :verify checked
   :sig [(x : i64) -> i64]
   :intent "Return the absolute value of x"
   :requires [(valid x)]
@@ -9,7 +9,7 @@
   :body (if (< x 0) (* x -1) x))
 
 ;; ── min : minimum of two values ──
-(defn min
+(defn min :verify checked
   :sig [(a : i64) (b : i64) -> i64]
   :intent "Return the smaller of two values"
   :requires [(valid a)]
@@ -17,7 +17,7 @@
   :body (if (<= a b) a b))
 
 ;; ── max : maximum of two values ──
-(defn max
+(defn max :verify checked
   :sig [(a : i64) (b : i64) -> i64]
   :intent "Return the larger of two values"
   :requires [(valid a)]
@@ -25,7 +25,7 @@
   :body (if (>= a b) a b))
 
 ;; ── clamp : clamp value between bounds ──
-(defn clamp
+(defn clamp :verify checked
   :sig [(x : i64) (lo : i64) (hi : i64) -> i64]
   :intent "Clamp x to the range [lo, hi]"
   :requires [(<= lo hi)]
@@ -33,7 +33,7 @@
   :body (if (< x lo) lo (if (> x hi) hi x)))
 
 ;; ── sign : sign of a number ──
-(defn sign
+(defn sign :verify checked
   :sig [(x : i64) -> i64]
   :intent "Return -1, 0, or 1 for negative, zero, or positive"
   :requires [(valid x)]
@@ -41,7 +41,7 @@
   :body (if (< x 0) -1 (if (> x 0) 1 0)))
 
 ;; ── even? : is integer even ──
-(defn even?
+(defn even? :verify checked
   :sig [(x : i64) -> bool]
   :intent "Check if x is even"
   :requires [(valid x)]
@@ -49,7 +49,7 @@
   :body (= (% x 2) 0))
 
 ;; ── odd? : is integer odd ──
-(defn odd?
+(defn odd? :verify checked
   :sig [(x : i64) -> bool]
   :intent "Check if x is odd"
   :requires [(valid x)]
@@ -57,7 +57,7 @@
   :body (not (= (% x 2) 0)))
 
 ;; ── pow : integer exponentiation (O(log n) by squaring) ──
-(defn pow
+(defn pow :verify checked
   :sig [(base : i64) (exp : i64) -> i64]
   :intent "Integer exponentiation using fast squaring"
   :requires [(>= exp 0)]
@@ -69,7 +69,7 @@
             (* base (pow base (- exp 1))))))
 
 ;; ── gcd : greatest common divisor ──
-(defn gcd
+(defn gcd :verify checked
   :sig [(a : i64) (b : i64) -> i64]
   :intent "Compute greatest common divisor using Euclidean algorithm"
   :requires [(>= a 0) (>= b 0)]
@@ -77,7 +77,7 @@
   :body (if (= b 0) a (gcd b (% a b))))
 
 ;; ── lcm : least common multiple ──
-(defn lcm
+(defn lcm :verify checked
   :sig [(a : i64) (b : i64) -> i64]
   :intent "Compute least common multiple"
   :requires [(>= a 0) (>= b 0)]
@@ -85,7 +85,7 @@
   :body (if (= a 0) 0 (if (= b 0) 0 (/ (* a b) (gcd a b)))))
 
 ;; ── sum-list : sum a list of numbers ──
-(defn sum-list
+(defn sum-list :verify checked
   :sig [(xs : List) -> i64]
   :intent "Sum all elements in a list"
   :requires [(valid xs)]
@@ -93,7 +93,7 @@
   :body (fold (fn [acc x] (+ acc x)) 0 xs))
 
 ;; ── product-list : product of a list of numbers ──
-(defn product-list
+(defn product-list :verify checked
   :sig [(xs : List) -> i64]
   :intent "Multiply all elements in a list"
   :requires [(valid xs)]

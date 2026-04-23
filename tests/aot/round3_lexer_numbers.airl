@@ -1,6 +1,6 @@
 ;; EXPECT: 1:integer 0|2:integer 99|3:integer -7|4:float 3.14|5:float 0.5|6:symbol .|7:symbol -|8:integer 0|9:symbol +.|10:integer 9
 ;; DEPS: bootstrap/lexer.airl
-(defn lex-first-token
+(defn lex-first-token :verify checked
   :sig [(src : String) -> String]
   :requires [(valid src)]
   :ensures [(valid result)]

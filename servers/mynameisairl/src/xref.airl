@@ -5,7 +5,7 @@
 
 ;; ─── build-call-graph ────────────────────────────────────────────────
 ;; Build a reverse call graph: callee-name → List of caller symbol IDs.
-(defn build-call-graph
+(defn build-call-graph :verify checked
   :sig [(symbols : List) -> Map]
   :intent "Build reverse call graph mapping callee names to caller IDs"
   :requires [(valid symbols)]
@@ -25,7 +25,7 @@
 
 ;; ─── find-callers ────────────────────────────────────────────────────
 ;; Find all symbols that call a given function name.
-(defn find-callers
+(defn find-callers :verify checked
   :sig [(index : Map) (function-name : String) -> List]
   :intent "Find all symbols that call the given function"
   :requires [(valid index) (valid function-name)]
@@ -42,7 +42,7 @@
 
 ;; ─── find-callees ────────────────────────────────────────────────────
 ;; Find all functions called by a given function.
-(defn find-callees
+(defn find-callees :verify checked
   :sig [(index : Map) (function-name : String) -> List]
   :intent "Find all functions called by the given function"
   :requires [(valid index) (valid function-name)]
@@ -56,7 +56,7 @@
 ;; ─── dependency-graph ────────────────────────────────────────────────
 ;; Build file-level dependency graph.
 ;; Returns Map of file → List of files it depends on (calls functions from).
-(defn dependency-graph
+(defn dependency-graph :verify checked
   :sig [(index : Map) -> Map]
   :intent "Build file-level dependency map"
   :requires [(valid index)]
@@ -89,7 +89,7 @@
 ;; ─── blast-radius ────────────────────────────────────────────────────
 ;; Compute the transitive closure of callers for a function.
 ;; Returns a Map with "symbols" (affected symbol maps) and "files" (affected file list).
-(defn blast-radius
+(defn blast-radius :verify checked
   :sig [(index : Map) (function-name : String) -> Map]
   :intent "Compute transitive impact of changing a function"
   :requires [(valid index) (valid function-name)]
@@ -114,7 +114,7 @@
 
 ;; ─── blast-radius-walk ───────────────────────────────────────────────
 ;; BFS-style walk of the call graph to find all transitive callers.
-(defn blast-radius-walk
+(defn blast-radius-walk :verify checked
   :sig [(call-graph : Map) (worklist : List) (visited : List) -> List]
   :intent "Walk call graph transitively to find all affected symbols"
   :requires [(valid call-graph) (valid worklist) (valid visited)]
@@ -139,7 +139,7 @@
 
 ;; ─── extract-name-from-id ────────────────────────────────────────────
 ;; Extract the function name from a symbol ID like "file::name#kind".
-(defn extract-name-from-id
+(defn extract-name-from-id :verify checked
   :sig [(id : String) -> String]
   :intent "Extract function name from symbol ID"
   :requires [(valid id)]

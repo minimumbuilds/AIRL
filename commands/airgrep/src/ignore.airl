@@ -7,7 +7,7 @@
 
 ;; ── parse-gitignore-line : parse one gitignore line ──
 ;; Returns (Some rule-map) or (None) for comments/blanks.
-(defn parse-gitignore-line
+(defn parse-gitignore-line :verify checked
   :sig [(line : String) -> _]
   :requires [(valid line)]
   :ensures [(valid result)]
@@ -27,7 +27,7 @@
                                          "dir-only" dir-only "anchored" anchored])))))))))))
 
 ;; ── parse-gitignore-rules-rec : build rule list using cons ──
-(defn parse-gitignore-rules-rec
+(defn parse-gitignore-rules-rec :verify checked
   :sig [(line-list : List) (acc : List) -> List]
   :requires [(valid line-list)]
   :ensures [(valid result)]
@@ -39,14 +39,14 @@
               (None) (parse-gitignore-rules-rec (tail line-list) acc)))))
 
 ;; ── parse-gitignore : parse file content to list of rules ──
-(defn parse-gitignore
+(defn parse-gitignore :verify checked
   :sig [(content : String) -> List]
   :requires [(valid content)]
   :ensures [(valid result)]
   :body (parse-gitignore-rules-rec (lines content) []))
 
 ;; ── rule-matches : test if a path matches a single rule ──
-(defn rule-matches
+(defn rule-matches :verify checked
   :sig [(rule : _) (path : String) (is-dir : Bool) -> Bool]
   :requires [(valid rule) (valid path)]
   :ensures [(valid result)]
@@ -61,7 +61,7 @@
               (glob-match-path pattern path)))))
 
 ;; ── is-ignored-rec : check rules in order, last match wins ──
-(defn is-ignored-rec
+(defn is-ignored-rec :verify checked
   :sig [(rules : List) (path : String) (is-dir : Bool) (ignored : Bool) -> Bool]
   :requires [(valid rules)]
   :ensures [(valid result)]
@@ -74,14 +74,14 @@
               (is-ignored-rec (tail rules) path is-dir ignored)))))
 
 ;; ── is-ignored : test path against all rules (last match wins) ──
-(defn is-ignored
+(defn is-ignored :verify checked
   :sig [(rules : List) (path : String) (is-dir : Bool) -> Bool]
   :requires [(valid rules) (valid path)]
   :ensures [(valid result)]
   :body (is-ignored-rec rules path is-dir false))
 
 ;; ── load-gitignore : read .gitignore from a directory if it exists ──
-(defn load-gitignore
+(defn load-gitignore :verify checked
   :sig [(dir-path : String) -> List]
   :requires [(valid dir-path)]
   :ensures [(valid result)]
@@ -92,7 +92,7 @@
 
 ;; ── merge-ignore-rules : combine parent rules with new directory rules ──
 ;; Both lists must be cons-built; we rebuild combined with cons.
-(defn merge-rules-rec
+(defn merge-rules-rec :verify checked
   :sig [(to-add : List) (acc : List) -> List]
   :requires [(valid to-add)]
   :ensures [(valid result)]
@@ -100,7 +100,7 @@
           acc
           (merge-rules-rec (tail to-add) (cons (head to-add) acc))))
 
-(defn merge-ignore-rules
+(defn merge-ignore-rules :verify checked
   :sig [(parent-rules : List) (dir-path : String) -> List]
   :requires [(valid parent-rules) (valid dir-path)]
   :ensures [(valid result)]

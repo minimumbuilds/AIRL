@@ -1,5 +1,5 @@
 ;; ERROR: contract violated
-(defn positive
+(defn positive :verify checked
   :sig [(x : i32) -> i32]
   :intent "return positive"
   :requires [(> x 0)]

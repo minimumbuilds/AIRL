@@ -1,4 +1,4 @@
-(defn greet :pub
+(defn greet :pub :verify checked
   :sig [(name : String) -> String]
   :requires [(valid name)]
   :ensures [(valid result)]

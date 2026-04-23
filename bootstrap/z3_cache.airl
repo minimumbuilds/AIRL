@@ -12,7 +12,7 @@
 
 ;; ── AST stringification for hashing ─────────────────────────────────
 
-(defn z3c-stringify-ast
+(defn z3c-stringify-ast :verify checked
   :sig [(node : _) -> String]
   :intent "Stable string representation of an AST node for cache hashing"
   :requires [(valid node)]
@@ -35,7 +35,7 @@
                    (z3c-stringify-ast e) ")")
             _ (str node))))))
 
-(defn z3c-stringify-list
+(defn z3c-stringify-list :verify checked
   :sig [(nodes : List) -> String]
   :intent "Stringify a list of AST nodes separated by spaces"
   :requires [(valid nodes)]
@@ -48,7 +48,7 @@
         (str (z3c-stringify-ast (head nodes)) " "
              (z3c-stringify-list (tail nodes))))))
 
-(defn z3c-stringify-clauses
+(defn z3c-stringify-clauses :verify checked
   :sig [(clauses : _) -> String]
   :intent "Stringify a list of contract clauses, handling nil"
   :requires [(valid 1)]
@@ -60,7 +60,7 @@
 
 ;; ── Param serialization ─────────────────────────────────────────────
 
-(defn z3c-hash-params
+(defn z3c-hash-params :verify checked
   :sig [(params : List) (acc : String) -> String]
   :intent "Serialize ASTParam list to a stable string"
   :requires [(valid params)]
@@ -77,7 +77,7 @@
 
 ;; ── Hash computation ────────────────────────────────────────────────
 
-(defn z3c-compute-hash
+(defn z3c-compute-hash :verify checked
   :sig [(name : String) (params : List) (requires-list : _) (ensures-list : _) (body : _) -> String]
   :intent "Content-address a function's contracts + body via SHA-256"
   :requires [(valid name)]
@@ -99,7 +99,7 @@
 ;;   result-map : hash(String) -> result(String)   ("proven" / "unknown")
 ;;   name-map   : hash(String) -> fn-name(String)  (for file output)
 
-(defn z3c-make-empty
+(defn z3c-make-empty :verify checked
   :sig [-> List]
   :intent "Create an empty cache"
   :requires [(valid 1)]
@@ -108,7 +108,7 @@
 
 ;; ── Cache load ──────────────────────────────────────────────────────
 
-(defn z3c-parse-line
+(defn z3c-parse-line :verify checked
   :sig [(line : String) (rmap : _) (nmap : _) -> List]
   :intent "Parse one pipe-delimited cache line into updated maps"
   :requires [(valid line)]
@@ -125,7 +125,7 @@
                 [(map-set rmap hash result)
                  (map-set nmap hash name)])))))))
 
-(defn z3c-parse-lines
+(defn z3c-parse-lines :verify checked
   :sig [(lines : List) (rmap : _) (nmap : _) -> List]
   :intent "Parse all cache lines into result-map and name-map"
   :requires [(valid lines)]
@@ -136,7 +136,7 @@
       (let (updated : List (z3c-parse-line (head lines) rmap nmap))
         (z3c-parse-lines (tail lines) (at updated 0) (at updated 1)))))
 
-(defn z3c-load
+(defn z3c-load :verify checked
   :sig [(path : String) -> List]
   :intent "Load Z3 cache from pipe-delimited file, returns [result-map, name-map]"
   :requires [(valid path)]
@@ -150,7 +150,7 @@
 
 ;; ── Cache lookup ────────────────────────────────────────────────────
 
-(defn z3c-lookup
+(defn z3c-lookup :verify checked
   :sig [(cache : List) (hash : String) -> _]
   :intent "Look up hash in cache, returns result string or nil"
   :requires [(valid cache)]
@@ -161,7 +161,7 @@
 
 ;; ── Cache put ───────────────────────────────────────────────────────
 
-(defn z3c-put
+(defn z3c-put :verify checked
   :sig [(cache : List) (hash : String) (name : String) (result : String) -> List]
   :intent "Add entry to cache, returns updated cache. Skips disproven results."
   :requires [(valid cache)]
@@ -175,7 +175,7 @@
 
 ;; ── Cache save ──────────────────────────────────────────────────────
 
-(defn z3c-build-lines-acc
+(defn z3c-build-lines-acc :verify checked
   :sig [(keys : List) (rmap : _) (nmap : _) (acc : String) -> String]
   :intent "Build pipe-delimited cache file content"
   :requires [(valid keys)]
@@ -192,7 +192,7 @@
                   line
                   (str acc "\n" line)))))))))
 
-(defn z3c-save
+(defn z3c-save :verify checked
   :sig [(path : String) (cache : List) -> _]
   :intent "Write cache to pipe-delimited file"
   :requires [(valid path)]
@@ -210,7 +210,7 @@
 ;; Mirrors z3-verify-ast but checks cache before calling Z3.
 ;; Returns [proof-map, updated-cache, hits, misses].
 
-(defn z3c-verify-defn-cached
+(defn z3c-verify-defn-cached :verify checked
   :sig [(node : _) (cache : List) -> _]
   :intent "Verify a single defn with cache check. Returns [name verdict updated-cache hit?] or nil."
   :requires [(valid node)]
@@ -233,7 +233,7 @@
                 _ nil))))
       _ nil))
 
-(defn z3c-verify-with-cache
+(defn z3c-verify-with-cache :verify checked
   :sig [(name : String) (params : List) (req-list : List) (ens-list : List) (body : _) (cache : List) -> _]
   :intent "Check cache for function, fall back to Z3 on miss"
   :requires [(valid name)]
@@ -252,7 +252,7 @@
 
 ;; ── Main entry point: verify all AST nodes with caching ─────────────
 
-(defn z3c-verify-ast-nodes-cached
+(defn z3c-verify-ast-nodes-cached :verify checked
   :sig [(nodes : List) (proof-map : _) (cache : List) (hits : Int) (misses : Int) -> _]
   :intent "Walk AST nodes, verify contracts with cache, return [proof-map cache hits misses]"
   :requires [(valid nodes)]
@@ -281,7 +281,7 @@
                 (at inner 0) (at inner 1) (at inner 2) (at inner 3)))
           _ (z3c-verify-ast-nodes-cached (tail nodes) proof-map cache hits misses)))))
 
-(defn z3c-verify-ast-cached
+(defn z3c-verify-ast-cached :verify checked
   :sig [(nodes : List) (cache : List) -> _]
   :intent "Entry point: verify all contracts with cache. Returns [proof-map updated-cache hits misses]."
   :requires [(valid nodes)]

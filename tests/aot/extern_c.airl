@@ -8,7 +8,7 @@
     (println "FAIL: airl_time_now returned non-positive")))
 
 ;; Test 2: Verify normal defn still works alongside extern-c
-(defn my-add :sig [(a : Int) (b : Int) -> Int]
+(defn my-add :verify checked :sig [(a : Int) (b : Int) -> Int]
   :requires ((>= a 0))
   :ensures ((>= %result 0))
   :body (+ a b))

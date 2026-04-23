@@ -4,7 +4,7 @@
 
 ;; ─── Builtin Type Environment ────────────────────────
 
-(defn bind-builtins
+(defn bind-builtins :verify checked
   :sig [(env : List) (entries : List) -> List]
   :intent "Bind a flat list of [name type name type ...] entries into env"
   :requires [(valid env)]
@@ -16,7 +16,7 @@
           (type-env-bind env (head entries) (at entries 1))
           (drop 2 entries)))))
 
-(defn make-builtin-env
+(defn make-builtin-env :verify checked
   :sig [(_u : i64) -> List]
   :intent "Create a type environment pre-populated with all typed builtins"
   :requires [(valid _u)]
@@ -319,7 +319,7 @@
 
 ;; ─── Core Expression Type Checking ──────────────────
 
-(defn check-expr
+(defn check-expr :verify checked
   :sig [(node : List) (env : List) (reg : List) -> List]
   :intent "Type-check an AST expression node, return (Ok type) or (Err msg)"
   :requires [(valid node)]
@@ -428,7 +428,7 @@
 
 ;; ─── Helper Functions ────────────────────────────────
 
-(defn check-let-bindings
+(defn check-let-bindings :verify checked
   :sig [(bindings : List) (env : List) (reg : List) -> List]
   :intent "Type-check let bindings sequentially, threading the type env"
   :requires [(valid bindings)]
@@ -448,7 +448,7 @@
                     (Err (join ["let binding '" name "': value type incompatible with declared type " type-name] "")))))
         _ (Err "invalid let binding"))))
 
-(defn check-do-exprs
+(defn check-do-exprs :verify checked
   :sig [(exprs : List) (env : List) (reg : List) -> List]
   :intent "Type-check a sequence of do-block expressions, return type of last"
   :requires [(valid exprs)]
@@ -462,14 +462,14 @@
             (Ok ty)
             (check-do-exprs (tail exprs) env reg)))))
 
-(defn check-args
+(defn check-args :verify checked
   :sig [(args : List) (env : List) (reg : List) -> List]
   :intent "Type-check argument list, return (Ok type-list) or (Err msg)"
   :requires [(valid args)]
   :ensures [(valid result)]
   :body (check-args-acc args env reg []))
 
-(defn check-args-acc
+(defn check-args-acc :verify checked
   :sig [(args : List) (env : List) (reg : List) (acc : List) -> List]
   :intent "Accumulate checked argument types"
   :requires [(valid args)]
@@ -480,7 +480,7 @@
         (Err e) (Err e)
         (Ok ty) (check-args-acc (tail args) env reg (cons ty acc)))))
 
-(defn check-arg-types
+(defn check-arg-types :verify checked
   :sig [(actual : List) (expected : List) -> Bool]
   :intent "Check if actual argument types are compatible with expected parameter types"
   :requires [(valid actual)]
@@ -492,7 +492,7 @@
           (check-arg-types (tail actual) (tail expected))
           false))))
 
-(defn bind-lambda-params
+(defn bind-lambda-params :verify checked
   :sig [(env : List) (params : List) -> List]
   :intent "Bind lambda parameter names with TyVar types"
   :requires [(valid env)]
@@ -501,7 +501,7 @@
     (if (empty? params) env
       (bind-lambda-params (type-env-bind env (head params) (TyVar (head params))) (tail params))))
 
-(defn check-match-arms
+(defn check-match-arms :verify checked
   :sig [(arms : List) (scr-ty : List) (env : List) (reg : List) -> List]
   :intent "Type-check match arms, verify all have compatible result types"
   :requires [(valid arms)]
@@ -525,7 +525,7 @@
                           (Ok (TyVar "match-result")))))))
         _ (Err "invalid match arm"))))
 
-(defn bind-pattern-vars
+(defn bind-pattern-vars :verify checked
   :sig [(env : List) (pattern : List) (scr-ty : List) -> List]
   :intent "Bind variables from a pattern into the type environment"
   :requires [(valid env)]
@@ -538,7 +538,7 @@
       (bind-variant-pattern-vars env sub-pats)
     _ env))
 
-(defn bind-variant-pattern-vars
+(defn bind-variant-pattern-vars :verify checked
   :sig [(env : List) (sub-pats : List) -> List]
   :intent "Bind sub-pattern variables from a variant pattern"
   :requires [(valid env)]
@@ -550,7 +550,7 @@
 
 ;; ─── Top-Level and Program Checking ─────────────────
 
-(defn check-fn
+(defn check-fn :verify checked
   :sig [(node : List) (env : List) (reg : List) -> List]
   :intent "Type-check a function definition, return (Ok [fn-type env]) or (Err msg)"
   :requires [(valid node)]
@@ -582,7 +582,7 @@
         _ (Err "defn requires a sig"))
     _ (Err "check-fn: not a defn")))
 
-(defn bind-fn-params
+(defn bind-fn-params :verify checked
   :sig [(env : List) (params : List) (reg : List) (acc : List) -> List]
   :intent "Bind function parameters into env and collect their types"
   :requires [(valid env)]
@@ -597,7 +597,7 @@
               (bind-fn-params (type-env-bind env name ty) (tail params) reg (cons ty acc)))
         _ (Err "invalid parameter"))))
 
-(defn check-top-level
+(defn check-top-level :verify checked
   :sig [(node : List) (env : List) (reg : List) -> List]
   :intent "Type-check a top-level node, return (Ok [type env reg]) or (Err msg)"
   :requires [(valid node)]
@@ -615,7 +615,7 @@
         (Err e) (Err e)
         (Ok ty) (Ok [ty env reg]))))
 
-(defn register-deftype
+(defn register-deftype :verify checked
   :sig [(name : String) (params : List) (body : List) (reg : List) -> List]
   :intent "Register a deftype declaration in the type registry"
   :requires [(valid name)]
@@ -630,7 +630,7 @@
           (registry-add-ctor reg name (CtorInfo name (map (fn [f] (TyVar "_")) fields)))
         _ reg)))
 
-(defn register-sum-ctors
+(defn register-sum-ctors :verify checked
   :sig [(variants : List) (parent : String) (reg : List) -> List]
   :intent "Register all constructors from a sum type"
   :requires [(valid variants)]
@@ -644,7 +644,7 @@
               (registry-add-ctor reg vname (CtorInfo parent ftys))))
         _ (register-sum-ctors (tail variants) parent reg))))
 
-(defn make-prelude-registry
+(defn make-prelude-registry :verify checked
   :sig [(_u : i64) -> List]
   :intent "Create a registry with standard prelude types (Result, Option)"
   :requires [(valid _u)]
@@ -663,7 +663,7 @@
 ;; Pass 1: Register all function signatures and deftypes
 ;; Pass 2: Check all function bodies and expressions
 
-(defn register-fn-sig
+(defn register-fn-sig :verify checked
   :sig [(node : List) (env : List) (reg : List) -> List]
   :intent "Pre-register a function's type signature without checking the body"
   :requires [(valid node)]
@@ -685,7 +685,7 @@
       (Ok [env (register-deftype name params body reg)])
     _ (Ok [env reg])))
 
-(defn bind-fn-param-types
+(defn bind-fn-param-types :verify checked
   :sig [(params : List) (reg : List) (acc : List) -> List]
   :intent "Resolve parameter types without binding into env"
   :requires [(valid params)]
@@ -699,7 +699,7 @@
             (Ok ty) (bind-fn-param-types (tail params) reg (cons ty acc)))
         _ (Err "invalid parameter"))))
 
-(defn register-all-top-levels
+(defn register-all-top-levels :verify checked
   :sig [(nodes : List) (env : List) (reg : List) -> List]
   :intent "Pass 1: register all function sigs and deftypes"
   :requires [(valid nodes)]
@@ -711,14 +711,14 @@
         (Ok result)
           (register-all-top-levels (tail nodes) (at result 0) (at result 1)))))
 
-(defn check-all-top-levels
+(defn check-all-top-levels :verify checked
   :sig [(nodes : List) (env : List) (reg : List) -> List]
   :intent "Pass 2: type-check all top-level nodes, collecting all errors"
   :requires [(valid nodes)]
   :ensures [(valid result)]
   :body (check-all-top-levels-acc nodes env reg []))
 
-(defn check-all-top-levels-acc
+(defn check-all-top-levels-acc :verify checked
   :sig [(nodes : List) (env : List) (reg : List) (errors : List) -> List]
   :intent "Accumulate type errors across all top-level nodes"
   :requires [(valid nodes)]
@@ -733,7 +733,7 @@
         (Ok result)
           (check-all-top-levels-acc (tail nodes) (at result 1) (at result 2) errors))))
 
-(defn type-check-program
+(defn type-check-program :verify checked
   :sig [(nodes : List) (env : List) (reg : List) -> List]
   :intent "Two-pass type-check: register all sigs, then check all bodies"
   :requires [(valid nodes)]

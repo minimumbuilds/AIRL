@@ -1,5 +1,5 @@
 ;; EXPECT: 1:1|2:1|3:2|4:6|5:24
-(defn fact
+(defn fact :verify checked
   :sig [(n : i64) -> i64]
   :requires [(valid n)]
   :ensures [(valid result)]

@@ -9,7 +9,7 @@
 ;; Internal helper: accumulate values indexed by key list.
 ;; Uses explicit recursion instead of map+lambda to work around AOT
 ;; MakeClosure compilation bug with inline lambdas passed to map.
-(defn map-values-loop
+(defn map-values-loop :verify checked
   :sig [(m : _) (ks : List) (i : i64) (len : i64) (acc : List) -> List]
   :requires [(>= i 0)]
   :ensures [(valid result)]
@@ -18,7 +18,7 @@
       acc
       (map-values-loop m ks (+ i 1) len (concat acc [(map-get m (at ks i))]))))
 
-(defn map-values
+(defn map-values :verify checked
   :sig [(m : _) -> List]
   :intent "Get all values from a map as a list"
   :requires [(valid m)]
@@ -28,7 +28,7 @@
       (map-values-loop m ks 0 (length ks) [])))
 
 ;; ── map-size : number of entries in the map ──
-(defn map-size
+(defn map-size :verify checked
   :sig [(m : _) -> i64]
   :intent "Get the number of entries in a map"
   :requires [(valid m)]
@@ -36,7 +36,7 @@
   :body (length (map-keys m)))
 
 ;; ── map-get-or : get value for key with default ──
-(defn map-get-or
+(defn map-get-or :verify checked
   :sig [(m : _) (key : String) (default : _) -> _]
   :intent "Get value for key, or return default if key absent"
   :requires [(valid m)]
@@ -44,7 +44,7 @@
   :body (if (map-has m key) (map-get m key) default))
 
 ;; ── map-from : create map from flat [k v k v ...] list ──
-(defn map-from-pairs-loop
+(defn map-from-pairs-loop :verify checked
   :sig [(lst : List) (i : i64) (len : i64) (acc : _) -> _]
   :intent "Build map from alternating key-value pairs"
   :requires [(>= i 0)]
@@ -54,7 +54,7 @@
           (map-from-pairs-loop lst (+ i 2) len
             (map-set acc (at lst i) (at lst (+ i 1))))))
 
-(defn map-from
+(defn map-from :verify checked
   :sig [(lst : List) -> _]
   :intent "Create a map from a flat list of alternating keys and values"
   :requires [(valid lst)]
@@ -64,7 +64,7 @@
 ;; ── map-entries : get list of [key value] pairs ──
 ;; Internal helper: accumulate [k v] pairs indexed by key list.
 ;; Uses explicit recursion instead of map+lambda (same AOT workaround as map-values).
-(defn map-entries-loop
+(defn map-entries-loop :verify checked
   :sig [(m : _) (ks : List) (i : i64) (len : i64) (acc : List) -> List]
   :requires [(>= i 0)]
   :ensures [(valid result)]
@@ -74,7 +74,7 @@
       (let (k : _ (at ks i))
         (map-entries-loop m ks (+ i 1) len (concat acc [[k (map-get m k)]])))))
 
-(defn map-entries
+(defn map-entries :verify checked
   :sig [(m : _) -> List]
   :intent "Get all entries as a list of [key value] pairs"
   :requires [(valid m)]
@@ -86,7 +86,7 @@
 ;; ── map-from-entries : create map from list of [key value] pairs ──
 ;; Internal helper: loop over entries list accumulating into a map.
 ;; Avoids fold+lambda which triggers AOT MakeClosure compilation failure.
-(defn map-from-entries-loop
+(defn map-from-entries-loop :verify checked
   :sig [(entries : List) (i : i64) (len : i64) (acc : _) -> _]
   :requires [(>= i 0)]
   :ensures [(valid result)]
@@ -97,7 +97,7 @@
         (map-from-entries-loop entries (+ i 1) len
           (map-set acc (head pair) (at pair 1))))))
 
-(defn map-from-entries
+(defn map-from-entries :verify checked
   :sig [(entries : List) -> _]
   :intent "Create a map from a list of [key value] pairs"
   :requires [(valid entries)]
@@ -105,7 +105,7 @@
   :body (map-from-entries-loop entries 0 (length entries) (map-new)))
 
 ;; ── map-merge : merge two maps (second wins on conflict) ──
-(defn map-merge
+(defn map-merge :verify checked
   :sig [(m1 : _) (m2 : _) -> _]
   :intent "Merge two maps, m2 values overwrite m1 on key conflict"
   :requires [(valid m1)]
@@ -114,7 +114,7 @@
 
 ;; ── map-map-values : apply function to all values ──
 ;; Internal helper: loop over entries accumulating transformed values.
-(defn map-map-values-loop
+(defn map-map-values-loop :verify checked
   :sig [(transform : fn) (entries : List) (i : i64) (len : i64) (acc : _) -> _]
   :requires [(>= i 0) (valid transform)]
   :ensures [(valid result)]
@@ -125,7 +125,7 @@
         (map-map-values-loop transform entries (+ i 1) len
           (map-set acc (head pair) (transform (at pair 1)))))))
 
-(defn map-map-values
+(defn map-map-values :verify checked
   :sig [(transform : fn) (m : _) -> _]
   :intent "Apply transform to every value in the map, keeping keys"
   :requires [(valid transform)]
@@ -136,7 +136,7 @@
 
 ;; ── map-filter : keep entries where predicate is true ──
 ;; Internal helper: loop over entries accumulating matching pairs.
-(defn map-filter-loop
+(defn map-filter-loop :verify checked
   :sig [(pred-fn : fn) (entries : List) (i : i64) (len : i64) (acc : _) -> _]
   :requires [(>= i 0) (valid pred-fn)]
   :ensures [(valid result)]
@@ -149,7 +149,7 @@
             (map-filter-loop pred-fn entries (+ i 1) len
               (if (pred-fn k v) (map-set acc k v) acc)))))))
 
-(defn map-filter
+(defn map-filter :verify checked
   :sig [(pred-fn : fn) (m : _) -> _]
   :intent "Keep entries where pred-fn(key, value) returns true"
   :requires [(valid pred-fn)]
@@ -159,7 +159,7 @@
       (map-filter-loop pred-fn entries 0 (length entries) (map-new))))
 
 ;; ── map-update : update a single key with a function ──
-(defn map-update
+(defn map-update :verify checked
   :sig [(m : _) (key : String) (updater : fn) -> _]
   :intent "Apply updater to the value at key, or do nothing if key absent"
   :requires [(valid updater)]
@@ -169,7 +169,7 @@
           m))
 
 ;; ── map-update-or : update a key with a function, using default if absent ──
-(defn map-update-or
+(defn map-update-or :verify checked
   :sig [(m : _) (key : String) (default : _) (updater : fn) -> _]
   :intent "Apply updater to value at key, or set to (updater default) if absent"
   :requires [(valid updater)]
@@ -178,7 +178,7 @@
 
 ;; ── map-count : count entries matching predicate ──
 ;; Internal helper: loop over entries counting matches.
-(defn map-count-loop
+(defn map-count-loop :verify checked
   :sig [(pred-fn : fn) (entries : List) (i : i64) (len : i64) (acc : i64) -> i64]
   :requires [(>= i 0) (valid pred-fn)]
   :ensures [(>= result 0)]
@@ -189,7 +189,7 @@
         (map-count-loop pred-fn entries (+ i 1) len
           (if (pred-fn (head pair) (at pair 1)) (+ acc 1) acc)))))
 
-(defn map-count
+(defn map-count :verify checked
   :sig [(pred-fn : fn) (m : _) -> i64]
   :intent "Count entries where pred-fn(key, value) returns true"
   :requires [(valid pred-fn)]

@@ -1,13 +1,13 @@
 ;; tools.airl — Tool registry with auto-discovery for Forge
 
-(defn identity
+(defn identity :verify checked
   :sig [(x : _) -> _]
   :intent "Return x unchanged"
   :requires [(valid x)]
   :ensures [(valid result)]
   :body x)
 
-(defn make-tool
+(defn make-tool :verify checked
   :sig [(meta : Map) (handler : _) -> Map]
   :intent "Build a tool map from fn-metadata and a handler closure"
   :requires [(map-has meta "name")]
@@ -25,14 +25,14 @@
                "param-names" tool-param-names
                "param-types" tool-param-types])))
 
-(defn make-registry
+(defn make-registry :verify checked
   :sig [-> Map]
   :intent "Create an empty tool registry"
   :requires [(valid true)]
   :ensures [(valid result)]
   :body (map-new))
 
-(defn register-tool
+(defn register-tool :verify checked
   :sig [(registry : Map) (tool : Map) -> Map]
   :intent "Add a tool to the registry keyed by tool name"
   :requires [(map-has tool "name")]
@@ -41,7 +41,7 @@
   (let (tool-name : _ (map-get tool "name"))
     (map-set registry tool-name tool)))
 
-(defn register-fn
+(defn register-fn :verify checked
   :sig [(registry : Map) (fn-name : String) (handler : _) -> _]
   :intent "Auto-discover fn metadata by name and register as a tool"
   :requires [(not (= fn-name ""))]
@@ -54,7 +54,7 @@
         (let (tool : _ (make-tool meta handler))
           (Ok (register-tool registry tool))))))
 
-(defn lookup-tool
+(defn lookup-tool :verify checked
   :sig [(registry : Map) (name : String) -> _]
   :intent "Find a tool by name; returns Ok(tool) or Err if not found"
   :requires [(valid registry) (not (= name ""))]
@@ -64,14 +64,14 @@
     (Ok (map-get registry name))
     (Err (str "tool not found: " name))))
 
-(defn list-tools
+(defn list-tools :verify checked
   :sig [(registry : Map) -> List]
   :intent "Return a list of all registered tool names"
   :requires [(valid registry)]
   :ensures [(valid result)]
   :body (map-keys registry))
 
-(defn tool-schemas
+(defn tool-schemas :verify checked
   :sig [(registry : Map) -> List]
   :intent "Return a list of JSON schemas for all tools in the registry"
   :requires [(valid registry)]
@@ -82,7 +82,7 @@
            (map-get tool "schema")))
        (map-keys registry)))
 
-(defn call-tool
+(defn call-tool :verify checked
   :sig [(registry : Map) (name : String) (args : List) -> _]
   :intent "Look up a tool by name and invoke its handler with args"
   :requires [(valid registry) (not (= name ""))]

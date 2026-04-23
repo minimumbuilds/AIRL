@@ -6,7 +6,7 @@
 ;; ── Internal helpers ─────────────────────────────────────────────────
 
 ;; rnd-nibble-to-char: 0–15 → single lowercase hex char string
-(defn rnd-nibble-to-char
+(defn rnd-nibble-to-char :verify checked
   :sig [(n : i64) -> String]
   :intent "Convert 0-15 to a single hex character string"
   :requires [(>= n 0) (<= n 15)]
@@ -17,7 +17,7 @@
 
 ;; rnd-hex-nibble-val: single hex char string → 0–15
 ;; Accepts '0'-'9', 'a'-'f', 'A'-'F'
-(defn rnd-hex-nibble-val
+(defn rnd-hex-nibble-val :verify checked
   :sig [(c : String) -> i64]
   :intent "Parse a single hex character to its integer value 0-15"
   :requires [(valid c)]
@@ -33,7 +33,7 @@
 ;; rnd-hex-pair-to-byte: parse pair of hex chars at pair index i
 ;; e.g. hex="a1b2", i=0 → 161, i=1 → 178
 ;; NOTE: bindings are nested because hi/lo depend on ci.
-(defn rnd-hex-pair-to-byte
+(defn rnd-hex-pair-to-byte :verify checked
   :sig [(hex : String) (i : i64) -> i64]
   :intent "Decode one byte (two hex chars) from hex string at pair index i"
   :requires [(>= i 0)]
@@ -45,7 +45,7 @@
         (+ (* hi 16) lo))))
 
 ;; rnd-hex-to-bytes: decode hex string to IntList (list of 0-255 values)
-(defn rnd-hex-to-bytes
+(defn rnd-hex-to-bytes :verify checked
   :sig [(hex : String) (i : i64) (n : i64) -> List]
   :intent "Decode all n bytes from a 2n-char hex string into a List of ints"
   :requires [(>= i 0)]
@@ -56,7 +56,7 @@
       (cons (rnd-hex-pair-to-byte hex i) (rnd-hex-to-bytes hex (+ i 1) n))))
 
 ;; rnd-ts-nibble: extract nibble k (0=MSN of 48-bit ts, 11=LSN) as hex char
-(defn rnd-ts-nibble
+(defn rnd-ts-nibble :verify checked
   :sig [(ts : i64) (k : i64) -> String]
   :intent "Extract the k-th nibble from the low 48 bits of ts as a hex char"
   :requires [(>= k 0) (<= k 11)]
@@ -65,7 +65,7 @@
     (rnd-nibble-to-char (bitwise-and (bitwise-shr ts (* (- 11 k) 4)) 15)))
 
 ;; rnd-int-to-hex-12: encode the low 48 bits of an i64 as 12 hex chars
-(defn rnd-int-to-hex-12
+(defn rnd-int-to-hex-12 :verify checked
   :sig [(ts : i64) -> String]
   :intent "Format the low 48 bits of ts as a 12-character lowercase hex string"
   :requires [(valid ts)]
@@ -81,7 +81,7 @@
 ;; ── Base64url encoding (RFC 4648 §5, no padding) ─────────────────────
 
 ;; rnd-b64url-char: map 6-bit index to base64url character
-(defn rnd-b64url-char
+(defn rnd-b64url-char :verify checked
   :sig [(n : i64) -> String]
   :intent "Map a 6-bit value (0-63) to its base64url character"
   :requires [(>= n 0) (<= n 63)]
@@ -98,7 +98,7 @@
             "_")))))
 
 ;; rnd-b64url-triple: encode 3 bytes into 4 base64url characters
-(defn rnd-b64url-triple
+(defn rnd-b64url-triple :verify checked
   :sig [(a : i64) (b : i64) (c : i64) -> String]
   :intent "Encode 3 bytes into 4 base64url characters (no padding)"
   :requires [(>= a 0) (>= b 0) (>= c 0)]
@@ -111,7 +111,7 @@
                 (rnd-b64url-char (% n 64))))))
 
 ;; rnd-b64url-loop: encode a byte list to base64url string, no padding
-(defn rnd-b64url-loop
+(defn rnd-b64url-loop :verify checked
   :sig [(bytes : List) (i : i64) (len : i64) -> String]
   :intent "Encode byte list to base64url string, no padding"
   :requires [(>= i 0)]
@@ -141,7 +141,7 @@
 ;; ── Public API ────────────────────────────────────────────────────────
 
 ;; random-hex: hex string of n cryptographically random bytes (alias for random-bytes)
-(defn random-hex
+(defn random-hex :verify checked
   :sig [(n : i64) -> String]
   :intent "Return a lowercase hex string of n cryptographically random bytes"
   :requires [(>= n 0)]
@@ -150,7 +150,7 @@
 
 ;; random-url-token: base64url-encoded n random bytes, no padding
 ;; NOTE: nested let because byte-list depends on hex.
-(defn random-url-token
+(defn random-url-token :verify checked
   :sig [(n : i64) -> String]
   :intent "Return n cryptographically random bytes encoded as base64url (no padding)"
   :requires [(>= n 0)]
@@ -164,7 +164,7 @@
 ;; Sets version nibble (position 12) to '4' and variant nibble (position 16)
 ;; to one of {'8','9','a','b'} (binary 10xx variant).
 ;; NOTE: nested lets because var-nibble depends on raw, var-char depends on var-nibble.
-(defn uuid-v4
+(defn uuid-v4 :verify checked
   :sig [-> String]
   :intent "Generate a random UUID v4 (RFC 4122) string"
   :requires [(valid result)]
@@ -189,7 +189,7 @@
 ;;   [17..20] = 12 more random bits
 ;;   [20..32] = 48 more random bits
 ;; NOTE: uses nested lets throughout due to multi-bind dependency rule.
-(defn uuid-v7
+(defn uuid-v7 :verify checked
   :sig [-> String]
   :intent "Generate a time-ordered UUID v7 (RFC 9562) string"
   :requires [(valid result)]

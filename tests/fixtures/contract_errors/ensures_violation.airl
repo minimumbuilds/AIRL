@@ -2,7 +2,7 @@
 ;; The requires clause uses (valid x) which Z3 cannot translate, so all
 ;; contract clauses fall back to runtime checking. At runtime, x = 0
 ;; makes (> result 0) false, triggering an ensures violation.
-(defn positive-result
+(defn positive-result :verify checked
   :sig [(x : i32) -> i32]
   :intent "return a positive value"
   :requires [(valid x)]

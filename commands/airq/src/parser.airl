@@ -3,28 +3,28 @@
 ;; Each parse function returns [AST remaining-tokens].
 
 ;; ── tok-type : get type of current token ──
-(defn tok-type
+(defn tok-type :verify checked
   :sig [(tokens : List) -> String]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
   :body (map-get (head tokens) "type"))
 
 ;; ── tok-val : get value of current token ──
-(defn tok-val
+(defn tok-val :verify checked
   :sig [(tokens : List) -> _]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
   :body (map-get-or (head tokens) "value" nil))
 
 ;; ── advance : drop first token ──
-(defn advance
+(defn advance :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
   :body (tail tokens))
 
 ;; ── expect : consume a token of given type or error ──
-(defn expect
+(defn expect :verify checked
   :sig [(tokens : List) (expected : String) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -34,7 +34,7 @@
             (exit 2))))
 
 ;; ── parse-dot-bracket : parse .[0], .[], .[2:5] ──
-(defn parse-dot-bracket
+(defn parse-dot-bracket :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -58,7 +58,7 @@
             [(map-from ["type" "iterate"]) (expect tokens "rbracket")])))))
 
 ;; ── parse-funcall-args : parse function arguments f(a; b; c) ──
-(defn parse-funcall-args
+(defn parse-funcall-args :verify checked
   :sig [(name : String) (tokens : List) -> List]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -70,7 +70,7 @@
             (parse-funcall-rest name [first-arg] rest))))
 
 ;; ── parse-funcall-rest : collect remaining semicolon-separated args ──
-(defn parse-funcall-rest
+(defn parse-funcall-rest :verify checked
   :sig [(name : String) (args : List) (tokens : List) -> List]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -84,7 +84,7 @@
             [(map-from ["type" "funcall" "name" name "args" args]) tokens])))
 
 ;; ── parse-object : parse {key: value, ...} ──
-(defn parse-object
+(defn parse-object :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -93,7 +93,7 @@
           (parse-object-pairs tokens [])))
 
 ;; ── parse-object-key : parse a key in object construction ──
-(defn parse-object-key
+(defn parse-object-key :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -105,7 +105,7 @@
             (parse-pipe tokens)))))
 
 ;; ── parse-object-pairs : collect key-value pairs ──
-(defn parse-object-pairs
+(defn parse-object-pairs :verify checked
   :sig [(tokens : List) (pairs : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -123,7 +123,7 @@
             [(map-from ["type" "object" "pairs" new-pairs]) (expect rest3 "rbrace")])))
 
 ;; ── parse-if-expr : parse if COND then THEN (elif|else) end ──
-(defn parse-if-expr
+(defn parse-if-expr :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -145,7 +145,7 @@
             [(map-from ["type" "if" "cond" cond-ast "then" then-ast "else" (map-from ["type" "identity"])]) (expect rest2 "end")]))))
 
 ;; ── parse-try-expr : parse try EXPR (catch EXPR)? ──
-(defn parse-try-expr
+(defn parse-try-expr :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -158,7 +158,7 @@
             [(map-from ["type" "try" "expr" expr-ast "catch" (map-from ["type" "funcall" "name" "empty" "args" []])]) rest])))
 
 ;; ── parse-def-expr : parse def NAME(params): BODY; REST ──
-(defn parse-def-expr
+(defn parse-def-expr :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -182,7 +182,7 @@
               [(map-from ["type" "def" "name" name "params" [] "body" body-ast "next" (head next-result)]) (at next-result 1)]))))
 
 ;; ── parse-def-params : parse f(a; b; c) parameter names ──
-(defn parse-def-params
+(defn parse-def-params :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -198,7 +198,7 @@
                 [[name] rest])))))
 
 ;; ── parse-primary-dot : handle dot token ──
-(defn parse-primary-dot
+(defn parse-primary-dot :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -215,7 +215,7 @@
                 [(map-from ["type" "identity"]) rest])))))))
 
 ;; ── parse-primary-group2 : handle lbrace/if/try/def/at/not/minus/ident ──
-(defn parse-primary-group2
+(defn parse-primary-group2 :verify checked
   :sig [(tt : String) (tokens : List) -> List]
   :requires [(valid tt)]
   :ensures [(valid result)]
@@ -245,7 +245,7 @@
             (exit 2)))))))))))
 
 ;; ── parse-primary : parse primary expressions ──
-(defn parse-primary
+(defn parse-primary :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -276,7 +276,7 @@
             (parse-primary-group2 tt tokens))))))))))
 
 ;; ── parse-postfix-loop : consume postfix operators ──
-(defn parse-postfix-loop
+(defn parse-postfix-loop :verify checked
   :sig [(ast : _) (tokens : List) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -341,7 +341,7 @@
               [ast tokens])))))))
 
 ;; ── parse-postfix : parse postfix operators ──
-(defn parse-postfix
+(defn parse-postfix :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -349,7 +349,7 @@
           (parse-postfix-loop (head result) (at result 1))))
 
 ;; ── parse-arith-loop : left-to-right arithmetic ──
-(defn parse-arith-loop
+(defn parse-arith-loop :verify checked
   :sig [(left : _) (tokens : List) -> List]
   :requires [(valid left)]
   :ensures [(valid result)]
@@ -371,7 +371,7 @@
             [left tokens])))
 
 ;; ── parse-arith : parse arithmetic ──
-(defn parse-arith
+(defn parse-arith :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -379,7 +379,7 @@
           (parse-arith-loop (head result) (at result 1))))
 
 ;; ── is-comparison-op : check if current token is a comparison ──
-(defn is-comparison-op
+(defn is-comparison-op :verify checked
   :sig [(tokens : List) -> Bool]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -394,7 +394,7 @@
           false))
 
 ;; ── parse-compare : parse comparison operators ──
-(defn parse-compare
+(defn parse-compare :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -408,7 +408,7 @@
             [left rest])))
 
 ;; ── parse-not-expr : parse 'not' (treated as identity negation) ──
-(defn parse-not-expr
+(defn parse-not-expr :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -418,7 +418,7 @@
           (parse-compare tokens)))
 
 ;; ── parse-and : parse 'and' expressions ──
-(defn parse-and
+(defn parse-and :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -431,7 +431,7 @@
             [left rest])))
 
 ;; ── parse-or : parse 'or' expressions ──
-(defn parse-or
+(defn parse-or :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -444,7 +444,7 @@
             [left rest])))
 
 ;; ── parse-comma : parse comma expressions ──
-(defn parse-comma
+(defn parse-comma :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -457,7 +457,7 @@
             [left rest])))
 
 ;; ── parse-pipe : parse pipe expressions (lowest precedence) ──
-(defn parse-pipe
+(defn parse-pipe :verify checked
   :sig [(tokens : List) -> List]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]
@@ -470,7 +470,7 @@
             [left rest])))
 
 ;; ── parse : main entry point ──
-(defn parse
+(defn parse :verify checked
   :sig [(tokens : List) -> _]
   :requires [(not (empty? tokens))]
   :ensures [(valid result)]

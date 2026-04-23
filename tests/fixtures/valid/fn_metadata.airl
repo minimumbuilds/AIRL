@@ -1,5 +1,5 @@
 ;; EXPECT: ()
-(defn add-nums
+(defn add-nums :verify checked
   :sig [(a : i64) (b : i64) -> i64]
   :intent "Add two numbers together"
   :requires [(valid a) (valid b)]

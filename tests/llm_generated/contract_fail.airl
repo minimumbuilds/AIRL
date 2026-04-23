@@ -1,7 +1,7 @@
 ;; LLM-generated AIRL: contract violation at runtime
 ;; The requires clause (> x 0) should reject x = -5
 
-(defn positive-only
+(defn positive-only :verify checked
   :sig [(x : i64) -> i64]
   :intent "Returns x, but requires it to be positive"
   :requires [(> x 0)]

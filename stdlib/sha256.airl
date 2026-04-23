@@ -8,35 +8,35 @@
 
 ;; ── 32-bit unsigned arithmetic helpers ──
 
-(defn u32
+(defn u32 :verify checked
   :sig [(x : i64) -> i64]
   :intent "Mask value to 32 bits"
   :requires [(valid x)]
   :ensures [(>= result 0) (<= result 4294967295)]
   :body (bitwise-and x 4294967295))
 
-(defn u32-rotr
+(defn u32-rotr :verify checked
   :sig [(x : i64) (n : i64) -> i64]
   :intent "32-bit right rotate"
   :requires [(>= n 0) (<= n 31)]
   :ensures [(>= result 0)]
   :body (u32 (bitwise-or (bitwise-shr x n) (bitwise-shl x (- 32 n)))))
 
-(defn u32-not
+(defn u32-not :verify checked
   :sig [(x : i64) -> i64]
   :intent "32-bit bitwise NOT"
   :requires [(>= x 0)]
   :ensures [(>= result 0)]
   :body (bitwise-xor x 4294967295))
 
-(defn u32-add2
+(defn u32-add2 :verify checked
   :sig [(a : i64) (b : i64) -> i64]
   :intent "Add two values mod 2^32"
   :requires [(>= a 0) (>= b 0)]
   :ensures [(>= result 0)]
   :body (u32 (+ a b)))
 
-(defn u32-add5
+(defn u32-add5 :verify checked
   :sig [(a : i64) (b : i64) (c : i64) (d : i64) (e : i64) -> i64]
   :intent "Add five values mod 2^32"
   :requires [(>= a 0)]
@@ -45,7 +45,7 @@
 
 ;; ── List indexing ──
 
-(defn list-nth
+(defn list-nth :verify checked
   :sig [(lst : List) (n : i64) -> i64]
   :intent "Get nth element of a list (0-indexed)"
   :requires [(>= n 0)]
@@ -54,42 +54,42 @@
 
 ;; ── SHA-256 logical functions ──
 
-(defn sha256-ch
+(defn sha256-ch :verify checked
   :sig [(x : i64) (y : i64) (z : i64) -> i64]
   :intent "Ch(x,y,z) = (x AND y) XOR (NOT x AND z)"
   :requires [(>= x 0)]
   :ensures [(>= result 0)]
   :body (bitwise-xor (bitwise-and x y) (bitwise-and (u32-not x) z)))
 
-(defn sha256-maj
+(defn sha256-maj :verify checked
   :sig [(x : i64) (y : i64) (z : i64) -> i64]
   :intent "Maj(x,y,z) = (x AND y) XOR (x AND z) XOR (y AND z)"
   :requires [(>= x 0)]
   :ensures [(>= result 0)]
   :body (bitwise-xor (bitwise-and x y) (bitwise-xor (bitwise-and x z) (bitwise-and y z))))
 
-(defn sha256-bsig0
+(defn sha256-bsig0 :verify checked
   :sig [(x : i64) -> i64]
   :intent "Big Sigma 0: ROTR2 XOR ROTR13 XOR ROTR22"
   :requires [(>= x 0)]
   :ensures [(>= result 0)]
   :body (bitwise-xor (u32-rotr x 2) (bitwise-xor (u32-rotr x 13) (u32-rotr x 22))))
 
-(defn sha256-bsig1
+(defn sha256-bsig1 :verify checked
   :sig [(x : i64) -> i64]
   :intent "Big Sigma 1: ROTR6 XOR ROTR11 XOR ROTR25"
   :requires [(>= x 0)]
   :ensures [(>= result 0)]
   :body (bitwise-xor (u32-rotr x 6) (bitwise-xor (u32-rotr x 11) (u32-rotr x 25))))
 
-(defn sha256-ssig0
+(defn sha256-ssig0 :verify checked
   :sig [(x : i64) -> i64]
   :intent "Small sigma 0: ROTR7 XOR ROTR18 XOR SHR3"
   :requires [(>= x 0)]
   :ensures [(>= result 0)]
   :body (bitwise-xor (u32-rotr x 7) (bitwise-xor (u32-rotr x 18) (bitwise-shr x 3))))
 
-(defn sha256-ssig1
+(defn sha256-ssig1 :verify checked
   :sig [(x : i64) -> i64]
   :intent "Small sigma 1: ROTR17 XOR ROTR19 XOR SHR10"
   :requires [(>= x 0)]
@@ -98,14 +98,14 @@
 
 ;; ── Hex encoding ──
 
-(defn hex-nibble
+(defn hex-nibble :verify checked
   :sig [(n : i64) -> i64]
   :intent "Convert 0-15 to ASCII hex character byte value"
   :requires [(>= n 0) (<= n 15)]
   :ensures [(>= result 48)]
   :body (if (< n 10) (+ 48 n) (+ 87 n)))
 
-(defn hex-byte-bytes
+(defn hex-byte-bytes :verify checked
   :sig [(b : i64) -> Bytes]
   :intent "Convert byte value to 2-character hex Bytes"
   :requires [(>= b 0) (<= b 255)]
@@ -113,7 +113,7 @@
   :body (bytes-concat-all [(bytes-from-int8 (hex-nibble (/ b 16)))
                             (bytes-from-int8 (hex-nibble (% b 16)))]))
 
-(defn bytes-to-hex-loop
+(defn bytes-to-hex-loop :verify checked
   :sig [(buf : Bytes) (i : i64) (len : i64) -> List]
   :intent "Convert each byte to hex, returning list of 2-byte Bytes"
   :requires [(>= i 0)]
@@ -123,7 +123,7 @@
 
 ;; ── Big-endian word operations ──
 
-(defn be32-get
+(defn be32-get :verify checked
   :sig [(buf : Bytes) (off : i64) -> i64]
   :intent "Read big-endian 32-bit word from Bytes at byte offset"
   :requires [(>= off 0)]
@@ -133,7 +133,7 @@
               (+ (* (at buf (+ off 2)) 256)
                  (at buf (+ off 3))))))
 
-(defn be32-to-list
+(defn be32-to-list :verify checked
   :sig [(w : i64) -> List]
   :intent "Convert 32-bit word to list of 4 big-endian byte Bytes"
   :requires [(>= w 0)]
@@ -143,7 +143,7 @@
          (bytes-from-int8 (% (/ w 256) 256))
          (bytes-from-int8 (% w 256))])
 
-(defn be64-to-list
+(defn be64-to-list :verify checked
   :sig [(val : i64) -> List]
   :intent "Convert 64-bit value to list of 8 big-endian byte Bytes"
   :requires [(>= val 0)]
@@ -154,7 +154,7 @@
 
 ;; ── Zero-byte list builder ──
 
-(defn make-zero-bytes
+(defn make-zero-bytes :verify checked
   :sig [(n : i64) -> List]
   :intent "Create list of n zero-byte Bytes values"
   :requires [(>= n 0)]
@@ -164,7 +164,7 @@
 
 ;; ── SHA-256 message padding ──
 
-(defn sha256-pad
+(defn sha256-pad :verify checked
   :sig [(msg : Bytes) -> Bytes]
   :intent "Pad message per FIPS 180-4 section 5.1.1"
   :requires [(valid msg)]
@@ -179,7 +179,7 @@
 
 ;; ── Message schedule ──
 
-(defn sha256-schedule-init
+(defn sha256-schedule-init :verify checked
   :sig [(block : Bytes) (base : i64) (i : i64) -> List]
   :intent "Extract 16 big-endian 32-bit words from a 64-byte block"
   :requires [(>= i 0)]
@@ -191,7 +191,7 @@
 ;; sha256-schedule-extend: use a 16-element sliding window so list-nth
 ;; is always O(16)=O(1), giving O(N) total instead of O(N²).
 ;; window: last 16 words [w[i-16]..w[i-1]]; result-rev: extension words in reverse.
-(defn sha256-schedule-extend
+(defn sha256-schedule-extend :verify checked
   :sig [(window : List) (result-rev : List) (i : i64) -> List]
   :intent "Build W[16..63] extension words using a 16-word sliding window"
   :requires [(>= i 16)]
@@ -211,7 +211,7 @@
           (cons new-w result-rev)
           (+ i 1)))))
 
-(defn sha256-schedule
+(defn sha256-schedule :verify checked
   :sig [(block : Bytes) (base : i64) -> List]
   :intent "Build full 64-word message schedule from a 64-byte block"
   :requires [(>= base 0)]
@@ -222,7 +222,7 @@
 
 ;; ── Compression ──
 
-(defn sha256-compress-round
+(defn sha256-compress-round :verify checked
   :sig [(state : List) (ki : i64) (wi : i64) -> List]
   :intent "One SHA-256 compression round updating 8 working variables"
   :requires [(valid state)]
@@ -239,7 +239,7 @@
              (t2 : i64 (u32-add2 (sha256-bsig0 a) (sha256-maj a b c)))
           [(u32-add2 t1 t2) a b c (u32-add2 d t1) e f g]))
 
-(defn sha256-compress-loop
+(defn sha256-compress-loop :verify checked
   :sig [(state : List) (k : List) (w : List) (i : i64) -> List]
   :intent "Run 64 compression rounds using head/tail for K and W"
   :requires [(>= i 0)]
@@ -249,7 +249,7 @@
             (sha256-compress-round state (head k) (head w))
             (tail k) (tail w) (+ i 1))))
 
-(defn sha256-add-hash
+(defn sha256-add-hash :verify checked
   :sig [(h : List) (state : List) -> List]
   :intent "Add compressed state back to current hash values"
   :requires [(valid h) (valid state)]
@@ -263,7 +263,7 @@
          (u32-add2 (list-nth h 6) (list-nth state 6))
          (u32-add2 (list-nth h 7) (list-nth state 7))])
 
-(defn sha256-compress-block
+(defn sha256-compress-block :verify checked
   :sig [(hash : List) (k : List) (padded : Bytes) (base : i64) -> List]
   :intent "Compress one 64-byte block against current hash state"
   :requires [(valid hash)]
@@ -273,7 +273,7 @@
 
 ;; ── Block processing ──
 
-(defn sha256-process-blocks
+(defn sha256-process-blocks :verify checked
   :sig [(hash : List) (k : List) (padded : Bytes) (off : i64) (len : i64) -> List]
   :intent "Process all 64-byte blocks of padded message"
   :requires [(>= off 0)]
@@ -285,7 +285,7 @@
 
 ;; ── Hash to bytes ──
 
-(defn sha256-hash-to-bytes
+(defn sha256-hash-to-bytes :verify checked
   :sig [(hash : List) -> Bytes]
   :intent "Convert 8 hash words to 32-byte digest"
   :requires [(valid hash)]

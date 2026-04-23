@@ -1,5 +1,5 @@
 ;; ERROR: contract violated
-(defn safe-div
+(defn safe-div :verify checked
   :sig [(a : i32) (b : i32) -> i32]
   :intent "divide safely"
   :requires [(!= b 0)]

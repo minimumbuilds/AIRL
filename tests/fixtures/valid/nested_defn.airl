@@ -1,11 +1,11 @@
 ;; EXPECT: 25
-(defn square
+(defn square :verify checked
   :sig [(x : i32) -> i32]
   :intent "square a number"
   :requires [(valid x)]
   :ensures [(valid result)]
   :body (* x x))
-(defn add-squares
+(defn add-squares :verify checked
   :sig [(a : i32) (b : i32) -> i32]
   :intent "sum of squares"
   :requires [(valid a) (valid b)]

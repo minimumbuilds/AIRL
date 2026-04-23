@@ -12,7 +12,7 @@
 ;; Uses bytes-xor builtin (airl-rt/src/misc.rs) — single native call, one allocation.
 ;; The pure loop below is retained as a reference for non-AOT paths.
 
-(defn pbkdf2-xor-bytes
+(defn pbkdf2-xor-bytes :verify checked
   :sig [(a : Bytes) (b : Bytes) -> Bytes]
   :intent "XOR two equal-length Bytes values"
   :requires [(= (length a) (length b))]
@@ -35,7 +35,7 @@
 
 ;; ── PBKDF2 F function: iterative HMAC with XOR accumulation ──
 
-(defn pbkdf2-f-loop
+(defn pbkdf2-f-loop :verify checked
   :sig [(key : Bytes) (u-prev : Bytes) (acc : Bytes) (iter : i64) -> Bytes]
   :intent "Iterate HMAC and XOR results for PBKDF2 F function"
   :requires [(>= iter 0)]
@@ -45,7 +45,7 @@
                (new-acc : Bytes (pbkdf2-xor-bytes acc u-next))
             (pbkdf2-f-loop key u-next new-acc (- iter 1)))))
 
-(defn pbkdf2-f
+(defn pbkdf2-f :verify checked
   :sig [(key : Bytes) (salt : Bytes) (iterations : i64) (block-idx : i64) -> Bytes]
   :intent "PBKDF2 F(Password, Salt, c, i) = U1 ^ U2 ^ ... ^ Uc"
   :requires [(>= iterations 1) (>= block-idx 1)]
@@ -57,7 +57,7 @@
 
 ;; ── PBKDF2 block generation ──
 
-(defn pbkdf2-blocks
+(defn pbkdf2-blocks :verify checked
   :sig [(key : Bytes) (salt : Bytes) (iterations : i64) (block-idx : i64) (blocks-needed : i64) -> List]
   :intent "Generate PBKDF2 output blocks T1..Tn"
   :requires [(>= block-idx 1)]
@@ -68,7 +68,7 @@
 
 ;; ── Public API ──
 
-(defn pbkdf2-sha256-bytes
+(defn pbkdf2-sha256-bytes :verify checked
   :sig [(password : Bytes) (salt : Bytes) (iterations : i64) (dk-len : i64) -> Bytes]
   :intent "PBKDF2-HMAC-SHA-256: derive dk-len bytes from password and salt"
   :requires [(>= iterations 1) (>= dk-len 1)]
@@ -77,7 +77,7 @@
              (all-blocks : Bytes (bytes-concat-all (pbkdf2-blocks password salt iterations 1 blocks-needed)))
           (bytes-slice all-blocks 0 dk-len)))
 
-(defn pbkdf2-sha256
+(defn pbkdf2-sha256 :verify checked
   :sig [(password : String) (salt : String) (iterations : i64) (dk-len : i64) -> String]
   :intent "PBKDF2-HMAC-SHA-256 hex output"
   :requires [(>= iterations 1) (>= dk-len 1)]

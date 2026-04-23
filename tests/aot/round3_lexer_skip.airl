@@ -1,6 +1,6 @@
 ;; EXPECT: 1:ok3|2:ok5|3:ok4|4:abc|5:hello-world!|6:ok0|7:ok3|8:ok11|9:|10:ok14
 ;; DEPS: bootstrap/lexer.airl
-(defn skip-check
+(defn skip-check :verify checked
   :sig [(src : String) -> String]
   :requires [(valid src)]
   :ensures [(valid result)]

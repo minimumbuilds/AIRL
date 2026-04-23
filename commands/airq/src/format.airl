@@ -2,7 +2,7 @@
 ;; Pretty-print, compact, and raw output modes.
 
 ;; ── make-indent : create indentation string ──
-(defn make-indent
+(defn make-indent :verify checked
   :sig [(depth : i64) (indent-str : String) -> String]
   :requires [(>= depth 0)]
   :ensures [(valid result)]
@@ -11,7 +11,7 @@
           (str indent-str (make-indent (- depth 1) indent-str))))
 
 ;; ── pretty-print : indented JSON output ──
-(defn pretty-print
+(defn pretty-print :verify checked
   :sig [(val : _) (depth : i64) (indent-str : String) (sort-keys : Bool) -> String]
   :requires [(>= depth 0)]
   :ensures [(valid result)]
@@ -26,7 +26,7 @@
             (json-stringify val))))))))))
 
 ;; ── pretty-print-list : format array with indentation ──
-(defn pretty-print-list
+(defn pretty-print-list :verify checked
   :sig [(lst : List) (depth : i64) (indent-str : String) (sort-keys : Bool) -> String]
   :requires [(valid lst)]
   :ensures [(valid result)]
@@ -40,7 +40,7 @@
                 (str "[\n" (join items ",\n") "\n" outer-indent "]"))))))
 
 ;; ── pretty-print-map : format object with indentation ──
-(defn pretty-print-map
+(defn pretty-print-map :verify checked
   :sig [(m : _) (depth : i64) (indent-str : String) (sort-keys : Bool) -> String]
   :requires [(valid m)]
   :ensures [(valid result)]
@@ -56,7 +56,7 @@
                   (str "{\n" (join items ",\n") "\n" outer-indent "}")))))))
 
 ;; ── raw-print : for -r, strings without quotes ──
-(defn raw-print
+(defn raw-print :verify checked
   :sig [(val : _) -> String]
   :requires [(valid val)]
   :ensures [(valid result)]
@@ -65,7 +65,7 @@
           (json-stringify val)))
 
 ;; ── output-value : main dispatcher based on opts ──
-(defn output-value
+(defn output-value :verify checked
   :sig [(val : _) (opts : _) -> String]
   :requires [(valid val)]
   :ensures [(valid result)]

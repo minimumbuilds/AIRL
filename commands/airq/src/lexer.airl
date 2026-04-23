@@ -2,7 +2,7 @@
 ;; Tokenizes jq filter expressions into a list of token maps.
 
 ;; ── is-whitespace : check if character is whitespace ──
-(defn is-whitespace
+(defn is-whitespace :verify checked
   :sig [(c : String) -> Bool]
   :requires [(valid c)]
   :ensures [(valid result)]
@@ -13,7 +13,7 @@
           false)))))
 
 ;; ── is-digit : check if character is 0-9 ──
-(defn is-digit
+(defn is-digit :verify checked
   :sig [(c : String) -> Bool]
   :requires [(valid c)]
   :ensures [(valid result)]
@@ -21,7 +21,7 @@
           (if (and (>= code 48) (<= code 57)) true false)))
 
 ;; ── is-alpha : check if character is a-z, A-Z, or _ ──
-(defn is-alpha
+(defn is-alpha :verify checked
   :sig [(c : String) -> Bool]
   :requires [(valid c)]
   :ensures [(valid result)]
@@ -32,28 +32,28 @@
             false)))))
 
 ;; ── is-alnum : check if character is alphanumeric or _ ──
-(defn is-alnum
+(defn is-alnum :verify checked
   :sig [(c : String) -> Bool]
   :requires [(valid c)]
   :ensures [(valid result)]
   :body (if (is-alpha c) true (is-digit c)))
 
 ;; ── mk-tok : create a simple token ──
-(defn mk-tok
+(defn mk-tok :verify checked
   :sig [(typ : String) -> _]
   :requires [(valid typ)]
   :ensures [(valid result)]
   :body (map-from ["type" typ]))
 
 ;; ── mk-tok-val : create a token with a value ──
-(defn mk-tok-val
+(defn mk-tok-val :verify checked
   :sig [(typ : String) (val : _) -> _]
   :requires [(valid typ)]
   :ensures [(valid result)]
   :body (map-from ["type" typ "value" val]))
 
 ;; ── classify-keyword : turn identifier into keyword token or ident ──
-(defn classify-keyword
+(defn classify-keyword :verify checked
   :sig [(name : String) -> _]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -75,7 +75,7 @@
           (mk-tok-val "ident" name)))))))))))))))))
 
 ;; ── read-string-escape : read an escape sequence ──
-(defn read-string-escape
+(defn read-string-escape :verify checked
   :sig [(cs : List) -> List]
   :requires [(valid cs)]
   :ensures [(valid result)]
@@ -92,7 +92,7 @@
               [(str "\\" c) rest])))))))))
 
 ;; ── read-string-chars : collect characters of a string literal ──
-(defn read-string-chars
+(defn read-string-chars :verify checked
   :sig [(cs : List) (acc : String) -> List]
   :requires [(valid cs)]
   :ensures [(valid result)]
@@ -110,7 +110,7 @@
                 (read-string-chars rest (str acc c)))))))
 
 ;; ── read-number-chars : collect digits (and optional dot) ──
-(defn read-number-chars
+(defn read-number-chars :verify checked
   :sig [(cs : List) (acc : String) (has-dot : Bool) -> List]
   :requires [(valid cs)]
   :ensures [(valid result)]
@@ -127,7 +127,7 @@
                 [acc cs])))))
 
 ;; ── parse-number-str : convert number string to int ──
-(defn parse-number-str
+(defn parse-number-str :verify checked
   :sig [(s : String) -> _]
   :requires [(valid s)]
   :ensures [(valid result)]
@@ -137,7 +137,7 @@
             _ 0)))
 
 ;; ── read-ident-chars : collect identifier characters ──
-(defn read-ident-chars
+(defn read-ident-chars :verify checked
   :sig [(cs : List) (acc : String) -> List]
   :requires [(valid cs)]
   :ensures [(valid result)]
@@ -149,7 +149,7 @@
               [acc cs]))))
 
 ;; ── skip-ws-chars : skip whitespace in char list ──
-(defn skip-ws-chars
+(defn skip-ws-chars :verify checked
   :sig [(cs : List) -> List]
   :requires [(valid cs)]
   :ensures [(valid result)]
@@ -160,7 +160,7 @@
             cs)))
 
 ;; ── skip-line : skip characters until newline ──
-(defn skip-line
+(defn skip-line :verify checked
   :sig [(cs : List) -> List]
   :requires [(valid cs)]
   :ensures [(valid result)]
@@ -171,7 +171,7 @@
             (skip-line (tail cs)))))
 
 ;; ── read-op-token : handle operator characters ──
-(defn read-op-token
+(defn read-op-token :verify checked
   :sig [(c : String) (rest : List) -> List]
   :requires [(valid c)]
   :ensures [(valid result)]
@@ -198,7 +198,7 @@
           [nil rest]))))))))
 
 ;; ── read-token : read one token from char list ──
-(defn read-token
+(defn read-token :verify checked
   :sig [(raw-cs : List) -> List]
   :requires [(valid raw-cs)]
   :ensures [(valid result)]
@@ -259,7 +259,7 @@
                   op-result)))))))))))))))))))))))))
 
 ;; ── tokenize-loop : recursive tokenizer loop ──
-(defn tokenize-loop
+(defn tokenize-loop :verify checked
   :sig [(cs : List) (acc : List) -> List]
   :requires [(valid cs)]
   :ensures [(valid result)]
@@ -271,7 +271,7 @@
                 (tokenize-loop remaining (cons tok acc)))))))
 
 ;; ── tokenize : main entry point ──
-(defn tokenize
+(defn tokenize :verify checked
   :sig [(input : String) -> List]
   :requires [(valid input)]
   :ensures [(not (empty? result))]

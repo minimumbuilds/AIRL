@@ -1,11 +1,11 @@
-(defn fib-helper
+(defn fib-helper :verify checked
   :sig [(n : i64) (a : i64) (b : i64) -> i64]
   :requires [(>= n 0)]
   :ensures [(valid result)]
   :body (if (= n 0) a
            (fib-helper (- n 1) b (+ a b))))
 
-(defn fib-fast
+(defn fib-fast :verify checked
   :sig [(n : i64) -> i64]
   :requires [(>= n 0)]
   :ensures [(>= result 0)]

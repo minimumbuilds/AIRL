@@ -1,7 +1,7 @@
 ;; tools_test.airl — Tests for lib/forge/tools.airl
 
 ;; Test subject: a simple function with metadata for auto-discovery
-(defn greet
+(defn greet :verify checked
   :sig [(name : String) -> String]
   :intent "Greet a person by name"
   :requires [(not (= name ""))]

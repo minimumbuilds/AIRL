@@ -4,7 +4,7 @@
 ;; to options maps, orchestrates walk → search → format → exit code.
 
 ;; ── add-flags-rec : fold flag configs onto app ──
-(defn add-flags-rec
+(defn add-flags-rec :verify checked
   :sig [(app : _) (flag-configs : List) -> _]
   :requires [(valid app)]
   :ensures [(valid result)]
@@ -13,7 +13,7 @@
           (add-flags-rec (cairli-add-flag app (head flag-configs)) (tail flag-configs))))
 
 ;; ── build-app : construct CairLI app with all flags ──
-(defn build-app
+(defn build-app :verify checked
   :sig [-> _]
   :requires [true]
   :ensures [(valid result)]
@@ -44,7 +44,7 @@
             []))))))))))))))))))))))))
 
 ;; ── resolve-color : decide if color should be used ──
-(defn resolve-color
+(defn resolve-color :verify checked
   :sig [(color-str : String) -> Bool]
   :requires [(valid color-str)]
   :ensures [(valid result)]
@@ -56,7 +56,7 @@
             true)))
 
 ;; ── build-search-opts : convert parsed CairLI context to search options map ──
-(defn build-search-opts
+(defn build-search-opts :verify checked
   :sig [(ctx : _) -> _]
   :requires [(valid ctx)]
   :ensures [(valid result)]
@@ -84,7 +84,7 @@
                      "max-depth" (cairli-flag ctx "max-depth")]))))
 
 ;; ── search-files-rec : search each file and collect results ──
-(defn search-files-rec
+(defn search-files-rec :verify checked
   :sig [(files : List) (regex : String) (opts : _) (acc : List) -> List]
   :requires [(valid files)]
   :ensures [(valid result)]
@@ -95,7 +95,7 @@
             (search-files-rec (tail files) regex opts (cons file-result acc)))))
 
 ;; ── has-any-matches : check if any file had matches ──
-(defn has-any-matches
+(defn has-any-matches :verify checked
   :sig [(results : List) -> Bool]
   :requires [(valid results)]
   :ensures [(valid result)]
@@ -106,7 +106,7 @@
             (has-any-matches (tail results)))))
 
 ;; ── run-search : orchestrate walk → search → format → exit code ──
-(defn run-search
+(defn run-search :verify checked
   :sig [(ctx : _) -> i64]
   :requires [(valid ctx)]
   :ensures [(valid result)]
@@ -120,7 +120,7 @@
                   (if (has-any-matches results) 0 1)))))))
 
 ;; ── dispatch : handle --type-list, then call run-search ──
-(defn dispatch
+(defn dispatch :verify checked
   :sig [(ctx : _) -> i64]
   :requires [(valid ctx)]
   :ensures [(valid result)]

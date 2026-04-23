@@ -5,7 +5,7 @@
 
 ;; ─── search-symbols ──────────────────────────────────────────────────
 ;; Search all symbols in an index, return ranked results.
-(defn search-symbols
+(defn search-symbols :verify checked
   :sig [(index : Map) (query : String) -> List]
   :intent "Search symbols by name, sig, or contract text and return ranked results"
   :requires [(valid index) (valid query)]
@@ -26,7 +26,7 @@
 
 ;; ─── search-symbols-limited ──────────────────────────────────────────
 ;; Search with a result limit.
-(defn search-symbols-limited
+(defn search-symbols-limited :verify checked
   :sig [(index : Map) (query : String) (limit : i64) -> List]
   :intent "Search symbols with a maximum number of results"
   :requires [(valid index) (valid query) (> limit 0)]
@@ -35,7 +35,7 @@
 
 ;; ─── search-by-kind ──────────────────────────────────────────────────
 ;; Search symbols filtered by kind.
-(defn search-by-kind
+(defn search-by-kind :verify checked
   :sig [(index : Map) (query : String) (kind : String) -> List]
   :intent "Search symbols filtered by kind (function, define, type, extern-c)"
   :requires [(valid index) (valid query) (valid kind)]
@@ -47,7 +47,7 @@
 ;; ─── score-symbol ────────────────────────────────────────────────────
 ;; Score a symbol against a search query. Higher = better match.
 ;; Returns 0 for no match.
-(defn score-symbol
+(defn score-symbol :verify checked
   :sig [(sym : Map) (query : String) -> i64]
   :intent "Score how well a symbol matches a search query"
   :requires [(valid sym) (valid query)]
@@ -74,7 +74,7 @@
 
 ;; ─── search-by-name ──────────────────────────────────────────────────
 ;; Search only by name (prefix + substring).
-(defn search-by-name
+(defn search-by-name :verify checked
   :sig [(symbols : List) (query : String) -> List]
   :intent "Search symbols by name only"
   :requires [(valid symbols) (valid query)]
@@ -87,7 +87,7 @@
 
 ;; ─── search-by-sig ───────────────────────────────────────────────────
 ;; Search in signature text.
-(defn search-by-sig
+(defn search-by-sig :verify checked
   :sig [(symbols : List) (query : String) -> List]
   :intent "Search symbols by signature text"
   :requires [(valid symbols) (valid query)]
@@ -100,7 +100,7 @@
 
 ;; ─── search-by-contract ──────────────────────────────────────────────
 ;; Search in contract text (requires + ensures).
-(defn search-by-contract
+(defn search-by-contract :verify checked
   :sig [(symbols : List) (query : String) -> List]
   :intent "Search symbols by contract text"
   :requires [(valid symbols) (valid query)]

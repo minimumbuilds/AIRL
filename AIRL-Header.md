@@ -53,6 +53,8 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 `:requires [CONDS]` — checked before body. `:ensures [CONDS]` — checked after, `result` is bound.
 `:invariant [CONDS]` — checked after body, before ensures. `(valid x)` — always true, minimal guard.
 
+**Default verification level:** `:verify proven`. Grandfather legacy modules with `:verify checked`; list them in `.airl-verify-baseline.toml`. Use `:verify` on individual `defn`s to override the enclosing module (precedence: FnDef.verify > ModuleDef.verify > default).
+
 ### deftype
 ```
 (deftype Name :body (Sum (V1 [T]) (V2 [T T])))       ;; enum

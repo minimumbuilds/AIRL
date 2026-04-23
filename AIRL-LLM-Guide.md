@@ -1694,3 +1694,20 @@ If you are tempted to use a loop, here is how to translate common imperative pat
 18. **`if` has exactly 3 subforms.** `(if cond then else)` — condition, then-branch, else-branch. No more, no less. If you need multiple statements in a branch, wrap them in `do`: `(if cond (do a b c) else-expr)`.
 
 19. **Use `char-code`/`char-from-code`, not `ord`/`chr`.** AIRL uses `(char-code s)` to get the Unicode code point of the first character, and `(char-from-code n)` to convert a code point back to a single-character string. Python-style `ord`/`chr` do not exist.
+
+### `:verify` Policy and Coverage (2026-04)
+
+The default verification level is now `:verify proven`. This means:
+
+- Modules without an explicit `:verify` annotation require Z3 to prove every contract on every `:pub defn`.
+- `:pub defn` in a `:verify proven` module MUST have at least one `:ensures` clause (coverage rule enforced at compile time).
+- Grandfathered modules are explicitly annotated with `:verify checked` and tracked in `.airl-verify-baseline.toml` at the repo root.
+- To ratchet strictness in a module, upgrade `:verify checked → :verify proven`, add `:ensures` to every `:pub defn`, and remove the module from the baseline.
+
+**Tooling:**
+- `airl verify-policy` — check tree against baseline (CI gate).
+- `airl verify-policy --init` — one-shot migration (already run).
+- `airl verify-policy --prune` — remove stale baseline entries after upgrades.
+- `airl verify-policy --list-uncovered` — show `:pub defn`s in proven modules missing `:ensures`.
+
+Precedence when resolving a function's verify level: `FnDef.verify` (per-defn `:verify`) > `ModuleDef.verify` (module-level `:verify`) > `VerifyLevel::default()` (now `Proven`).

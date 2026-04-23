@@ -61,7 +61,7 @@ pub enum VerifyLevel {
 }
 
 impl Default for VerifyLevel {
-    fn default() -> Self { Self::Checked }
+    fn default() -> Self { Self::Proven }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -89,6 +89,9 @@ pub struct FnDef {
     pub execute_on: Option<ExecTarget>,
     pub priority: Option<Priority>,
     pub is_public: bool,
+    /// Per-function override of the enclosing module's :verify level.
+    /// `None` means inherit from module (or the parser default).
+    pub verify: Option<VerifyLevel>,
     pub span: Span,
 }
 
@@ -483,8 +486,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn verify_level_default_is_checked() {
-        assert_eq!(VerifyLevel::default(), VerifyLevel::Checked);
+    fn verify_level_default_is_proven() {
+        assert_eq!(VerifyLevel::default(), VerifyLevel::Proven);
     }
 
     #[test]
@@ -526,8 +529,31 @@ mod tests {
             execute_on: None,
             priority: None,
             is_public: true,
+            verify: None,
             span: Span::dummy(),
         };
         assert!(f.is_public);
+    }
+
+    #[test]
+    fn fn_def_has_verify_override() {
+        let f = FnDef {
+            name: "foo".to_string(),
+            params: vec![],
+            return_type: AstType { kind: AstTypeKind::Named("i64".to_string()), span: Span::dummy() },
+            intent: None,
+            requires: vec![],
+            ensures: vec![],
+            invariants: vec![],
+            is_pure: false,
+            is_total: false,
+            body: Expr { kind: ExprKind::NilLit, span: Span::dummy() },
+            execute_on: None,
+            priority: None,
+            is_public: false,
+            verify: Some(VerifyLevel::Checked),
+            span: Span::dummy(),
+        };
+        assert_eq!(f.verify, Some(VerifyLevel::Checked));
     }
 }

@@ -1,6 +1,6 @@
 ;; EXPECT: 1:ASTInt|2:ASTFloat|3:ASTStr|4:ASTBool|5:ASTSymbol
 ;; DEPS: bootstrap/lexer.airl bootstrap/parser.airl
-(defn atom-type
+(defn atom-type :verify checked
   :sig [(src : String) -> String]
   :requires [(valid src)]
   :ensures [(valid result)]

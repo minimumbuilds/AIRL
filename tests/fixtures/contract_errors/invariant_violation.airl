@@ -1,6 +1,6 @@
 ;; ERROR: contract violated
 ;; The invariant (> result 0) is violated when x = 0
-(defn must-be-positive
+(defn must-be-positive :verify checked
   :sig [(x : i64) -> i64]
   :intent "Identity function with positive invariant"
   :requires [(valid x)]

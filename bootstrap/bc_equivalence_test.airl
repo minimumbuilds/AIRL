@@ -8,7 +8,7 @@
 
 ;; ── Test infrastructure ──────────────────────────────────
 
-(defn bc-test
+(defn bc-test :verify checked
   :sig [(source : String) (expected : _) (name : String) -> Bool]
   :intent "Run source through bytecode pipeline and check against expected"
   :requires [(valid source)]
@@ -19,7 +19,7 @@
         (do (print "PASS:" name) true)
         (do (print "FAIL:" name "expected" (Ok expected) "got" actual) false))))
 
-(defn count-results
+(defn count-results :verify checked
   :sig [(results : List) (passes : Int) (fails : Int) -> List]
   :intent "Count pass/fail booleans in a list"
   :requires [(valid results)]

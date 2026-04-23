@@ -6,7 +6,7 @@
 (print "Hello, World!")
 
 ;; Define a greeting function with a contract
-(defn greet
+(defn greet :verify checked
   :sig [(name : String) -> String]
   :intent "create a personalized greeting"
   :ensures [(valid result)]

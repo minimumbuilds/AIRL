@@ -1,5 +1,5 @@
 ;; ERROR: Contract disproven
-(defn bad-add
+(defn bad-add :verify checked
   :sig [(a : i32) (b : i32) -> i32]
   :ensures [(= result (* a b))]
   :body (+ a b))

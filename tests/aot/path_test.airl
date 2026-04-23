@@ -3,7 +3,7 @@
 ;; Rust builtins deregistered — using canonical names.
 
 ;; ── Helper: last-index-of ──
-(defn last-index-of
+(defn last-index-of :verify checked
   :sig [(haystack : String) (needle : String) -> Int]
   :requires [(valid haystack) (valid needle)]
   :ensures [(>= result -1)]
@@ -14,7 +14,7 @@
         (- (- (length haystack) (length (at parts (- (length parts) 1)))) (length needle)))))
 
 ;; ── path-join ──
-(defn path-join
+(defn path-join :verify checked
   :sig [(a : String) (b : String) -> String]
   :requires [(valid a) (valid b)]
   :ensures [(valid result)]
@@ -28,7 +28,7 @@
           (+ (+ a "/") b)))))
 
 ;; ── path-parent ──
-(defn path-parent
+(defn path-parent :verify checked
   :sig [(path : String) -> String]
   :requires [(valid path)]
   :ensures [(valid result)]
@@ -41,7 +41,7 @@
           (substring path 0 idx)))))
 
 ;; ── path-filename ──
-(defn path-filename
+(defn path-filename :verify checked
   :sig [(path : String) -> String]
   :requires [(valid path)]
   :ensures [(valid result)]
@@ -52,7 +52,7 @@
         (substring path (+ idx 1) (length path)))))
 
 ;; ── path-extension ──
-(defn path-extension
+(defn path-extension :verify checked
   :sig [(path : String) -> String]
   :requires [(valid path)]
   :ensures [(valid result)]
@@ -66,7 +66,7 @@
             (substring fname (+ idx 1) (length fname)))))))
 
 ;; ── is-absolute ──
-(defn is-absolute
+(defn is-absolute :verify checked
   :sig [(path : String) -> Bool]
   :requires [(valid path)]
   :ensures [(valid result)]

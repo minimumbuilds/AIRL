@@ -1,6 +1,6 @@
 ;; EXPECT: 6
 ;; Test forall in an ensures contract: result is always non-negative
-(defn abs
+(defn abs :verify checked
   :sig [(x : i32) -> i32]
   :intent "absolute value"
   :requires [(valid x)]

@@ -9,7 +9,7 @@
 ;; Run with: cargo run -- run examples/07-higher-order-functions/higher_order_functions.airl
 
 ;; apply-twice: takes a function and a value, applies the function twice
-(defn apply-twice
+(defn apply-twice :verify checked
   :sig [(f : fn) (x : i64) -> i64]
   :intent "Apply function f to x twice: f(f(x))"
   :requires [(valid f) (valid x)]
@@ -21,7 +21,7 @@
 (print "Double twice: 3 * 2 * 2 =" (apply-twice (fn [x] (* x 2)) 3))
 
 ;; Compose two functions into one
-(defn compose
+(defn compose :verify checked
   :sig [(f : fn) (g : fn) (x : i64) -> i64]
   :intent "Compute f(g(x))"
   :requires [(valid f) (valid g) (valid x)]

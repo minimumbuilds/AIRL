@@ -8,19 +8,19 @@
 (extern-c "airl_file_exists" [(path : String) -> Bool])
 
 ;; ── AIRL wrappers with contracts ──
-(defn safe-read-file
+(defn safe-read-file :verify checked
   :sig [(path : String) -> String]
   :requires [(valid path)]
   :ensures [(valid result)]
   :body (airl_read_file path))
 
-(defn safe-write-file
+(defn safe-write-file :verify checked
   :sig [(path : String) (content : String) -> Bool]
   :requires [(valid path) (valid content)]
   :ensures [(valid result)]
   :body (airl_write_file path content))
 
-(defn safe-file-exists?
+(defn safe-file-exists? :verify checked
   :sig [(path : String) -> Bool]
   :requires [(valid path)]
   :ensures [(valid result)]
