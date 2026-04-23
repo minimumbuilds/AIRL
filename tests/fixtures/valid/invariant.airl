@@ -1,5 +1,5 @@
 ;; EXPECT: 10
-(defn clamp-positive
+(defn clamp-positive :verify checked
   :sig [(x : i64) -> i64]
   :intent "Return x if positive, else 0"
   :requires [(valid x)]

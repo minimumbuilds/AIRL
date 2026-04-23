@@ -1,6 +1,6 @@
 ;; ERROR: moved
 ;; Passing with own should move the value
-(defn consume
+(defn consume :verify checked
   :sig [(own x : i32) -> i32]
   :intent "consume"
   :requires [(>= x 0)]

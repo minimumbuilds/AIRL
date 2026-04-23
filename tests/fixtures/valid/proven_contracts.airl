@@ -1,6 +1,6 @@
 ;; EXPECT: 7
 ;; Contracts should be provable by Z3
-(defn add
+(defn add :verify checked
   :sig [(a : i32) (b : i32) -> i32]
   :intent "add two integers"
   :requires [(valid a) (valid b)]

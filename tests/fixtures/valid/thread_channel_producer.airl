@@ -1,7 +1,7 @@
 ;; EXPECT: 55
 ;; Producer thread sends 1..10 through channel, main thread sums them
 
-(defn send-range
+(defn send-range :verify checked
   :sig [(tx : i64) (i : i64) (end : i64) -> i64]
   :requires [(valid tx)]
   :ensures [(valid result)]
@@ -10,7 +10,7 @@
       (do (channel-close tx) 0)
       (do (channel-send tx i) (send-range tx (+ i 1) end))))
 
-(defn recv-sum
+(defn recv-sum :verify checked
   :sig [(rx : i64) (acc : i64) (remaining : i64) -> i64]
   :requires [(valid rx)]
   :ensures [(valid result)]

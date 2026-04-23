@@ -61,7 +61,7 @@ pub enum VerifyLevel {
 }
 
 impl Default for VerifyLevel {
-    fn default() -> Self { Self::Checked }
+    fn default() -> Self { Self::Proven }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -486,8 +486,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn verify_level_default_is_checked() {
-        assert_eq!(VerifyLevel::default(), VerifyLevel::Checked);
+    fn verify_level_default_is_proven() {
+        assert_eq!(VerifyLevel::default(), VerifyLevel::Proven);
     }
 
     #[test]
