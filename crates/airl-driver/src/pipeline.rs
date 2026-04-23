@@ -1415,6 +1415,10 @@ pub enum PipelineError {
     Parse(Diagnostics),
     TypeCheck(Diagnostics),
     Runtime(RuntimeError),
+    ContractCoverageMissing {
+        fn_name: String,
+        module: String,
+    },
     ContractDisproven {
         fn_name: String,
         clause: String,
@@ -1445,6 +1449,15 @@ impl std::fmt::Display for PipelineError {
                 Ok(())
             }
             PipelineError::Runtime(e) => write!(f, "Runtime error: {}", e),
+            PipelineError::ContractCoverageMissing { fn_name, module } => {
+                write!(
+                    f,
+                    "public function `{}` in module `{}` has no :ensures clause\n  \
+                     note: `:verify proven` modules require every :pub defn to have at least one :ensures\n  \
+                     help: add an :ensures clause, or mark the module or function :verify checked",
+                    fn_name, module
+                )
+            }
             PipelineError::ContractDisproven { fn_name, clause, counterexample } => {
                 write!(f, "Contract disproven in `{}`: {} (counterexample: {:?})", fn_name, clause, counterexample)
             }
@@ -1785,6 +1798,18 @@ mod tests {
         // where source files are not present). We just verify it doesn't panic.
         let _result = stdlib_disk_hash();
         // No assertion needed — just confirming no panic.
+    }
+
+    #[test]
+    fn contract_coverage_missing_display() {
+        let e = PipelineError::ContractCoverageMissing {
+            fn_name: "foo".to_string(),
+            module: "bar.airl".to_string(),
+        };
+        let s = format!("{}", e);
+        assert!(s.contains("foo"), "expected fn name in message: {}", s);
+        assert!(s.contains("bar.airl"), "expected module in message: {}", s);
+        assert!(s.contains(":ensures") || s.contains("ensures"), "expected hint about :ensures: {}", s);
     }
 }
 
