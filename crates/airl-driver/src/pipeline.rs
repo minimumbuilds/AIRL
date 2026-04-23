@@ -1820,6 +1820,7 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
         (SET_SOURCE, "set"),
         (PATH_SOURCE, "path"),
         (RANDOM_SOURCE, "random"),
+        (JSON_SOURCE, "json"),
     ] {
         let (funcs, _stdlib_main) = compile_source_to_bytecode(src, name)?;
         all_funcs.extend(funcs);
@@ -1995,6 +1996,8 @@ pub fn compile_to_object_with_imports(entry_path: &str, target: Option<&str>) ->
         (MAP_SOURCE, "map"),
         (SET_SOURCE, "set"),
         (PATH_SOURCE, "path"),
+        (RANDOM_SOURCE, "random"),
+        (JSON_SOURCE, "json"),
     ] {
         let (funcs, _stdlib_main) = compile_source_to_bytecode(src, name)?;
         all_funcs.extend(funcs);
