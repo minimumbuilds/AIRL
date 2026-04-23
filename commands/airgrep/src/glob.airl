@@ -4,7 +4,7 @@
 ;; then matches against file paths using regex-match.
 
 ;; ── escape-regex-char : escape one regex metacharacter ──
-(defn escape-regex-char
+(defn escape-regex-char :verify checked
   :sig [(c : String) -> String]
   :requires [(valid c)]
   :ensures [(valid result)]
@@ -23,7 +23,7 @@
           c)))))))))))))
 
 ;; ── escape-regex-chars-rec : recursive helper ──
-(defn escape-regex-chars-rec
+(defn escape-regex-chars-rec :verify checked
   :sig [(char-list : List) (acc : String) -> String]
   :requires [(valid char-list)]
   :ensures [(valid result)]
@@ -35,7 +35,7 @@
 
 ;; ── escape-regex : escape all regex metacharacters in a string ──
 ;; Used for -F (fixed-string) mode to treat pattern as literal.
-(defn escape-regex
+(defn escape-regex :verify checked
   :sig [(s : String) -> String]
   :requires [(valid s)]
   :ensures [(valid result)]
@@ -43,7 +43,7 @@
 
 ;; ── glob-chars-to-regex : convert glob char list to regex string ──
 ;; Handles: * -> [^/]*, ** -> .*, ? -> [^/], [abc] -> [abc] passthrough
-(defn glob-chars-to-regex
+(defn glob-chars-to-regex :verify checked
   :sig [(cs : List) (acc : String) -> String]
   :requires [(valid cs)]
   :ensures [(valid result)]
@@ -71,7 +71,7 @@
 
 ;; ── collect-bracket : gather chars until closing ] ──
 ;; Returns a two-element list: [content, remaining-chars]
-(defn collect-bracket
+(defn collect-bracket :verify checked
   :sig [(cs : List) (acc : String) -> List]
   :requires [(valid cs)]
   :ensures [(valid result)]
@@ -85,14 +85,14 @@
 
 ;; ── glob-to-regex : convert a glob pattern to a regex string ──
 ;; Anchors the regex to match the full string.
-(defn glob-to-regex
+(defn glob-to-regex :verify checked
   :sig [(pattern : String) -> String]
   :requires [(valid pattern)]
   :ensures [(valid result)]
   :body (str "^" (glob-chars-to-regex (chars pattern) "") "$"))
 
 ;; ── glob-match : test if a path matches a glob pattern ──
-(defn glob-match
+(defn glob-match :verify checked
   :sig [(pattern : String) (path : String) -> Bool]
   :requires [(valid pattern) (valid path)]
   :ensures [(valid result)]
@@ -102,7 +102,7 @@
 ;; ── glob-match-path : match glob against filename or full path ──
 ;; For patterns without /, match against the basename.
 ;; For patterns with /, match against the full relative path.
-(defn glob-match-path
+(defn glob-match-path :verify checked
   :sig [(pattern : String) (path : String) -> Bool]
   :requires [(valid pattern) (valid path)]
   :ensures [(valid result)]

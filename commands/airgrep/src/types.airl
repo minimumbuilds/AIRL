@@ -4,14 +4,14 @@
 ;; Used for --type / -t filtering.
 
 ;; ── add-type : add a type entry to the type map ──
-(defn add-type
+(defn add-type :verify checked
   :sig [(m : _) (name : String) (extensions : List) -> _]
   :requires [(valid m) (valid name)]
   :ensures [(valid result)]
   :body (map-set m name extensions))
 
 ;; ── default-type-map : returns Map of type-name to extension list ──
-(defn default-type-map
+(defn default-type-map :verify checked
   :sig [-> _]
   :requires [true]
   :ensures [(valid result)]
@@ -42,7 +42,7 @@
            "asm" ["asm" "s" "S"]))
 
 ;; ── ext-matches-type-rec : check if extension is in the list ──
-(defn ext-matches-type-rec
+(defn ext-matches-type-rec :verify checked
   :sig [(ext : String) (extensions : List) -> Bool]
   :requires [(valid ext)]
   :ensures [(valid result)]
@@ -53,7 +53,7 @@
             (ext-matches-type-rec ext (tail extensions)))))
 
 ;; ── file-matches-type : check if a file path matches a type name ──
-(defn file-matches-type
+(defn file-matches-type :verify checked
   :sig [(path : String) (type-name : String) (type-map : _) -> Bool]
   :requires [(valid path) (valid type-name)]
   :ensures [(valid result)]
@@ -63,7 +63,7 @@
           false))
 
 ;; ── format-type-entry : format one type for display ──
-(defn format-type-entry
+(defn format-type-entry :verify checked
   :sig [(name : String) (type-map : _) -> String]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -72,7 +72,7 @@
             (str name ": " (join ext-strs ", ")))))
 
 ;; ── list-types : format type list for --type-list output ──
-(defn list-types
+(defn list-types :verify checked
   :sig [(type-map : _) -> String]
   :requires [(valid type-map)]
   :ensures [(valid result)]

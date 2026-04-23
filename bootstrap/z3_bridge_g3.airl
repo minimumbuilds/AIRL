@@ -10,7 +10,7 @@
 
 ;; ── Context / solver constructors ───────────────────────────────────
 
-(defn z3-make-context
+(defn z3-make-context :verify checked
   :sig [-> _]
   :intent "Create a Z3 context (config is created and freed internally)"
   :requires [true]
@@ -21,13 +21,13 @@
         (do (airl_z3_del_config cfg)
             ctx))))
 
-(defn z3-make-solver
+(defn z3-make-solver :verify checked
   :sig [(ctx : _) -> _]
   :requires [(valid ctx)]
   :ensures [(valid result)]
   :body (airl_z3_mk_solver ctx))
 
-(defn z3-cleanup
+(defn z3-cleanup :verify checked
   :sig [(ctx : _) (solver : _) -> _]
   :requires [(valid ctx)]
   :ensures [(valid result)]
@@ -37,7 +37,7 @@
 
 ;; ── Sort helpers ────────────────────────────────────────────────────
 
-(defn z3-sort-for-type
+(defn z3-sort-for-type :verify checked
   :sig [(ctx : _) (type-name : String) -> _]
   :requires [(valid ctx)]
   :ensures [(valid result)]
@@ -62,7 +62,7 @@
 
 ;; ── Named constant constructor ──────────────────────────────────────
 
-(defn z3-make-named-const
+(defn z3-make-named-const :verify checked
   :sig [(ctx : _) (name : String) (sort : _) -> _]
   :requires [(valid ctx)]
   :ensures [(valid result)]
@@ -73,7 +73,7 @@
 ;; ── param-map: list of [name, z3-ast] pairs ─────────────────────────
 ;; Lookup by name, returning 0 if not found.
 
-(defn z3-param-lookup
+(defn z3-param-lookup :verify checked
   :sig [(param-map : List) (name : String) -> _]
   :requires [(valid param-map)]
   :ensures [(valid result)]
@@ -89,7 +89,7 @@
 ;; params: list of [name, type-string]
 ;; Returns: list of [name, z3-const-handle]
 
-(defn z3-build-param-map-acc
+(defn z3-build-param-map-acc :verify checked
   :sig [(ctx : _) (params : List) (acc : List) -> List]
   :requires [(valid ctx)]
   :ensures [(valid result)]
@@ -104,7 +104,7 @@
                 (z3-build-param-map-acc ctx (tail params)
                   (cons (cons pname (cons zconst [])) acc)))))))))
 
-(defn z3-build-param-map
+(defn z3-build-param-map :verify checked
   :sig [(ctx : _) (params : List) -> List]
   :requires [(valid ctx)]
   :ensures [(valid result)]
@@ -122,7 +122,7 @@
 ;;
 ;; Returns 0 for unsupported expressions.
 
-(defn z3-is-digit-char
+(defn z3-is-digit-char :verify checked
   :sig [(ch : String) -> Bool]
   :requires [(valid ch)]
   :ensures [(valid result)]
@@ -132,7 +132,7 @@
         (if (<= c 57) true false)
         false)))
 
-(defn z3-is-int-string
+(defn z3-is-int-string :verify checked
   :sig [(s : String) -> Bool]
   :requires [(valid s)]
   :ensures [(valid result)]
@@ -151,13 +151,13 @@
 ;; ── Float literal detection ─────────────────────────────────────────
 ;; Detects strings containing a decimal point (e.g., "3.14", "-0.5")
 
-(defn z3-is-float-string
+(defn z3-is-float-string :verify checked
   :sig [(s : String) -> Bool]
   :requires [(valid s)]
   :ensures [(valid result)]
   :body (z3-has-dot s 0))
 
-(defn z3-has-dot
+(defn z3-has-dot :verify checked
   :sig [(s : String) (i : Int) -> Bool]
   :requires [(valid s)]
   :ensures [(valid result)]
@@ -170,7 +170,7 @@
 
 ;; Translate a float string like "3.14" to Z3 Real via scaled integer ratio.
 ;; Uses 6-decimal precision: 3.14 → (airl_z3_mk_real ctx 3140000 1000000)
-(defn z3-translate-float-literal
+(defn z3-translate-float-literal :verify checked
   :sig [(ctx : _) (s : String) -> _]
   :intent "Translate float literal to Z3 Real (scaled by 1000000)"
   :requires [(valid ctx)]
@@ -198,7 +198,7 @@
                         (let (num : Int (if is-neg (- 0 abs-num) abs-num))
                           (airl_z3_mk_real ctx num scale)))))))))))))
 
-(defn z3-find-dot
+(defn z3-find-dot :verify checked
   :sig [(s : String) (i : Int) -> Int]
   :requires [(valid s)]
   :ensures [(valid result)]
@@ -209,7 +209,7 @@
         i
         (z3-find-dot s (+ i 1)))))
 
-(defn z3-pow10
+(defn z3-pow10 :verify checked
   :sig [(n : Int) -> Int]
   :requires [(valid n)]
   :ensures [(valid result)]
@@ -217,7 +217,7 @@
     (if (= n 0) 1
       (* 10 (z3-pow10 (- n 1)))))
 
-(defn z3-translate-expr
+(defn z3-translate-expr :verify checked
   :sig [(ctx : _) (expr : _) (param-map : List) (int-sort : _) -> _]
   :requires [(valid ctx)]
   :ensures [(valid result)]
@@ -246,7 +246,7 @@
           (let (args : _ (tail expr))
             (z3-translate-op ctx op args param-map int-sort))))))
 
-(defn z3-translate-op
+(defn z3-translate-op :verify checked
   :sig [(ctx : _) (op : String) (args : List) (param-map : List) (int-sort : _) -> _]
   :requires [(valid ctx)]
   :ensures [(valid result)]
@@ -375,7 +375,7 @@
 ;; The parser produces these for :requires and :ensures clauses.
 ;; Returns a Z3 AST handle, or 0 for unsupported expressions.
 
-(defn z3-translate-ast-expr
+(defn z3-translate-ast-expr :verify checked
   :sig [(ctx : _) (node : _) (param-map : List) (int-sort : _) -> _]
   :intent "Translate a parsed AST expression node into a Z3 AST"
   :requires [(valid ctx)]
@@ -458,7 +458,7 @@
 ;; Must be defined before z3-translate-ast-op (forward references cause
 ;; arity mismatch in the AOT compiler).
 
-(defn z3-is-user-function
+(defn z3-is-user-function :verify checked
   :sig [(op : String) -> Bool]
   :requires [(valid op)]
   :ensures [(valid result)]
@@ -512,7 +512,7 @@
     (if (= op "exit") false
       true))))))))))))))))))))))))))))))))))))))))))))))))
 
-(defn z3-apply-uninterpreted
+(defn z3-apply-uninterpreted :verify checked
   :sig [(ctx : _) (op : String) (args : List) (param-map : List) (int-sort : _) -> _]
   :intent "Apply unknown operator as Z3 uninterpreted function"
   :requires [(valid ctx)]
@@ -533,7 +533,7 @@
           0))
       0))
 
-(defn z3-translate-ast-op
+(defn z3-translate-ast-op :verify checked
   :sig [(ctx : _) (op : String) (args : List) (param-map : List) (int-sort : _) -> _]
   :intent "Translate a function call AST node to Z3 (binary ops, comparisons, logic)"
   :requires [(valid ctx)]
@@ -635,7 +635,7 @@
 ;; add binding, then translate body. g3 nests single-binding lets, so this
 ;; handles each ASTLet with its list of ASTBinding nodes.
 
-(defn z3-translate-ast-let
+(defn z3-translate-ast-let :verify checked
   :sig [(ctx : _) (bindings : List) (body : _) (param-map : List) (int-sort : _) -> _]
   :intent "Translate let bindings for Z3 — bind each init, then translate body"
   :requires [(valid ctx)]
@@ -658,7 +658,7 @@
 ;; args[1] = guard (ASTCall "where" [...]) or body
 ;; args[2] = body (if guard present)
 
-(defn z3-extract-param-name
+(defn z3-extract-param-name :verify checked
   :sig [(param-list : _) -> String]
   :intent "Extract variable name from [x : Type] parameter list AST"
   :requires [(valid param-list)]
@@ -671,7 +671,7 @@
           _ "?")
       _ "?"))
 
-(defn z3-extract-param-type
+(defn z3-extract-param-type :verify checked
   :sig [(param-list : _) -> String]
   :intent "Extract type name from [x : Type] parameter list AST"
   :requires [(valid param-list)]
@@ -687,7 +687,7 @@
           "Int")
       _ "Int"))
 
-(defn z3-translate-quantifier
+(defn z3-translate-quantifier :verify checked
   :sig [(ctx : _) (args : List) (param-map : List) (int-sort : _) (is-forall : Bool) -> _]
   :intent "Translate forall/exists quantifier expression to Z3"
   :requires [(valid ctx)]
@@ -726,7 +726,7 @@
                             (airl_z3_mk_forall_const1 ctx bound-var body-z3)
                             (airl_z3_mk_exists_const1 ctx bound-var body-z3))))))))))))))
 
-(defn z3-is-where-call
+(defn z3-is-where-call :verify checked
   :sig [(node : _) -> Bool]
   :intent "Check if an AST node is (where ...) guard"
   :requires [(valid node)]
@@ -736,7 +736,7 @@
       (ASTCall callee _ _ _) (= callee "where")
       _ false))
 
-(defn z3-translate-where-guard
+(defn z3-translate-where-guard :verify checked
   :sig [(ctx : _) (node : _) (param-map : List) (int-sort : _) -> _]
   :intent "Translate the guard expression inside (where guard)"
   :requires [(valid ctx)]
@@ -752,7 +752,7 @@
 ;; Builds an ITE chain from match arms right-to-left.
 ;; arms: list of (ASTArm pattern body)
 
-(defn z3-translate-match-arms
+(defn z3-translate-match-arms :verify checked
   :sig [(ctx : _) (scrutinee : _) (arms : List) (param-map : List) (int-sort : _) -> _]
   :intent "Translate match arms to Z3 ITE chain"
   :requires [(valid ctx)]
@@ -772,7 +772,7 @@
                     (if (= rest-z3 0) 0
                       (airl_z3_mk_ite ctx cond-z3 body-z3 rest-z3)))))))))))
 
-(defn z3-translate-pattern-cond
+(defn z3-translate-pattern-cond :verify checked
   :sig [(ctx : _) (scrutinee : _) (arm : _) (param-map : List) (int-sort : _) -> _]
   :intent "Generate Z3 condition for a match arm pattern"
   :requires [(valid ctx)]
@@ -803,7 +803,7 @@
           _ (airl_z3_mk_true ctx))
       _ (airl_z3_mk_true ctx)))
 
-(defn z3-translate-match-arm-body
+(defn z3-translate-match-arm-body :verify checked
   :sig [(ctx : _) (scrutinee : _) (arm : _) (param-map : List) (int-sort : _) -> _]
   :intent "Translate match arm body with pattern bindings in scope"
   :requires [(valid ctx)]
@@ -823,7 +823,7 @@
 ;; ── Assert multiple clauses (AST-aware) ─────────────────────────────
 ;; Translates each clause (AST node) and asserts it. Returns true if all OK.
 
-(defn z3-assert-clauses-acc
+(defn z3-assert-clauses-acc :verify checked
   :sig [(ctx : _) (solver : _) (clauses : List) (param-map : List) (int-sort : _) -> Bool]
   :requires [(valid ctx)]
   :ensures [(valid result)]
@@ -839,7 +839,7 @@
 ;; ── Conjoin multiple clauses into one Z3 AST (AST-aware) ────────────
 ;; Returns the conjunction of all translated clauses, or 0 if any fails.
 
-(defn z3-conjoin-clauses-acc
+(defn z3-conjoin-clauses-acc :verify checked
   :sig [(ctx : _) (clauses : List) (param-map : List) (int-sort : _) (acc : _) -> _]
   :requires [(valid ctx)]
   :ensures [(valid result)]
@@ -854,7 +854,7 @@
             (let (conj : _ (airl_z3_mk_and2 ctx acc ast))
               (z3-conjoin-clauses-acc ctx (tail clauses) param-map int-sort conj)))))))
 
-(defn z3-conjoin-clauses
+(defn z3-conjoin-clauses :verify checked
   :sig [(ctx : _) (clauses : List) (param-map : List) (int-sort : _) -> _]
   :requires [(valid ctx)]
   :ensures [(valid result)]
@@ -878,7 +878,7 @@
 ;; (untranslatable) is demoted to "unknown" because `result` is
 ;; unconstrained in that regime and the SAT witness is spurious.
 
-(defn z3-verify-function
+(defn z3-verify-function :verify checked
   :sig [(name : String) (params : List) (requires-list : List) (ensures-list : List) (body : _) -> String]
   :intent "Verify function contracts using Z3 SMT solver"
   :requires [(valid name)]
@@ -953,7 +953,7 @@
 ;; These helpers extract requires/ensures clauses from parsed AST defns
 ;; and convert them to the format expected by z3-verify-function.
 
-(defn z3-extract-param-pairs
+(defn z3-extract-param-pairs :verify checked
   :sig [(params : List) -> List]
   :intent "Convert ASTParam list to [name type-string] pairs for z3"
   :requires [(valid params)]
@@ -966,7 +966,7 @@
             (cons [name type-name] (z3-extract-param-pairs (tail params)))
           _ (z3-extract-param-pairs (tail params))))))
 
-(defn z3-verify-defn
+(defn z3-verify-defn :verify checked
   :sig [(node : _) -> _]
   :intent "Verify a single ASTDefn's contracts. Returns [name verdict] or nil if no contracts."
   :requires [(valid node)]
@@ -989,7 +989,7 @@
                 _ nil))))
       _ nil))
 
-(defn z3-verify-ast-nodes
+(defn z3-verify-ast-nodes :verify checked
   :sig [(nodes : List) (proof-map : _) -> _]
   :intent "Verify all defn contracts in AST nodes, returning proof-results map"
   :requires [(valid nodes)]
@@ -1008,7 +1008,7 @@
               (z3-verify-ast-nodes (tail nodes) inner-map))
           _ (z3-verify-ast-nodes (tail nodes) proof-map)))))
 
-(defn z3-verify-ast
+(defn z3-verify-ast :verify checked
   :sig [(nodes : List) -> _]
   :intent "Entry point: verify all contracts in parsed AST, return proof-map"
   :requires [(valid nodes)]

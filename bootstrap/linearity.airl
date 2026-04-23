@@ -13,7 +13,7 @@
 
 ;; ── Copy-type detection ─────────────────────────────────
 
-(defn is-copy-type
+(defn is-copy-type :verify checked
   :sig [(type-name : String) -> Bool]
   :intent "Returns true if the type is Copy (never consumed by move)"
   :requires [(valid type-name)]
@@ -35,7 +35,7 @@
 ;; A binding map is a list of [name state] pairs.
 ;; Lookup walks from head (most recently added) — shadowing is natural.
 
-(defn binding-lookup
+(defn binding-lookup :verify checked
   :sig [(bindings : List) (name : String) -> _]
   :intent "Look up a binding's state by name. Returns (Ok state) or (Err \"not-found\")"
   :requires [(valid bindings)]
@@ -48,7 +48,7 @@
           (Ok (at entry 1))
           (binding-lookup (tail bindings) name)))))
 
-(defn binding-update
+(defn binding-update :verify checked
   :sig [(bindings : List) (name : String) (new-state : String) -> List]
   :intent "Update the first binding matching name to new-state. Returns updated map."
   :requires [(valid bindings)]
@@ -62,14 +62,14 @@
             (cons [name new-state] rest)
             (cons entry (binding-update rest name new-state)))))))
 
-(defn binding-add
+(defn binding-add :verify checked
   :sig [(bindings : List) (name : String) (state : String) -> List]
   :intent "Add a new binding to the front of the map"
   :requires [(valid bindings)]
   :ensures [(valid result)]
   :body (cons [name state] bindings))
 
-(defn binding-remove
+(defn binding-remove :verify checked
   :sig [(bindings : List) (name : String) -> List]
   :intent "Remove the first binding matching name"
   :requires [(valid bindings)]
@@ -85,7 +85,7 @@
 
 ;; ── Track move ──────────────────────────────────────────
 
-(defn track-move
+(defn track-move :verify checked
   :sig [(bindings : List) (name : String) -> List]
   :intent "Transition binding to moved. Returns [updated-bindings diagnostics]"
   :requires [(valid bindings)]
@@ -110,7 +110,7 @@
 
 ;; ── Track read ──────────────────────────────────────────
 
-(defn track-read
+(defn track-read :verify checked
   :sig [(bindings : List) (name : String) -> List]
   :intent "Verify binding is readable (not moved) without consuming it. Returns [bindings diagnostics]"
   :requires [(valid bindings)]
@@ -129,7 +129,7 @@
 
 ;; ── Non-consuming builtin classification ────────────────
 
-(defn is-non-consuming-op
+(defn is-non-consuming-op :verify checked
   :sig [(op-name : String) -> Bool]
   :intent "Returns true if the named builtin does not consume its arguments (Ref/Copy semantics)"
   :requires [(valid op-name)]
@@ -219,7 +219,7 @@
 
 ;; ── Divergent expression detection ─────────────────────
 
-(defn is-divergent-expr
+(defn is-divergent-expr :verify checked
   :sig [(expr : _) -> Bool]
   :intent "Returns true for expressions that represent early exits (Err, error, exit)"
   :requires [(valid expr)]
@@ -237,7 +237,7 @@
 
 ;; ── Non-consuming bootstrap function list ───────────────
 
-(defn is-non-consuming-bootstrap-fn
+(defn is-non-consuming-bootstrap-fn :verify checked
   :sig [(fn-name : String) -> Bool]
   :intent "Returns true for user-defined g3 bootstrap functions that read arguments without consuming"
   :requires [(valid fn-name)]
@@ -301,7 +301,7 @@
 
 ;; ── Branch merge ────────────────────────────────────────
 
-(defn merge-branch-states-walk
+(defn merge-branch-states-walk :verify checked
   :sig [(base : List) (map-a : List) (map-b : List) (merged : List) (diags : List) -> List]
   :intent "Walk base bindings, compare states in map-a and map-b, build merged map and diagnostics"
   :requires [(valid base)]
@@ -328,7 +328,7 @@
                             (append merged [name "moved"])
                             (append diags (str "branches disagree on ownership of '" name "': moved in one branch but not the other")))))))))))))))
 
-(defn merge-branch-states
+(defn merge-branch-states :verify checked
   :sig [(map-a : List) (map-b : List) (base : List) -> List]
   :intent "Merge two branch binding maps against base. Returns [merged-map diagnostics]"
   :requires [(valid map-a)]
@@ -337,7 +337,7 @@
 
 ;; ── Merge N arm states ──────────────────────────────────
 
-(defn merge-n-arm-states
+(defn merge-n-arm-states :verify checked
   :sig [(arm-states : List) (base : List) -> List]
   :intent "Merge N arm states pairwise. Returns [merged-map diagnostics]"
   :requires [(valid arm-states)]
@@ -361,7 +361,7 @@
 
 ;; ── Initial state for a param ───────────────────────────
 
-(defn param-initial-state
+(defn param-initial-state :verify checked
   :sig [(param : _) -> String]
   :intent "Determine initial ownership state for a function parameter"
   :requires [(valid param)]
@@ -372,7 +372,7 @@
         (if (is-copy-type type-name) "copy" "owned")
       _ "owned"))
 
-(defn param-name
+(defn param-name :verify checked
   :sig [(param : _) -> String]
   :intent "Extract name from an ASTParam"
   :requires [(valid param)]
@@ -385,7 +385,7 @@
 ;; ── Expression checker ──────────────────────────────────
 ;; Returns [updated-bindings diagnostics-list]
 
-(defn linearity-check-expr
+(defn linearity-check-expr :verify checked
   :sig [(expr : _) (bindings : List) -> List]
   :intent "Walk an expression, tracking ownership. Returns [updated-bindings diagnostics]"
   :requires [(valid expr)]
@@ -457,7 +457,7 @@
 
 ;; ── Let binding checker ─────────────────────────────────
 
-(defn linearity-check-let
+(defn linearity-check-let :verify checked
   :sig [(let-bindings : List) (body : _) (bindings : List) -> List]
   :intent "Check let bindings, introduce them, check body, clean up"
   :requires [(valid let-bindings)]
@@ -476,7 +476,7 @@
                   (let (cleaned : List (linearity-remove-names bindings-after-body bound-names))
                     [cleaned (concat init-diags body-diags)])))))))))
 
-(defn linearity-check-let-inits
+(defn linearity-check-let-inits :verify checked
   :sig [(let-bindings : List) (bindings : List) (names-acc : List) -> List]
   :intent "Check let init expressions and add bindings. Returns [updated-bindings diags names-list]"
   :requires [(valid let-bindings)]
@@ -503,7 +503,7 @@
             ;; Not a binding node — skip
             _ (linearity-check-let-inits rest bindings names-acc))))))
 
-(defn linearity-remove-names
+(defn linearity-remove-names :verify checked
   :sig [(bindings : List) (names : List) -> List]
   :intent "Remove a list of names from the binding map"
   :requires [(valid bindings)]
@@ -515,7 +515,7 @@
 
 ;; ── Sequential expression checker ───────────────────────
 
-(defn linearity-check-seq
+(defn linearity-check-seq :verify checked
   :sig [(exprs : List) (bindings : List) -> List]
   :intent "Check expressions sequentially, threading bindings. Returns [updated-bindings diags]"
   :requires [(valid exprs)]
@@ -533,7 +533,7 @@
 
 ;; ── If/else checker ─────────────────────────────────────
 
-(defn linearity-check-if
+(defn linearity-check-if :verify checked
   :sig [(cond-expr : _) (then-expr : _) (else-expr : _) (bindings : List) -> List]
   :intent "Check if/else with branch snapshot/merge"
   :requires [(valid cond-expr)]
@@ -566,7 +566,7 @@
 
 ;; ── Match checker ───────────────────────────────────────
 
-(defn linearity-check-match
+(defn linearity-check-match :verify checked
   :sig [(scrutinee : _) (arms : List) (bindings : List) -> List]
   :intent "Check match with N-way branch merge"
   :requires [(valid scrutinee)]
@@ -588,7 +588,7 @@
                       (let (merge-diags : List (at merge-result 1))
                         [merged (concat scrut-diags (concat arm-diags merge-diags))])))))))))))
 
-(defn linearity-check-match-arms
+(defn linearity-check-match-arms :verify checked
   :sig [(arms : List) (snapshot : List) -> List]
   :intent "Check each match arm from snapshot. Returns [list-of-arm-states all-diags]"
   :requires [(valid arms)]
@@ -620,7 +620,7 @@
             ;; Not an ASTArm — skip
             _ (linearity-check-match-arms rest snapshot))))))
 
-(defn introduce-pattern-bindings
+(defn introduce-pattern-bindings :verify checked
   :sig [(pattern : _) (bindings : List) -> List]
   :intent "Add bindings for pattern variables (all owned)"
   :requires [(valid pattern)]
@@ -636,7 +636,7 @@
       ;; Wildcard, literal — no bindings
       _ bindings))
 
-(defn collect-pattern-names
+(defn collect-pattern-names :verify checked
   :sig [(pattern : _) -> List]
   :intent "Collect all binding names from a pattern"
   :requires [(valid pattern)]
@@ -652,7 +652,7 @@
 
 ;; ── Call checker ────────────────────────────────────────
 
-(defn extract-callee-name
+(defn extract-callee-name :verify checked
   :sig [(callee : _) -> String]
   :intent "Extract the string name of a callee expression for builtin classification"
   :requires [(valid callee)]
@@ -664,7 +664,7 @@
       ;; Complex expression (higher-order call) — treat as consuming
       _ ""))
 
-(defn linearity-check-call
+(defn linearity-check-call :verify checked
   :sig [(callee : _) (args : List) (bindings : List) -> List]
   :intent "Check function call — use non-consuming semantics for known builtins"
   :requires [(valid callee)]
@@ -685,7 +685,7 @@
                   (let (args-diags : List (at args-result 1))
                     [final-bindings (concat callee-diags args-diags)])))))))))
 
-(defn linearity-check-call-args
+(defn linearity-check-call-args :verify checked
   :sig [(args : List) (bindings : List) (non-consuming : Bool) -> List]
   :intent "Check call arguments, using track-read for non-consuming builtins"
   :requires [(valid args)]
@@ -713,7 +713,7 @@
 
 ;; ── Lambda checker ──────────────────────────────────────
 
-(defn linearity-check-lambda
+(defn linearity-check-lambda :verify checked
   :sig [(params : List) (body : _) (bindings : List) -> List]
   :intent "Check lambda body with params in scope. No capture analysis in v1."
   :requires [(valid params)]
@@ -731,7 +731,7 @@
 
 ;; ── Function definition checker ─────────────────────────
 
-(defn linearity-check-fn
+(defn linearity-check-fn :verify checked
   :sig [(defn-ast : _) (mode : String) -> List]
   :intent "Check one function definition for linearity violations"
   :requires [(valid defn-ast)]
@@ -762,7 +762,7 @@
 
 ;; ── Module checker (entry point) ────────────────────────
 
-(defn linearity-check-module
+(defn linearity-check-module :verify checked
   :sig [(tops : List) (mode : String) -> List]
   :intent "Check all defns in a module for linearity violations. Returns list of diagnostic strings."
   :requires [(valid tops)]

@@ -2,7 +2,7 @@
 ;; CairLI app definition and dispatch logic.
 
 ;; ── build-app : create CairLI app with all flags ──
-(defn build-app
+(defn build-app :verify checked
   :sig [(dummy : _) -> _]
   :requires [true]
   :ensures [(valid result)]
@@ -21,7 +21,7 @@
                                 app)))))))))))))
 
 ;; ── build-opts : convert parsed CairLI context to opts Map ──
-(defn build-opts
+(defn build-opts :verify checked
   :sig [(ctx : _) -> _]
   :requires [(valid ctx)]
   :ensures [(valid result)]
@@ -39,7 +39,7 @@
                          "indent-str" indent-str])))))
 
 ;; ── output-results : print each result on its own line ──
-(defn output-results
+(defn output-results :verify checked
   :sig [(results : List) (opts : _) (join-out : Bool) -> i64]
   :requires [(valid results)]
   :ensures [(valid result)]
@@ -54,7 +54,7 @@
             0)))
 
 ;; ── run-and-output : evaluate filter and print results ──
-(defn run-and-output
+(defn run-and-output :verify checked
   :sig [(filter-ast : _) (input : _) (env : _) (opts : _) -> i64]
   :requires [(valid filter-ast)]
   :ensures [(valid result)]
@@ -63,7 +63,7 @@
             (output-results results opts join-out))))
 
 ;; ── process-single : parse JSON, evaluate filter, output results ──
-(defn process-single
+(defn process-single :verify checked
   :sig [(json-input : String) (filter-ast : _) (opts : _) (env : _) -> i64]
   :requires [(valid json-input)]
   :ensures [(valid result)]
@@ -71,7 +71,7 @@
           (run-and-output filter-ast input env opts)))
 
 ;; ── process-raw-lines : -R mode, treat each line as a string ──
-(defn process-raw-lines
+(defn process-raw-lines :verify checked
   :sig [(raw-input : String) (filter-ast : _) (opts : _) (env : _) -> i64]
   :requires [(valid raw-input)]
   :ensures [(valid result)]
@@ -83,7 +83,7 @@
               0 input-lines))))
 
 ;; ── dispatch-input : handle stdin reading based on mode ──
-(defn dispatch-input
+(defn dispatch-input :verify checked
   :sig [(filter-ast : _) (opts : _) (env : _) -> i64]
   :requires [(valid filter-ast)]
   :ensures [(valid result)]
@@ -99,7 +99,7 @@
                 (process-single (trim raw) filter-ast opts env))))))
 
 ;; ── dispatch : main dispatch logic ──
-(defn dispatch
+(defn dispatch :verify checked
   :sig [(ctx : _) -> _]
   :requires [(valid ctx)]
   :ensures [(valid result)]

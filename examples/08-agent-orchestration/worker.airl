@@ -6,21 +6,21 @@
 ;;
 ;; Each function has full contracts — the worker guarantees its outputs.
 
-(defn factorial
+(defn factorial :verify checked
   :sig [(n : i64) -> i64]
   :intent "Compute n! recursively"
   :requires [(>= n 0) (<= n 20)]
   :ensures [(>= result 1)]
   :body (if (<= n 1) 1 (* n (factorial (- n 1)))))
 
-(defn fibonacci
+(defn fibonacci :verify checked
   :sig [(n : i64) -> i64]
   :intent "Compute the nth Fibonacci number"
   :requires [(>= n 0) (<= n 30)]
   :ensures [(>= result 0)]
   :body (if (<= n 1) n (+ (fibonacci (- n 1)) (fibonacci (- n 2)))))
 
-(defn is-even
+(defn is-even :verify checked
   :sig [(n : i64) -> i64]
   :intent "Return 1 if n is even, 0 if odd"
   :requires [(valid n)]

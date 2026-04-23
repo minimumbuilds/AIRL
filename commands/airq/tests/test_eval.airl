@@ -1,6 +1,6 @@
 ;; ── airq: Eval Tests ────────────────────────────────────────
 
-(defn test-assert
+(defn test-assert :verify checked
   :sig [(label : String) (actual : _) (expected : _) -> _]
   :requires [(valid label)]
   :ensures [(valid result)]
@@ -9,7 +9,7 @@
           (let (dummy : _ (print (str "FAIL: " label " expected=" (json-stringify expected) " actual=" (json-stringify actual) "\n")))
             (exit 1))))
 
-(defn run-jq
+(defn run-jq :verify checked
   :sig [(filter-str : String) (input : _) -> List]
   :requires [(valid filter-str)]
   :ensures [(valid result)]
@@ -17,7 +17,7 @@
           (let (ast : _ (parse tokens))
             (jq-eval ast input (empty-env nil)))))
 
-(defn run-jq-first
+(defn run-jq-first :verify checked
   :sig [(filter-str : String) (input : _) -> _]
   :requires [(valid filter-str)]
   :ensures [(valid result)]

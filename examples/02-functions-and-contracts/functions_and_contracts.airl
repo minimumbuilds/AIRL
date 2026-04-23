@@ -10,7 +10,7 @@
 
 ;; A function that clamps a value to a range [lo, hi].
 ;; The contract guarantees the result is always within bounds.
-(defn clamp
+(defn clamp :verify checked
   :sig [(val : i64) (lo : i64) (hi : i64) -> i64]
   :intent "Restrict val to the range [lo, hi]"
   :requires [(<= lo hi)]
@@ -18,7 +18,7 @@
   :body (if (< val lo) lo (if (> val hi) hi val)))
 
 ;; Converts a raw score (any integer) to a percentage [0, 100]
-(defn to-percentage
+(defn to-percentage :verify checked
   :sig [(score : i64) (max-score : i64) -> i64]
   :intent "Convert a raw score to a percentage, clamped to [0, 100]"
   :requires [(> max-score 0)]

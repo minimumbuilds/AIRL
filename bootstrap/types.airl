@@ -5,7 +5,7 @@
 
 ;; ─── Type Resolution ─────────────────────────────────
 
-(defn is-int-type
+(defn is-int-type :verify checked
   :sig [(ty : List) -> Bool]
   :intent "Check if a type is an integer type"
   :requires [(valid ty)]
@@ -21,7 +21,7 @@
     (TyU64) true
     _ false))
 
-(defn is-float-type
+(defn is-float-type :verify checked
   :sig [(ty : List) -> Bool]
   :intent "Check if a type is a float type"
   :requires [(valid ty)]
@@ -33,7 +33,7 @@
     (TyBF16) true
     _ false))
 
-(defn resolve-type-name
+(defn resolve-type-name :verify checked
   :sig [(name : String) (registry : List) -> List]
   :intent "Resolve a type name string to a type variant, or Err for unknown types"
   :requires [(valid name)]
@@ -71,35 +71,35 @@
 ;; ─── Type Environment ────────────────────────────────
 ;; Same list-of-maps frame stack pattern as eval.airl
 
-(defn type-env-new
+(defn type-env-new :verify checked
   :sig [(_u : i64) -> List]
   :intent "Create a new type environment with one empty frame"
   :requires [(valid _u)]
   :ensures [(valid result)]
   :body [(map-new)])
 
-(defn type-env-push
+(defn type-env-push :verify checked
   :sig [(env : List) -> List]
   :intent "Push a new empty frame onto the type environment"
   :requires [(valid env)]
   :ensures [(valid result)]
   :body (cons (map-new) env))
 
-(defn type-env-pop
+(defn type-env-pop :verify checked
   :sig [(env : List) -> List]
   :intent "Pop the innermost frame from the type environment"
   :requires [(valid env)]
   :ensures [(valid result)]
   :body (tail env))
 
-(defn type-env-bind
+(defn type-env-bind :verify checked
   :sig [(env : List) (name : String) (ty : List) -> List]
   :intent "Bind a name to a type in the top frame"
   :requires [(valid env)]
   :ensures [(valid result)]
   :body (cons (map-set (head env) name ty) (tail env)))
 
-(defn type-env-lookup
+(defn type-env-lookup :verify checked
   :sig [(env : List) (name : String) -> List]
   :intent "Look up a name in the type environment, searching from innermost frame outward"
   :requires [(valid env)]
@@ -115,21 +115,21 @@
 ;;   type-name → type info (stored as variant)
 ;;   ctor-name → CtorInfo with parent type and field types
 
-(defn registry-new
+(defn registry-new :verify checked
   :sig [(_u : i64) -> List]
   :intent "Create a new empty type registry"
   :requires [(valid _u)]
   :ensures [(valid result)]
   :body (map-new))
 
-(defn registry-add-ctor
+(defn registry-add-ctor :verify checked
   :sig [(reg : List) (name : String) (info : List) -> List]
   :intent "Register a constructor name with its CtorInfo"
   :requires [(valid reg)]
   :ensures [(valid result)]
   :body (map-set reg (join ["ctor:" name] "") info))
 
-(defn registry-get-ctor
+(defn registry-get-ctor :verify checked
   :sig [(reg : List) (name : String) -> List]
   :intent "Look up a constructor by name"
   :requires [(valid reg)]
@@ -140,21 +140,21 @@
         (Ok (map-get reg key))
         (Err (join ["unknown constructor: " name] "")))))
 
-(defn registry-has-ctor
+(defn registry-has-ctor :verify checked
   :sig [(reg : List) (name : String) -> Bool]
   :intent "Check if a constructor is registered"
   :requires [(valid reg)]
   :ensures [(valid result)]
   :body (map-has reg (join ["ctor:" name] "")))
 
-(defn registry-add-type
+(defn registry-add-type :verify checked
   :sig [(reg : List) (name : String) (info : List) -> List]
   :intent "Register a type name with its definition"
   :requires [(valid reg)]
   :ensures [(valid result)]
   :body (map-set reg (join ["type:" name] "") info))
 
-(defn registry-has-type
+(defn registry-has-type :verify checked
   :sig [(reg : List) (name : String) -> Bool]
   :intent "Check if a type is registered"
   :requires [(valid reg)]
@@ -163,7 +163,7 @@
 
 ;; ─── Type Compatibility ─────────────────────────────
 
-(defn types-compatible
+(defn types-compatible :verify checked
   :sig [(a : List) (b : List) -> Bool]
   :intent "Check if two types are compatible (assignable)"
   :requires [(valid a)]
@@ -207,7 +207,7 @@
                       _ false)
                     _ false)))))))))
 
-(defn types-compatible-lists
+(defn types-compatible-lists :verify checked
   :sig [(as : List) (bs : List) -> Bool]
   :intent "Check if two lists of types are pairwise compatible"
   :requires [(valid as)]

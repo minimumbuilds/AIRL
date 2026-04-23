@@ -8,7 +8,7 @@
 ;; Run with: cargo run -- run examples/05-ownership-and-borrowing/ownership_and_borrowing.airl
 
 ;; This function takes ownership: the caller's binding is moved
-(defn consume
+(defn consume :verify checked
   :sig [(own val : i64) -> i64]
   :intent "Take ownership of a value and return it doubled"
   :requires [(valid val)]
@@ -16,7 +16,7 @@
   :body (* val 2))
 
 ;; This function borrows immutably: the caller keeps the value
-(defn inspect
+(defn inspect :verify checked
   :sig [(ref val : i64) -> i64]
   :intent "Read a value without taking ownership"
   :requires [(valid val)]

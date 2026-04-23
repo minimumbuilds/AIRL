@@ -14,7 +14,7 @@
 
 ;; ── Error formatting ───────────────────────────────────────
 
-(defn g3-format-error
+(defn g3-format-error :verify checked
   :sig [(label : String) (e : _) -> String]
   :intent "Format errors with file:line:col when available"
   :requires [(valid label)]
@@ -26,14 +26,14 @@
 
 ;; ── Compile a single source string to BCFunc list ────────────
 
-(defn g3-compile-source
+(defn g3-compile-source :verify checked
   :sig [(source : String) (label : String) -> _]
   :intent "Compile source string to list of BCFunc values"
   :requires [(valid source)]
   :ensures [(valid result)]
   :body (g3-compile-source-with-prefix source label ""))
 
-(defn g3-compile-source-with-prefix
+(defn g3-compile-source-with-prefix :verify checked
   :sig [(source : String) (label : String) (mod-prefix : String) -> _]
   :intent "Compile source string to list of BCFunc values with module prefix"
   :requires [(valid source)]
@@ -52,7 +52,7 @@
 
 ;; ── Z3-verified compilation ──────────────────────────────
 
-(defn g3-compile-source-with-z3
+(defn g3-compile-source-with-z3 :verify checked
   :sig [(source : String) (label : String) (mod-prefix : String) -> _]
   :intent "Compile with Z3 verification + disk cache: parse → cached-z3-verify → bc-compile"
   :requires [(valid source)]
@@ -83,7 +83,7 @@
 
 ;; ── Linearity check integration (issue-141) ─────────────
 
-(defn g3-linearity-mode
+(defn g3-linearity-mode :verify checked
   :sig [(strict : Bool) -> String]
   :intent "Determine linearity mode: check when strict or AIRL_LINEARITY=check, else warn"
   :requires [(valid strict)]
@@ -95,7 +95,7 @@
         (Ok mode) mode
         _ "warn")))
 
-(defn g3-run-linearity
+(defn g3-run-linearity :verify checked
   :sig [(ast-nodes : List) (label : String) (lin-mode : String) -> _]
   :intent "Run linearity checker on AST nodes. Returns (Ok ast-nodes) or (Err msg) in check mode."
   :requires [(valid ast-nodes)]
@@ -116,7 +116,7 @@
 
 ;; ── Z3-verified compilation with strict mode (issue-136) ─
 
-(defn g3-compile-source-with-z3-strict
+(defn g3-compile-source-with-z3-strict :verify checked
   :sig [(source : String) (label : String) (mod-prefix : String) (strict : Bool) -> _]
   :intent "Compile with Z3 verification + linearity check; when strict=true, override all verify-levels to proven"
   :requires [(valid source)]
@@ -164,7 +164,7 @@
 
 ;; ── Locate stdlib directory ──────────────────────────────
 
-(defn g3-find-stdlib-dir
+(defn g3-find-stdlib-dir :verify checked
   :sig [-> String]
   :intent "Find stdlib directory: AIRL_STDLIB env var, or stdlib/ relative to CWD"
   :requires [(valid 1)]
@@ -176,7 +176,7 @@
 
 ;; ── Compile stdlib as a single unit ──────────────────────
 
-(defn g3-compile-stdlib
+(defn g3-compile-stdlib :verify checked
   :sig [-> _]
   :intent "Compile each stdlib module separately with module prefix for lambda naming"
   :requires [(valid 1)]
@@ -211,7 +211,7 @@
 
 ;; ── Parse CLI arguments ──────────────────────────────────
 
-(defn g3-parse-args
+(defn g3-parse-args :verify checked
   :sig [(args : List) -> _]
   :intent "Parse CLI args into [input-files output-path target-triple]"
   :requires [(valid args)]
@@ -237,20 +237,20 @@
 
 ;; ── Flag handling ────────────────────────────────────────
 
-(defn g3-has-flag?
+(defn g3-has-flag? :verify checked
   :sig [(args : List) (flag : String) -> Bool]
   :intent "Check if any arg matches the given flag"
   :requires [(valid args)]
   :ensures [(valid result)]
   :body (any (fn [a] (= a flag)) args))
 
-(defn g3-print-version
+(defn g3-print-version :verify checked
   :sig [-> Nil]
   :requires [(valid 1)]
   :ensures [(valid result)]
   :body (print "g3 0.21.5\n"))
 
-(defn g3-print-help
+(defn g3-print-help :verify checked
   :sig [-> Nil]
   :requires [(valid 1)]
   :ensures [(valid result)]
@@ -279,7 +279,7 @@
 ;; no cross-file BCFunc retention. This is the primitive Step 3 needs;
 ;; wiring it into the fold driver is left as follow-up work.
 
-(defn g3-compile-file-to-obj
+(defn g3-compile-file-to-obj :verify checked
   :sig [(source : String) (label : String) (strict : Bool) (obj-path : String) (strip-main : Bool) -> _]
   :intent "Compile one file to a .o, strip __main__ if strip-main=true"
   :requires [(valid source)]
@@ -303,7 +303,7 @@
 ;; Externalizing this keeps the fold's lambda trivial and avoids the parens-
 ;; imbalance trap that 11-level in-line nesting causes the AIRL parser.
 
-(defn g3-step3-fold-step
+(defn g3-step3-fold-step :verify checked
   :sig [(acc : _) (entry : List) (output-path : String) (strict : Bool) -> _]
   :intent "One fold step: compile one source file to .o, update (paths, needs) accumulator"
   :requires [(valid entry)]
@@ -332,7 +332,7 @@
 ;; After the fold, compile last-file (keeping __main__), append its .o path,
 ;; and link everything. Externalizing keeps the main body trivial.
 
-(defn g3-step3-link-tail
+(defn g3-step3-link-tail :verify checked
   :sig [(acc : _) (last-file : String) (output-path : String) (strict : Bool) -> _]
   :intent "Compile last-file, link all .o into output-path"
   :requires [(valid last-file)]

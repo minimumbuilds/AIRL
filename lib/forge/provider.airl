@@ -1,7 +1,7 @@
 ;; provider.airl — LLM Provider abstraction for Forge (Anthropic API)
 ;; Requires AIReqL: compile with aireql-util.airl aireql-transport.airl aireql.airl
 
-(defn make-provider
+(defn make-provider :verify checked
   :sig [(name : String) (api-url : String) (api-key : String) (model : String) -> Map]
   :intent "Create a provider config map with name, api-url, api-key, and model"
   :requires [(not (= name "")) (not (= api-key ""))]
@@ -12,7 +12,7 @@
              "api-key" api-key
              "model" model]))
 
-(defn make-message
+(defn make-message :verify checked
   :sig [(role : String) (content : String) -> Map]
   :intent "Create a message map with role and content fields"
   :requires [(not (= role "")) (not (= content ""))]
@@ -20,7 +20,7 @@
   :body
   (map-from ["role" role "content" content]))
 
-(defn format-messages-anthropic
+(defn format-messages-anthropic :verify checked
   :sig [(messages : List) (model : String) (tools : _) -> Map]
   :intent "Build Anthropic API request body with model, messages, max_tokens, and optional tools"
   :requires [(valid messages) (not (= model ""))]
@@ -35,7 +35,7 @@
         base
         (map-set base "tools" tools)))))
 
-(defn call-provider
+(defn call-provider :verify checked
   :sig [(provider : Map) (messages : List) (tools : _) -> _]
   :intent "Make HTTP POST to Anthropic API with messages, return parsed Result"
   :requires [(map-has provider "api-url") (map-has provider "api-key") (map-has provider "model")]
@@ -55,7 +55,7 @@
       (Ok (aireql-json resp))
       (Err (str "HTTP " (aireql-status-code resp) ": " (aireql-text resp))))))
 
-(defn extract-text-content
+(defn extract-text-content :verify checked
   :sig [(response : Map) -> _]
   :intent "Extract first text block from Anthropic response content list, or return error"
   :requires [(valid response)]
@@ -73,7 +73,7 @@
           (Ok (map-get text-block "text"))))
       (Err "Response has no content field"))))
 
-(defn extract-tool-calls
+(defn extract-tool-calls :verify checked
   :sig [(response : Map) -> List]
   :intent "Filter content blocks where type is tool_use, returns list (may be empty)"
   :requires [(valid response)]

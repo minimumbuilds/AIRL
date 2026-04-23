@@ -1,6 +1,6 @@
 ;; EXPECT: 1:hello|2:a b c|3:12|4:0|5:true
 ;; DEPS: bootstrap/lexer.airl
-(defn lex-str-val
+(defn lex-str-val :verify checked
   :sig [(src : String) -> String]
   :requires [(valid src)]
   :ensures [(valid result)]

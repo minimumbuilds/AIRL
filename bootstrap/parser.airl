@@ -3,21 +3,21 @@
 
 ;; ── Helpers ───────────────────────────────────────
 
-(defn is-upper?
+(defn is-upper? :verify checked
   :sig [(ch : String) -> Bool]
   :intent "Check if single-char string is uppercase letter"
   :requires [(valid ch)]
   :ensures [(valid result)]
   :body (contains "ABCDEFGHIJKLMNOPQRSTUVWXYZ" ch))
 
-(defn parse-error
+(defn parse-error :verify checked
   :sig [(msg : String) (line : i64) (col : i64) -> List]
   :intent "Create a structured parse error"
   :requires [(valid msg)]
   :ensures [(valid result)]
   :body (Err (ParseError msg line col)))
 
-(defn token-line
+(defn token-line :verify checked
   :sig [(tok : List) -> i64]
   :intent "Extract line number from a Token"
   :requires [(valid tok)]
@@ -25,7 +25,7 @@
   :body (match tok
     (Token _ _ line _) line))
 
-(defn token-col
+(defn token-col :verify checked
   :sig [(tok : List) -> i64]
   :intent "Extract column number from a Token"
   :requires [(valid tok)]
@@ -33,7 +33,7 @@
   :body (match tok
     (Token _ _ _ col) col))
 
-(defn token-kind
+(defn token-kind :verify checked
   :sig [(tok : List) -> String]
   :intent "Extract kind string from a Token"
   :requires [(valid tok)]
@@ -41,7 +41,7 @@
   :body (match tok
     (Token kind _ _ _) kind))
 
-(defn token-value
+(defn token-value :verify checked
   :sig [(tok : List) -> List]
   :intent "Extract value from a Token"
   :requires [(valid tok)]
@@ -53,7 +53,7 @@
 
 ;; Internal depth-aware implementations — not part of public API.
 ;; MAX-PARSE-DEPTH = 1000 inlined to avoid def-constant type issues.
-(defn parse-sexpr-d
+(defn parse-sexpr-d :verify checked
   :sig [(tokens : List) (pos : i64) (depth : i64) -> List]
   :intent "parse-sexpr with depth guard — internal; use parse-sexpr for external callers"
   :requires [(valid tokens)]
@@ -106,7 +106,7 @@
                       ;; Any other token is an atom
                       (Ok [(SAtom tok) (+ pos 1)])))))))))))
 
-(defn parse-sexprs-d
+(defn parse-sexprs-d :verify checked
   :sig [(tokens : List) (pos : i64) (stop-kind : String) (depth : i64) -> List]
   :intent "parse-sexprs with depth guard — internal; use parse-sexprs for external callers"
   :requires [(valid tokens)]
@@ -138,21 +138,21 @@
 
 ;; Public API — original 2/3-arg signatures preserved for test compatibility.
 ;; Delegates to depth-aware internal functions starting at depth 0.
-(defn parse-sexpr
+(defn parse-sexpr :verify checked
   :sig [(tokens : List) (pos : i64) -> List]
   :intent "Parse one S-expression from token list at pos, return (Ok [sexpr new-pos]) or (Err ...)"
   :requires [(valid tokens)]
   :ensures [(valid result)]
   :body (parse-sexpr-d tokens pos 0))
 
-(defn parse-sexprs
+(defn parse-sexprs :verify checked
   :sig [(tokens : List) (pos : i64) (stop-kind : String) -> List]
   :intent "Parse S-expressions until stop token or EOF, return (Ok [sexprs pos])"
   :requires [(valid tokens)]
   :ensures [(valid result)]
   :body (parse-sexprs-d tokens pos stop-kind 0))
 
-(defn parse-sexpr-all
+(defn parse-sexpr-all :verify checked
   :sig [(tokens : List) -> List]
   :intent "Parse all tokens into S-expressions, return (Ok sexprs) or (Err ...)"
   :requires [(valid tokens)]
@@ -164,7 +164,7 @@
 
 ;; ── Phase 2: S-Expression → AST ──────────────────
 
-(defn parse-atom
+(defn parse-atom :verify checked
   :sig [(tok : List) -> List]
   :intent "Convert a token to an AST atom node"
   :requires [(valid tok)]
@@ -185,7 +185,7 @@
             (Ok (ASTSymbol value line col)))
           (Err (ParseError (+ "unexpected token kind: " kind) line col)))))))))))
 
-(defn parse-list-items
+(defn parse-list-items :verify checked
   :sig [(sexprs : List) (pos : i64) -> List]
   :intent "Parse a list of S-expressions into AST exprs, return (Ok exprs) or (Err ...)"
   :requires [(valid sexprs)]
@@ -200,7 +200,7 @@
             (Err e) (Err e))
         (Err e) (Err e))))
 
-(defn parse-expr
+(defn parse-expr :verify checked
   :sig [(sexpr : List) -> List]
   :intent "Parse an S-expression into an AST expression node"
   :requires [(valid sexpr)]
@@ -265,7 +265,7 @@
 
 ;; ── Compound expression parsers ───────────────────
 
-(defn parse-if
+(defn parse-if :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (if cond then else) expression"
   :requires [(valid items)]
@@ -285,7 +285,7 @@
         (Err e) (Err e))
       (Err (ParseError "if requires exactly 3 arguments (cond then else)" line col))))
 
-(defn parse-let-binding
+(defn parse-let-binding :verify checked
   :sig [(sexpr : List) -> List]
   :intent "Parse a single let binding (name : Type value)"
   :requires [(valid sexpr)]
@@ -330,7 +330,7 @@
 ;;   "expected type name in let binding"
 ;; errors. AIRL-side fix for AIRL-side "Bug B" per
 ;; docs/superpowers/specs/2026-04-21-airl-castle-bugs-discovered.md.
-(defn sexpr-is-colon?
+(defn sexpr-is-colon? :verify checked
   :sig [(sexpr : _) -> Bool]
   :intent "True if sexpr is the `:` token atom"
   :requires [(valid sexpr)]
@@ -343,7 +343,7 @@
             (if (= value ":") true false))
       _ false))
 
-(defn sexpr-is-symbol?
+(defn sexpr-is-symbol? :verify checked
   :sig [(sexpr : _) -> Bool]
   :intent "True if sexpr is a symbol atom"
   :requires [(valid sexpr)]
@@ -356,7 +356,7 @@
             (if (= kind "symbol") true false))
       _ false))
 
-(defn sexpr-looks-like-binding?
+(defn sexpr-looks-like-binding? :verify checked
   :sig [(sexpr : _) -> Bool]
   :intent "True if sexpr could be a let binding tuple (name : ...)"
   :requires [(valid sexpr)]
@@ -371,7 +371,7 @@
             false))
       _ false))
 
-(defn parse-let-bindings
+(defn parse-let-bindings :verify checked
   :sig [(items : List) (pos : i64) (end : i64) -> List]
   :intent "Parse let bindings from items[pos] to items[end-1], return (Ok bindings)"
   :requires [(valid items)]
@@ -389,7 +389,7 @@
 ;; Find the index of the first item in items[pos..] that does NOT look like
 ;; a let binding. That index is the body. Used by parse-let to correctly
 ;; split bindings from body even when the body itself is an SList.
-(defn find-let-body-idx
+(defn find-let-body-idx :verify checked
   :sig [(items : List) (pos : i64) -> i64]
   :intent "Return the index of the body expression in a let items list"
   :requires [(valid items)]
@@ -402,7 +402,7 @@
         (find-let-body-idx items (+ pos 1))
         pos)))
 
-(defn parse-let
+(defn parse-let :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (let (bindings...) body) expression"
   :requires [(valid items)]
@@ -422,7 +422,7 @@
                 (Err e) (Err e))
             (Err e) (Err e)))))
 
-(defn parse-do
+(defn parse-do :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (do expr1 expr2 ...) expression"
   :requires [(valid items)]
@@ -437,7 +437,7 @@
 
 ;; ── Pattern parsing ───────────────────────────────
 
-(defn parse-pattern
+(defn parse-pattern :verify checked
   :sig [(sexpr : List) -> List]
   :intent "Parse an S-expression into a pattern node"
   :requires [(valid sexpr)]
@@ -482,7 +482,7 @@
 
       _ (Err (ParseError "unexpected S-expression in pattern" 0 0))))
 
-(defn parse-patterns
+(defn parse-patterns :verify checked
   :sig [(items : List) (pos : i64) -> List]
   :intent "Parse sub-patterns from items[pos..], return (Ok patterns)"
   :requires [(valid items)]
@@ -499,7 +499,7 @@
 
 ;; ── Match expression ──────────────────────────────
 
-(defn parse-match-arms
+(defn parse-match-arms :verify checked
   :sig [(items : List) (pos : i64) -> List]
   :intent "Parse pattern/body pairs from items[pos..], return (Ok arms)"
   :requires [(valid items)]
@@ -520,7 +520,7 @@
               (Err e) (Err e))
           (Err e) (Err e)))))
 
-(defn parse-match
+(defn parse-match :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (match scrutinee pattern body ...) expression"
   :requires [(valid items)]
@@ -542,7 +542,7 @@
 
 ;; ── Lambda ────────────────────────────────────────
 
-(defn parse-lambda-params
+(defn parse-lambda-params :verify checked
   :sig [(items : List) (pos : i64) -> List]
   :intent "Parse lambda parameter names from bracket items"
   :requires [(valid items)]
@@ -561,7 +561,7 @@
                 (Err (ParseError "lambda parameter must be a symbol" 0 0))))
         _ (Err (ParseError "lambda parameter must be a symbol" 0 0)))))
 
-(defn parse-lambda
+(defn parse-lambda :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (fn [params] body) expression"
   :requires [(valid items)]
@@ -582,7 +582,7 @@
 
 ;; ── Try ───────────────────────────────────────────
 
-(defn parse-try
+(defn parse-try :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (try expr) expression"
   :requires [(valid items)]
@@ -596,7 +596,7 @@
 
 ;; ── Signature parsing ─────────────────────────────
 
-(defn parse-param
+(defn parse-param :verify checked
   :sig [(sexpr : List) -> List]
   :intent "Parse a parameter (name : Type) from S-expression"
   :requires [(valid sexpr)]
@@ -626,7 +626,7 @@
               _ (Err (ParseError "expected symbol name in parameter" line col)))))
       _ (Err (ParseError "parameter must be a list" 0 0))))
 
-(defn parse-sig-params
+(defn parse-sig-params :verify checked
   :sig [(items : List) (pos : i64) (arrow-pos : i64) -> List]
   :intent "Parse signature parameters from items[pos..arrow-pos]"
   :requires [(valid items)]
@@ -641,7 +641,7 @@
             (Err e) (Err e))
         (Err e) (Err e))))
 
-(defn find-arrow
+(defn find-arrow :verify checked
   :sig [(items : List) (pos : i64) -> i64]
   :intent "Find index of -> arrow token in S-expr list, return -1 if not found"
   :requires [(valid items)]
@@ -658,7 +658,7 @@
                 (find-arrow items (+ pos 1))))
         _ (find-arrow items (+ pos 1)))))
 
-(defn parse-sig
+(defn parse-sig :verify checked
   :sig [(sexpr : List) -> List]
   :intent "Parse :sig [(params...) -> ReturnType] from bracket S-expression"
   :requires [(valid sexpr)]
@@ -690,7 +690,7 @@
 
 ;; ── defn clause walker ────────────────────────────
 
-(defn walk-defn-clauses
+(defn walk-defn-clauses :verify checked
   :sig [(items : List) (pos : i64) (sig : List) (intent : String) (requires : List) (ensures : List) (body : List) (is-pub : _) -> List]
   :intent "Walk keyword clauses in defn, accumulate values"
   :requires [(valid items)]
@@ -749,7 +749,7 @@
         ;; Non-atom — error
         _ (Err (ParseError "expected keyword clause in defn" 0 0)))))
 
-(defn parse-defn
+(defn parse-defn :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (defn name :clause value ...) definition"
   :requires [(valid items)]
@@ -779,7 +779,7 @@
 
 ;; ── deftype parsing ──────────────────────────────
 
-(defn parse-variant
+(defn parse-variant :verify checked
   :sig [(sexpr : List) -> List]
   :intent "Parse a sum variant: (Name Type1 Type2 ...) → (ASTVariantDef name field-type-names)"
   :requires [(valid sexpr)]
@@ -799,7 +799,7 @@
             _ (Err (ParseError "variant name must be a symbol" line col))))
       _ (Err (ParseError "variant must be a list" 0 0))))
 
-(defn parse-field
+(defn parse-field :verify checked
   :sig [(sexpr : List) -> List]
   :intent "Parse a product field: (name : Type) → (ASTFieldDef name type-name)"
   :requires [(valid sexpr)]
@@ -826,7 +826,7 @@
             _ (Err (ParseError "field name must be a symbol" line col))))
       _ (Err (ParseError "field must be a list" 0 0))))
 
-(defn parse-variants-acc
+(defn parse-variants-acc :verify checked
   :sig [(items : List) (pos : i64) (acc : List) -> List]
   :intent "Accumulate parsed variants from items list"
   :requires [(valid items)]
@@ -838,7 +838,7 @@
         (Ok v) (parse-variants-acc items (+ pos 1) (cons v acc))
         (Err e) (Err e))))
 
-(defn parse-sum-body
+(defn parse-sum-body :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse sum type body: (| (Variant1 ...) (Variant2 ...)) → (ASTSumBody variants)"
   :requires [(valid items)]
@@ -848,7 +848,7 @@
       (Ok variants) (Ok (ASTSumBody variants))
       (Err e) (Err e)))
 
-(defn parse-fields-acc
+(defn parse-fields-acc :verify checked
   :sig [(items : List) (pos : i64) (acc : List) -> List]
   :intent "Accumulate parsed fields from items list"
   :requires [(valid items)]
@@ -860,7 +860,7 @@
         (Ok f) (parse-fields-acc items (+ pos 1) (cons f acc))
         (Err e) (Err e))))
 
-(defn parse-product-body
+(defn parse-product-body :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse product type body: (& (f1 : T1) (f2 : T2)) → (ASTProductBody fields)"
   :requires [(valid items)]
@@ -870,7 +870,7 @@
       (Ok fields) (Ok (ASTProductBody fields))
       (Err e) (Err e)))
 
-(defn parse-type-params-acc
+(defn parse-type-params-acc :verify checked
   :sig [(items : List) (pos : i64) (acc : List) -> List]
   :intent "Parse type parameters from bracket items"
   :requires [(valid items)]
@@ -907,7 +907,7 @@
                 (Err (ParseError "type param must be a symbol" 0 0))))
         _ (Err (ParseError "type param must be an atom" 0 0)))))
 
-(defn parse-deftype-body
+(defn parse-deftype-body :verify checked
   :sig [(rest-item : List) (line : i64) (col : i64) (name : String) (params : List) -> List]
   :intent "Parse the body part of a deftype declaration"
   :requires [(valid rest-item)]
@@ -933,7 +933,7 @@
             _ (Err (ParseError "deftype body must start with | or &" bl bc))))
       _ (Err (ParseError "deftype body must be a list" line col))))
 
-(defn parse-deftype
+(defn parse-deftype :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (deftype Name [Params] Body) → (ASTDefType ...)"
   :requires [(valid items)]
@@ -963,7 +963,7 @@
 
 ;; ── import parsing ──────────────────────────────
 
-(defn extract-symbol-names
+(defn extract-symbol-names :verify checked
   :sig [(items : List) (pos : i64) -> List]
   :intent "Extract symbol names from a bracket list of atoms"
   :requires [(valid items)]
@@ -982,7 +982,7 @@
                 (Err (ParseError "import :only items must be symbols" 0 0))))
         _ (Err (ParseError "import :only items must be symbols" 0 0)))))
 
-(defn walk-import-clauses
+(defn walk-import-clauses :verify checked
   :sig [(items : List) (pos : i64) (alias : _) (only-list : _) -> List]
   :intent "Walk :as/:only clauses in import"
   :requires [(valid items)]
@@ -1019,7 +1019,7 @@
                 (walk-import-clauses items (+ pos 1) alias only-list)))
         _ (walk-import-clauses items (+ pos 1) alias only-list))))
 
-(defn parse-import
+(defn parse-import :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (import path :as alias :only [names])"
   :requires [(valid items)]
@@ -1042,7 +1042,7 @@
 
 ;; ── Module form ──────────────────────────────────
 
-(defn walk-module-clauses
+(defn walk-module-clauses :verify checked
   :sig [(items : List) (pos : i64) (verify : String) (body : List) -> List]
   :intent "Walk keyword clauses in module form, collect verify level and body items"
   :requires [(valid items)]
@@ -1079,7 +1079,7 @@
             (Ok node) (walk-module-clauses items (+ pos 1) verify (append body node))
             (Err e) (Err e)))))
 
-(defn parse-module
+(defn parse-module :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (module name :verify level body...) form"
   :requires [(valid items)]
@@ -1101,7 +1101,7 @@
 
 ;; ── Top-level and entry point ─────────────────────
 
-(defn parse-top-level
+(defn parse-top-level :verify checked
   :sig [(sexpr : List) -> List]
   :intent "Parse a top-level S-expression into an AST node"
   :requires [(valid sexpr)]
@@ -1129,7 +1129,7 @@
             _ (parse-expr sexpr)))
       _ (parse-expr sexpr)))
 
-(defn parse-top-levels
+(defn parse-top-levels :verify checked
   :sig [(sexprs : List) (pos : i64) -> List]
   :intent "Parse all top-level S-expressions into AST nodes"
   :requires [(valid sexprs)]
@@ -1144,14 +1144,14 @@
             (Err e) (Err e))
         (Err e) (Err e))))
 
-(defn parse-program
+(defn parse-program :verify checked
   :sig [(sexprs : List) -> List]
   :intent "Parse a list of S-expressions into AST nodes"
   :requires [(valid sexprs)]
   :ensures [(valid result)]
   :body (parse-top-levels sexprs 0))
 
-(defn parse
+(defn parse :verify checked
   :sig [(source : String) -> List]
   :intent "Full pipeline: source → tokens → S-exprs → AST"
   :requires [(valid source)]

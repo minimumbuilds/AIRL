@@ -6,7 +6,7 @@
 
 ;; ── build-regex : construct final regex from pattern + flags ──
 ;; Handles -i (case insensitive prefix), -w (word boundary), -F (fixed string)
-(defn build-regex
+(defn build-regex :verify checked
   :sig [(pattern : String) (opts : _) -> String]
   :requires [(valid pattern)]
   :ensures [(valid result)]
@@ -20,7 +20,7 @@
 
 ;; ── search-line : test one line against pattern ──
 ;; Returns true if the line matches (or doesn't match with -v invert)
-(defn search-line
+(defn search-line :verify checked
   :sig [(line : String) (regex : String) (invert : Bool) -> Bool]
   :requires [(valid line) (valid regex)]
   :ensures [(valid result)]
@@ -30,7 +30,7 @@
 
 ;; ── search-lines-rec : search lines accumulating match indices ──
 ;; Returns list of matching 0-based line indices
-(defn search-lines-rec
+(defn search-lines-rec :verify checked
   :sig [(line-list : List) (regex : String) (invert : Bool) (idx : i64) (max-count : i64) (found : i64) (acc : List) -> List]
   :requires [(valid line-list)]
   :ensures [(valid result)]
@@ -45,7 +45,7 @@
 
 ;; ── search-file-lines : search all lines, handle -m max-count ──
 ;; Returns list of 0-based line indices that matched.
-(defn search-file-lines
+(defn search-file-lines :verify checked
   :sig [(all-lines : List) (regex : String) (invert : Bool) (max-count : i64) -> List]
   :requires [(valid all-lines) (valid regex)]
   :ensures [(valid result)]
@@ -53,7 +53,7 @@
 
 ;; ── expand-context-range : given match indices, expand by before/after ──
 ;; Returns list of [start end] pairs (0-based, inclusive)
-(defn expand-context-rec
+(defn expand-context-rec :verify checked
   :sig [(match-indices : List) (before : i64) (after : i64) (total-lines : i64) (acc : List) -> List]
   :requires [(valid match-indices)]
   :ensures [(valid result)]
@@ -66,7 +66,7 @@
                 (cons (cons start (cons end [])) acc))))))
 
 ;; ── merge-ranges-rec : merge overlapping [start end] ranges ──
-(defn merge-ranges-rec
+(defn merge-ranges-rec :verify checked
   :sig [(ranges : List) (current : List) (acc : List) -> List]
   :requires [(valid ranges)]
   :ensures [(valid result)]
@@ -88,7 +88,7 @@
 
 ;; ── add-context : expand match indices by -B/-A, merge overlapping ──
 ;; Returns list of context groups, each a [start end] range.
-(defn add-context
+(defn add-context :verify checked
   :sig [(match-indices : List) (before : i64) (after : i64) (total-lines : i64) -> List]
   :requires [(valid match-indices)]
   :ensures [(valid result)]
@@ -100,7 +100,7 @@
               (merge-ranges-rec (tail expanded) (head expanded) [])))))
 
 ;; ── is-binary : check first bytes for NUL byte ──
-(defn is-binary-rec
+(defn is-binary-rec :verify checked
   :sig [(char-list : List) (count : i64) (limit : i64) -> Bool]
   :requires [(valid char-list)]
   :ensures [(valid result)]
@@ -113,7 +113,7 @@
                 true
                 (is-binary-rec (tail char-list) (+ count 1) limit))))))
 
-(defn is-binary
+(defn is-binary :verify checked
   :sig [(content : String) -> Bool]
   :requires [(valid content)]
   :ensures [(valid result)]
@@ -122,7 +122,7 @@
             (is-binary-rec (chars sample) 0 check-len))))
 
 ;; ── make-match-set : build a map of matching line indices for fast lookup ──
-(defn make-match-set-rec
+(defn make-match-set-rec :verify checked
   :sig [(indices : List) (acc : _) -> _]
   :requires [(valid indices)]
   :ensures [(valid result)]
@@ -130,14 +130,14 @@
           acc
           (make-match-set-rec (tail indices) (map-set acc (str (head indices)) true))))
 
-(defn make-match-set
+(defn make-match-set :verify checked
   :sig [(indices : List) -> _]
   :requires [(valid indices)]
   :ensures [(valid result)]
   :body (make-match-set-rec indices (map-new)))
 
 ;; ── is-match-line : check if a line index is in the match set ──
-(defn is-match-line
+(defn is-match-line :verify checked
   :sig [(idx : i64) (match-set : _) -> Bool]
   :requires [(valid match-set)]
   :ensures [(valid result)]
@@ -152,7 +152,7 @@
 ;;   "match-count" — number of matches
 ;;   "is-binary" — whether file is binary
 ;;   "match-set" — map of line-idx-string -> true for O(1) lookup
-(defn search-file
+(defn search-file :verify checked
   :sig [(file-path : String) (regex : String) (opts : _) -> _]
   :requires [(valid file-path) (valid regex)]
   :ensures [(valid result)]

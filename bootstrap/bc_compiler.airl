@@ -10,65 +10,65 @@
 ;; ── Opcode constants ────────────────────────────────────
 ;; Must match crates/airl-runtime/src/bytecode.rs Op enum order
 
-(defn op-load-const  :sig [-> Int] :requires [true] :ensures [(= result 0)]  :body 0)
-(defn op-load-nil    :sig [-> Int] :requires [true] :ensures [(= result 1)]  :body 1)
-(defn op-load-true   :sig [-> Int] :requires [true] :ensures [(= result 2)]  :body 2)
-(defn op-load-false  :sig [-> Int] :requires [true] :ensures [(= result 3)]  :body 3)
-(defn op-move        :sig [-> Int] :requires [true] :ensures [(= result 4)]  :body 4)
-(defn op-add         :sig [-> Int] :requires [true] :ensures [(= result 5)]  :body 5)
-(defn op-sub         :sig [-> Int] :requires [true] :ensures [(= result 6)]  :body 6)
-(defn op-mul         :sig [-> Int] :requires [true] :ensures [(= result 7)]  :body 7)
-(defn op-div         :sig [-> Int] :requires [true] :ensures [(= result 8)]  :body 8)
-(defn op-mod         :sig [-> Int] :requires [true] :ensures [(= result 9)]  :body 9)
-(defn op-eq          :sig [-> Int] :requires [true] :ensures [(= result 10)] :body 10)
-(defn op-ne          :sig [-> Int] :requires [true] :ensures [(= result 11)] :body 11)
-(defn op-lt          :sig [-> Int] :requires [true] :ensures [(= result 12)] :body 12)
-(defn op-le          :sig [-> Int] :requires [true] :ensures [(= result 13)] :body 13)
-(defn op-gt          :sig [-> Int] :requires [true] :ensures [(= result 14)] :body 14)
-(defn op-ge          :sig [-> Int] :requires [true] :ensures [(= result 15)] :body 15)
-(defn op-not         :sig [-> Int] :requires [true] :ensures [(= result 16)] :body 16)
-(defn op-neG         :sig [-> Int] :requires [true] :ensures [(= result 17)] :body 17)
-(defn op-jump        :sig [-> Int] :requires [true] :ensures [(= result 18)] :body 18)
-(defn op-jump-if-false :sig [-> Int] :requires [true] :ensures [(= result 19)] :body 19)
-(defn op-jump-if-true  :sig [-> Int] :requires [true] :ensures [(= result 20)] :body 20)
-(defn op-call        :sig [-> Int] :requires [true] :ensures [(= result 21)] :body 21)
-(defn op-call-builtin :sig [-> Int] :requires [true] :ensures [(= result 22)] :body 22)
-(defn op-call-reg    :sig [-> Int] :requires [true] :ensures [(= result 23)] :body 23)
-(defn op-tail-call   :sig [-> Int] :requires [true] :ensures [(= result 24)] :body 24)
-(defn op-return      :sig [-> Int] :requires [true] :ensures [(= result 25)] :body 25)
-(defn op-make-list   :sig [-> Int] :requires [true] :ensures [(= result 26)] :body 26)
-(defn op-make-variant :sig [-> Int] :requires [true] :ensures [(= result 27)] :body 27)
-(defn op-make-variant0 :sig [-> Int] :requires [true] :ensures [(= result 28)] :body 28)
-(defn op-make-closure :sig [-> Int] :requires [true] :ensures [(= result 29)] :body 29)
-(defn op-match-tag   :sig [-> Int] :requires [true] :ensures [(= result 30)] :body 30)
-(defn op-jump-if-no-match :sig [-> Int] :requires [true] :ensures [(= result 31)] :body 31)
-(defn op-match-wild  :sig [-> Int] :requires [true] :ensures [(= result 32)] :body 32)
-(defn op-try-unwrap  :sig [-> Int] :requires [true] :ensures [(= result 33)] :body 33)
+(defn op-load-const :verify checked  :sig [-> Int] :requires [true] :ensures [(= result 0)]  :body 0)
+(defn op-load-nil :verify checked    :sig [-> Int] :requires [true] :ensures [(= result 1)]  :body 1)
+(defn op-load-true :verify checked   :sig [-> Int] :requires [true] :ensures [(= result 2)]  :body 2)
+(defn op-load-false :verify checked  :sig [-> Int] :requires [true] :ensures [(= result 3)]  :body 3)
+(defn op-move :verify checked        :sig [-> Int] :requires [true] :ensures [(= result 4)]  :body 4)
+(defn op-add :verify checked         :sig [-> Int] :requires [true] :ensures [(= result 5)]  :body 5)
+(defn op-sub :verify checked         :sig [-> Int] :requires [true] :ensures [(= result 6)]  :body 6)
+(defn op-mul :verify checked         :sig [-> Int] :requires [true] :ensures [(= result 7)]  :body 7)
+(defn op-div :verify checked         :sig [-> Int] :requires [true] :ensures [(= result 8)]  :body 8)
+(defn op-mod :verify checked         :sig [-> Int] :requires [true] :ensures [(= result 9)]  :body 9)
+(defn op-eq :verify checked          :sig [-> Int] :requires [true] :ensures [(= result 10)] :body 10)
+(defn op-ne :verify checked          :sig [-> Int] :requires [true] :ensures [(= result 11)] :body 11)
+(defn op-lt :verify checked          :sig [-> Int] :requires [true] :ensures [(= result 12)] :body 12)
+(defn op-le :verify checked          :sig [-> Int] :requires [true] :ensures [(= result 13)] :body 13)
+(defn op-gt :verify checked          :sig [-> Int] :requires [true] :ensures [(= result 14)] :body 14)
+(defn op-ge :verify checked          :sig [-> Int] :requires [true] :ensures [(= result 15)] :body 15)
+(defn op-not :verify checked         :sig [-> Int] :requires [true] :ensures [(= result 16)] :body 16)
+(defn op-neG :verify checked         :sig [-> Int] :requires [true] :ensures [(= result 17)] :body 17)
+(defn op-jump :verify checked        :sig [-> Int] :requires [true] :ensures [(= result 18)] :body 18)
+(defn op-jump-if-false :verify checked :sig [-> Int] :requires [true] :ensures [(= result 19)] :body 19)
+(defn op-jump-if-true :verify checked  :sig [-> Int] :requires [true] :ensures [(= result 20)] :body 20)
+(defn op-call :verify checked        :sig [-> Int] :requires [true] :ensures [(= result 21)] :body 21)
+(defn op-call-builtin :verify checked :sig [-> Int] :requires [true] :ensures [(= result 22)] :body 22)
+(defn op-call-reg :verify checked    :sig [-> Int] :requires [true] :ensures [(= result 23)] :body 23)
+(defn op-tail-call :verify checked   :sig [-> Int] :requires [true] :ensures [(= result 24)] :body 24)
+(defn op-return :verify checked      :sig [-> Int] :requires [true] :ensures [(= result 25)] :body 25)
+(defn op-make-list :verify checked   :sig [-> Int] :requires [true] :ensures [(= result 26)] :body 26)
+(defn op-make-variant :verify checked :sig [-> Int] :requires [true] :ensures [(= result 27)] :body 27)
+(defn op-make-variant0 :verify checked :sig [-> Int] :requires [true] :ensures [(= result 28)] :body 28)
+(defn op-make-closure :verify checked :sig [-> Int] :requires [true] :ensures [(= result 29)] :body 29)
+(defn op-match-tag :verify checked   :sig [-> Int] :requires [true] :ensures [(= result 30)] :body 30)
+(defn op-jump-if-no-match :verify checked :sig [-> Int] :requires [true] :ensures [(= result 31)] :body 31)
+(defn op-match-wild :verify checked  :sig [-> Int] :requires [true] :ensures [(= result 32)] :body 32)
+(defn op-try-unwrap :verify checked  :sig [-> Int] :requires [true] :ensures [(= result 33)] :body 33)
 
 ;; Contract assertions
-(defn op-assert-requires  :sig [-> Int] :requires [true] :ensures [(= result 34)] :body 34)
-(defn op-assert-ensures   :sig [-> Int] :requires [true] :ensures [(= result 35)] :body 35)
-(defn op-assert-invariant :sig [-> Int] :requires [true] :ensures [(= result 36)] :body 36)
+(defn op-assert-requires :verify checked  :sig [-> Int] :requires [true] :ensures [(= result 34)] :body 34)
+(defn op-assert-ensures :verify checked   :sig [-> Int] :requires [true] :ensures [(= result 35)] :body 35)
+(defn op-assert-invariant :verify checked :sig [-> Int] :requires [true] :ensures [(= result 36)] :body 36)
 
 ;; Ownership tracking
-(defn op-mark-moved       :sig [-> Int] :requires [true] :ensures [(= result 37)] :body 37)
-(defn op-check-not-moved  :sig [-> Int] :requires [true] :ensures [(= result 38)] :body 38)
+(defn op-mark-moved :verify checked       :sig [-> Int] :requires [true] :ensures [(= result 37)] :body 37)
+(defn op-check-not-moved :verify checked  :sig [-> Int] :requires [true] :ensures [(= result 38)] :body 38)
 
 ;; Memory management
-(defn op-release          :sig [-> Int] :requires [true] :ensures [(= result 39)] :body 39)
+(defn op-release :verify checked          :sig [-> Int] :requires [true] :ensures [(= result 39)] :body 39)
 
 ;; ── Compiler state management ───────────────────────────
 ;; State is a map with keys: "instrs", "consts", "locals", "next-reg", "max-reg",
 ;; "lambdas", "lambda-ctr"
 
-(defn make-compiler-state
+(defn make-compiler-state :verify checked
   :sig [-> _]
   :intent "Create a fresh compiler state"
   :requires [true]
   :ensures [(valid result)]
   :body (make-compiler-state-named "anon"))
 
-(defn make-compiler-state-named
+(defn make-compiler-state-named :verify checked
   :sig [(func-name : String) -> _]
   :intent "Create a fresh compiler state with function name for lambda prefixing"
   :requires [(valid func-name)]
@@ -84,43 +84,43 @@
 
 ;; ── Accessors ───────────────────────────────────────────
 
-(defn cs-instrs
+(defn cs-instrs :verify checked
   :sig [(st : _) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
   :body (map-get st "instrs"))
 
-(defn cs-consts
+(defn cs-consts :verify checked
   :sig [(st : _) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
   :body (map-get st "consts"))
 
-(defn cs-locals
+(defn cs-locals :verify checked
   :sig [(st : _) -> _]
   :requires [(valid st)]
   :ensures [(valid result)]
   :body (map-get st "locals"))
 
-(defn cs-next-reg
+(defn cs-next-reg :verify checked
   :sig [(st : _) -> Int]
   :requires [(valid st)]
   :ensures [(valid result)]
   :body (map-get st "next-reg"))
 
-(defn cs-max-reg
+(defn cs-max-reg :verify checked
   :sig [(st : _) -> Int]
   :requires [(valid st)]
   :ensures [(valid result)]
   :body (map-get st "max-reg"))
 
-(defn cs-lambdas
+(defn cs-lambdas :verify checked
   :sig [(st : _) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
   :body (map-get st "lambdas"))
 
-(defn cs-lambda-ctr
+(defn cs-lambda-ctr :verify checked
   :sig [(st : _) -> Int]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -128,14 +128,14 @@
 
 ;; ── Mutators ────────────────────────────────────────────
 
-(defn cs-emit
+(defn cs-emit :verify checked
   :sig [(st : _) (op : Int) (dst : Int) (a : Int) (b : Int) -> _]
   :intent "Emit an instruction [op dst a b]"
   :requires [(valid st)]
   :ensures [(valid result)]
   :body (map-set st "instrs" (append (cs-instrs st) [op dst a b])))
 
-(defn cs-add-const
+(defn cs-add-const :verify checked
   :sig [(st : _) (val : _) -> List]
   :intent "Add a constant, return [new-state index]"
   :requires [(valid st)]
@@ -148,7 +148,7 @@
           (let (idx : Int (length consts))
             [(map-set st "consts" (append consts val)) idx])))))
 
-(defn cs-find-const
+(defn cs-find-const :verify checked
   :sig [(consts : List) (val : _) (i : Int) -> Int]
   :intent "Find index of val in consts, or -1 if not found"
   :requires [(valid consts)]
@@ -158,7 +158,7 @@
       (if (= (at consts i) val) i
         (cs-find-const consts val (+ i 1)))))
 
-(defn cs-alloc-reg
+(defn cs-alloc-reg :verify checked
   :sig [(st : _) -> List]
   :intent "Allocate one register, return [new-state reg-number]"
   :requires [(valid st)]
@@ -170,7 +170,7 @@
           (let (new-max : Int (if (> nr mx) nr mx))
             [(map-set (map-set st "next-reg" nr) "max-reg" new-max) r])))))
 
-(defn cs-alloc-regs
+(defn cs-alloc-regs :verify checked
   :sig [(st : _) (n : Int) -> List]
   :intent "Allocate n consecutive registers, return [new-state first-reg]"
   :requires [(valid st)]
@@ -182,7 +182,7 @@
           (let (new-max : Int (if (> nr mx) nr mx))
             [(map-set (map-set st "next-reg" nr) "max-reg" new-max) r])))))
 
-(defn bc-emit-releases-loop
+(defn bc-emit-releases-loop :verify checked
   :sig [(st : _) (current : Int) (target : Int) -> _]
   :intent "Emit Release for each register from (target) to (current-1) inclusive"
   :requires [(valid st) (>= current target)]
@@ -194,7 +194,7 @@
         (let (st2 : _ (cs-emit st (op-release) 0 reg 0))
           (bc-emit-releases-loop st2 reg target)))))
 
-(defn cs-free-reg-to
+(defn cs-free-reg-to :verify checked
   :sig [(st : _) (r : Int) -> _]
   :intent "Emit Release for registers [r..next-reg) then mark them free"
   :requires [(valid st)]
@@ -204,7 +204,7 @@
       (let (st2 : _ (bc-emit-releases-loop st current r))
         (map-set st2 "next-reg" r))))
 
-(defn bc-release-call-slots
+(defn bc-release-call-slots :verify checked
   :sig [(st : _) (dst : Int) (argc : Int) -> _]
   :intent "Emit Release for call arg slots dst+1..dst+argc after a Call. Complements cs-free-reg-to for the case where save>dst+1 would otherwise skip the arg slots. Double-releases are null-safe."
   :requires [(valid st) (>= argc 0)]
@@ -215,35 +215,35 @@
         (let (st2 : _ (cs-emit st (op-release) 0 slot 0))
           (bc-release-call-slots st2 dst (- argc 1))))))
 
-(defn cs-set-local
+(defn cs-set-local :verify checked
   :sig [(st : _) (name : String) (reg : Int) -> _]
   :intent "Bind a variable name to a register"
   :requires [(valid st)]
   :ensures [(valid result)]
   :body (map-set st "locals" (map-set (cs-locals st) name reg)))
 
-(defn cs-remove-local
+(defn cs-remove-local :verify checked
   :sig [(st : _) (name : String) -> _]
   :intent "Remove a variable binding"
   :requires [(valid st)]
   :ensures [(valid result)]
   :body (map-set st "locals" (map-remove (cs-locals st) name)))
 
-(defn cs-lookup-local
+(defn cs-lookup-local :verify checked
   :sig [(st : _) (name : String) -> _]
   :intent "Look up a variable, returns register number or nil"
   :requires [(valid st)]
   :ensures [(valid result)]
   :body (map-get (cs-locals st) name))
 
-(defn cs-instr-count
+(defn cs-instr-count :verify checked
   :sig [(st : _) -> Int]
   :intent "Number of instructions emitted so far"
   :requires [(valid st)]
   :ensures [(valid result)]
   :body (length (cs-instrs st)))
 
-(defn cs-patch-jump
+(defn cs-patch-jump :verify checked
   :sig [(st : _) (instr-idx : Int) (field : String) (value : Int) -> _]
   :intent "Patch a field in an already-emitted instruction. field is 'a' (index 2) or 'b' (index 3)"
   :requires [(valid st)]
@@ -255,14 +255,14 @@
           (let (patched : List (bc-list-set instr field-idx value))
             (map-set st "instrs" (bc-list-set instrs instr-idx patched)))))))
 
-(defn bc-list-set
+(defn bc-list-set :verify checked
   :sig [(lst : List) (idx : Int) (val : _) -> List]
   :intent "Return list with element at idx replaced by val"
   :requires [(valid lst)]
   :ensures [(valid result)]
   :body (bc-list-set-loop lst idx val 0))
 
-(defn bc-list-set-loop
+(defn bc-list-set-loop :verify checked
   :sig [(lst : List) (idx : Int) (val : _) (i : Int) -> List]
   :requires [(valid lst)]
   :ensures [(valid result)]
@@ -272,20 +272,20 @@
         (cons val (tail lst))
         (cons (head lst) (bc-list-set-loop (tail lst) idx val (+ i 1))))))
 
-(defn cs-add-lambda
+(defn cs-add-lambda :verify checked
   :sig [(st : _) (func : _) -> _]
   :intent "Add a compiled lambda to the lambda list"
   :requires [(valid st)]
   :ensures [(valid result)]
   :body (map-set st "lambdas" (append (cs-lambdas st) func)))
 
-(defn bc-digit-to-char
+(defn bc-digit-to-char :verify checked
   :sig [(d : Int) -> String]
   :requires [(valid d)]
   :ensures [(valid result)]
   :body (at ["0" "1" "2" "3" "4" "5" "6" "7" "8" "9"] d))
 
-(defn bc-nat-to-str
+(defn bc-nat-to-str :verify checked
   :sig [(n : Int) (acc : String) -> String]
   :requires [(valid n)]
   :ensures [(valid result)]
@@ -294,7 +294,7 @@
     (let (digit : String (bc-digit-to-char (% n 10)))
       (bc-nat-to-str (/ n 10) (+ digit acc)))))
 
-(defn bc-int-to-string
+(defn bc-int-to-string :verify checked
   :sig [(n : Int) -> String]
   :requires [(valid n)]
   :ensures [(valid result)]
@@ -302,7 +302,7 @@
     (+ "-" (bc-nat-to-str (* n -1) ""))
     (bc-nat-to-str n "")))
 
-(defn cs-next-lambda-name
+(defn cs-next-lambda-name :verify checked
   :sig [(st : _) -> List]
   :intent "Generate unique lambda name, return [new-state name]. Uses module-prefix if set."
   :requires [(valid st)]
@@ -315,7 +315,7 @@
             (let (name : String (str "__lambda_" prefix "_" (bc-int-to-string ctr)))
               [(map-set st "lambda-ctr" (+ ctr 1)) name]))))))
 
-(defn cs-ensure-above-dst
+(defn cs-ensure-above-dst :verify checked
   :sig [(st : _) (dst : Int) -> _]
   :intent "Ensure next-reg is above dst"
   :requires [(valid st)]
@@ -330,7 +330,7 @@
 
 ;; ── Direct opcode lookup ────────────────────────────────
 
-(defn bc-direct-op
+(defn bc-direct-op :verify checked
   :sig [(name : String) -> _]
   :intent "Return opcode for direct arithmetic/comparison ops, or nil"
   :requires [(valid name)]
@@ -353,7 +353,7 @@
 ;; ── Expression compiler ─────────────────────────────────
 ;; bc-compile-expr(state, ast-node, dst-reg) -> (Ok new-state) | (Err msg)
 
-(defn bc-compile-expr
+(defn bc-compile-expr :verify checked
   :sig [(st : _) (node : _) (dst : Int) -> _]
   :intent "Compile an AST expression node to bytecode in state st, placing result in dst"
   :requires [(valid st)]
@@ -447,7 +447,7 @@
 
 ;; ── If compilation ──────────────────────────────────────
 
-(defn bc-compile-if
+(defn bc-compile-if :verify checked
   :sig [(st : _) (cond : _) (then-br : _) (else-br : _) (dst : Int) -> _]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -490,7 +490,7 @@
 
 ;; ── Do block compilation ────────────────────────────────
 
-(defn bc-compile-do
+(defn bc-compile-do :verify checked
   :sig [(st : _) (exprs : List) (dst : Int) -> _]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -502,7 +502,7 @@
         ;; Multiple expressions: compile all but last to temps, last to dst
         (bc-compile-do-loop st exprs dst (cs-next-reg st)))))
 
-(defn bc-compile-do-loop
+(defn bc-compile-do-loop :verify checked
   :sig [(st : _) (exprs : List) (dst : Int) (save-reg : Int) -> _]
   :intent "Compile do-block expressions; last one goes to dst"
   :requires [(valid st)]
@@ -530,7 +530,7 @@
 
 ;; ── Let compilation ─────────────────────────────────────
 
-(defn bc-compile-let
+(defn bc-compile-let :verify checked
   :sig [(st : _) (bindings : List) (body : _) (dst : Int) -> _]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -555,7 +555,7 @@
                           (let (free-to : Int (if (> save-reg (+ dst 1)) save-reg (+ dst 1)))
                             (Ok (cs-free-reg-to st5 free-to)))))))))))))
 
-(defn bc-compile-let-bindings
+(defn bc-compile-let-bindings :verify checked
   :sig [(st : _) (bindings : List) -> _]
   :intent "Compile let bindings, return (Ok [state bound-name-list]) or Err"
   :requires [(valid st)]
@@ -580,7 +580,7 @@
                               (Ok [st5 (cons name rest-names)])))))))))
         _ (Err "bc-compile-let-bindings: invalid binding"))))
 
-(defn bc-unbind-let
+(defn bc-unbind-let :verify checked
   :sig [(st : _) (names : List) -> _]
   :intent "Remove let bindings from locals"
   :requires [(valid st)]
@@ -591,7 +591,7 @@
 
 ;; ── Call compilation ────────────────────────────────────
 
-(defn bc-compile-call-expr
+(defn bc-compile-call-expr :verify checked
   :sig [(st : _) (callee : _) (args : List) (dst : Int) -> _]
   :intent "Compile a function call"
   :requires [(valid st)]
@@ -613,7 +613,7 @@
     ;; Non-symbol callee — compile callee to reg, then CallReg
     _ (bc-compile-call-reg st callee args dst)))
 
-(defn bc-compile-binop
+(defn bc-compile-binop :verify checked
   :sig [(st : _) (op : Int) (left : _) (right : _) (dst : Int) -> _]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -634,7 +634,7 @@
                           (let (free-to : Int (if (> a-reg (+ dst 1)) a-reg (+ dst 1)))
                             (Ok (cs-free-reg-to st6 free-to)))))))))))))
 
-(defn bc-compile-unop
+(defn bc-compile-unop :verify checked
   :sig [(st : _) (op : Int) (arg : _) (dst : Int) -> _]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -649,7 +649,7 @@
                 (let (free-to : Int (if (> a-reg (+ dst 1)) a-reg (+ dst 1)))
                   (Ok (cs-free-reg-to st4 free-to)))))))))
 
-(defn bc-compile-named-call
+(defn bc-compile-named-call :verify checked
   :sig [(st : _) (name : String) (args : List) (dst : Int) -> _]
   :intent "Compile a named function call (Call or CallReg)"
   :requires [(valid st)]
@@ -662,7 +662,7 @@
         ;; Local variable (closure/funcref) — use CallReg
         (bc-compile-call-local st name local-reg args dst))))
 
-(defn bc-compile-call-named
+(defn bc-compile-call-named :verify checked
   :sig [(st : _) (name : String) (args : List) (dst : Int) -> _]
   :intent "Compile Call dst name_idx argc with args in dst+1..dst+argc. Emits TailCall for self-tail-calls."
   :requires [(valid st)]
@@ -695,7 +695,7 @@
                                     (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
                                       (Ok (cs-free-reg-to st5b free-to)))))))))))))))))))
 
-(defn bc-compile-call-local
+(defn bc-compile-call-local :verify checked
   :sig [(st : _) (name : String) (callee-reg : Int) (args : List) (dst : Int) -> _]
   :intent "Compile CallReg for a local variable holding a function"
   :requires [(valid st)]
@@ -730,7 +730,7 @@
                             (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
                               (Ok (cs-free-reg-to st4b free-to)))))))))))))))
 
-(defn bc-in-danger-zone
+(defn bc-in-danger-zone :verify checked
   :sig [(reg : Int) (dst : Int) (argc : Int) -> Bool]
   :intent "Check if reg is in the call argument slots"
   :requires [(valid reg)]
@@ -740,7 +740,7 @@
       (if (< reg (+ (+ dst 1) argc)) true false)
       false))
 
-(defn bc-compile-call-reg
+(defn bc-compile-call-reg :verify checked
   :sig [(st : _) (callee : _) (args : List) (dst : Int) -> _]
   :intent "Compile a call where callee is a non-symbol expression"
   :requires [(valid st)]
@@ -766,7 +766,7 @@
                                   (let (free-to : Int (if (> save (+ dst 1)) save (+ dst 1)))
                                     (Ok (cs-free-reg-to st6b free-to)))))))))))))))))
 
-(defn bc-compile-args-to-temps
+(defn bc-compile-args-to-temps :verify checked
   :sig [(st : _) (args : List) -> _]
   :intent "Compile args to temp registers, return (Ok [state [reg1 reg2 ...]]) or Err"
   :requires [(valid st)]
@@ -786,7 +786,7 @@
                       (let (rest-regs : List (at rest-pair 1))
                         (Ok [st4 (cons r rest-regs)]))))))))))
 
-(defn bc-move-to-slots
+(defn bc-move-to-slots :verify checked
   :sig [(st : _) (tmp-regs : List) (dst : Int) (i : Int) -> _]
   :intent "Move temp registers into call slots dst+1+i, dst+2+i, etc."
   :requires [(valid st)]
@@ -800,7 +800,7 @@
             (let (st2 : _ (cs-emit st (op-move) slot tmp 0))
               (bc-move-to-slots st2 (tail tmp-regs) dst (+ i 1))))))))
 
-(defn bc-ensure-call-slots
+(defn bc-ensure-call-slots :verify checked
   :sig [(st : _) (dst : Int) (argc : Int) -> _]
   :intent "Ensure max-reg covers dst+1+argc"
   :requires [(valid st)]
@@ -813,7 +813,7 @@
 
 ;; ── Variant compilation ─────────────────────────────────
 
-(defn bc-compile-variant
+(defn bc-compile-variant :verify checked
   :sig [(st : _) (tag : String) (args : List) (dst : Int) -> _]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -850,7 +850,7 @@
 
 ;; ── List compilation ────────────────────────────────────
 
-(defn bc-compile-list
+(defn bc-compile-list :verify checked
   :sig [(st : _) (items : List) (dst : Int) -> _]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -863,7 +863,7 @@
             (let (free-to : Int (if (> start (+ dst 1)) start (+ dst 1)))
               (Ok (cs-free-reg-to st3 free-to)))))))
 
-(defn bc-compile-items-to-regs
+(defn bc-compile-items-to-regs :verify checked
   :sig [(st : _) (items : List) -> _]
   :intent "Compile each item to a consecutively allocated register"
   :requires [(valid st)]
@@ -879,7 +879,7 @@
 
 ;; ── Try compilation ─────────────────────────────────────
 
-(defn bc-compile-try
+(defn bc-compile-try :verify checked
   :sig [(st : _) (expr : _) (dst : Int) -> _]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -896,7 +896,7 @@
 
 ;; ── Match compilation ───────────────────────────────────
 
-(defn bc-compile-match
+(defn bc-compile-match :verify checked
   :sig [(st : _) (scrutinee : _) (arms : List) (dst : Int) -> _]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -918,7 +918,7 @@
                         (let (free-to : Int (if (> scr-reg (+ dst 1)) scr-reg (+ dst 1)))
                           (Ok (cs-free-reg-to st5 free-to))))))))))))
 
-(defn bc-compile-match-arms
+(defn bc-compile-match-arms :verify checked
   :sig [(st : _) (arms : List) (scr-reg : Int) (dst : Int) (end-jumps : List) -> _]
   :intent "Compile match arms, return (Ok [state end-jumps]) or Err"
   :requires [(valid st)]
@@ -935,7 +935,7 @@
                   (bc-compile-match-arms st2 (tail arms) scr-reg dst (concat end-jumps new-end-jumps)))))
         _ (Err "bc-compile-match-arms: invalid arm"))))
 
-(defn bc-compile-one-arm
+(defn bc-compile-one-arm :verify checked
   :sig [(st : _) (pat : _) (body : _) (scr-reg : Int) (dst : Int) -> _]
   :intent "Compile one match arm, return (Ok [state [maybe-end-jump-idx]]) or Err"
   :requires [(valid st)]
@@ -1039,7 +1039,7 @@
 
 ;; ── Pattern binding helpers ─────────────────────────────
 
-(defn bc-bind-single-pattern
+(defn bc-bind-single-pattern :verify checked
   :sig [(st : _) (pat : _) (value-reg : Int) -> _]
   :intent "Bind a single sub-pattern to value-reg"
   :requires [(valid st)]
@@ -1067,7 +1067,7 @@
       (Ok st)  ;; Literal in sub-position doesn't bind
     _ (Err "bc-bind-single-pattern: unknown pattern")))
 
-(defn bc-bind-multi-field
+(defn bc-bind-multi-field :verify checked
   :sig [(st : _) (pats : List) (inner-reg : Int) (i : Int) -> _]
   :intent "Bind multi-field variant sub-patterns using at() builtin"
   :requires [(valid st)]
@@ -1132,7 +1132,7 @@
 
         _ (Err "bc-bind-multi-field: unknown pattern type"))))
 
-(defn bc-unbind-sub-patterns
+(defn bc-unbind-sub-patterns :verify checked
   :sig [(st : _) (pats : List) -> _]
   :intent "Remove pattern bindings from locals"
   :requires [(valid st)]
@@ -1144,7 +1144,7 @@
         (PatVariant _ nested _ _) (bc-unbind-sub-patterns (bc-unbind-sub-patterns st nested) (tail pats))
         _ (bc-unbind-sub-patterns st (tail pats)))))
 
-(defn bc-patch-end-jumps
+(defn bc-patch-end-jumps :verify checked
   :sig [(st : _) (jumps : List) -> _]
   :intent "Patch all end-of-arm jumps to point to current instruction"
   :requires [(valid st)]
@@ -1158,7 +1158,7 @@
 
 ;; ── Free variable analysis ──────────────────────────────
 
-(defn bc-free-vars
+(defn bc-free-vars :verify checked
   :sig [(node : _) (bound : _) -> List]
   :intent "Collect free variable names in node not in bound (a map)"
   :requires [(valid node)]
@@ -1212,7 +1212,7 @@
 
     _ []))
 
-(defn bc-fv-list
+(defn bc-fv-list :verify checked
   :sig [(nodes : List) (bound : _) -> List]
   :requires [(valid nodes)]
   :ensures [(valid result)]
@@ -1221,7 +1221,7 @@
       (bc-fv-merge (bc-free-vars (head nodes) bound)
         (bc-fv-list (tail nodes) bound))))
 
-(defn bc-fv-merge
+(defn bc-fv-merge :verify checked
   :sig [(a : List) (b : List) -> List]
   :intent "Merge two free-var lists, removing duplicates"
   :requires [(valid a)]
@@ -1233,7 +1233,7 @@
           (bc-fv-merge a (tail b))
           (bc-fv-merge (append a x) (tail b))))))
 
-(defn bc-list-contains
+(defn bc-list-contains :verify checked
   :sig [(lst : List) (x : _) -> Bool]
   :requires [(valid lst)]
   :ensures [(valid result)]
@@ -1242,7 +1242,7 @@
       (if (= (head lst) x) true
         (bc-list-contains (tail lst) x))))
 
-(defn bc-fv-let
+(defn bc-fv-let :verify checked
   :sig [(bindings : List) (body : _) (bound : _) -> List]
   :requires [(valid bindings)]
   :ensures [(valid result)]
@@ -1255,7 +1255,7 @@
             (bc-fv-let (tail bindings) body (map-set bound name true)))
         _ [])))
 
-(defn bc-fv-arms
+(defn bc-fv-arms :verify checked
   :sig [(arms : List) (bound : _) -> List]
   :requires [(valid arms)]
   :ensures [(valid result)]
@@ -1268,7 +1268,7 @@
               (bc-fv-arms (tail arms) bound)))
         _ (bc-fv-arms (tail arms) bound))))
 
-(defn bc-add-pattern-to-bound
+(defn bc-add-pattern-to-bound :verify checked
   :sig [(bound : _) (pat : _) -> _]
   :requires [(valid bound)]
   :ensures [(valid result)]
@@ -1277,7 +1277,7 @@
     (PatVariant _ sub-pats _ _) (bc-add-patterns-to-bound bound sub-pats)
     _ bound))
 
-(defn bc-add-patterns-to-bound
+(defn bc-add-patterns-to-bound :verify checked
   :sig [(bound : _) (pats : List) -> _]
   :requires [(valid bound)]
   :ensures [(valid result)]
@@ -1285,7 +1285,7 @@
     (if (empty? pats) bound
       (bc-add-patterns-to-bound (bc-add-pattern-to-bound bound (head pats)) (tail pats))))
 
-(defn bc-add-params-to-bound
+(defn bc-add-params-to-bound :verify checked
   :sig [(bound : _) (params : List) -> _]
   :requires [(valid bound)]
   :ensures [(valid result)]
@@ -1295,7 +1295,7 @@
 
 ;; ── Lambda compilation ──────────────────────────────────
 
-(defn bc-compile-lambda
+(defn bc-compile-lambda :verify checked
   :sig [(st : _) (params : List) (body : _) (dst : Int) -> _]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -1334,7 +1334,7 @@
                                                   (let (free-to : Int (if (> capture-start (+ dst 1)) capture-start (+ dst 1)))
                                                     (Ok (cs-free-reg-to st6 free-to))))))))))))))))))))))))))
 
-(defn bc-filter-to-locals
+(defn bc-filter-to-locals :verify checked
   :sig [(st : _) (names : List) -> List]
   :intent "Filter free var names to only those in current locals, return [[name reg] ...]"
   :requires [(valid st)]
@@ -1347,7 +1347,7 @@
             (bc-filter-to-locals st (tail names))
             (cons [name reg] (bc-filter-to-locals st (tail names))))))))
 
-(defn bc-add-all-lambdas
+(defn bc-add-all-lambdas :verify checked
   :sig [(st : _) (lambdas : List) -> _]
   :intent "Add all lambdas to compiler state"
   :requires [(valid st)]
@@ -1356,7 +1356,7 @@
     (if (empty? lambdas) st
       (bc-add-all-lambdas (cs-add-lambda st (head lambdas)) (tail lambdas))))
 
-(defn bc-emit-captures
+(defn bc-emit-captures :verify checked
   :sig [(st : _) (captured : List) -> _]
   :intent "Emit Move instructions for each captured variable"
   :requires [(valid st)]
@@ -1373,7 +1373,7 @@
 
 ;; ── Function compilation ────────────────────────────────
 
-(defn bc-compile-function
+(defn bc-compile-function :verify checked
   :sig [(name : String) (params : List) (body : _) (capture-count : Int) -> _]
   :intent "Compile a function body into a BCFunc value. Returns (Ok [BCFunc [lambdas...]]) or (Err msg)."
   :requires [(valid name)]
@@ -1382,7 +1382,7 @@
     (Ok triple) (Ok [(at triple 0) (at triple 1)])
     (Err e) (Err e)))
 
-(defn bc-compile-function-with-contracts
+(defn bc-compile-function-with-contracts :verify checked
   :sig [(name : String) (params : List) (body : _) (capture-count : Int) (requires-clauses : List) (ensures-clauses : List) -> _]
   :intent "Compile a function with contract assertions. Returns (Ok [BCFunc [lambdas...]]) or (Err msg)."
   :requires [(valid name)]
@@ -1391,7 +1391,7 @@
     (Ok triple) (Ok [(at triple 0) (at triple 1)])
     (Err e) (Err e)))
 
-(defn bc-compile-function-ext
+(defn bc-compile-function-ext :verify checked
   :sig [(name : String) (params : List) (body : _) (capture-count : Int) (requires-clauses : List) (ensures-clauses : List) (mod-prefix : String) (init-lambda-ctr : Int) (verify-level : String) -> _]
   :intent "Compile function with module prefix, lambda counter, and verify-level. Returns (Ok [BCFunc lambdas final-lambda-ctr])."
   :requires [(valid name)]
@@ -1433,7 +1433,7 @@
                                       (let (func : _ (bc-func-from name arity (cs-max-reg st8) capture-count (cs-consts st8) (cs-instrs st8)))
                                         (Ok [func (cs-lambdas st8) (cs-lambda-ctr st8)])))))))))))))))))
 
-(defn bc-emit-contract-assertions
+(defn bc-emit-contract-assertions :verify checked
   :sig [(st : _) (fn-name : String) (clauses : List) (assert-op : Int) (dst-reg : Int) -> _]
   :intent "Emit assertion opcodes for a list of contract clauses"
   :requires [(valid st)]
@@ -1463,7 +1463,7 @@
                                 ;; Recurse for remaining clauses
                                 (bc-emit-contract-assertions st6 fn-name (tail clauses) assert-op dst-reg)))))))))))))))
 
-(defn bc-bind-params
+(defn bc-bind-params :verify checked
   :sig [(st : _) (params : List) (i : Int) -> _]
   :intent "Bind function parameters to registers r0..rN"
   :requires [(valid st)]
@@ -1479,7 +1479,7 @@
 
 ;; ── Top-level compilation ───────────────────────────────
 
-(defn bc-compile-top-level
+(defn bc-compile-top-level :verify checked
   :sig [(node : _) -> _]
   :intent "Compile a top-level AST node. Returns (Ok [bcfunc-or-nil lambdas]) or (Err msg)."
   :requires [(valid node)]
@@ -1506,7 +1506,7 @@
 
 ;; ── Program compilation ─────────────────────────────────
 
-(defn bc-compile-program
+(defn bc-compile-program :verify checked
   :sig [(ast-nodes : List) -> _]
   :intent "Compile all AST nodes into a list of BCFunc values. Returns (Ok [BCFunc ...]) or (Err msg)."
   :requires [(valid ast-nodes)]
@@ -1534,7 +1534,7 @@
                         (let (main-lambdas : List (at result-pair 1))
                           (Ok (concat func-list (concat main-lambdas [main-func])))))))))))))
 
-(defn bc-compile-program-with-prefix
+(defn bc-compile-program-with-prefix :verify checked
   :sig [(ast-nodes : List) (mod-prefix : String) -> _]
   :intent "Compile all AST nodes with module prefix for lambda naming."
   :requires [(valid ast-nodes)]
@@ -1559,7 +1559,7 @@
                         (let (main-lambdas : List (at result-triple 1))
                           (Ok (concat func-list (concat main-lambdas [main-func])))))))))))))
 
-(defn bc-compile-program-with-prefix-and-proofs
+(defn bc-compile-program-with-prefix-and-proofs :verify checked
   :sig [(ast-nodes : List) (mod-prefix : String) (proof-map : _) -> _]
   :intent "Compile all AST nodes with module prefix and Z3 proof results for opcode elision."
   :requires [(valid ast-nodes)]
@@ -1584,7 +1584,7 @@
                         (let (main-lambdas : List (at result-triple 1))
                           (Ok (concat func-list (concat main-lambdas [main-func])))))))))))))
 
-(defn bc-compile-program-with-prefix-proofs-strict
+(defn bc-compile-program-with-prefix-proofs-strict :verify checked
   :sig [(ast-nodes : List) (mod-prefix : String) (proof-map : _) -> _]
   :intent "Compile with strict mode: all verify-levels overridden to proven (issue-136)"
   :requires [(valid ast-nodes)]
@@ -1611,7 +1611,7 @@
                           (let (main-lambdas : List (at result-triple 1))
                             (Ok (concat func-list (concat main-lambdas [main-func]))))))))))))))
 
-(defn bc-override-all-proven
+(defn bc-override-all-proven :verify checked
   :sig [(vm : _) (defns : List) -> _]
   :intent "Set verify-level to proven for every defn in the list"
   :requires [(valid vm)]
@@ -1623,14 +1623,14 @@
           (bc-override-all-proven (map-set vm name "proven") (tail defns))
         _ (bc-override-all-proven vm (tail defns)))))
 
-(defn bc-split-top-levels
+(defn bc-split-top-levels :verify checked
   :sig [(nodes : List) -> List]
   :intent "Split AST nodes into [defns exprs verify-map]"
   :requires [(valid nodes)]
   :ensures [(valid result)]
   :body (bc-split-loop nodes [] [] (map-new)))
 
-(defn bc-tag-defns-verify
+(defn bc-tag-defns-verify :verify checked
   :sig [(vm : _) (defns : List) (level : String) -> _]
   :intent "Add verify-level entries for each defn in the list"
   :requires [(valid vm)]
@@ -1642,7 +1642,7 @@
           (bc-tag-defns-verify (map-set vm name level) (tail defns) level)
         _ (bc-tag-defns-verify vm (tail defns) level))))
 
-(defn bc-split-loop
+(defn bc-split-loop :verify checked
   :sig [(nodes : List) (defns : List) (exprs : List) (verify-map : _) -> List]
   :requires [(valid nodes)]
   :ensures [(valid result)]
@@ -1666,21 +1666,21 @@
                     inner-vm))))
           _ (bc-split-loop (tail nodes) defns (append exprs node) verify-map)))))
 
-(defn bc-compile-defns
+(defn bc-compile-defns :verify checked
   :sig [(defns : List) (verify-map : _) -> _]
   :intent "Compile all defn nodes into BCFunc list (including lambdas)"
   :requires [(valid defns)]
   :ensures [(valid result)]
   :body (bc-compile-defns-prefixed defns "" verify-map))
 
-(defn bc-compile-defns-prefixed
+(defn bc-compile-defns-prefixed :verify checked
   :sig [(defns : List) (mod-prefix : String) (verify-map : _) -> _]
   :intent "Compile all defn nodes with module prefix and verify-level map"
   :requires [(valid defns)]
   :ensures [(valid result)]
   :body (bc-compile-defns-prefixed-with-proofs defns mod-prefix verify-map (map-new)))
 
-(defn bc-compile-defns-prefixed-with-proofs
+(defn bc-compile-defns-prefixed-with-proofs :verify checked
   :sig [(defns : List) (mod-prefix : String) (verify-map : _) (proof-map : _) -> _]
   :intent "Compile all defn nodes with module prefix, verify-level map, and Z3 proof results"
   :requires [(valid defns)]
@@ -1740,7 +1740,7 @@
 
 ;; ── Full pipeline ───────────────────────────────────────
 
-(defn run-compiled-bc
+(defn run-compiled-bc :verify checked
   :sig [(source : String) -> _]
   :intent "Full bytecode pipeline: source -> lex -> parse -> bc-compile -> run-bytecode"
   :requires [(valid source)]

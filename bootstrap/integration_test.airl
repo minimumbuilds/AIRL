@@ -7,42 +7,42 @@
 ;; NOTE: Only the lexer functions are needed here. The parser functions
 ;; are defined below. We copy the lexer because AIRL has no import system.
 
-(defn is-whitespace?
+(defn is-whitespace? :verify checked
   :sig [(ch : String) -> Bool]
   :intent "Check if single-char string is whitespace"
   :requires [(valid ch)]
   :ensures [(valid result)]
   :body (or (= ch " ") (or (= ch "\t") (or (= ch "\n") (= ch "\r")))))
 
-(defn is-digit?
+(defn is-digit? :verify checked
   :sig [(ch : String) -> Bool]
   :intent "Check if single-char string is a decimal digit"
   :requires [(valid ch)]
   :ensures [(valid result)]
   :body (contains "0123456789" ch))
 
-(defn digit-value
+(defn digit-value :verify checked
   :sig [(ch : String) -> i64]
   :intent "Return numeric value of a digit character"
   :requires [(valid ch)]
   :ensures [(valid result)]
   :body (index-of "0123456789" ch))
 
-(defn is-symbol-start?
+(defn is-symbol-start? :verify checked
   :sig [(ch : String) -> Bool]
   :intent "Check if char can start a symbol"
   :requires [(valid ch)]
   :ensures [(valid result)]
   :body (contains "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!$%&*+-./<=>?@^_~" ch))
 
-(defn is-symbol-char?
+(defn is-symbol-char? :verify checked
   :sig [(ch : String) -> Bool]
   :intent "Check if char can continue a symbol"
   :requires [(valid ch)]
   :ensures [(valid result)]
   :body (or (is-symbol-start? ch) (is-digit? ch)))
 
-(defn peek-next-is?
+(defn peek-next-is? :verify checked
   :sig [(source : String) (pos : i64) (expected : String) -> Bool]
   :intent "Check if char at pos+1 equals expected, bounds-safe"
   :requires [(valid source)]
@@ -52,7 +52,7 @@
       (= (char-at source (+ pos 1)) expected)
       false))
 
-(defn skip-block-comment
+(defn skip-block-comment :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (depth : i64) -> List]
   :intent "Skip nestable block comment"
   :requires [(valid source)]
@@ -75,7 +75,7 @@
               (skip-block-comment source (+ pos 1) (+ line 1) 0 depth)
               (skip-block-comment source (+ pos 1) line (+ col 1) depth)))))))
 
-(defn skip-line-comment
+(defn skip-line-comment :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
   :intent "Skip to end of line"
   :requires [(valid source)]
@@ -87,7 +87,7 @@
         (skip-ws source (+ pos 1) (+ line 1) 0)
         (skip-line-comment source (+ pos 1) line (+ col 1)))))
 
-(defn skip-ws
+(defn skip-ws :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
   :intent "Skip whitespace and comments"
   :requires [(valid source)]
@@ -110,7 +110,7 @@
                   (Ok [pos line col]))
                 (Ok [pos line col]))))))))
 
-(defn read-symbol-chars
+(defn read-symbol-chars :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) -> List]
   :intent "Read consecutive symbol characters"
   :requires [(valid source)]
@@ -123,7 +123,7 @@
           (read-symbol-chars source (+ pos 1) line (+ col 1) (+ acc ch))
           [acc pos line col]))))
 
-(defn lex-symbol
+(defn lex-symbol :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
   :intent "Lex a symbol"
   :requires [(valid source)]
@@ -139,7 +139,7 @@
               (if (= text "nil")   (Ok [(Token "nil" nil start-line start-col) new-pos new-line new-col])
                 (Ok [(Token "symbol" text start-line start-col) new-pos new-line new-col]))))))
 
-(defn lex-keyword
+(defn lex-keyword :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
   :intent "Lex a keyword"
   :requires [(valid source)]
@@ -152,7 +152,7 @@
          (new-col : i64 (at r 3))
               (Ok [(Token "keyword" text start-line start-col) new-pos new-line new-col])))
 
-(defn digit-value-f
+(defn digit-value-f :verify checked
   :sig [(ch : String) -> f64]
   :intent "Return float value of a digit character"
   :requires [(valid ch)]
@@ -160,14 +160,14 @@
   :body
     (if (= ch "0") 0.0 (if (= ch "1") 1.0 (if (= ch "2") 2.0 (if (= ch "3") 3.0 (if (= ch "4") 4.0 (if (= ch "5") 5.0 (if (= ch "6") 6.0 (if (= ch "7") 7.0 (if (= ch "8") 8.0 9.0))))))))))
 
-(defn int-to-float
+(defn int-to-float :verify checked
   :sig [(n : i64) -> f64]
   :intent "Convert integer to float"
   :requires [(valid n)]
   :ensures [(valid result)]
   :body (if (= n 0) 0.0 (if (< n 0) (- 0.0 (int-to-float (- 0 n))) (+ 1.0 (int-to-float (- n 1))))))
 
-(defn read-digits
+(defn read-digits :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : i64) -> List]
   :intent "Read consecutive digits"
   :requires [(valid source)]
@@ -180,7 +180,7 @@
           (read-digits source (+ pos 1) line (+ col 1) (+ (* acc 10) (digit-value ch)))
           [acc pos line col]))))
 
-(defn read-frac-digits
+(defn read-frac-digits :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : f64) (divisor : f64) -> List]
   :intent "Read fractional digits"
   :requires [(valid source)]
@@ -193,7 +193,7 @@
           (read-frac-digits source (+ pos 1) line (+ col 1) (+ acc (/ (digit-value-f ch) divisor)) (* divisor 10.0))
           [acc pos line col]))))
 
-(defn lex-number
+(defn lex-number :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : i64) (negative : Bool) (start-line : i64) (start-col : i64) -> List]
   :intent "Lex an integer or float literal"
   :requires [(valid source)]
@@ -220,7 +220,7 @@
                   (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))
                 (Ok [(Token "integer" (if negative (- 0 int-val) int-val) start-line start-col) new-pos new-line new-col]))))
 
-(defn lex-string
+(defn lex-string :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (acc : String) (start-line : i64) (start-col : i64) -> List]
   :intent "Lex a string literal"
   :requires [(valid source)]
@@ -246,7 +246,7 @@
               (lex-string source (+ pos 1) (+ line 1) 0 (+ acc ch) start-line start-col)
               (lex-string source (+ pos 1) line (+ col 1) (+ acc ch) start-line start-col)))))))
 
-(defn next-token
+(defn next-token :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) -> List]
   :intent "Read next token"
   :requires [(valid source)]
@@ -288,7 +288,7 @@
                     (Err (+ "unexpected character '" (+ ch "'")))))
                   )))))))))))))
 
-(defn lex-loop
+(defn lex-loop :verify checked
   :sig [(source : String) (pos : i64) (line : i64) (col : i64) (tokens : List) -> List]
   :intent "Accumulate tokens until EOF"
   :requires [(valid source)]
@@ -308,7 +308,7 @@
                         (Ok new-tokens)
                         (lex-loop source new-pos new-line new-col new-tokens))))))
 
-(defn lex
+(defn lex :verify checked
   :sig [(source : String) -> List]
   :intent "Tokenize source string"
   :requires [(valid source)]
@@ -320,21 +320,21 @@
 
 ;; ═══ PARSER ═════════════════════════════════════
 
-(defn is-upper?
+(defn is-upper? :verify checked
   :sig [(ch : String) -> Bool]
   :intent "Check if uppercase"
   :requires [(valid ch)]
   :ensures [(valid result)]
   :body (contains "ABCDEFGHIJKLMNOPQRSTUVWXYZ" ch))
 
-(defn token-kind
+(defn token-kind :verify checked
   :sig [(tok : Any) -> String]
   :intent "Extract kind from Token"
   :requires [(valid tok)]
   :ensures [(valid result)]
   :body (match tok (Token kind _ _ _) kind))
 
-(defn parse-sexpr
+(defn parse-sexpr :verify checked
   :sig [(tokens : List) (pos : i64) -> List]
   :intent "Parse one S-expression"
   :requires [(valid tokens)]
@@ -378,7 +378,7 @@
                 (if (= kind "eof") (Err (ParseError "unexpected end of input" line col))
                   (Ok [(SAtom tok) (+ pos 1)]))))))))))
 
-(defn parse-sexprs
+(defn parse-sexprs :verify checked
   :sig [(tokens : List) (pos : i64) (stop-kind : String) -> List]
   :intent "Parse S-expressions until stop token"
   :requires [(valid tokens)]
@@ -401,7 +401,7 @@
                         (Err e) (Err e)))
                 (Err e) (Err e))))))))
 
-(defn parse-sexpr-all
+(defn parse-sexpr-all :verify checked
   :sig [(tokens : List) -> List]
   :intent "Parse all tokens into S-expressions"
   :requires [(valid tokens)]
@@ -411,7 +411,7 @@
       (Ok result) (Ok (at result 0))
       (Err e) (Err e)))
 
-(defn parse-atom
+(defn parse-atom :verify checked
   :sig [(tok : Any) -> List]
   :intent "Convert token to AST atom"
   :requires [(valid tok)]
@@ -431,7 +431,7 @@
             (Ok (ASTSymbol value line col)))
           (Err (ParseError (+ "unexpected token: " kind) line col)))))))))))
 
-(defn parse-list-items
+(defn parse-list-items :verify checked
   :sig [(sexprs : List) (pos : i64) -> List]
   :intent "Parse list of S-expressions into AST exprs"
   :requires [(valid sexprs)]
@@ -445,7 +445,7 @@
             (Err e) (Err e))
         (Err e) (Err e))))
 
-(defn parse-expr
+(defn parse-expr :verify checked
   :sig [(sexpr : Any) -> List]
   :intent "Parse S-expression into AST"
   :requires [(valid sexpr)]
@@ -494,7 +494,7 @@
                       (Err e) (Err e))
                   (Err e) (Err e)))))))
 
-(defn parse-if
+(defn parse-if :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (if cond then else)"
   :requires [(valid items)]
@@ -510,7 +510,7 @@
         (Err e) (Err e))
       (Err (ParseError "if requires 3 arguments" line col))))
 
-(defn parse-let-binding
+(defn parse-let-binding :verify checked
   :sig [(sexpr : Any) -> List]
   :intent "Parse (name : Type value)"
   :requires [(valid sexpr)]
@@ -539,7 +539,7 @@
             _ (Err (ParseError "expected name" line col))))
       _ (Err (ParseError "binding must be list" 0 0))))
 
-(defn parse-let-bindings
+(defn parse-let-bindings :verify checked
   :sig [(items : List) (pos : i64) (end : i64) -> List]
   :intent "Parse let bindings"
   :requires [(valid items)]
@@ -552,7 +552,7 @@
           (Err e) (Err e))
         (Err e) (Err e))))
 
-(defn parse-let
+(defn parse-let :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (let bindings body)"
   :requires [(valid items)]
@@ -567,7 +567,7 @@
             (Err e) (Err e))
           (Err e) (Err e)))))
 
-(defn parse-do
+(defn parse-do :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (do exprs)"
   :requires [(valid items)]
@@ -579,7 +579,7 @@
         (Ok exprs) (Ok (ASTDo exprs line col))
         (Err e) (Err e))))
 
-(defn parse-pattern
+(defn parse-pattern :verify checked
   :sig [(sexpr : Any) -> List]
   :intent "Parse pattern"
   :requires [(valid sexpr)]
@@ -615,7 +615,7 @@
             _ (Err (ParseError "pattern needs symbol" line col))))
       _ (Err (ParseError "bad pattern" 0 0))))
 
-(defn parse-patterns
+(defn parse-patterns :verify checked
   :sig [(items : List) (pos : i64) -> List]
   :intent "Parse sub-patterns"
   :requires [(valid items)]
@@ -628,7 +628,7 @@
           (Err e) (Err e))
         (Err e) (Err e))))
 
-(defn parse-match-arms
+(defn parse-match-arms :verify checked
   :sig [(items : List) (pos : i64) -> List]
   :intent "Parse pattern/body pairs"
   :requires [(valid items)]
@@ -645,7 +645,7 @@
             (Err e) (Err e))
           (Err e) (Err e)))))
 
-(defn parse-match
+(defn parse-match :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (match scrutinee arms)"
   :requires [(valid items)]
@@ -662,7 +662,7 @@
               (Err e) (Err e))
             (Err e) (Err e))))))
 
-(defn parse-lambda-params
+(defn parse-lambda-params :verify checked
   :sig [(items : List) (pos : i64) -> List]
   :intent "Parse lambda params"
   :requires [(valid items)]
@@ -679,7 +679,7 @@
               (Err (ParseError "param must be symbol" 0 0))))
         _ (Err (ParseError "param must be symbol" 0 0)))))
 
-(defn parse-lambda
+(defn parse-lambda :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (fn [params] body)"
   :requires [(valid items)]
@@ -696,7 +696,7 @@
         _ (Err (ParseError "fn expects [params]" line col)))
       (Err (ParseError "fn needs [params] and body" line col))))
 
-(defn parse-try
+(defn parse-try :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (try expr)"
   :requires [(valid items)]
@@ -708,7 +708,7 @@
         (Err e) (Err e))
       (Err (ParseError "try needs one argument" line col))))
 
-(defn parse-param
+(defn parse-param :verify checked
   :sig [(sexpr : Any) -> List]
   :intent "Parse (name : Type)"
   :requires [(valid sexpr)]
@@ -732,7 +732,7 @@
             _ (Err (ParseError "expected name" line col))))
       _ (Err (ParseError "param must be list" 0 0))))
 
-(defn parse-sig-params
+(defn parse-sig-params :verify checked
   :sig [(items : List) (pos : i64) (arrow-pos : i64) -> List]
   :intent "Parse sig params"
   :requires [(valid items)]
@@ -745,7 +745,7 @@
           (Err e) (Err e))
         (Err e) (Err e))))
 
-(defn find-arrow
+(defn find-arrow :verify checked
   :sig [(items : List) (pos : i64) -> i64]
   :intent "Find -> arrow index"
   :requires [(valid items)]
@@ -758,7 +758,7 @@
             (if (= kind "arrow") pos (find-arrow items (+ pos 1))))
         _ (find-arrow items (+ pos 1)))))
 
-(defn parse-sig
+(defn parse-sig :verify checked
   :sig [(sexpr : Any) -> List]
   :intent "Parse :sig [(params) -> ReturnType]"
   :requires [(valid sexpr)]
@@ -784,7 +784,7 @@
               (Err e) (Err e))))
       _ (Err (ParseError "sig must be bracket list" 0 0))))
 
-(defn walk-defn-clauses
+(defn walk-defn-clauses :verify checked
   :sig [(items : List) (pos : i64) (sig : Any) (intent : String) (requires : List) (ensures : List) (body : Any) -> List]
   :intent "Walk keyword clauses"
   :requires [(valid items)]
@@ -815,7 +815,7 @@
               (Err (ParseError "expected keyword in defn" 0 0))))
         _ (Err (ParseError "expected keyword in defn" 0 0)))))
 
-(defn parse-defn
+(defn parse-defn :verify checked
   :sig [(items : List) (line : i64) (col : i64) -> List]
   :intent "Parse (defn name clauses)"
   :requires [(valid items)]
@@ -833,7 +833,7 @@
               (Err (ParseError "defn name must be symbol" line col))))
         _ (Err (ParseError "defn name must be symbol" line col)))))
 
-(defn parse-top-level
+(defn parse-top-level :verify checked
   :sig [(sexpr : Any) -> List]
   :intent "Parse top-level form"
   :requires [(valid sexpr)]
@@ -851,7 +851,7 @@
             _ (parse-expr sexpr)))
       _ (parse-expr sexpr)))
 
-(defn parse-top-levels
+(defn parse-top-levels :verify checked
   :sig [(sexprs : List) (pos : i64) -> List]
   :intent "Parse all top-level forms"
   :requires [(valid sexprs)]
@@ -864,7 +864,7 @@
           (Err e) (Err e))
         (Err e) (Err e))))
 
-(defn parse
+(defn parse :verify checked
   :sig [(source : String) -> List]
   :intent "Full pipeline: source → tokens → S-exprs → AST"
   :requires [(valid source)]
@@ -878,7 +878,7 @@
 
 ;; ═══ TEST ═══════════════════════════════════════
 
-(defn assert-eq
+(defn assert-eq :verify checked
   :sig [(a : Any) (b : Any) -> Bool]
   :intent "Assert equality"
   :requires [(valid a) (valid b)]

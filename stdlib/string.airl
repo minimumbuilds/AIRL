@@ -4,7 +4,7 @@
 ;; Internal helper: accumulate non-empty tokens into result list.
 ;; Uses explicit recursion instead of filter+lambda to work around AOT
 ;; MakeClosure compilation bug with inline lambdas passed to map/filter.
-(defn words-collect-loop
+(defn words-collect-loop :verify checked
   :sig [(parts : List) (i : i64) (len : i64) (acc : List) -> List]
   :requires [(>= i 0)]
   :ensures [(valid result)]
@@ -16,7 +16,7 @@
           (words-collect-loop parts (+ i 1) len acc)
           (words-collect-loop parts (+ i 1) len (concat acc [tok]))))))
 
-(defn words
+(defn words :verify checked
   :sig [(s : String) -> List]
   :intent "Split a string into words by whitespace"
   :requires [(valid s)]
@@ -26,7 +26,7 @@
       (words-collect-loop parts 0 (length parts) [])))
 
 ;; ── unwords : join strings with spaces ──
-(defn unwords
+(defn unwords :verify checked
   :sig [(ws : List) -> String]
   :intent "Join a list of strings with spaces"
   :requires [(valid ws)]
@@ -34,7 +34,7 @@
   :body (join ws " "))
 
 ;; ── lines : split string by newlines ──
-(defn lines
+(defn lines :verify checked
   :sig [(s : String) -> List]
   :intent "Split a string into lines"
   :requires [(valid s)]
@@ -42,7 +42,7 @@
   :body (split s "\n"))
 
 ;; ── unlines : join strings with newlines ──
-(defn unlines
+(defn unlines :verify checked
   :sig [(ls : List) -> String]
   :intent "Join a list of strings with newlines"
   :requires [(valid ls)]
@@ -50,7 +50,7 @@
   :body (join ls "\n"))
 
 ;; ── repeat-str : repeat a string n times ──
-(defn repeat-str
+(defn repeat-str :verify checked
   :sig [(s : String) (n : i64) -> String]
   :intent "Repeat a string n times using binary doubling — O(N log N), O(log N) stack depth"
   :requires [(>= n 0)]
@@ -65,7 +65,7 @@
                 (+ half (+ half s)))))))
 
 ;; ── pad-left : pad string to width on left ──
-(defn pad-left
+(defn pad-left :verify checked
   :sig [(s : String) (width : i64) (ch : String) -> String]
   :intent "Pad string to width by prepending ch characters — O(N) via repeat-str"
   :requires [(>= width 0)]
@@ -76,7 +76,7 @@
             (+ (repeat-str ch (- width slen)) s))))
 
 ;; ── pad-right : pad string to width on right ──
-(defn pad-right
+(defn pad-right :verify checked
   :sig [(s : String) (width : i64) (ch : String) -> String]
   :intent "Pad string to width by appending ch characters — O(N) via repeat-str"
   :requires [(>= width 0)]
@@ -87,7 +87,7 @@
             (+ s (repeat-str ch (- width slen))))))
 
 ;; ── is-empty-str : check if string is empty ──
-(defn is-empty-str
+(defn is-empty-str :verify checked
   :sig [(s : String) -> bool]
   :intent "Check if a string is empty"
   :requires [(valid s)]
@@ -95,7 +95,7 @@
   :body (= (length s) 0))
 
 ;; ── reverse-str : reverse a string ──
-(defn reverse-str
+(defn reverse-str :verify checked
   :sig [(s : String) -> String]
   :intent "Reverse a string"
   :requires [(valid s)]
@@ -103,7 +103,7 @@
   :body (join (reverse (chars s)) ""))
 
 ;; ── count-occurrences : count occurrences of substring ──
-(defn count-occurrences
+(defn count-occurrences :verify checked
   :sig [(s : String) (sub : String) -> i64]
   :intent "Count non-overlapping occurrences of sub in s"
   :requires [(valid s) (not (= sub ""))]
@@ -118,7 +118,7 @@
 ;; ══════════════════════════════════════════════════════════════════
 
 ;; ── helper: compare bytes at offset ──
-(defn bytes-match-at
+(defn bytes-match-at :verify checked
   :sig [(haystack : Bytes) (needle : Bytes) (offset : i64) (nlen : i64) (i : i64) -> bool]
   :intent "Check if needle bytes match haystack at given offset starting from index i"
   :requires [(>= offset 0) (>= i 0)]
@@ -130,7 +130,7 @@
             false)))
 
 ;; ── starts-with : check if string starts with prefix ──
-(defn starts-with
+(defn starts-with :verify checked
   :sig [(s : String) (prefix : String) -> bool]
   :intent "Check if s starts with prefix using byte comparison"
   :requires [(valid s) (valid prefix)]
@@ -144,7 +144,7 @@
             (bytes-match-at sb pb 0 plen 0))))
 
 ;; ── ends-with : check if string ends with suffix ──
-(defn ends-with
+(defn ends-with :verify checked
   :sig [(s : String) (suffix : String) -> bool]
   :intent "Check if s ends with suffix using byte comparison"
   :requires [(valid s) (valid suffix)]
@@ -158,7 +158,7 @@
             (bytes-match-at sb xb (- slen xlen) xlen 0))))
 
 ;; ── helper: scan for needle in haystack ──
-(defn bytes-scan
+(defn bytes-scan :verify checked
   :sig [(haystack : Bytes) (needle : Bytes) (hlen : i64) (nlen : i64) (pos : i64) (limit : i64) -> i64]
   :intent "Find first occurrence of needle in haystack, return byte offset or -1"
   :requires [(>= pos 0)]
@@ -170,7 +170,7 @@
             (bytes-scan haystack needle hlen nlen (+ pos 1) limit))))
 
 ;; ── index-of : find first occurrence of substring ──
-(defn index-of
+(defn index-of :verify checked
   :sig [(s : String) (sub : String) -> i64]
   :intent "Find byte index of first occurrence of sub in s, or -1"
   :requires [(valid s) (valid sub)]
@@ -186,7 +186,7 @@
               (bytes-scan sb nb slen nlen 0 (- slen nlen))))))
 
 ;; ── contains : check if string contains substring ──
-(defn contains
+(defn contains :verify checked
   :sig [(s : String) (sub : String) -> bool]
   :intent "Check if s contains sub using byte scanning"
   :requires [(valid s) (valid sub)]
@@ -194,7 +194,7 @@
   :body (not (= (index-of s sub) -1)))
 
 ;; ── helper: byte-level case transforms ──
-(defn to-lower-byte
+(defn to-lower-byte :verify checked
   :sig [(b : i64) -> i64]
   :intent "Convert ASCII uppercase byte to lowercase"
   :requires [(>= b 0)]
@@ -203,7 +203,7 @@
           (+ b 32)
           b))
 
-(defn to-upper-byte
+(defn to-upper-byte :verify checked
   :sig [(b : i64) -> i64]
   :intent "Convert ASCII lowercase byte to uppercase"
   :requires [(>= b 0)]
@@ -213,7 +213,7 @@
           b))
 
 ;; Build a list of 1-byte arrays with each byte lowercased
-(defn lower-bytes-loop
+(defn lower-bytes-loop :verify checked
   :sig [(src : Bytes) (i : i64) (len : i64) -> List]
   :intent "Collect lowercased bytes as list of 1-byte arrays"
   :requires [(>= i 0)]
@@ -224,7 +224,7 @@
                 (lower-bytes-loop src (+ i 1) len))))
 
 ;; Build a list of 1-byte arrays with each byte uppercased
-(defn upper-bytes-loop
+(defn upper-bytes-loop :verify checked
   :sig [(src : Bytes) (i : i64) (len : i64) -> List]
   :intent "Collect uppercased bytes as list of 1-byte arrays"
   :requires [(>= i 0)]
@@ -235,7 +235,7 @@
                 (upper-bytes-loop src (+ i 1) len))))
 
 ;; ── to-lower : convert ASCII uppercase to lowercase ──
-(defn to-lower
+(defn to-lower :verify checked
   :sig [(s : String) -> String]
   :intent "Convert ASCII uppercase characters to lowercase"
   :requires [(valid s)]
@@ -247,7 +247,7 @@
           (bytes-to-string result 0 len)))
 
 ;; ── to-upper : convert ASCII lowercase to uppercase ──
-(defn to-upper
+(defn to-upper :verify checked
   :sig [(s : String) -> String]
   :intent "Convert ASCII lowercase characters to uppercase"
   :requires [(valid s)]
@@ -259,14 +259,14 @@
           (bytes-to-string result 0 len)))
 
 ;; ── helper: whitespace detection and trim boundaries ──
-(defn is-whitespace-byte
+(defn is-whitespace-byte :verify checked
   :sig [(b : i64) -> bool]
   :intent "Check if byte is ASCII whitespace (space, tab, newline, carriage return)"
   :requires [(>= b 0)]
   :ensures [(valid result)]
   :body (or (= b 32) (or (= b 9) (or (= b 10) (= b 13)))))
 
-(defn trim-left-pos
+(defn trim-left-pos :verify checked
   :sig [(buf : Bytes) (i : i64) (len : i64) -> i64]
   :intent "Find first non-whitespace byte position from left"
   :requires [(>= i 0)]
@@ -277,7 +277,7 @@
             (trim-left-pos buf (+ i 1) len)
             i)))
 
-(defn trim-right-pos
+(defn trim-right-pos :verify checked
   :sig [(buf : Bytes) (i : i64) -> i64]
   :intent "Find last non-whitespace byte position from right (exclusive)"
   :requires [(>= i 0)]
@@ -289,7 +289,7 @@
             i)))
 
 ;; ── trim : trim leading and trailing whitespace ──
-(defn trim
+(defn trim :verify checked
   :sig [(s : String) -> String]
   :intent "Trim leading and trailing ASCII whitespace"
   :requires [(valid s)]
@@ -303,7 +303,7 @@
             (bytes-to-string sb left (- right left)))))
 
 ;; ── char-alpha : check if first byte is ASCII alphabetic ──
-(defn char-alpha
+(defn char-alpha :verify checked
   :sig [(s : String) -> bool]
   :intent "Check if first character is ASCII alphabetic (A-Z or a-z)"
   :requires [(valid s)]
@@ -316,7 +316,7 @@
                   (and (>= b 97) (<= b 122)))))))
 
 ;; ── char-digit : check if first byte is ASCII digit ──
-(defn char-digit
+(defn char-digit :verify checked
   :sig [(s : String) -> bool]
   :intent "Check if first character is ASCII digit (0-9)"
   :requires [(valid s)]
@@ -328,7 +328,7 @@
               (and (>= b 48) (<= b 57))))))
 
 ;; ── char-whitespace : check if first byte is ASCII whitespace ──
-(defn char-whitespace
+(defn char-whitespace :verify checked
   :sig [(s : String) -> bool]
   :intent "Check if first character is ASCII whitespace"
   :requires [(valid s)]

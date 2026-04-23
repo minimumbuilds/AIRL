@@ -1,7 +1,7 @@
 ;; LLM-generated AIRL: intentionally violates a contract
 ;; Tests that the runtime catches the violation
 
-(defn positive-only
+(defn positive-only :verify checked
   :sig [(x : i64) -> i64]
   :intent "Returns x, but requires it to be positive"
   :requires [(> x 0)]

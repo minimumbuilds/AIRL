@@ -1,10 +1,10 @@
-(defn fact
+(defn fact :verify checked
   :sig [(n : i64) -> i64]
   :requires [(valid n)]
   :ensures [(valid result)]
   :body (if (<= n 1) 1 (* n (fact (- n 1)))))
 
-(defn apply-fn
+(defn apply-fn :verify checked
   :sig [(f : fn) (x : i64) -> i64]
   :requires [(valid f)]
   :ensures [(valid result)]

@@ -1,6 +1,6 @@
 ;; EXPECT: 1:1|2:1|3:2|4:1|5:1
 ;; DEPS: bootstrap/lexer.airl bootstrap/parser.airl
-(defn count-top
+(defn count-top :verify checked
   :sig [(src : String) -> i64]
   :requires [(valid src)]
   :ensures [(valid result)]

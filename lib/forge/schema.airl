@@ -1,6 +1,6 @@
 ;; schema.airl — Type to JSON Schema conversion for Forge
 
-(defn type-to-json-schema
+(defn type-to-json-schema :verify checked
   :sig [(type-str : String) -> Map]
   :intent "Convert an AIRL type string to a JSON Schema map"
   :requires [(valid type-str)]
@@ -28,7 +28,7 @@
                       (map-new)
                       (map-from ["type" "string" "description" (str "AIRL type: " type-str)]))))))))))))
 
-(defn param-to-schema
+(defn param-to-schema :verify checked
   :sig [(pname : String) (ptype : String) -> List]
   :intent "Convert a parameter name and type to a [name schema] pair"
   :requires [(not (= pname ""))]
@@ -36,7 +36,7 @@
   :body
   [pname (type-to-json-schema ptype)])
 
-(defn fn-to-tool-schema
+(defn fn-to-tool-schema :verify checked
   :sig [(meta : Map) -> Map]
   :intent "Convert fn-metadata map to an OpenAI-style tool schema map"
   :requires [(map-has meta "name")]

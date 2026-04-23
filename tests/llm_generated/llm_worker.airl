@@ -1,7 +1,7 @@
 ;; LLM-generated worker module
 ;; An AI system would generate this to expose its capabilities as typed, verified functions
 
-(defn classify
+(defn classify :verify checked
   :sig [(score : i64) -> i64]
   :intent "Classify score: 0=fail, 1=pass, 2=excellent"
   :requires [(>= score 0) (<= score 100)]
@@ -10,7 +10,7 @@
     (if (< score 50) 0
       (if (< score 90) 1 2)))
 
-(defn weighted-average
+(defn weighted-average :verify checked
   :sig [(a : i64) (b : i64) (w : i64) -> i64]
   :intent "Weighted average: (a*w + b*(100-w)) / 100"
   :requires [(>= w 0) (<= w 100)]

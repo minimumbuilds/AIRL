@@ -6,7 +6,7 @@
 ;; ─── index-project ───────────────────────────────────────────────────
 ;; Scan a project root for .airl files, extract symbols, build index.
 ;; Returns a project index Map.
-(defn index-project
+(defn index-project :verify checked
   :sig [(root-path : String) -> Map]
   :intent "Index all .airl files under root-path into a project index"
   :requires [(valid root-path)]
@@ -28,7 +28,7 @@
 
 ;; ─── index-file ──────────────────────────────────────────────────────
 ;; Index a single file: hash content, extract symbols.
-(defn index-file
+(defn index-file :verify checked
   :sig [(path : String) (content : String) -> Map]
   :intent "Extract symbols from a file and compute content hash"
   :requires [(valid path) (valid content)]
@@ -39,7 +39,7 @@
 
 ;; ─── index-get-symbols ───────────────────────────────────────────────
 ;; Get symbols for a specific file from the index.
-(defn index-get-symbols
+(defn index-get-symbols :verify checked
   :sig [(index : Map) (file-path : String) -> List]
   :intent "Retrieve symbols for a file from the project index"
   :requires [(valid index) (valid file-path)]
@@ -52,7 +52,7 @@
 
 ;; ─── index-all-symbols ───────────────────────────────────────────────
 ;; Get all symbols from the index.
-(defn index-all-symbols
+(defn index-all-symbols :verify checked
   :sig [(index : Map) -> List]
   :intent "Get flat list of all symbols across all files"
   :requires [(valid index)]
@@ -61,7 +61,7 @@
 
 ;; ─── collect-all-symbols ─────────────────────────────────────────────
 ;; Collect all symbols from the files index into a flat list.
-(defn collect-all-symbols
+(defn collect-all-symbols :verify checked
   :sig [(files-index : Map) -> List]
   :intent "Flatten all file symbol lists into one list"
   :requires [(valid files-index)]
@@ -74,7 +74,7 @@
 
 ;; ─── find-airl-files ─────────────────────────────────────────────────
 ;; Recursively find all .airl files under a directory.
-(defn find-airl-files
+(defn find-airl-files :verify checked
   :sig [(dir-path : String) -> List]
   :intent "Recursively find all .airl files in a directory tree"
   :requires [(valid dir-path)]
@@ -97,7 +97,7 @@
 
 ;; ─── make-relative ───────────────────────────────────────────────────
 ;; Make a path relative to a root path.
-(defn make-relative
+(defn make-relative :verify checked
   :sig [(full-path : String) (root : String) -> String]
   :intent "Strip root prefix from a full path to make it relative"
   :requires [(valid full-path) (valid root)]

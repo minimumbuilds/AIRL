@@ -4,7 +4,7 @@
 ;; All functions operate on Map values where keys are the set elements.
 
 ;; ── set-new : create empty set ──
-(defn set-new
+(defn set-new :verify checked
   :sig [-> Map]
   :intent "Create an empty set"
   :requires [true]
@@ -12,7 +12,7 @@
   :body (map-new))
 
 ;; ── set-from : create set from list ──
-(defn set-from
+(defn set-from :verify checked
   :sig [(xs : List) -> Map]
   :intent "Create a set from a list of elements"
   :requires [(valid xs)]
@@ -20,7 +20,7 @@
   :body (fold (fn [s x] (map-set s x true)) (map-new) xs))
 
 ;; ── set-add : add element to set ──
-(defn set-add
+(defn set-add :verify checked
   :sig [(s : Map) (x : _) -> Map]
   :intent "Add an element to the set"
   :requires [(valid s)]
@@ -28,7 +28,7 @@
   :body (map-set s x true))
 
 ;; ── set-remove : remove element from set ──
-(defn set-remove
+(defn set-remove :verify checked
   :sig [(s : Map) (x : _) -> Map]
   :intent "Remove an element from the set"
   :requires [(valid s)]
@@ -36,7 +36,7 @@
   :body (map-remove s x))
 
 ;; ── set-contains? : check membership ──
-(defn set-contains?
+(defn set-contains? :verify checked
   :sig [(s : Map) (x : _) -> Bool]
   :intent "Check if element is in the set"
   :requires [(valid s)]
@@ -44,7 +44,7 @@
   :body (map-has s x))
 
 ;; ── set-size : number of elements ──
-(defn set-size
+(defn set-size :verify checked
   :sig [(s : Map) -> i64]
   :intent "Number of elements in the set"
   :requires [(valid s)]
@@ -52,7 +52,7 @@
   :body (map-size s))
 
 ;; ── set-to-list : convert to list ──
-(defn set-to-list
+(defn set-to-list :verify checked
   :sig [(s : Map) -> List]
   :intent "Convert set to list of elements"
   :requires [(valid s)]
@@ -60,7 +60,7 @@
   :body (map-keys s))
 
 ;; ── set-union : combine two sets ──
-(defn set-union
+(defn set-union :verify checked
   :sig [(a : Map) (b : Map) -> Map]
   :intent "Union of two sets"
   :requires [(valid a) (valid b)]
@@ -68,7 +68,7 @@
   :body (fold (fn [s x] (map-set s x true)) a (map-keys b)))
 
 ;; ── set-intersection : elements in both sets ──
-(defn set-intersection
+(defn set-intersection :verify checked
   :sig [(a : Map) (b : Map) -> Map]
   :intent "Intersection of two sets"
   :requires [(valid a) (valid b)]
@@ -76,7 +76,7 @@
   :body (fold (fn [s x] (if (map-has b x) (map-set s x true) s)) (map-new) (map-keys a)))
 
 ;; ── set-difference : elements in a but not b ──
-(defn set-difference
+(defn set-difference :verify checked
   :sig [(a : Map) (b : Map) -> Map]
   :intent "Elements in first set but not second"
   :requires [(valid a) (valid b)]
@@ -84,7 +84,7 @@
   :body (fold (fn [s x] (if (map-has b x) s (map-set s x true))) (map-new) (map-keys a)))
 
 ;; ── set-subset? : is a subset of b? ──
-(defn set-subset?
+(defn set-subset? :verify checked
   :sig [(a : Map) (b : Map) -> Bool]
   :intent "Check if first set is a subset of second"
   :requires [(valid a) (valid b)]
@@ -92,7 +92,7 @@
   :body (all (fn [x] (map-has b x)) (map-keys a)))
 
 ;; ── set-equal? : same elements? ──
-(defn set-equal?
+(defn set-equal? :verify checked
   :sig [(a : Map) (b : Map) -> Bool]
   :intent "Check if two sets have the same elements"
   :requires [(valid a) (valid b)]

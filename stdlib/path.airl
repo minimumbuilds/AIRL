@@ -6,7 +6,7 @@
 
 ;; ── last-index-of: find last occurrence of needle in haystack ──
 ;; Returns -1 if not found.
-(defn last-index-of
+(defn last-index-of :verify checked
   :sig [(haystack : String) (needle : String) -> Int]
   :requires [(valid haystack) (valid needle)]
   :ensures [(>= result -1)]
@@ -17,7 +17,7 @@
         (- (- (length haystack) (length (at parts (- (length parts) 1)))) (length needle)))))
 
 ;; ── path-join: concatenate two path segments with / ──
-(defn path-join
+(defn path-join :verify checked
   :sig [(a : String) (b : String) -> String]
   :requires [(valid a) (valid b)]
   :ensures [(valid result)]
@@ -32,7 +32,7 @@
 
 ;; ── path-parent: everything before the last / ──
 ;; Returns "" for paths with no parent (e.g., "file.txt").
-(defn path-parent
+(defn path-parent :verify checked
   :sig [(path : String) -> String]
   :requires [(valid path)]
   :ensures [(valid result)]
@@ -46,7 +46,7 @@
 
 ;; ── path-filename: everything after the last / ──
 ;; Returns the whole string if no / present.
-(defn path-filename
+(defn path-filename :verify checked
   :sig [(path : String) -> String]
   :requires [(valid path)]
   :ensures [(valid result)]
@@ -58,7 +58,7 @@
 
 ;; ── path-extension: everything after the last . in the filename ──
 ;; Returns "" if no extension.
-(defn path-extension
+(defn path-extension :verify checked
   :sig [(path : String) -> String]
   :requires [(valid path)]
   :ensures [(valid result)]
@@ -72,14 +72,14 @@
             (substring fname (+ idx 1) (length fname)))))))
 
 ;; ── is-absolute: starts with / ──
-(defn is-absolute
+(defn is-absolute :verify checked
   :sig [(path : String) -> Bool]
   :requires [(valid path)]
   :ensures [(valid result)]
   :body (starts-with path "/"))
 
 ;; ── path-expand-home: expand leading ~ to $HOME ──
-(defn path-expand-home
+(defn path-expand-home :verify checked
   :sig [(path : String) -> String]
   :requires [(valid path)]
   :ensures [(valid result)]

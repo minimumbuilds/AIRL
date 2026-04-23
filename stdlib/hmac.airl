@@ -6,7 +6,7 @@
 
 ;; ── Key preparation ──
 
-(defn hmac-pad-key
+(defn hmac-pad-key :verify checked
   :sig [(key : Bytes) -> Bytes]
   :intent "Prepare HMAC key: hash if > 64 bytes, zero-pad to 64 bytes"
   :requires [(valid key)]
@@ -21,7 +21,7 @@
 ;; ── XOR key with pad byte ──
 ;; Uses bytes-xor-scalar builtin — single allocation, no per-byte recursion.
 
-(defn hmac-xor-key
+(defn hmac-xor-key :verify checked
   :sig [(key : Bytes) (pad : i64) -> Bytes]
   :intent "XOR 64-byte key with pad byte, returning 64-byte Bytes"
   :requires [(= (length key) 64)]

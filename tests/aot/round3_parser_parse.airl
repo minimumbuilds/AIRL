@@ -1,6 +1,6 @@
 ;; EXPECT: 1:ok1|2:ok1|3:ok2|4:ok1|5:ok1|6:err|7:err|8:err|9:ok1|10:err
 ;; DEPS: bootstrap/lexer.airl bootstrap/parser.airl
-(defn parse-check
+(defn parse-check :verify checked
   :sig [(src : String) -> String]
   :requires [(valid src)]
   :ensures [(valid result)]

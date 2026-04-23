@@ -11,14 +11,14 @@
 
 ;; ─── Section 1: Tool discovery via fn-metadata ───────────────────────────────
 
-(defn add
+(defn add :verify checked
   :sig [(a : i64) (b : i64) -> i64]
   :intent "Add two integers"
   :requires [(valid a) (valid b)]
   :ensures [(valid result)]
   :body (+ a b))
 
-(defn multiply
+(defn multiply :verify checked
   :sig [(a : i64) (b : i64) -> i64]
   :intent "Multiply two integers"
   :requires [(valid a) (valid b)]

@@ -1,5 +1,5 @@
 ;; EXPECT: 1:0 a.out|2:1 a.out|3:1 out|4:2 out|5:0 a.out
-(defn g3-parse-args
+(defn g3-parse-args :verify checked
   :sig [(args : List) -> _]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -17,7 +17,7 @@
           args))
       [(at result 0) (at result 1)]))
 
-(defn show-parsed
+(defn show-parsed :verify checked
   :sig [(args : List) -> String]
   :requires [(valid args)]
   :ensures [(valid result)]

@@ -2,7 +2,7 @@
 
 ;; ── Test helpers ──────────────────────────
 
-(defn assert-eq
+(defn assert-eq :verify checked
   :sig [(actual : _) (expected : _) (label : String) -> _]
   :requires [(valid label)]
   :ensures [(valid result)]
@@ -13,7 +13,7 @@
 
 ;; ── Test: parse basic import ──────────────
 
-(defn test-import-basic
+(defn test-import-basic :verify checked
   :sig [-> _]
   :requires [(valid 1)]
   :ensures [(valid result)]
@@ -31,7 +31,7 @@
 
 ;; ── Test: parse import with alias ────────
 
-(defn test-import-alias
+(defn test-import-alias :verify checked
   :sig [-> _]
   :requires [(valid 1)]
   :ensures [(valid result)]
@@ -49,7 +49,7 @@
 
 ;; ── Test: parse import with :only ────────
 
-(defn test-import-only
+(defn test-import-only :verify checked
   :sig [-> _]
   :requires [(valid 1)]
   :ensures [(valid result)]
@@ -69,7 +69,7 @@
 
 ;; ── Test: parse defn with :pub ───────────
 
-(defn test-defn-pub
+(defn test-defn-pub :verify checked
   :sig [-> _]
   :requires [(valid 1)]
   :ensures [(valid result)]
@@ -86,7 +86,7 @@
 
 ;; ── Test: parse defn without :pub ────────
 
-(defn test-defn-no-pub
+(defn test-defn-no-pub :verify checked
   :sig [-> _]
   :requires [(valid 1)]
   :ensures [(valid result)]

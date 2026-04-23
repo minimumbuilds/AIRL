@@ -8,7 +8,7 @@
 ;; Run with: cargo run -- run examples/04-safe-error-handling/safe_error_handling.airl
 
 ;; Safe division returns a Result instead of crashing on zero
-(defn safe-divide
+(defn safe-divide :verify checked
   :sig [(a : i64) (b : i64) -> Result[i64, String]]
   :intent "Divide a by b, returning Err on division by zero"
   :requires [(valid a) (valid b)]

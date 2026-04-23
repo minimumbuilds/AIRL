@@ -1,6 +1,6 @@
 ;; EXPECT: stdlib
 ;; g3-find-stdlib-dir inlined
-(defn g3-find-stdlib-dir
+(defn g3-find-stdlib-dir :verify checked
   :sig [-> String]
   :requires [(valid 1)]
   :ensures [(valid result)]

@@ -2,7 +2,7 @@
 ;; Built-in function dispatch.
 
 ;; ── eval-builtin-core : core builtins (length, keys, type, etc.) ──
-(defn eval-builtin-core
+(defn eval-builtin-core :verify checked
   :sig [(name : String) (args : List) (input : _) (env : _) -> List]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -26,7 +26,7 @@
           nil))))))))))))))))))
 
 ;; ── eval-builtin-string : string builtins ──
-(defn eval-builtin-string
+(defn eval-builtin-string :verify checked
   :sig [(name : String) (args : List) (input : _) (env : _) -> List]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -48,7 +48,7 @@
           nil))))))))))))))))
 
 ;; ── eval-builtin-collection : collection builtins ──
-(defn eval-builtin-collection
+(defn eval-builtin-collection :verify checked
   :sig [(name : String) (args : List) (input : _) (env : _) -> List]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -72,7 +72,7 @@
           nil))))))))))))))))))
 
 ;; ── eval-builtin-path : path and entry builtins ──
-(defn eval-builtin-path
+(defn eval-builtin-path :verify checked
   :sig [(name : String) (args : List) (input : _) (env : _) -> List]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -88,7 +88,7 @@
           nil))))))))))
 
 ;; ── eval-builtin-misc : miscellaneous builtins ──
-(defn eval-builtin-misc
+(defn eval-builtin-misc :verify checked
   :sig [(name : String) (args : List) (input : _) (env : _) -> List]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -120,7 +120,7 @@
           nil))))))))))))))))))))))))))
 
 ;; ── eval-builtin : top-level dispatch ──
-(defn eval-builtin
+(defn eval-builtin :verify checked
   :sig [(name : String) (args : List) (input : _) (env : _) -> List]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -138,7 +138,7 @@
                               [input]))))))))))))
 
 ;; ── bi-length : length of string, array, object, null ──
-(defn bi-length
+(defn bi-length :verify checked
   :sig [(input : _) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -151,7 +151,7 @@
             [0])))))))
 
 ;; ── bi-keys : object keys ──
-(defn bi-keys
+(defn bi-keys :verify checked
   :sig [(input : _) (sorted : Bool) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -162,7 +162,7 @@
             [nil])))
 
 ;; ── range-list : generate [from..to) ──
-(defn range-list
+(defn range-list :verify checked
   :sig [(from : i64) (to : i64) -> List]
   :requires [(<= from to)]
   :ensures [(valid result)]
@@ -171,7 +171,7 @@
           (cons from (range-list (+ from 1) to))))
 
 ;; ── bi-values : object values ──
-(defn bi-values
+(defn bi-values :verify checked
   :sig [(input : _) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -180,7 +180,7 @@
           [input]))
 
 ;; ── bi-type : jq type name ──
-(defn bi-type
+(defn bi-type :verify checked
   :sig [(input : _) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -195,7 +195,7 @@
             [t])))))))))
 
 ;; ── bi-has : has(key) ──
-(defn bi-has
+(defn bi-has :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -212,7 +212,7 @@
                     [false])))))))
 
 ;; ── bi-in : key | in(obj) ──
-(defn bi-in
+(defn bi-in :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -227,7 +227,7 @@
                   [false]))))))
 
 ;; ── bi-contains : recursive containment ──
-(defn bi-contains
+(defn bi-contains :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -238,7 +238,7 @@
               [false]
               [(jq-contains input (head other-results))]))))
 
-(defn jq-contains
+(defn jq-contains :verify checked
   :sig [(a : _) (b : _) -> Bool]
   :requires [(valid a)]
   :ensures [(valid result)]
@@ -257,7 +257,7 @@
             (= a b)))))
 
 ;; ── bi-add : add elements ──
-(defn bi-add
+(defn bi-add :verify checked
   :sig [(input : _) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -268,7 +268,7 @@
               [(fold (fn [acc x] (jq-add acc x)) first-elem (tail input))]))
           [input]))
 
-(defn jq-add
+(defn jq-add :verify checked
   :sig [(a : _) (b : _) -> _]
   :requires [(valid a)]
   :ensures [(valid result)]
@@ -283,7 +283,7 @@
             a)))))))))
 
 ;; ── bi-any : any / any(f) ──
-(defn bi-any
+(defn bi-any :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -296,7 +296,7 @@
           [false]))
 
 ;; ── bi-all : all / all(f) ──
-(defn bi-all
+(defn bi-all :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -309,7 +309,7 @@
           [false]))
 
 ;; ── bi-flatten : flatten array ──
-(defn bi-flatten
+(defn bi-flatten :verify checked
   :sig [(args : List) (input : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -317,7 +317,7 @@
           [(flatten-list input 1)]
           [input]))
 
-(defn flatten-list
+(defn flatten-list :verify checked
   :sig [(lst : List) (depth : i64) -> List]
   :requires [(valid lst)]
   :ensures [(valid result)]
@@ -330,7 +330,7 @@
             [] lst)))
 
 ;; ── bi-range : range(n) / range(from;to) / range(from;to;step) ──
-(defn bi-range
+(defn bi-range :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -350,7 +350,7 @@
                           (let (step : i64 (if (empty? step-results) 1 (head step-results)))
                             (range-step-list n to step))))))))))))
 
-(defn range-step-list
+(defn range-step-list :verify checked
   :sig [(from : i64) (to : i64) (step : i64) -> List]
   :requires [(not (= step 0))]
   :ensures [(valid result)]
@@ -361,7 +361,7 @@
             (cons from (range-step-list (+ from step) to step)))))
 
 ;; ── bi-tostring / bi-tonumber ──
-(defn bi-tostring
+(defn bi-tostring :verify checked
   :sig [(input : _) -> String]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -371,7 +371,7 @@
           (if (= t "bool") (if input "true" "false")
             (json-stringify input))))))
 
-(defn bi-tonumber
+(defn bi-tonumber :verify checked
   :sig [(input : _) -> _]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -380,7 +380,7 @@
           input))
 
 ;; ── bi-ltrimstr / bi-rtrimstr ──
-(defn bi-ltrimstr
+(defn bi-ltrimstr :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -392,7 +392,7 @@
                   [(substring (str input) (length prefix) (length (str input)))]
                   [input]))))))
 
-(defn bi-rtrimstr
+(defn bi-rtrimstr :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -405,7 +405,7 @@
                   [input]))))))
 
 ;; ── bi-startswith / bi-endswith ──
-(defn bi-startswith
+(defn bi-startswith :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -414,7 +414,7 @@
             (if (empty? s-results) [false]
               [(starts-with (str input) (str (head s-results)))]))))
 
-(defn bi-endswith
+(defn bi-endswith :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -424,7 +424,7 @@
               [(ends-with (str input) (str (head s-results)))]))))
 
 ;; ── bi-split / bi-join ──
-(defn bi-split
+(defn bi-split :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -433,7 +433,7 @@
             (if (empty? delim-results) [input]
               [(split (str input) (str (head delim-results)))]))))
 
-(defn bi-join
+(defn bi-join :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -445,7 +445,7 @@
           [input]))
 
 ;; ── bi-test : regex test ──
-(defn bi-test
+(defn bi-test :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -455,7 +455,7 @@
               [(airl_regex_match (str (head re-results)) (str input))]))))
 
 ;; ── bi-match : regex match ──
-(defn bi-match
+(defn bi-match :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -468,14 +468,14 @@
                   [(map-from ["offset" 0 "length" (length (head matches)) "string" (head matches) "captures" []])]))))))
 
 ;; ── bi-capture : regex named capture ──
-(defn bi-capture
+(defn bi-capture :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
   :body (bi-match args input env))
 
 ;; ── bi-gsub / bi-sub : regex replacement ──
-(defn bi-gsub
+(defn bi-gsub :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -485,14 +485,14 @@
               (if (if (empty? re-results) true (empty? repl-results)) [input]
                 [(airl_regex_replace (str (head re-results)) (str input) (str (head repl-results)))])))))
 
-(defn bi-sub
+(defn bi-sub :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
   :body (bi-gsub args input env))
 
 ;; ── bi-map : map(f) → [.[] | f] ──
-(defn bi-map
+(defn bi-map :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -502,7 +502,7 @@
           [input]))
 
 ;; ── bi-map-values : map_values(f) ──
-(defn bi-map-values
+(defn bi-map-values :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -523,7 +523,7 @@
               [input])))))
 
 ;; ── bi-select : select(f) — keep input if f is truthy ──
-(defn bi-select
+(defn bi-select :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -535,7 +535,7 @@
               []))))
 
 ;; ── bi-sort : sort array ──
-(defn bi-sort
+(defn bi-sort :verify checked
   :sig [(input : _) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -544,7 +544,7 @@
           [input]))
 
 ;; ── bi-sort-by : sort_by(f) ──
-(defn bi-sort-by
+(defn bi-sort-by :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -553,7 +553,7 @@
           [(bi-sort-by-impl (head args) input env)]
           [input]))
 
-(defn bi-sort-by-impl
+(defn bi-sort-by-impl :verify checked
   :sig [(f : _) (lst : List) (env : _) -> List]
   :requires [(valid f)]
   :ensures [(valid result)]
@@ -561,7 +561,7 @@
           []
           (fold (fn [acc x] (bi-insert-by f x acc env)) [] lst)))
 
-(defn bi-insert-by
+(defn bi-insert-by :verify checked
   :sig [(f : _) (elem : _) (sorted : List) (env : _) -> List]
   :requires [(valid f)]
   :ensures [(valid result)]
@@ -576,7 +576,7 @@
                     (cons (head sorted) (bi-insert-by f elem (tail sorted) env)))))))))
 
 ;; ── bi-group-by : group_by(f) ──
-(defn bi-group-by
+(defn bi-group-by :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -584,14 +584,14 @@
           [(bi-group-by-impl (head args) input env)]
           [input]))
 
-(defn bi-group-by-impl
+(defn bi-group-by-impl :verify checked
   :sig [(f : _) (lst : List) (env : _) -> List]
   :requires [(valid f)]
   :ensures [(valid result)]
   :body (let (sorted : List (bi-sort-by-impl f lst env))
           (bi-group-sorted f sorted env)))
 
-(defn bi-group-sorted
+(defn bi-group-sorted :verify checked
   :sig [(f : _) (sorted : List) (env : _) -> List]
   :requires [(valid f)]
   :ensures [(valid result)]
@@ -605,7 +605,7 @@
                     (let (remaining : List (at split-result 1))
                       (cons group (bi-group-sorted f remaining env))))))))))
 
-(defn bi-split-group
+(defn bi-split-group :verify checked
   :sig [(f : _) (key : _) (lst : List) (env : _) (acc : List) -> List]
   :requires [(valid f)]
   :ensures [(valid result)]
@@ -619,7 +619,7 @@
                   [acc lst]))))))
 
 ;; ── bi-unique : unique ──
-(defn bi-unique
+(defn bi-unique :verify checked
   :sig [(input : _) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -627,7 +627,7 @@
           [(bi-unique-impl input [])]
           [input]))
 
-(defn bi-unique-impl
+(defn bi-unique-impl :verify checked
   :sig [(lst : List) (seen : List) -> List]
   :requires [(valid lst)]
   :ensures [(valid result)]
@@ -639,7 +639,7 @@
               (bi-unique-impl (tail lst) (append seen elem))))))
 
 ;; ── bi-unique-by : unique_by(f) ──
-(defn bi-unique-by
+(defn bi-unique-by :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -647,7 +647,7 @@
           [(bi-unique-by-impl (head args) input env [] [])]
           [input]))
 
-(defn bi-unique-by-impl
+(defn bi-unique-by-impl :verify checked
   :sig [(f : _) (lst : List) (env : _) (seen-keys : List) (acc : List) -> List]
   :requires [(valid f)]
   :ensures [(valid result)]
@@ -661,7 +661,7 @@
                   (bi-unique-by-impl f (tail lst) env (append seen-keys key) (append acc elem))))))))
 
 ;; ── bi-min / bi-max ──
-(defn bi-min
+(defn bi-min :verify checked
   :sig [(input : _) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -669,7 +669,7 @@
           [(fold (fn [acc x] (if (< x acc) x acc)) (head input) (tail input))]
           [nil]))
 
-(defn bi-max
+(defn bi-max :verify checked
   :sig [(input : _) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -678,7 +678,7 @@
           [nil]))
 
 ;; ── bi-min-by / bi-max-by ──
-(defn bi-min-by
+(defn bi-min-by :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -693,7 +693,7 @@
               (head input) (tail input))])
           [nil]))
 
-(defn bi-max-by
+(defn bi-max-by :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -709,7 +709,7 @@
           [nil]))
 
 ;; ── bi-first / bi-last / bi-nth / bi-limit ──
-(defn bi-first
+(defn bi-first :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -720,7 +720,7 @@
           (let (results : List (jq-eval (head args) input env))
             (if (empty? results) [] [(head results)]))))
 
-(defn bi-last
+(defn bi-last :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -731,7 +731,7 @@
           (let (results : List (jq-eval (head args) input env))
             (if (empty? results) [] [(at results (- (length results) 1))]))))
 
-(defn bi-nth
+(defn bi-nth :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -746,7 +746,7 @@
                     [nil])
                   [nil]))))))
 
-(defn bi-limit
+(defn bi-limit :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -758,7 +758,7 @@
                 (let (results : List (jq-eval (at args 1) input env))
                   (take-n results n)))))))
 
-(defn take-n
+(defn take-n :verify checked
   :sig [(lst : List) (n : i64) -> List]
   :requires [(valid lst)]
   :ensures [(valid result)]
@@ -767,7 +767,7 @@
             (cons (head lst) (take-n (tail lst) (- n 1))))))
 
 ;; ── bi-to-entries / bi-from-entries / bi-with-entries ──
-(defn bi-to-entries
+(defn bi-to-entries :verify checked
   :sig [(input : _) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -775,7 +775,7 @@
           [(map (fn [k] (map-from ["key" k "value" (map-get input k)])) (map-keys input))]
           [input]))
 
-(defn bi-from-entries
+(defn bi-from-entries :verify checked
   :sig [(input : _) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -789,7 +789,7 @@
             (map-from []) input)]
           [input]))
 
-(defn bi-with-entries
+(defn bi-with-entries :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -801,13 +801,13 @@
           [input]))
 
 ;; ── bi-paths / bi-getpath / bi-setpath / bi-delpaths ──
-(defn bi-paths
+(defn bi-paths :verify checked
   :sig [(input : _) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
   :body [(bi-paths-impl input [])])
 
-(defn bi-paths-impl
+(defn bi-paths-impl :verify checked
   :sig [(input : _) (prefix : List) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -820,7 +820,7 @@
             (bi-paths-list-loop input prefix 0)
             [])))
 
-(defn bi-paths-list-loop
+(defn bi-paths-list-loop :verify checked
   :sig [(lst : List) (prefix : List) (i : i64) -> List]
   :requires [(valid lst)]
   :ensures [(valid result)]
@@ -831,7 +831,7 @@
               (let (rest : List (bi-paths-list-loop lst prefix (+ i 1)))
                 (fold (fn [acc p] (append acc p)) (cons path sub-paths) rest))))))
 
-(defn bi-getpath
+(defn bi-getpath :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -843,7 +843,7 @@
                   [(navigate-path input path)]
                   [nil]))))))
 
-(defn navigate-path
+(defn navigate-path :verify checked
   :sig [(input : _) (path : List) -> _]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -858,7 +858,7 @@
                   nil)
                 nil)))))
 
-(defn bi-setpath
+(defn bi-setpath :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -868,7 +868,7 @@
               (if (if (empty? path-results) true (empty? val-results)) [input]
                 [(set-path-impl input (head path-results) (head val-results))])))))
 
-(defn set-path-impl
+(defn set-path-impl :verify checked
   :sig [(input : _) (path : List) (val : _) -> _]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -879,14 +879,14 @@
               (map-set input (str key) (set-path-impl (map-get-or input (str key) nil) (tail path) val))
               input))))
 
-(defn bi-delpaths
+(defn bi-delpaths :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
   :body [input])
 
 ;; ── bi-debug : print to stderr, pass through ──
-(defn bi-debug
+(defn bi-debug :verify checked
   :sig [(input : _) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -894,7 +894,7 @@
           [input]))
 
 ;; ── bi-error : raise error ──
-(defn bi-error
+(defn bi-error :verify checked
   :sig [(args : List) (input : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -903,7 +903,7 @@
             [])))
 
 ;; ── bi-implode / bi-explode ──
-(defn bi-implode
+(defn bi-implode :verify checked
   :sig [(input : _) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -911,7 +911,7 @@
           [(fold (fn [acc code] (str acc (char-from-code code))) "" input)]
           [input]))
 
-(defn bi-explode
+(defn bi-explode :verify checked
   :sig [(input : _) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -920,14 +920,14 @@
           [input]))
 
 ;; ── bi-indices ──
-(defn bi-indices
+(defn bi-indices :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
   :body [input])
 
 ;; ── bi-inside ──
-(defn bi-inside
+(defn bi-inside :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -937,7 +937,7 @@
               [(jq-contains (head other-results) input)]))))
 
 ;; ── bi-recurse : recurse / recurse(f) ──
-(defn bi-recurse
+(defn bi-recurse :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -945,7 +945,7 @@
           (bi-recurse-default input 100)
           (bi-recurse-with-filter (head args) input env 100)))
 
-(defn bi-recurse-default
+(defn bi-recurse-default :verify checked
   :sig [(input : _) (depth : i64) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -957,7 +957,7 @@
               [input]
               (cons input (concatmap (fn [x] (bi-recurse-default x (- depth 1))) children))))))
 
-(defn bi-recurse-with-filter
+(defn bi-recurse-with-filter :verify checked
   :sig [(f : _) (input : _) (env : _) (depth : i64) -> List]
   :requires [(valid f)]
   :ensures [(valid result)]
@@ -969,20 +969,20 @@
               (cons input (concatmap (fn [x] (bi-recurse-with-filter f x env (- depth 1))) next))))))
 
 ;; ── bi-path ──
-(defn bi-path
+(defn bi-path :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
   :body [input])
 
 ;; ── bi-leaf-paths ──
-(defn bi-leaf-paths
+(defn bi-leaf-paths :verify checked
   :sig [(input : _) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
   :body [(bi-leaf-paths-impl input [])])
 
-(defn bi-leaf-paths-impl
+(defn bi-leaf-paths-impl :verify checked
   :sig [(input : _) (prefix : List) -> List]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -996,7 +996,7 @@
               (bi-leaf-paths-list-loop input prefix 0))
             [prefix])))
 
-(defn bi-leaf-paths-list-loop
+(defn bi-leaf-paths-list-loop :verify checked
   :sig [(lst : List) (prefix : List) (i : i64) -> List]
   :requires [(valid lst)]
   :ensures [(valid result)]
@@ -1007,14 +1007,14 @@
               (fold (fn [acc p] (append acc p)) sub rest)))))
 
 ;; ── bi-del : del(f) ──
-(defn bi-del
+(defn bi-del :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]
   :body [input])
 
 ;; ── bi-reduce : reduce .[] as $x (init; update) ──
-(defn bi-reduce
+(defn bi-reduce :verify checked
   :sig [(args : List) (input : _) (env : _) -> List]
   :requires [(valid args)]
   :ensures [(valid result)]

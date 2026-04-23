@@ -1,6 +1,6 @@
 ;; chain.airl — Pipeline composition for Forge
 
-(defn make-step
+(defn make-step :verify checked
   :sig [(name : String) (f : _) -> Map]
   :intent "Create a pipeline step from a name and a function"
   :requires [(not (= name ""))]
@@ -8,7 +8,7 @@
   :body
   (map-from ["name" name "fn" f]))
 
-(defn chain
+(defn chain :verify checked
   :sig [(steps : List) (initial-input : _) -> _]
   :intent "Left-fold over steps threading Result; short-circuits on first Err"
   :requires [(valid steps)]
@@ -28,7 +28,7 @@
     (Ok initial-input)
     steps))
 
-(defn fan-out
+(defn fan-out :verify checked
   :sig [(fns : List) (input : _) -> _]
   :intent "Apply each function to the same input; Ok(values) if all succeed, Err(count) if any fail"
   :requires [(valid fns)]

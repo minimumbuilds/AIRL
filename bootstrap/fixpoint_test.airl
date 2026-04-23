@@ -13,7 +13,7 @@
 
 ;; ── Helpers ─────────────────────────────────────────────
 
-(defn parse-source
+(defn parse-source :verify checked
   :sig [(source : String) -> _]
   :intent "Lex and parse source string into AST nodes"
   :requires [(valid source)]
@@ -26,7 +26,7 @@
           (Err e) (Err e)
           (Ok sexprs) (parse-program sexprs))))
 
-(defn run-fixpoint-test
+(defn run-fixpoint-test :verify checked
   :sig [(label : String) (source : String) -> Bool]
   :intent "Compile source twice via bc-compile-program and assert identical BCFunc output"
   :requires [(valid source)]

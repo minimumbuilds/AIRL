@@ -1,6 +1,6 @@
 ;; EXPECT: echo:hello|send-err:invalid handle|recv-err:invalid handle|exact-err:invalid handle
 ;; Test: TCP operations from spawned threads with nested match patterns.
-(defn run-server
+(defn run-server :verify checked
   :sig [(port : i64) -> Nil]
   :requires [(> port 0)]
   :ensures [(valid result)]
@@ -17,7 +17,7 @@
       (tcp-close server))
     (Err _) nil))
 
-(defn test-send-in-thread
+(defn test-send-in-thread :verify checked
   :sig [(conn : i64) -> String]
   :requires [(valid conn)]
   :ensures [(valid result)]
@@ -29,7 +29,7 @@
           (Err e) (str "recv-err:" e))
         (Err e) (str "send-err:" e))))
 
-(defn test-send-invalid
+(defn test-send-invalid :verify checked
   :sig [-> String]
   :requires [(valid 1)]
   :ensures [(valid result)]
@@ -37,7 +37,7 @@
     (Ok _) "unexpected-ok"
     (Err e) (str e)))
 
-(defn test-recv-invalid
+(defn test-recv-invalid :verify checked
   :sig [-> String]
   :requires [(valid 1)]
   :ensures [(valid result)]
@@ -45,7 +45,7 @@
     (Ok _) "unexpected-ok"
     (Err e) (str e)))
 
-(defn test-recv-exact-invalid
+(defn test-recv-exact-invalid :verify checked
   :sig [-> String]
   :requires [(valid 1)]
   :ensures [(valid result)]

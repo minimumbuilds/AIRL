@@ -1,11 +1,11 @@
 ;; EXPECT: 120|55
-(defn factorial
+(defn factorial :verify checked
   :sig [(n : i64) -> i64]
   :requires [(valid n)]
   :ensures [(valid result)]
   :body (if (<= n 1) 1 (* n (factorial (- n 1)))))
 
-(defn fib
+(defn fib :verify checked
   :sig [(n : i64) -> i64]
   :requires [(valid n)]
   :ensures [(valid result)]

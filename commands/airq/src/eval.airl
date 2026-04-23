@@ -2,7 +2,7 @@
 ;; Tree-walk evaluator. Each function takes (ast input env) → List[Any].
 
 ;; ── parse-json-or-die : parse JSON, unwrap Result ──
-(defn parse-json-or-die
+(defn parse-json-or-die :verify checked
   :sig [(s : String) -> _]
   :requires [(valid s)]
   :ensures [(valid result)]
@@ -13,7 +13,7 @@
                       (exit 2)))))
 
 ;; ── concatmap : apply f to each element, flatten results ──
-(defn concatmap
+(defn concatmap :verify checked
   :sig [(f : _) (lst : List) -> List]
   :requires [(valid f)]
   :ensures [(valid result)]
@@ -24,7 +24,7 @@
               (fold (fn [acc x] (append acc x)) first-results rest-results)))))
 
 ;; ── jq-truthy : jq truthiness (false and null are falsy) ──
-(defn jq-truthy
+(defn jq-truthy :verify checked
   :sig [(val : _) -> Bool]
   :requires [(valid val)]
   :ensures [(valid result)]
@@ -33,14 +33,14 @@
           true)))
 
 ;; ── empty-env : create initial environment ──
-(defn empty-env
+(defn empty-env :verify checked
   :sig [(dummy : _) -> _]
   :requires [true]
   :ensures [(valid result)]
   :body (map-from ["vars" (map-from []) "funcs" (map-from [])]))
 
 ;; ── env-get-var : look up variable in environment ──
-(defn env-get-var
+(defn env-get-var :verify checked
   :sig [(env : _) (name : String) -> _]
   :requires [(valid env)]
   :ensures [(valid result)]
@@ -48,7 +48,7 @@
           (map-get-or vars name nil)))
 
 ;; ── env-set-var : set variable in environment ──
-(defn env-set-var
+(defn env-set-var :verify checked
   :sig [(env : _) (name : String) (val : _) -> _]
   :requires [(valid env)]
   :ensures [(valid result)]
@@ -56,7 +56,7 @@
           (map-set env "vars" (map-set vars name val))))
 
 ;; ── env-get-func : look up user-defined function ──
-(defn env-get-func
+(defn env-get-func :verify checked
   :sig [(env : _) (name : String) -> _]
   :requires [(valid env)]
   :ensures [(valid result)]
@@ -64,7 +64,7 @@
           (map-get-or funcs name nil)))
 
 ;; ── env-set-func : define a function in environment ──
-(defn env-set-func
+(defn env-set-func :verify checked
   :sig [(env : _) (name : String) (fdef : _) -> _]
   :requires [(valid env)]
   :ensures [(valid result)]
@@ -72,7 +72,7 @@
           (map-set env "funcs" (map-set funcs name fdef))))
 
 ;; ── jq-eval : main evaluator dispatch ──
-(defn jq-eval
+(defn jq-eval :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -105,7 +105,7 @@
             [])))))))))))))))))))))))))))
 
 ;; ── eval-field : .foo ──
-(defn eval-field
+(defn eval-field :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -115,7 +115,7 @@
             [nil])))
 
 ;; ── eval-index : .[N] ──
-(defn eval-index
+(defn eval-index :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -127,7 +127,7 @@
             [nil])))
 
 ;; ── eval-index-expr : .[expr] ──
-(defn eval-index-expr
+(defn eval-index-expr :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -146,7 +146,7 @@
                 [nil]))) expr-results)))
 
 ;; ── eval-iterate : .[] ──
-(defn eval-iterate
+(defn eval-iterate :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -157,7 +157,7 @@
             [])))
 
 ;; ── eval-slice : .[N:M] ──
-(defn eval-slice
+(defn eval-slice :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -169,7 +169,7 @@
           [nil]))
 
 ;; ── slice-list : extract sublist ──
-(defn slice-list
+(defn slice-list :verify checked
   :sig [(lst : List) (from : i64) (to : i64) -> List]
   :requires [(valid lst)]
   :ensures [(valid result)]
@@ -178,7 +178,7 @@
             (let (t : i64 (if (< to 0) (+ len to) (if (> to len) len to)))
               (slice-list-loop lst f t [])))))
 
-(defn slice-list-loop
+(defn slice-list-loop :verify checked
   :sig [(lst : List) (i : i64) (to : i64) (acc : List) -> List]
   :requires [(valid lst)]
   :ensures [(valid result)]
@@ -189,7 +189,7 @@
             (slice-list-loop lst (+ i 1) to (append acc (at lst i))))))
 
 ;; ── eval-pipe : A | B ──
-(defn eval-pipe
+(defn eval-pipe :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -197,7 +197,7 @@
           (concatmap (fn [x] (jq-eval (map-get ast "right") x env)) left-results)))
 
 ;; ── eval-comma : A, B ──
-(defn eval-comma
+(defn eval-comma :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -206,7 +206,7 @@
             (fold (fn [acc x] (append acc x)) left-results right-results))))
 
 ;; ── eval-array : [expr] ──
-(defn eval-array
+(defn eval-array :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -214,14 +214,14 @@
           [results]))
 
 ;; ── eval-object : {key: value, ...} ──
-(defn eval-object
+(defn eval-object :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
   :body (let (pairs : List (map-get ast "pairs"))
           [(eval-object-pairs pairs input env (map-from []))]))
 
-(defn eval-object-pairs
+(defn eval-object-pairs :verify checked
   :sig [(pairs : List) (input : _) (env : _) (acc : _) -> _]
   :requires [(valid pairs)]
   :ensures [(valid result)]
@@ -235,7 +235,7 @@
                     (eval-object-pairs (tail pairs) input env (map-set acc key val)))))))))
 
 ;; ── eval-if : if-then-else ──
-(defn eval-if
+(defn eval-if :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -245,7 +245,7 @@
             (jq-eval (map-get ast "else") input env))))
 
 ;; ── eval-compare : ==, !=, <, >, <=, >= ──
-(defn eval-compare
+(defn eval-compare :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -263,7 +263,7 @@
                     [false]))))))))))))
 
 ;; ── eval-arith : +, -, *, /, % ──
-(defn eval-arith
+(defn eval-arith :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -274,7 +274,7 @@
                 (let (rv : _ (if (empty? right-results) nil (head right-results)))
                   (eval-arith-op op lv rv)))))))
 
-(defn eval-arith-op
+(defn eval-arith-op :verify checked
   :sig [(op : String) (lv : _) (rv : _) -> List]
   :requires [(valid op)]
   :ensures [(valid result)]
@@ -302,7 +302,7 @@
               [nil])))))))))))
 
 ;; ── merge-maps : merge two maps ──
-(defn merge-maps
+(defn merge-maps :verify checked
   :sig [(base : _) (overlay : _) -> _]
   :requires [(valid base)]
   :ensures [(valid result)]
@@ -310,7 +310,7 @@
           (fold (fn [acc k] (map-set acc k (map-get overlay k))) base keys)))
 
 ;; ── eval-not : boolean negation ──
-(defn eval-not
+(defn eval-not :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -320,7 +320,7 @@
             [(not (jq-truthy (head results)))])))
 
 ;; ── eval-and : boolean and ──
-(defn eval-and
+(defn eval-and :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -330,7 +330,7 @@
             [false])))
 
 ;; ── eval-or : boolean or ──
-(defn eval-or
+(defn eval-or :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -340,14 +340,14 @@
             (jq-eval (map-get ast "right") input env))))
 
 ;; ── eval-try : try-catch ──
-(defn eval-try
+(defn eval-try :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
   :body (jq-eval (map-get ast "expr") input env))
 
 ;; ── eval-def : function definition ──
-(defn eval-def
+(defn eval-def :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -357,7 +357,7 @@
               (jq-eval (map-get ast "next") input new-env)))))
 
 ;; ── eval-binding : as $var | body ──
-(defn eval-binding
+(defn eval-binding :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -369,7 +369,7 @@
               expr-results))))
 
 ;; ── eval-format : @base64, etc. ──
-(defn eval-format
+(defn eval-format :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -393,7 +393,7 @@
             [(str input)]))))))))))
 
 ;; ── format-csv : format list as CSV ──
-(defn format-csv
+(defn format-csv :verify checked
   :sig [(input : _) -> String]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -402,7 +402,7 @@
           (json-stringify input)))
 
 ;; ── format-tsv : format list as TSV ──
-(defn format-tsv
+(defn format-tsv :verify checked
   :sig [(input : _) -> String]
   :requires [(valid input)]
   :ensures [(valid result)]
@@ -411,7 +411,7 @@
           (json-stringify input)))
 
 ;; ── escape-html : basic HTML escaping ──
-(defn escape-html
+(defn escape-html :verify checked
   :sig [(s : String) -> String]
   :requires [(valid s)]
   :ensures [(valid result)]
@@ -421,7 +421,7 @@
               (replace s3 "\"" "&quot;")))))
 
 ;; ── escape-uri : basic URI encoding ──
-(defn escape-uri
+(defn escape-uri :verify checked
   :sig [(s : String) -> String]
   :requires [(valid s)]
   :ensures [(valid result)]
@@ -430,7 +430,7 @@
             (replace s2 "=" "%3D"))))
 
 ;; ── eval-funcall : call builtin or user-defined function ──
-(defn eval-funcall
+(defn eval-funcall :verify checked
   :sig [(ast : _) (input : _) (env : _) -> List]
   :requires [(valid ast)]
   :ensures [(valid result)]
@@ -443,7 +443,7 @@
                 (eval-builtin name args input env))))))
 
 ;; ── eval-user-func : call user-defined function ──
-(defn eval-user-func
+(defn eval-user-func :verify checked
   :sig [(fdef : _) (args : List) (input : _) (env : _) -> List]
   :requires [(valid fdef)]
   :ensures [(valid result)]
@@ -453,7 +453,7 @@
               (jq-eval body input new-env)))))
 
 ;; ── bind-params : bind function parameters to arguments ──
-(defn bind-params
+(defn bind-params :verify checked
   :sig [(env : _) (params : List) (args : List) (input : _) -> _]
   :requires [(valid env)]
   :ensures [(valid result)]

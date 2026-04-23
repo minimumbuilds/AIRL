@@ -1,7 +1,7 @@
 ;; LLM-generated AIRL: orchestrate a computation across agents
 ;; This is what an AI orchestrator would generate to dispatch work
 
-(defn compute-pipeline
+(defn compute-pipeline :verify checked
   :sig [(x : i64) -> i64]
   :intent "Multi-step computation: square, add 10, double"
   :requires [(>= x 0)]

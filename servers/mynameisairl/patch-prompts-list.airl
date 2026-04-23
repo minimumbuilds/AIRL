@@ -5,7 +5,7 @@
 ;; version. Compiled before airtraffic.airl so first-def-wins applies.
 ;; Upstream fix tracked as cross-repo requirement.
 
-(defn airtraffic-handle-prompts-list
+(defn airtraffic-handle-prompts-list :verify checked
   :sig [(server : Map) (id : Any) -> String]
   :requires [(valid server)]
   :ensures [(valid result)]

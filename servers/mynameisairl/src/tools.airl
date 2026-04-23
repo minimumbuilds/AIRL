@@ -9,7 +9,7 @@
 
 ;; ─── safe-path? ─────────────────────────────────────────────────────
 ;; Reject path components containing ".." to prevent directory traversal.
-(defn safe-path?
+(defn safe-path? :verify checked
   :sig [(file : String) -> Bool]
   :intent "Check that a relative file path has no .. traversal"
   :requires [(valid file)]
@@ -21,7 +21,7 @@
 ;; Persists cumulative token savings to ~/.airl-mcp/savings.json.
 ;; Each tool call reads the current total, adds its savings, writes back.
 
-(defn savings-path
+(defn savings-path :verify checked
   :sig [-> String]
   :intent "Path to the persistent token savings file"
   :body
@@ -29,7 +29,7 @@
     (Ok home) (str home "/.airl-mcp/savings.json")
     (Err _) "/tmp/airl-mcp-savings.json"))
 
-(defn load-savings
+(defn load-savings :verify checked
   :sig [-> i64]
   :intent "Read cumulative token count from disk; return 0 if missing"
   :body
@@ -39,7 +39,7 @@
         (if (= data nil) 0 (map-get-or data "total" 0)))
       0)))
 
-(defn save-savings
+(defn save-savings :verify checked
   :sig [(total : i64) -> Bool]
   :intent "Persist updated token count to disk, creating directory if needed"
   :body
@@ -53,7 +53,7 @@
 ;; ─── add-meta ────────────────────────────────────────────────────────
 ;; Wraps a JSON response string with a _meta block reporting byte counts
 ;; and estimated token savings vs. reading the raw file.
-(defn add-meta
+(defn add-meta :verify checked
   :sig [(response-json : String) (file-bytes : i64) -> String]
   :intent "Append _meta token savings block to a tool response JSON"
   :body
@@ -70,7 +70,7 @@
 ;; - Single-file tools: full file size (what Read would have returned)
 ;; - Project-level tools: total size of all .airl files in the project
 ;; - Search/tree tools: 0 (no single-file comparison point)
-(defn file-bytes-for-tool
+(defn file-bytes-for-tool :verify checked
   :sig [(tool-name : String) (args : Map) -> i64]
   :intent "Compute raw file bytes that would have been read without the indexer"
   :body
@@ -91,7 +91,7 @@
 ;; Wrap a handler's Ok response with _meta token-savings data and persist
 ;; cumulative savings to ~/.airl-mcp/savings.json. Bindings invoke this
 ;; around each handler's result.
-(defn wrap-with-meta
+(defn wrap-with-meta :verify checked
   :sig [(tool-name : String) (args : Map) (handler-result : Result) -> Result]
   :intent "Add _meta and persist cumulative token savings"
   :requires [(valid tool-name) (valid args) (valid handler-result)]
@@ -107,7 +107,7 @@
       (Err msg) (Err msg)))
 
 ;; ─── handle-index-project ────────────────────────────────────────────
-(defn handle-index-project
+(defn handle-index-project :verify checked
   :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -125,7 +125,7 @@
            "symbols" (length all-syms)])))))))
 
 ;; ─── handle-file-tree ────────────────────────────────────────────────
-(defn handle-file-tree
+(defn handle-file-tree :verify checked
   :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -145,7 +145,7 @@
              "total" (length entries)]))))))))
 
 ;; ─── handle-file-outline ─────────────────────────────────────────────
-(defn handle-file-outline
+(defn handle-file-outline :verify checked
   :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -175,7 +175,7 @@
 ;; Useful for LLMs generating/editing AIRL — localizes paren imbalances
 ;; precisely instead of relying on the parser's downstream "unexpected ')'"
 ;; error. Matches the behavior of the `airl parens` CLI subcommand.
-(defn handle-check-parens
+(defn handle-check-parens :verify checked
   :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -206,7 +206,7 @@
                      "message" (if (= stderr "") stdout stderr)])))))))))))
 
 ;; ─── handle-get-symbol ───────────────────────────────────────────────
-(defn handle-get-symbol
+(defn handle-get-symbol :verify checked
   :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -234,7 +234,7 @@
                       (Ok (json-stringify (map-set found "source" source))))))))))))))
 
 ;; ─── handle-search-symbols ───────────────────────────────────────────
-(defn handle-search-symbols
+(defn handle-search-symbols :verify checked
   :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -262,7 +262,7 @@
               ["query" query "results" compact "count" (length compact)])))))))))
 
 ;; ─── handle-get-content ──────────────────────────────────────────────
-(defn handle-get-content
+(defn handle-get-content :verify checked
   :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -296,7 +296,7 @@
                      "content" (join selected "\n")])))))))))))))
 
 ;; ─── handle-repo-outline ─────────────────────────────────────────────
-(defn handle-repo-outline
+(defn handle-repo-outline :verify checked
   :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -321,7 +321,7 @@
              "files" outline]))))))))
 
 ;; ─── handle-find-callers ─────────────────────────────────────────────
-(defn handle-find-callers
+(defn handle-find-callers :verify checked
   :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -344,7 +344,7 @@
              "count" (length compact)]))))))))
 
 ;; ─── handle-dependency-graph ─────────────────────────────────────────
-(defn handle-dependency-graph
+(defn handle-dependency-graph :verify checked
   :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -356,7 +356,7 @@
         (Ok (json-stringify dep-graph))))))
 
 ;; ─── handle-blast-radius ─────────────────────────────────────────────
-(defn handle-blast-radius
+(defn handle-blast-radius :verify checked
   :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -380,7 +380,7 @@
              "total-affected" (map-get radius "total-affected")]))))))))
 
 ;; ─── handle-session-stats ────────────────────────────────────────────
-(defn handle-session-stats
+(defn handle-session-stats :verify checked
   :sig [(args : Map) -> Result]
   :requires [(valid args)]
   :ensures [(valid result)]
@@ -394,7 +394,7 @@
 ;; Schema list kept internal to this file — make-tool-bindings below
 ;; pairs each schema with its closure handler for airtraffic-tools.
 
-(defn tool-schemas
+(defn tool-schemas :verify checked
   :sig [-> List]
   :intent "Internal: list of all AirMunch tool schema maps"
   :requires []
@@ -497,7 +497,7 @@
 
 ;; ─── find-schema-by-name ─────────────────────────────────────────────
 ;; Helper: look up a tool schema by name within (tool-schemas).
-(defn find-schema-by-name
+(defn find-schema-by-name :verify checked
   :sig [(name : String) -> Map]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -508,7 +508,7 @@
 ;; Each handler is a lambda (required by g3's indirect-call path — named
 ;; defns stored in maps fail at runtime). Each wraps its handler result
 ;; with _meta token-savings via wrap-with-meta.
-(defn make-tool-bindings
+(defn make-tool-bindings :verify checked
   :sig [-> List]
   :intent "Bind every AirMunch tool schema to its handler closure"
   :requires []

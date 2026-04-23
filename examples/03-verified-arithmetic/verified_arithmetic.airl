@@ -9,7 +9,7 @@
 ;; Check with: cargo run -- check examples/03-verified-arithmetic/verified_arithmetic.airl
 
 ;; Z3 can prove this: result always equals a + b
-(defn add
+(defn add :verify checked
   :sig [(a : i32) (b : i32) -> i32]
   :intent "Add two integers"
   :requires [(valid a) (valid b)]
@@ -17,7 +17,7 @@
   :body (+ a b))
 
 ;; Z3 can prove: doubling is the same as adding a number to itself
-(defn double
+(defn double :verify checked
   :sig [(x : i32) -> i32]
   :intent "Double a value"
   :requires [(valid x)]
@@ -25,7 +25,7 @@
   :body (* x 2))
 
 ;; Z3 can prove: absolute value is always non-negative
-(defn abs
+(defn abs :verify checked
   :sig [(x : i32) -> i32]
   :intent "Absolute value"
   :requires [(valid x)]

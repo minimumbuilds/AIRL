@@ -42,14 +42,14 @@
                 (Err e) (do (print "Error: ") (print e) (print "\n") nil))))))))
 
 ;; Parse compile args: collect files until -o, then output name
-(defn parse-compile-args
+(defn parse-compile-args :verify checked
   :sig [(args : List) -> Any]
   :intent "Parse file list and -o output from compile args"
   :requires [(valid args)]
   :ensures [(valid result)]
   :body (parse-compile-args-loop args [] "a.out"))
 
-(defn parse-compile-args-loop
+(defn parse-compile-args-loop :verify checked
   :sig [(args : List) (files : List) (output : String) -> Any]
   :intent "Recursive arg parser"
   :requires [(valid args)]

@@ -12,13 +12,13 @@
 
 ;; ── Integer-to-string helper ──────────────────────────────
 
-(defn cg-digit-to-char
+(defn cg-digit-to-char :verify checked
   :sig [(d : i64) -> String]
   :requires [(>= d 0) (<= d 9)]
   :ensures [(valid result)]
   :body (char-at "0123456789" d))
 
-(defn cg-nat-to-str
+(defn cg-nat-to-str :verify checked
   :sig [(n : i64) (acc : String) -> String]
   :requires [(>= n 0)]
   :ensures [(valid result)]
@@ -27,7 +27,7 @@
     (let (digit : String (cg-digit-to-char (% n 10)))
       (cg-nat-to-str (/ n 10) (+ digit acc)))))
 
-(defn cg-int-to-string
+(defn cg-int-to-string :verify checked
   :sig [(n : i64) -> String]
   :requires [(valid n)]
   :ensures [(valid result)]
@@ -37,31 +37,31 @@
 
 ;; ── String helpers ────────────────────────────────────────
 
-(defn cg-str-len
+(defn cg-str-len :verify checked
   :sig [(s : String) -> i64]
   :requires [(valid s)]
   :ensures [(>= result 0)]
   :body (length (chars s)))
 
-(defn str3
+(defn str3 :verify checked
   :sig [(a : String) (b : String) (c : String) -> String]
   :requires [(valid a)]
   :ensures [(valid result)]
   :body (+ a (+ b c)))
 
-(defn str4
+(defn str4 :verify checked
   :sig [(a : String) (b : String) (c : String) (d : String) -> String]
   :requires [(valid a)]
   :ensures [(valid result)]
   :body (+ a (+ b (+ c d))))
 
-(defn str5
+(defn str5 :verify checked
   :sig [(a : String) (b : String) (c : String) (d : String) (e : String) -> String]
   :requires [(valid a)]
   :ensures [(valid result)]
   :body (+ a (+ b (+ c (+ d e)))))
 
-(defn str6
+(defn str6 :verify checked
   :sig [(a : String) (b : String) (c : String) (d : String) (e : String) (f : String) -> String]
   :requires [(valid a)]
   :ensures [(valid result)]
@@ -69,7 +69,7 @@
 
 ;; ── Name mangling ─────────────────────────────────────────
 
-(defn mangle-char
+(defn mangle-char :verify checked
   :sig [(ch : String) -> String]
   :requires [(valid ch)]
   :ensures [(valid result)]
@@ -78,7 +78,7 @@
       (if (= ch "!") "_b"
         ch))))
 
-(defn mangle-name-loop
+(defn mangle-name-loop :verify checked
   :sig [(s : String) (i : i64) (len : i64) (acc : String) -> String]
   :requires [(valid s)]
   :ensures [(valid result)]
@@ -86,7 +86,7 @@
     (let (ch : String (char-at s i))
       (mangle-name-loop s (+ i 1) len (+ acc (mangle-char ch))))))
 
-(defn mangle-name
+(defn mangle-name :verify checked
   :sig [(name : String) -> String]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -105,7 +105,7 @@
 
 ;; ── Builtin mapping ───────────────────────────────────────
 
-(defn builtin-c-name
+(defn builtin-c-name :verify checked
   :sig [(name : String) -> _]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -127,7 +127,7 @@
                                 (if (= name "xor") "airl_xor"
                                   (builtin-c-name-2 name)))))))))))))))))
 
-(defn builtin-c-name-2
+(defn builtin-c-name-2 :verify checked
   :sig [(name : String) -> _]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -149,7 +149,7 @@
                                 (if (= name "ends-with") "airl_ends_with"
                                   (builtin-c-name-3 name)))))))))))))))))
 
-(defn builtin-c-name-3
+(defn builtin-c-name-3 :verify checked
   :sig [(name : String) -> _]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -171,7 +171,7 @@
                                 (if (= name "map-size") "airl_map_size"
                                   (builtin-c-name-4 name)))))))))))))))))
 
-(defn builtin-c-name-4
+(defn builtin-c-name-4 :verify checked
   :sig [(name : String) -> _]
   :requires [(valid name)]
   :ensures [(valid result)]
@@ -189,7 +189,7 @@
 
 ;; ── C string escaping ─────────────────────────────────────
 
-(defn escape-c-char
+(defn escape-c-char :verify checked
   :sig [(ch : String) -> String]
   :requires [(valid ch)]
   :ensures [(valid result)]
@@ -200,7 +200,7 @@
           (if (= ch "\r") "\\r"
             ch))))))
 
-(defn escape-c-string-loop
+(defn escape-c-string-loop :verify checked
   :sig [(s : String) (i : i64) (len : i64) (acc : String) -> String]
   :requires [(valid s)]
   :ensures [(valid result)]
@@ -208,7 +208,7 @@
     (let (ch : String (char-at s i))
       (escape-c-string-loop s (+ i 1) len (+ acc (escape-c-char ch))))))
 
-(defn escape-c-string
+(defn escape-c-string :verify checked
   :sig [(s : String) -> String]
   :requires [(valid s)]
   :ensures [(valid result)]
@@ -216,7 +216,7 @@
 
 ;; ── Free variable detection ───────────────────────────────
 
-(defn set-contains
+(defn set-contains :verify checked
   :sig [(lst : List) (item : String) -> Bool]
   :requires [(valid lst)]
   :ensures [(valid result)]
@@ -224,21 +224,21 @@
     (if (= (head lst) item) true
       (set-contains (tail lst) item))))
 
-(defn set-add
+(defn set-add :verify checked
   :sig [(lst : List) (item : String) -> List]
   :requires [(valid lst)]
   :ensures [(valid result)]
   :body (if (set-contains lst item) lst
     (cons item lst)))
 
-(defn set-union
+(defn set-union :verify checked
   :sig [(a : List) (b : List) -> List]
   :requires [(valid a)]
   :ensures [(valid result)]
   :body (if (empty? b) a
     (set-union (set-add a (head b)) (tail b))))
 
-(defn set-diff
+(defn set-diff :verify checked
   :sig [(a : List) (b : List) -> List]
   :requires [(valid a)]
   :ensures [(valid result)]
@@ -252,14 +252,14 @@
 ;; Split into small helpers to avoid overwhelming the bytecode compiler
 ;; with a single large match expression.
 
-(defn collect-loads-list
+(defn collect-loads-list :verify checked
   :sig [(items : List) -> List]
   :requires [(valid items)]
   :ensures [(valid result)]
   :body (if (empty? items) []
     (set-union (collect-loads (head items)) (collect-loads-list (tail items)))))
 
-(defn collect-loads-bindings
+(defn collect-loads-bindings :verify checked
   :sig [(binds : List) -> List]
   :requires [(valid binds)]
   :ensures [(valid result)]
@@ -267,7 +267,7 @@
     (let (b : _ (head binds))
       (set-union (collect-loads (at b 1)) (collect-loads-bindings (tail binds))))))
 
-(defn collect-loads-arms
+(defn collect-loads-arms :verify checked
   :sig [(arms : List) -> List]
   :requires [(valid arms)]
   :ensures [(valid result)]
@@ -275,7 +275,7 @@
     (let (arm : _ (head arms))
       (set-union (collect-loads (at arm 1)) (collect-loads-arms (tail arms))))))
 
-(defn collect-loads
+(defn collect-loads :verify checked
   :sig [(ir : _) -> List]
   :requires [(valid ir)]
   :ensures [(valid result)]
@@ -308,7 +308,7 @@
     (IRFunc _) []
     _ []))
 
-(defn free-vars
+(defn free-vars :verify checked
   :sig [(params : List) (body : _) -> List]
   :requires [(valid params)]
   :ensures [(valid result)]
@@ -317,7 +317,7 @@
 ;; Rewrite captured variable references in a lambda body.
 ;; Replaces IRLoad(name) with IRLoad("__cap_" + mangle(name)) for all captured names.
 
-(defn rewrite-captures-list
+(defn rewrite-captures-list :verify checked
   :sig [(caps : List) (items : List) -> List]
   :requires [(valid caps)]
   :ensures [(valid result)]
@@ -325,7 +325,7 @@
     (cons (rewrite-captures caps (head items))
       (rewrite-captures-list caps (tail items)))))
 
-(defn rewrite-captures-bindings
+(defn rewrite-captures-bindings :verify checked
   :sig [(caps : List) (binds : List) -> List]
   :requires [(valid caps)]
   :ensures [(valid result)]
@@ -334,7 +334,7 @@
       (cons [(at b 0) (rewrite-captures caps (at b 1))]
         (rewrite-captures-bindings caps (tail binds))))))
 
-(defn rewrite-captures-arms
+(defn rewrite-captures-arms :verify checked
   :sig [(caps : List) (arms : List) -> List]
   :requires [(valid caps)]
   :ensures [(valid result)]
@@ -343,7 +343,7 @@
       (cons [(at arm 0) (rewrite-captures caps (at arm 1))]
         (rewrite-captures-arms caps (tail arms))))))
 
-(defn rewrite-captures
+(defn rewrite-captures :verify checked
   :sig [(caps : List) (ir : _) -> _]
   :requires [(valid caps)]
   :ensures [(valid result)]
@@ -373,31 +373,31 @@
 
 ;; ── Codegen state ─────────────────────────────────────────
 
-(defn cg-make-state
+(defn cg-make-state :verify checked
   :sig [-> _]
   :requires [true]
   :ensures [(valid result)]
   :body (map-from ["lambda-ctr" 0 "lambdas" [] "fwd-decls" [] "func-names" []]))
 
-(defn cg-lambda-ctr
+(defn cg-lambda-ctr :verify checked
   :sig [(st : _) -> i64]
   :requires [(valid st)]
   :ensures [(valid result)]
   :body (map-get st "lambda-ctr"))
 
-(defn cg-lambdas
+(defn cg-lambdas :verify checked
   :sig [(st : _) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
   :body (map-get st "lambdas"))
 
-(defn cg-fwd-decls
+(defn cg-fwd-decls :verify checked
   :sig [(st : _) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
   :body (map-get st "fwd-decls"))
 
-(defn cg-next-lambda
+(defn cg-next-lambda :verify checked
   :sig [(st : _) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -406,7 +406,7 @@
       (let (name : String (+ "__lambda_" (cg-int-to-string ctr)))
         [(map-set st "lambda-ctr" (+ ctr 1)) name])))
 
-(defn cg-add-lambda
+(defn cg-add-lambda :verify checked
   :sig [(st : _) (name : String) (all-params : List) (body-code : String) (fwd : String) -> _]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -417,14 +417,14 @@
 
 ;; ── C code building helpers ───────────────────────────────
 
-(defn emit-c-param-decls
+(defn emit-c-param-decls :verify checked
   :sig [(params : List) -> String]
   :requires [(valid params)]
   :ensures [(valid result)]
   :body (if (empty? params) "void"
     (join (map (fn [p] (+ "RtValue* " p)) params) ", ")))
 
-(defn make-variant-tag
+(defn make-variant-tag :verify checked
   :sig [(tag : String) -> String]
   :requires [(valid tag)]
   :ensures [(valid result)]
@@ -435,7 +435,7 @@
 ;; ── Core expression emitter ───────────────────────────────
 ;; All emit-c-* functions return [state, code-string] as a list.
 
-(defn emit-c-expr
+(defn emit-c-expr :verify checked
   :sig [(st : _) (ir : _) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -462,7 +462,7 @@
 
 ;; ── If ────────────────────────────────────────────────────
 
-(defn emit-c-if
+(defn emit-c-if :verify checked
   :sig [(st : _) (parts : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -474,7 +474,7 @@
 
 ;; ── Let ───────────────────────────────────────────────────
 
-(defn emit-c-let-bindings
+(defn emit-c-let-bindings :verify checked
   :sig [(st : _) (bindings : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -487,7 +487,7 @@
               [(at r2 0) (str5 "RtValue* " (mangle-name bname) " = " (at r1 1) (+ "; " (at r2 1)))])))
       _ (emit-c-let-bindings st (tail bindings)))))
 
-(defn emit-c-let
+(defn emit-c-let :verify checked
   :sig [(st : _) (parts : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -498,7 +498,7 @@
 
 ;; ── Do ────────────────────────────────────────────────────
 
-(defn emit-c-do-exprs
+(defn emit-c-do-exprs :verify checked
   :sig [(st : _) (exprs : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -509,7 +509,7 @@
         (let (r2 : List (emit-c-do-exprs (at r1 0) (tail exprs)))
           [(at r2 0) (str3 (at r1 1) "; " (at r2 1))])))))
 
-(defn emit-c-do
+(defn emit-c-do :verify checked
   :sig [(st : _) (exprs : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -519,7 +519,7 @@
 
 ;; ── Call ──────────────────────────────────────────────────
 
-(defn emit-c-args
+(defn emit-c-args :verify checked
   :sig [(st : _) (args : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -530,7 +530,7 @@
         (let (r2 : List (emit-c-args (at r1 0) (tail args)))
           [(at r2 0) (str3 (at r1 1) ", " (at r2 1))])))))
 
-(defn emit-c-call
+(defn emit-c-call :verify checked
   :sig [(st : _) (parts : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -555,7 +555,7 @@
               (let (r : List (emit-c-args st args))
                 [(at r 0) (str3 bi "(" (+ (at r 1) ")"))])))))))
 
-(defn emit-c-print
+(defn emit-c-print :verify checked
   :sig [(st : _) (args : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -572,7 +572,7 @@
 
 ;; ── Call expression (computed callee) ─────────────────────
 
-(defn emit-c-call-expr
+(defn emit-c-call-expr :verify checked
   :sig [(st : _) (parts : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -586,7 +586,7 @@
 
 ;; ── List literal ──────────────────────────────────────────
 
-(defn emit-c-list
+(defn emit-c-list :verify checked
   :sig [(st : _) (items : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -602,7 +602,7 @@
 
 ;; ── Variant constructor ───────────────────────────────────
 
-(defn emit-c-variant
+(defn emit-c-variant :verify checked
   :sig [(st : _) (parts : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -623,7 +623,7 @@
 
 ;; ── Lambda ────────────────────────────────────────────────
 
-(defn emit-closure-site
+(defn emit-closure-site :verify checked
   :sig [(st : _) (lname : String) (captures : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -637,7 +637,7 @@
               (let (p2 : String (str5 "airl_make_closure(" lname ", __caps, " ns "); })"))
                 [st (+ p1 p2)])))))))
 
-(defn emit-c-lambda
+(defn emit-c-lambda :verify checked
   :sig [(st : _) (parts : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -660,7 +660,7 @@
 
 ;; ── Pattern match ─────────────────────────────────────────
 
-(defn emit-c-match
+(defn emit-c-match :verify checked
   :sig [(st : _) (parts : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -669,7 +669,7 @@
       (let (r2 : List (emit-c-match-arms (at r1 0) "__mscr" (at parts 1)))
         [(at r2 0) (str5 "({ RtValue* __mscr = " (at r1 1) "; " (at r2 1) "; })")])))
 
-(defn emit-c-match-arms
+(defn emit-c-match-arms :verify checked
   :sig [(st : _) (sn : String) (arms : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -698,7 +698,7 @@
               _ (emit-c-match-arms st sn (tail arms)))))
       _ (emit-c-match-arms st sn (tail arms)))))
 
-(defn emit-c-variant-arm
+(defn emit-c-variant-arm :verify checked
   :sig [(st : _) (sn : String) (vparts : List) (body-ir : _) (rest-arms : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -714,7 +714,7 @@
                     (let (p3 : String (str3 " : " (at r2 1) "; })"))
                       [(at r2 0) (str3 p1 p2 p3)]))))))))))
 
-(defn emit-lit-check
+(defn emit-lit-check :verify checked
   :sig [(sn : String) (value : _) -> String]
   :requires [(valid sn)]
   :ensures [(valid result)]
@@ -731,7 +731,7 @@
           (str3 "airl_as_bool_raw(airl_eq(" sn ", airl_bool(0)))"))
         (str3 "airl_as_bool_raw(airl_eq(" sn ", airl_nil()))")))))
 
-(defn emit-c-variant-body
+(defn emit-c-variant-body :verify checked
   :sig [(st : _) (mv : String) (inner-pats : List) (body-ir : _) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -758,7 +758,7 @@
 
 ;; ── Try expression ────────────────────────────────────────
 
-(defn emit-c-try
+(defn emit-c-try :verify checked
   :sig [(st : _) (expr : _) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -771,7 +771,7 @@
 
 ;; ── Top-level function emitter ────────────────────────────
 
-(defn emit-c-func
+(defn emit-c-func :verify checked
   :sig [(st : _) (ir : _) -> List]
   :intent "Return [state, def-string, fwd-decl-string]"
   :requires [(valid st)]
@@ -793,7 +793,7 @@
 
 ;; ── Full program emitter ──────────────────────────────────
 
-(defn emit-c-top-levels-loop
+(defn emit-c-top-levels-loop :verify checked
   :sig [(st : _) (nodes : List) (funcs : List) (fwds : List) (main-stmts : List) -> List]
   :requires [(valid st)]
   :ensures [(valid result)]
@@ -811,7 +811,7 @@
           (let (r : List (emit-c-expr st node))
             (emit-c-top-levels-loop (at r 0) (tail nodes) funcs fwds (append main-stmts (at r 1))))))))
 
-(defn emit-c-program
+(defn emit-c-program :verify checked
   :sig [(ir-nodes : List) -> String]
   :requires [(valid ir-nodes)]
   :ensures [(valid result)]
@@ -831,7 +831,7 @@
                             (let (mf : String (str4 "int main(int argc, char** argv) {\n" "    airl_set_args(argc, argv);\n" mb "    airl_flush_stdout();\n    return 0;\n}\n"))
                               (str6 header "/* Forward declarations */\n" (+ uf lf) (+ "\n/* Lambda definitions */\n" ld) (+ "\n/* Function definitions */\n" fd) (+ "\n/* Main */\n" mf))))))))))))))))
 
-(defn emit-lambda-defs
+(defn emit-lambda-defs :verify checked
   :sig [(lambdas : List) -> String]
   :requires [(valid lambdas)]
   :ensures [(valid result)]
@@ -839,7 +839,7 @@
     (let (entry : List (head lambdas))
       (str3 (at entry 2) "\n\n" (emit-lambda-defs (tail lambdas))))))
 
-(defn emit-main-stmts
+(defn emit-main-stmts :verify checked
   :sig [(stmts : List) -> String]
   :requires [(valid stmts)]
   :ensures [(valid result)]
@@ -848,7 +848,7 @@
 
 ;; ── Convenience: full pipeline from source ────────────────
 
-(defn compile-to-c
+(defn compile-to-c :verify checked
   :sig [(source : String) -> _]
   :requires [(valid source)]
   :ensures [(valid result)]

@@ -1,6 +1,6 @@
 ;; validate.airl — Contract-based output validation for Forge
 
-(defn validate-output
+(defn validate-output :verify checked
   :sig [(value : _) (pred : _) (error-msg : String) -> _]
   :intent "Apply pred to value. If true return Ok(value), if false return Err with error-msg and json-stringified value"
   :requires [(not (= error-msg ""))]
@@ -10,7 +10,7 @@
     (Ok value)
     (Err (str error-msg ": " (json-stringify value)))))
 
-(defn validate-keys
+(defn validate-keys :verify checked
   :sig [(m : Map) (expected : List) -> _]
   :intent "Check all expected keys are present in map m. Return Ok(m) or Err listing missing keys"
   :requires [(valid m) (valid expected)]
@@ -21,7 +21,7 @@
       (Ok m)
       (Err (str "Missing required keys: " (json-stringify missing))))))
 
-(defn validate-type
+(defn validate-type :verify checked
   :sig [(value : _) (expected-type : String) -> _]
   :intent "Check type-of value matches expected-type string. Return Ok(value) or Err with type mismatch message"
   :requires [(not (= expected-type ""))]
@@ -32,7 +32,7 @@
       (Ok value)
       (Err (str "Type mismatch: expected " expected-type " but got " actual-type)))))
 
-(defn validate-with-retry
+(defn validate-with-retry :verify checked
   :sig [(provider : Map) (messages : List) (validator : _) (max-retries : _) -> _]
   :intent "Call provider, extract text content, run validator. On failure recurse with feedback and decremented retries"
   :requires [(valid provider) (valid messages) (> max-retries 0)]

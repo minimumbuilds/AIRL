@@ -1,5 +1,5 @@
 ;; EXPECT: 1:100|2:50|3:30|4:13|5:7|6:0|7:0|8:1000000|9:-1|10:0
-(defn safe-arith
+(defn safe-arith :verify checked
   :sig [(a : i64) (b : i64) -> List]
   :requires [(valid a)]
   :ensures [(valid result)]

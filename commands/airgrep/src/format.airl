@@ -4,28 +4,28 @@
 ;; Handles --color, -c (count), -l (files-with-matches), -q (quiet).
 
 ;; ── esc : the ESC character for ANSI codes ──
-(defn esc
+(defn esc :verify checked
   :sig [-> String]
   :requires [true]
   :ensures [(valid result)]
   :body (char-from-code 27))
 
 ;; ── ansi : wrap text in ANSI escape code ──
-(defn ansi
+(defn ansi :verify checked
   :sig [(code : String) (text : String) -> String]
   :requires [(valid code) (valid text)]
   :ensures [(valid result)]
   :body (str (esc) "[" code "m" text (esc) "[0m"))
 
 ;; ── color-filename : colorize a filename (magenta) ──
-(defn color-filename
+(defn color-filename :verify checked
   :sig [(path : String) (use-color : Bool) -> String]
   :requires [(valid path)]
   :ensures [(valid result)]
   :body (if use-color (ansi "35" path) path))
 
 ;; ── color-linenum : colorize a line number (green) ──
-(defn color-linenum
+(defn color-linenum :verify checked
   :sig [(num : i64) (use-color : Bool) -> String]
   :requires [(valid num)]
   :ensures [(valid result)]
@@ -33,14 +33,14 @@
           (if use-color (ansi "32" s) s)))
 
 ;; ── color-match : colorize matching text (red bold) ──
-(defn color-match
+(defn color-match :verify checked
   :sig [(text : String) (use-color : Bool) -> String]
   :requires [(valid text)]
   :ensures [(valid result)]
   :body (if use-color (ansi "1;31" text) text))
 
 ;; ── color-sep : colorize the separator (cyan) ──
-(defn color-sep
+(defn color-sep :verify checked
   :sig [(sep : String) (use-color : Bool) -> String]
   :requires [(valid sep)]
   :ensures [(valid result)]
@@ -48,7 +48,7 @@
 
 ;; ── highlight-matches : highlight regex matches in a line ──
 ;; Replaces all regex matches with colorized versions.
-(defn highlight-matches
+(defn highlight-matches :verify checked
   :sig [(line : String) (regex : String) (use-color : Bool) -> String]
   :requires [(valid line) (valid regex)]
   :ensures [(valid result)]
@@ -64,7 +64,7 @@
 
 ;; ── format-match-line : format one result line ──
 ;; Shows "filename:linenum:line" or "linenum:line" depending on multi-file
-(defn format-match-line
+(defn format-match-line :verify checked
   :sig [(file-path : String) (linenum : i64) (line : String) (regex : String) (use-color : Bool) (multi-file : Bool) (is-match : Bool) -> String]
   :requires [(valid file-path) (valid line)]
   :ensures [(valid result)]
@@ -77,7 +77,7 @@
             (str (color-linenum linenum use-color) colored-sep highlighted)))))
 
 ;; ── print-context-group : print lines in a context range ──
-(defn print-context-group-rec
+(defn print-context-group-rec :verify checked
   :sig [(all-lines : List) (start : i64) (end : i64) (cur : i64) (match-set : _) (file-path : String) (regex : String) (use-color : Bool) (multi-file : Bool) -> i64]
   :requires [(valid all-lines)]
   :ensures [(valid result)]
@@ -90,7 +90,7 @@
               (print-context-group-rec all-lines start end (+ cur 1) match-set file-path regex use-color multi-file)))))
 
 ;; ── format-context-separator : print -- between context groups ──
-(defn format-context-separator
+(defn format-context-separator :verify checked
   :sig [(use-color : Bool) -> String]
   :requires [true]
   :ensures [(valid result)]
@@ -98,7 +98,7 @@
 
 ;; ── print-file-results : print all results for one file ──
 ;; Handles context groups with separators between them.
-(defn print-groups-rec
+(defn print-groups-rec :verify checked
   :sig [(groups : List) (group-idx : i64) (all-lines : List) (match-set : _) (file-path : String) (regex : String) (use-color : Bool) (multi-file : Bool) -> i64]
   :requires [(valid groups)]
   :ensures [(valid result)]
@@ -116,7 +116,7 @@
               (print-groups-rec (tail groups) (+ group-idx 1) all-lines match-set file-path regex use-color multi-file))))))
 
 ;; ── print-file-heading : print filename heading for grouped output ──
-(defn print-file-heading
+(defn print-file-heading :verify checked
   :sig [(file-path : String) (use-color : Bool) (has-context : Bool) -> i64]
   :requires [(valid file-path)]
   :ensures [(valid result)]
@@ -125,7 +125,7 @@
           0))
 
 ;; ── print-simple-matches : print matches without context ──
-(defn print-simple-matches-rec
+(defn print-simple-matches-rec :verify checked
   :sig [(match-indices : List) (all-lines : List) (file-path : String) (regex : String) (use-color : Bool) (multi-file : Bool) -> i64]
   :requires [(valid match-indices)]
   :ensures [(valid result)]
@@ -140,7 +140,7 @@
 ;; ── print-results : main output driver ──
 ;; Handles -c (count only), -l (files with matches), -q (quiet),
 ;; and normal output with optional context.
-(defn print-results
+(defn print-results :verify checked
   :sig [(results : List) (regex : String) (opts : _) -> i64]
   :requires [(valid results) (valid regex)]
   :ensures [(valid result)]
