@@ -71,7 +71,7 @@ while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
     # number — and 8 GB still satisfies that constraint.
     (cd "$AIRL_ROOT" && \
      CARGO_TARGET_DIR="${AIRL_ROOT}/target-prepush" \
-     G3_BUILD_MEM=8g \
+     G3_BUILD_MEM="${G3_BUILD_MEM:-8g}" \
      bash scripts/build-g3.sh) > "$LOG" 2>&1 || {
         echo "[pre-push] BUILD FAILED — push blocked"
         tail -40 "$LOG"
