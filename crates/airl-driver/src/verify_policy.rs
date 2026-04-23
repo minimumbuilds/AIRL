@@ -672,9 +672,43 @@ fn run_init(root: &Path) -> i32 {
     0
 }
 
-fn run_prune(_root: &Path) -> i32 {
-    eprintln!("verify-policy --prune: not yet implemented (see Phase 6)");
-    2
+fn run_prune(root: &Path) -> i32 {
+    let baseline_path = root.join(BASELINE_FILE);
+    let mut baseline = match Baseline::load(&baseline_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: reading baseline: {}", e);
+            return 2;
+        }
+    };
+
+    let mut scanned = Vec::new();
+    for file in enumerate_airl_files(root) {
+        let src = std::fs::read_to_string(&file).unwrap_or_default();
+        if src.is_empty() { continue; }
+        let rel = file.strip_prefix(root).unwrap_or(&file).to_string_lossy().replace('\\', "/");
+        if let Ok(tops) = parse_file_tops(&src) {
+            scanned.extend(extract_verify_entries(&rel, &tops));
+        }
+    }
+
+    let diff = compute_diff(&baseline, &scanned);
+    let before_checked = baseline.grandfathered_checked.len();
+    let before_trusted = baseline.grandfathered_trusted.len();
+
+    baseline.grandfathered_checked.retain(|k| !diff.stale_checked.contains(k));
+    baseline.grandfathered_trusted.retain(|k| !diff.stale_trusted.contains(k));
+
+    if let Err(e) = baseline.write(&baseline_path) {
+        eprintln!("error: writing baseline: {}", e);
+        return 2;
+    }
+    println!(
+        "verify-policy --prune: removed {} checked + {} trusted stale entries",
+        before_checked - baseline.grandfathered_checked.len(),
+        before_trusted - baseline.grandfathered_trusted.len(),
+    );
+    0
 }
 
 fn run_list_uncovered(_root: &Path) -> i32 {
@@ -895,6 +929,26 @@ grandfathered_trusted = []
     }
 
     // ── Task 6.1 tests ───────────────────────────────────────────────────────
+
+    // ── Task 6.3 tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn prune_removes_stale_entries() {
+        use tempfile::TempDir;
+        let td = TempDir::new().unwrap();
+        let root = td.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        // Module was grandfathered as Checked but has since been upgraded to Proven.
+        std::fs::write(root.join("src/lib.airl"),
+            "(module a :verify proven (defn x :pub :sig [-> i64] :requires [true] :ensures [(= result 0)] :body 0))").unwrap();
+        let mut b = Baseline::new();
+        b.grandfathered_checked.push(BaselineKey::whole_file("src/lib.airl"));
+        b.write(&root.join(BASELINE_FILE)).unwrap();
+
+        assert_eq!(run_prune(root), 0);
+        let updated = Baseline::load(&root.join(BASELINE_FILE)).unwrap();
+        assert!(updated.grandfathered_checked.is_empty(), "stale entry should be pruned: {:?}", updated);
+    }
 
     // ── Task 6.2 tests ───────────────────────────────────────────────────────
 
