@@ -46,7 +46,7 @@ impl BaselineKey {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Baseline {
     pub version: u32,
     pub grandfathered_checked: Vec<BaselineKey>,
@@ -55,6 +55,10 @@ pub struct Baseline {
 
 pub const BASELINE_VERSION: u32 = 1;
 pub const BASELINE_FILE: &str = ".airl-verify-baseline.toml";
+
+impl Default for Baseline {
+    fn default() -> Self { Self::new() }
+}
 
 impl Baseline {
     pub fn new() -> Self {
