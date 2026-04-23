@@ -973,6 +973,7 @@ fn parse_defn(items: &[SExpr], span: Span, diags: &mut Diagnostics) -> Result<Fn
         execute_on,
         priority,
         is_public,
+        verify: None,
         span,
     })
 }
