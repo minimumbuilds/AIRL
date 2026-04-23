@@ -62,6 +62,52 @@ const RANDOM_SOURCE: &str = include_str!("../../../stdlib/random.airl");
 const JSON_SOURCE: &str = include_str!("../../../stdlib/json.airl");
 #[cfg(not(target_os = "airlos"))]
 const SQLITE_SOURCE: &str = include_str!("../../../stdlib/sqlite.airl");
+// On airlos, sqlite has no host bindings. Declare an empty stub so STDLIB_MODULES
+// can reference SQLITE_SOURCE unconditionally; `on_airlos: false` prevents the stub
+// from being used.
+#[cfg(target_os = "airlos")]
+const SQLITE_SOURCE: &str = "";
+
+/// One auto-included stdlib module.
+///
+/// `source` is the embedded AIRL source (from `include_str!`).
+/// `path` is the repo-relative path used for change-detection dependencies.
+/// `name` is the bytecode compiler prefix used for symbol mangling.
+/// `has_extern_c` routes AOT compilation through the extern-C-aware path.
+/// `on_airlos` gates inclusion on the airlos target (currently only sqlite is excluded).
+pub struct StdlibModule {
+    pub source: &'static str,
+    pub path: &'static str,
+    pub name: &'static str,
+    pub has_extern_c: bool,
+    pub on_airlos: bool,
+}
+
+/// Single source of truth for every auto-included AIRL stdlib module.
+/// Order matters — modules are compiled in registry order, so later modules may
+/// reference names defined by earlier ones (e.g. string.airl uses prelude.airl's map).
+pub const STDLIB_MODULES: &[StdlibModule] = &[
+    StdlibModule { source: COLLECTIONS_SOURCE, path: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/prelude.airl"), name: "collections", has_extern_c: false, on_airlos: true },
+    StdlibModule { source: MATH_SOURCE,        path: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/math.airl"),    name: "math",        has_extern_c: false, on_airlos: true },
+    StdlibModule { source: RESULT_SOURCE,      path: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/result.airl"),  name: "result",      has_extern_c: false, on_airlos: true },
+    StdlibModule { source: STRING_SOURCE,      path: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/string.airl"),  name: "string",      has_extern_c: false, on_airlos: true },
+    StdlibModule { source: MAP_SOURCE,         path: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/map.airl"),     name: "map",         has_extern_c: false, on_airlos: true },
+    StdlibModule { source: SET_SOURCE,         path: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/set.airl"),     name: "set",         has_extern_c: false, on_airlos: true },
+    StdlibModule { source: IO_SOURCE,          path: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/io.airl"),      name: "io",          has_extern_c: true,  on_airlos: true },
+    StdlibModule { source: PATH_SOURCE,        path: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/path.airl"),    name: "path",        has_extern_c: false, on_airlos: true },
+    StdlibModule { source: RANDOM_SOURCE,      path: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/random.airl"),  name: "random",      has_extern_c: false, on_airlos: true },
+    StdlibModule { source: JSON_SOURCE,        path: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/json.airl"),    name: "json",        has_extern_c: false, on_airlos: true },
+    StdlibModule { source: SQLITE_SOURCE,      path: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/sqlite.airl"),  name: "sqlite",      has_extern_c: true,  on_airlos: false },
+];
+
+#[inline]
+fn on_current_target(m: &StdlibModule) -> bool {
+    if cfg!(target_os = "airlos") {
+        m.on_airlos
+    } else {
+        true
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineMode {
@@ -1087,40 +1133,22 @@ fn compile_tops_without_exprs(
     (ir_nodes, contracts, metadata)
 }
 
-/// Stdlib source file paths (relative to the manifest directory at build time).
-/// These are checked at runtime to detect source changes since the last embed.
-const STDLIB_PATHS: &[&str] = &[
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/prelude.airl"),
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/math.airl"),
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/result.airl"),
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/string.airl"),
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/map.airl"),
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/set.airl"),
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/io.airl"),
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/path.airl"),
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/random.airl"),
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/json.airl"),
-    #[cfg(not(target_os = "airlos"))]
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/sqlite.airl"),
-];
+/// Stdlib source paths for change-detection. Derived from STDLIB_MODULES.
+fn stdlib_paths() -> Vec<&'static str> {
+    STDLIB_MODULES.iter()
+        .filter(|m| on_current_target(m))
+        .map(|m| m.path)
+        .collect()
+}
 
 /// Compute a hash of the embedded stdlib sources to detect changes.
 fn stdlib_embed_hash() -> u64 {
     use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
     let mut hasher = DefaultHasher::new();
-    COLLECTIONS_SOURCE.hash(&mut hasher);
-    MATH_SOURCE.hash(&mut hasher);
-    RESULT_SOURCE.hash(&mut hasher);
-    STRING_SOURCE.hash(&mut hasher);
-    MAP_SOURCE.hash(&mut hasher);
-    SET_SOURCE.hash(&mut hasher);
-    IO_SOURCE.hash(&mut hasher);
-    PATH_SOURCE.hash(&mut hasher);
-    RANDOM_SOURCE.hash(&mut hasher);
-    JSON_SOURCE.hash(&mut hasher);
-    #[cfg(not(target_os = "airlos"))]
-    SQLITE_SOURCE.hash(&mut hasher);
+    for m in STDLIB_MODULES.iter().filter(|m| on_current_target(m)) {
+        m.source.hash(&mut hasher);
+    }
     hasher.finish()
 }
 
@@ -1130,7 +1158,7 @@ fn stdlib_disk_hash() -> Option<u64> {
     use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
     let mut hasher = DefaultHasher::new();
-    for path in STDLIB_PATHS {
+    for path in stdlib_paths() {
         match std::fs::metadata(path) {
             Ok(meta) => {
                 match meta.modified() {
@@ -1149,38 +1177,11 @@ fn stdlib_disk_hash() -> Option<u64> {
 static STDLIB_CACHE: OnceLock<(u64, Vec<(Vec<BytecodeFunc>, BytecodeFunc)>)> = OnceLock::new();
 
 fn compile_stdlib_all() -> Result<Vec<(Vec<BytecodeFunc>, BytecodeFunc)>, PipelineError> {
-    #[cfg(target_os = "airlos")]
-    let stdlib_modules: &[(&str, &str)] = &[
-        (COLLECTIONS_SOURCE, "collections"),
-        (MATH_SOURCE, "math"),
-        (RESULT_SOURCE, "result"),
-        (STRING_SOURCE, "string"),
-        (MAP_SOURCE, "map"),
-        (SET_SOURCE, "set"),
-        (IO_SOURCE, "io"),
-        (PATH_SOURCE, "path"),
-        (RANDOM_SOURCE, "random"),
-        (JSON_SOURCE, "json"),
-    ];
-    #[cfg(not(target_os = "airlos"))]
-    let stdlib_modules: &[(&str, &str)] = &[
-        (COLLECTIONS_SOURCE, "collections"),
-        (MATH_SOURCE, "math"),
-        (RESULT_SOURCE, "result"),
-        (STRING_SOURCE, "string"),
-        (MAP_SOURCE, "map"),
-        (SET_SOURCE, "set"),
-        (IO_SOURCE, "io"),
-        (PATH_SOURCE, "path"),
-        (RANDOM_SOURCE, "random"),
-        (JSON_SOURCE, "json"),
-        (SQLITE_SOURCE, "sqlite"),
-    ];
     let mut result = Vec::new();
-    for (src, name) in stdlib_modules {
-        let tops = parse_source_stdlib(src, name)?;
+    for m in STDLIB_MODULES.iter().filter(|m| on_current_target(m)) {
+        let tops = parse_source_stdlib(m.source, m.name)?;
         let ir_nodes: Vec<IRNode> = tops.iter().flat_map(compile_top_level).collect();
-        let mut bc_compiler = BytecodeCompiler::with_prefix(name);
+        let mut bc_compiler = BytecodeCompiler::with_prefix(m.name);
         let (funcs, main_func) = bc_compiler.compile_program(&ir_nodes);
         result.push((funcs, main_func));
     }
@@ -1830,10 +1831,13 @@ mod tests {
 
     #[test]
     fn stdlib_embed_hash_is_stable() {
-        // Hash of embedded stdlib content should be deterministic across calls.
-        let h1 = stdlib_embed_hash();
-        let h2 = stdlib_embed_hash();
-        assert_eq!(h1, h2, "embed hash must be deterministic");
+        // Anchor value captured before the consolidation refactor.
+        // A mismatch here means the refactor changed iteration order or included/excluded
+        // sources — both are regressions, not intended behavior changes.
+        // Updated after audit/builtin-parity merge changed stdlib/json.airl
+        // (json-parse :sig -> Result + empty-input Err message).
+        const EXPECTED: u64 = 12016738277244436689;
+        assert_eq!(stdlib_embed_hash(), EXPECTED, "stdlib embed hash changed — refactor has a drift bug");
     }
 
     #[test]
@@ -1955,6 +1959,39 @@ mod tests {
             panic!("coverage gate fired for :verify checked module");
         }
     }
+
+    // ── Registry invariant tests ──────────────────────────────────────────
+
+    #[test]
+    fn stdlib_registry_has_no_duplicate_names() {
+        let mut seen = std::collections::HashSet::new();
+        for m in STDLIB_MODULES {
+            assert!(seen.insert(m.name), "duplicate module name: {}", m.name);
+        }
+    }
+
+    #[test]
+    fn stdlib_registry_has_no_duplicate_paths() {
+        let mut seen = std::collections::HashSet::new();
+        for m in STDLIB_MODULES {
+            assert!(seen.insert(m.path), "duplicate module path: {}", m.path);
+        }
+    }
+
+    #[test]
+    fn stdlib_registry_sources_are_non_empty_on_target() {
+        for m in STDLIB_MODULES.iter().filter(|m| on_current_target(m)) {
+            assert!(!m.source.is_empty(), "empty source for {} on current target", m.name);
+        }
+    }
+
+    #[test]
+    fn stdlib_registry_airlos_excludes_sqlite() {
+        let sqlite_entry = STDLIB_MODULES.iter().find(|m| m.name == "sqlite");
+        assert!(sqlite_entry.is_some(), "sqlite module missing from registry");
+        assert_eq!(sqlite_entry.unwrap().on_airlos, false);
+    }
+
 }
 
 // ── AOT Compilation Pipeline ──────────────────────────────────────────────
@@ -1971,32 +2008,19 @@ pub fn compile_to_object(paths: &[String], target: Option<&str>) -> Result<Vec<u
     let mut all_funcs: Vec<BytecodeFunc> = Vec::new();
 
     // 1. Compile stdlib to bytecode (skip their __main__ — they're no-op for pure defn modules)
-    for (src, name) in &[
-        (COLLECTIONS_SOURCE, "collections"),
-        (MATH_SOURCE, "math"),
-        (RESULT_SOURCE, "result"),
-        (STRING_SOURCE, "string"),
-        (MAP_SOURCE, "map"),
-        (SET_SOURCE, "set"),
-        (PATH_SOURCE, "path"),
-        (RANDOM_SOURCE, "random"),
-        (JSON_SOURCE, "json"),
-    ] {
-        let (funcs, _stdlib_main) = compile_source_to_bytecode(src, name)?;
+    for m in STDLIB_MODULES.iter().filter(|m| on_current_target(m) && !m.has_extern_c) {
+        let (funcs, _stdlib_main) = compile_source_to_bytecode(m.source, m.name)?;
         all_funcs.extend(funcs);
-        mem_trace(&format!("stdlib {} compiled (total funcs={})", name, all_funcs.len()));
+        mem_trace(&format!("stdlib {} compiled (total funcs={})", m.name, all_funcs.len()));
     }
 
     // 1b. Compile stdlib with extern-c declarations (io.airl, sqlite.airl)
     let mut stdlib_extern_c_decls: Vec<airl_runtime::bytecode_aot::ExternCInfo> = Vec::new();
-    for (src, name) in &[
-        (IO_SOURCE, "io"),
-        (SQLITE_SOURCE, "sqlite"),
-    ] {
-        let (funcs, _stdlib_main, externs) = compile_source_to_bytecode_with_externs(src, name)?;
+    for m in STDLIB_MODULES.iter().filter(|m| on_current_target(m) && m.has_extern_c) {
+        let (funcs, _stdlib_main, externs) = compile_source_to_bytecode_with_externs(m.source, m.name)?;
         all_funcs.extend(funcs);
         stdlib_extern_c_decls.extend(externs);
-        mem_trace(&format!("stdlib-extern {} compiled (total funcs={})", name, all_funcs.len()));
+        mem_trace(&format!("stdlib-extern {} compiled (total funcs={})", m.name, all_funcs.len()));
     }
 
     // 2. Parse and compile user source files with Z3 verification
@@ -2148,28 +2172,15 @@ pub fn compile_to_object_with_imports(entry_path: &str, target: Option<&str>) ->
     let mut all_funcs: Vec<BytecodeFunc> = Vec::new();
 
     // 1. Compile stdlib to bytecode
-    for (src, name) in &[
-        (COLLECTIONS_SOURCE, "collections"),
-        (MATH_SOURCE, "math"),
-        (RESULT_SOURCE, "result"),
-        (STRING_SOURCE, "string"),
-        (MAP_SOURCE, "map"),
-        (SET_SOURCE, "set"),
-        (PATH_SOURCE, "path"),
-        (RANDOM_SOURCE, "random"),
-        (JSON_SOURCE, "json"),
-    ] {
-        let (funcs, _stdlib_main) = compile_source_to_bytecode(src, name)?;
+    for m in STDLIB_MODULES.iter().filter(|m| on_current_target(m) && !m.has_extern_c) {
+        let (funcs, _stdlib_main) = compile_source_to_bytecode(m.source, m.name)?;
         all_funcs.extend(funcs);
     }
 
     // 1b. Compile stdlib with extern-c declarations (io.airl, sqlite.airl)
     let mut extern_c_decls: Vec<airl_runtime::bytecode_aot::ExternCInfo> = Vec::new();
-    for (src, name) in &[
-        (IO_SOURCE, "io"),
-        (SQLITE_SOURCE, "sqlite"),
-    ] {
-        let (funcs, _stdlib_main, externs) = compile_source_to_bytecode_with_externs(src, name)?;
+    for m in STDLIB_MODULES.iter().filter(|m| on_current_target(m) && m.has_extern_c) {
+        let (funcs, _stdlib_main, externs) = compile_source_to_bytecode_with_externs(m.source, m.name)?;
         all_funcs.extend(funcs);
         extern_c_decls.extend(externs);
     }
