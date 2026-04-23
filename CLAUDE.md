@@ -10,6 +10,14 @@ AIRL (AI Intermediate Representation Language) is a programming language for AI 
 
 **Before writing ANY `.airl` file:** Read `AIRL-Header.md` in full. No exceptions.
 
+## Fresh clone setup
+
+```bash
+bash scripts/git-hooks/install.sh    # Activate tracked git hooks (pre-push fixpoint gate)
+```
+
+One-shot, idempotent. Points `core.hooksPath` at `scripts/git-hooks/`. See `scripts/git-hooks/README.md`.
+
 ## Build & Test
 
 ```bash

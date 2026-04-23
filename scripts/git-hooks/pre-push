@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# pre-push hook: enforce fixpoint test before pushing AIRL changes to main/master.
+#
+# This hook runs the full three-stage build + fixpoint smoke if:
+#   - The remote ref being pushed is main or master
+#   - There are changes to bootstrap/*.airl, src/, crates/, or stdlib/
+#
+# All build stages run inside the rust:slim-bullseye Docker container so that
+# the airl-driver binary, the compiled g3, and any linked libraries share a
+# single GLIBC ABI (2.31). Host-built binaries with newer GLIBC cannot
+# execute inside the container (and container-built binaries cannot execute
+# on most older hosts), so mixing the two is a bug magnet — do not reintroduce
+# a host-side cargo build here.
+#
+# Skip with: git push --no-verify  (requires explicit opt-out — nothing is silent)
+set -euo pipefail
+
+REMOTE="$1"
+URL="$2"
+
+AIRL_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
+# Read pushed refs from stdin
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+    # Only gate pushes to main/master
+    if ! echo "$remote_ref" | grep -qE 'refs/heads/(main|master)$'; then
+        continue
+    fi
+
+    # Skip if deleting a ref
+    if [[ "$local_sha" == "0000000000000000000000000000000000000000" ]]; then
+        continue
+    fi
+
+    # Check if any compiler-relevant files changed
+    BASE="${remote_sha}"
+    if [[ "$BASE" == "0000000000000000000000000000000000000000" ]]; then
+        BASE="HEAD~1"
+    fi
+
+    CHANGED=$(git diff --name-only "$BASE" "$local_sha" 2>/dev/null || true)
+    COMPILER_CHANGED=$(echo "$CHANGED" | grep -E '^(bootstrap/|src/|crates/|stdlib/)' || true)
+
+    if [[ -z "$COMPILER_CHANGED" ]]; then
+        echo "[pre-push] No compiler files changed — skipping fixpoint check"
+        continue
+    fi
+
+    echo "[pre-push] Compiler files changed:"
+    echo "$COMPILER_CHANGED" | sed 's/^/  /'
+    echo ""
+    echo "[pre-push] Running fixpoint verification inside Docker (mandatory for AIRL main pushes)..."
+    echo "[pre-push] build-g3.sh re-execs inside rust:slim-bullseye and runs cargo build + g3 compile + Stage 3 smoke."
+    echo ""
+
+    LOG="/tmp/airl-prepush-$$.log"
+
+    # No Stage 1 on the host: build-g3.sh launches rust:slim-bullseye, runs
+    # `cargo build --release --features aot` inside the container (line 152
+    # of scripts/build-g3.sh), and uses the resulting container-glibc binary
+    # for Stage 2 (g3 compile) and Stage 3 (fixpoint smoke). Host target/
+    # artifacts must not participate — redirect CARGO_TARGET_DIR to a
+    # container-only path so the host's target/ is never read or written.
+    #
+    # G3_BUILD_MEM=8g: the self-hosted bootstrap peaks at ~5.9 GB RSS while
+    # compiling bootstrap/linearity.airl, which OOMs inside the default 6 GB
+    # Docker cap. 8 GB leaves headroom; the memory-pressure work is a
+    # separate concern tracked in the session notes. The mandatory-sandbox
+    # invariant (from the 2026-04-21 OOM regression spec) was about keeping
+    # the build inside a resource-limited container — not about the exact
+    # number — and 8 GB still satisfies that constraint.
+    (cd "$AIRL_ROOT" && \
+     CARGO_TARGET_DIR="${AIRL_ROOT}/target-prepush" \
+     G3_BUILD_MEM=8g \
+     bash scripts/build-g3.sh) > "$LOG" 2>&1 || {
+        echo "[pre-push] BUILD FAILED — push blocked"
+        tail -40 "$LOG"
+        rm -f "$LOG"
+        exit 1
+    }
+
+    if ! grep -q "Stage 3 OK" "$LOG"; then
+        echo "[pre-push] FIXPOINT FAILED — Stage 3 did not pass — push blocked"
+        tail -20 "$LOG"
+        rm -f "$LOG"
+        exit 1
+    fi
+
+    FIXPOINT_RESULT=$(grep "Stage 3 OK" "$LOG" | tail -1)
+    echo "[pre-push] $FIXPOINT_RESULT"
+    rm -f "$LOG"
+
+    echo ""
+    echo "[pre-push] Fixpoint PASSED — push to $remote_ref cleared"
+done
+
+exit 0
