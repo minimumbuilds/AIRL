@@ -270,6 +270,81 @@ pub fn extract_verify_entries(
     out
 }
 
+#[derive(Debug, Default)]
+pub struct PolicyDiff {
+    /// Keys at :verify checked in the tree but missing from grandfathered_checked.
+    pub new_checked: Vec<BaselineKey>,
+    /// Keys at :verify trusted in the tree but missing from grandfathered_trusted.
+    pub new_trusted: Vec<BaselineKey>,
+    /// Keys in grandfathered_checked but no longer at :verify checked in the tree.
+    pub stale_checked: Vec<BaselineKey>,
+    /// Keys in grandfathered_trusted but no longer at :verify trusted in the tree.
+    pub stale_trusted: Vec<BaselineKey>,
+}
+
+impl PolicyDiff {
+    /// "Clean" means no regressions. Stale entries are tolerated (they just
+    /// mean the user has ratcheted but not yet run --prune).
+    pub fn is_clean(&self) -> bool {
+        self.new_checked.is_empty() && self.new_trusted.is_empty()
+    }
+
+    pub fn is_fully_clean(&self) -> bool {
+        self.new_checked.is_empty()
+            && self.new_trusted.is_empty()
+            && self.stale_checked.is_empty()
+            && self.stale_trusted.is_empty()
+    }
+}
+
+pub fn compute_diff(
+    baseline: &Baseline,
+    scanned: &[(BaselineKey, airl_syntax::ast::VerifyLevel)],
+) -> PolicyDiff {
+    use std::collections::HashSet;
+    use airl_syntax::ast::VerifyLevel;
+
+    let baseline_checked: HashSet<&BaselineKey> = baseline.grandfathered_checked.iter().collect();
+    let baseline_trusted: HashSet<&BaselineKey> = baseline.grandfathered_trusted.iter().collect();
+
+    let mut scanned_checked: HashSet<&BaselineKey> = HashSet::new();
+    let mut scanned_trusted: HashSet<&BaselineKey> = HashSet::new();
+    for (key, level) in scanned {
+        match level {
+            VerifyLevel::Checked => { scanned_checked.insert(key); }
+            VerifyLevel::Trusted => { scanned_trusted.insert(key); }
+            VerifyLevel::Proven => {}
+        }
+    }
+
+    let mut diff = PolicyDiff::default();
+    for k in &scanned_checked {
+        if !baseline_checked.contains(k) {
+            diff.new_checked.push((*k).clone());
+        }
+    }
+    for k in &scanned_trusted {
+        if !baseline_trusted.contains(k) {
+            diff.new_trusted.push((*k).clone());
+        }
+    }
+    for k in &baseline_checked {
+        if !scanned_checked.contains(k) {
+            diff.stale_checked.push((*k).clone());
+        }
+    }
+    for k in &baseline_trusted {
+        if !scanned_trusted.contains(k) {
+            diff.stale_trusted.push((*k).clone());
+        }
+    }
+    diff.new_checked.sort();
+    diff.new_trusted.sort();
+    diff.stale_checked.sort();
+    diff.stale_trusted.sort();
+    diff
+}
+
 /// Walk the tree rooted at `root`, collecting `.airl` files.
 /// Excludes `tests/fixtures/**` and anything under a `target/` or `.git/` directory.
 pub fn enumerate_airl_files(root: &Path) -> Vec<PathBuf> {
@@ -465,6 +540,56 @@ grandfathered_trusted = []
         let (key, level) = &entries[0];
         assert_eq!(key.name.as_deref(), Some("foo"));
         assert_eq!(*level, airl_syntax::ast::VerifyLevel::Checked);
+    }
+
+    // ── Task 4.3 tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn diff_detects_new_checked_module_not_in_baseline() {
+        let b = Baseline::new();
+        // Baseline is empty
+        let scanned = vec![
+            (BaselineKey::whole_file("a.airl"), airl_syntax::ast::VerifyLevel::Checked),
+        ];
+        let diff = compute_diff(&b, &scanned);
+        assert_eq!(diff.new_checked.len(), 1);
+        assert_eq!(diff.new_checked[0], BaselineKey::whole_file("a.airl"));
+        assert!(diff.new_trusted.is_empty());
+        assert!(diff.stale_checked.is_empty());
+    }
+
+    #[test]
+    fn diff_tolerates_upgraded_module_in_baseline() {
+        let mut b = Baseline::new();
+        b.grandfathered_checked.push(BaselineKey::whole_file("a.airl"));
+        let scanned = vec![
+            (BaselineKey::whole_file("a.airl"), airl_syntax::ast::VerifyLevel::Proven),
+        ];
+        let diff = compute_diff(&b, &scanned);
+        assert!(diff.new_checked.is_empty(), "should not regress on upgraded module");
+        assert_eq!(diff.stale_checked.len(), 1, "should report upgrade as prunable");
+    }
+
+    #[test]
+    fn diff_clean_when_baseline_matches() {
+        let mut b = Baseline::new();
+        b.grandfathered_checked.push(BaselineKey::whole_file("a.airl"));
+        let scanned = vec![
+            (BaselineKey::whole_file("a.airl"), airl_syntax::ast::VerifyLevel::Checked),
+        ];
+        let diff = compute_diff(&b, &scanned);
+        assert!(diff.is_clean(), "expected clean: {:?}", diff);
+    }
+
+    #[test]
+    fn diff_flags_new_trusted_separately() {
+        let b = Baseline::new();
+        let scanned = vec![
+            (BaselineKey::whole_file("a.airl"), airl_syntax::ast::VerifyLevel::Trusted),
+        ];
+        let diff = compute_diff(&b, &scanned);
+        assert_eq!(diff.new_trusted.len(), 1);
+        assert!(diff.new_checked.is_empty());
     }
 
     #[test]
