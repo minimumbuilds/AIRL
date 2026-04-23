@@ -1014,6 +1014,18 @@ pub extern "C" fn airl_base64_encode_bytes(data: *mut RtValue) -> *mut RtValue {
     rt_bytes(encoded.into_bytes())
 }
 
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_base64_decode_bytes(_data: *mut RtValue) -> *mut RtValue {
+    err_variant("base64-decode-bytes: not available on AIRLOS")
+}
+
+#[cfg(target_os = "airlos")]
+#[no_mangle]
+pub extern "C" fn airl_base64_encode_bytes(_data: *mut RtValue) -> *mut RtValue {
+    err_variant("base64-encode-bytes: not available on AIRLOS")
+}
+
 #[no_mangle]
 pub extern "C" fn airl_bitwise_xor(a: *mut RtValue, b: *mut RtValue) -> *mut RtValue {
     let va = match unsafe { &(*a).data } { RtData::Int(n) => *n, _ => 0 };

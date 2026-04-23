@@ -60,6 +60,10 @@ const RANDOM_SOURCE: &str = include_str!("../../../stdlib/random.airl");
 // bytecode_vm.rs; the AIRL implementations in stdlib/json.airl are now the
 // only providers of those symbols.
 const JSON_SOURCE: &str = include_str!("../../../stdlib/json.airl");
+// base64.airl is auto-included so that base64-encode and base64-decode (the
+// AIRL String→String implementations) are globally available without explicit
+// import. Added 2026-04-23 as part of the base64 completeness fix.
+const BASE64_SOURCE: &str = include_str!("../../../stdlib/base64.airl");
 #[cfg(not(target_os = "airlos"))]
 const SQLITE_SOURCE: &str = include_str!("../../../stdlib/sqlite.airl");
 // On airlos, sqlite has no host bindings. Declare an empty stub so STDLIB_MODULES
@@ -97,6 +101,7 @@ pub const STDLIB_MODULES: &[StdlibModule] = &[
     StdlibModule { source: PATH_SOURCE,        path: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/path.airl"),    name: "path",        has_extern_c: false, on_airlos: true },
     StdlibModule { source: RANDOM_SOURCE,      path: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/random.airl"),  name: "random",      has_extern_c: false, on_airlos: true },
     StdlibModule { source: JSON_SOURCE,        path: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/json.airl"),    name: "json",        has_extern_c: false, on_airlos: true },
+    StdlibModule { source: BASE64_SOURCE,      path: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/base64.airl"),  name: "base64",      has_extern_c: false, on_airlos: true },
     StdlibModule { source: SQLITE_SOURCE,      path: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../stdlib/sqlite.airl"),  name: "sqlite",      has_extern_c: true,  on_airlos: false },
 ];
 
@@ -1831,12 +1836,13 @@ mod tests {
 
     #[test]
     fn stdlib_embed_hash_is_stable() {
-        // Anchor value captured before the consolidation refactor.
+        // Anchor value captured after adding base64.airl to STDLIB_MODULES (2026-04-23).
+        // Previous value (16774069352182620680) was from the consolidation refactor.
         // A mismatch here means the refactor changed iteration order or included/excluded
         // sources — both are regressions, not intended behavior changes.
-        // Updated after audit/builtin-parity merge changed stdlib/json.airl
-        // (json-parse :sig -> Result + empty-input Err message).
-        const EXPECTED: u64 = 12016738277244436689;
+        // Captured after audit + base64 merges (stdlib/json.airl updated to return
+        // Result; stdlib/base64.airl added to STDLIB_MODULES).
+        const EXPECTED: u64 = 5399544521157553627;
         assert_eq!(stdlib_embed_hash(), EXPECTED, "stdlib embed hash changed — refactor has a drift bug");
     }
 
